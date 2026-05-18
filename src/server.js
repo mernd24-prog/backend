@@ -11,7 +11,10 @@ function getLocalIp() {
 
   for (const interfaceName in interfaces) {
     for (const iface of interfaces[interfaceName]) {
-      if (iface.family === "IPv4" && !iface.internal) {
+      if (
+        iface.family === "IPv4" &&
+        !iface.internal
+      ) {
         return iface.address;
       }
     }
@@ -22,15 +25,6 @@ function getLocalIp() {
 
 async function bootstrap() {
   const app = await createApp();
-
-  // Health check / root route for Vercel
-  app.get("/", (req, res) => {
-    res.status(200).json({
-      success: true,
-      message: "Sam Global Backend Running Successfully 🚀",
-      environment: process.env.NODE_ENV || "development",
-    });
-  });
 
   const httpServer = http.createServer(app);
 

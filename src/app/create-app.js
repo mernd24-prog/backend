@@ -20,45 +20,60 @@ const { registerDomainHandlers } = require("../infrastructure/events/register-do
 const { createMetricsMiddleware } = require("../infrastructure/observability/metrics");
 
 async function createApp() {
-  await Promise.all([connectMongo(), connectPostgres() ]);
+  await Promise.all([connectMongo(), connectPostgres()]);
 
   const app = express();
 
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
+
   app.use(pinoHttp({ logger }));
   app.use(helmet());
   app.use(cors());
+
   app.use(
     rateLimit({
       windowMs: 60 * 1000,
       max: 300,
       standardHeaders: true,
       legacyHeaders: false,
-    }),
+    })
   );
+
   app.use(
     express.json({
       limit: env.upload.jsonBodyLimit,
       verify: (req, res, buffer) => {
         req.rawBody = buffer;
       },
-    }),
+    })
   );
+
   app.use(express.urlencoded({ extended: true, limit: env.upload.jsonBodyLimit }));
-  app.use("/uploads", express.static(path.resolve(__dirname, "../../uploads")));
-  app.use(auditLog);
-  app.use(createMetricsMiddleware()); // Track performance metrics
+
+  app.get("/", (req, res) => {
+    res.status(200).json({
+      success: true,
+      service: env.appName,
+      message: "Sam Global Backend Running Successfully 🚀",
+      status: "ok",
+    });
+  });
 
   app.get("/health", (req, res) => {
     res.json({ success: true, service: env.appName, status: "ok" });
   });
+
+  app.use("/uploads", express.static(path.resolve(__dirname, "../../uploads")));
+  app.use(auditLog);
+  app.use(createMetricsMiddleware());
 
   registerRoutes(app);
   registerWorkers();
   registerCronJobs();
   registerRealtimeSubscribers();
   registerDomainHandlers();
+
   app.use(notFoundHandler);
   app.use(errorHandler);
 
