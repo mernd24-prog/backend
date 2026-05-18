@@ -4,6 +4,8 @@ dotenv.config();
 
 const defaultMaxDocumentBytes = 5 * 1024 * 1024;
 const maxDocumentBytes = Number(process.env.MAX_DOCUMENT_UPLOAD_BYTES);
+const emailPort = Number(process.env.EMAIL_PORT || process.env.SMTP_PORT || 1025);
+const emailSecureDefault = emailPort === 465 ? "true" : "false";
 
 const env = {
   nodeEnv: process.env.NODE_ENV || "development",
@@ -47,13 +49,13 @@ const env = {
     corsOrigin: process.env.SOCKET_CORS_ORIGIN || "*",
   },
   smtp: {
-    host: process.env.SMTP_HOST || "localhost",
-    port: Number(process.env.SMTP_PORT || 1025),
-    secure: String(process.env.SMTP_SECURE || "false") === "true",
-    user: process.env.SMTP_USER || "",
-    pass: process.env.SMTP_PASS || "",
+    host: process.env.EMAIL_HOST || process.env.SMTP_HOST || "localhost",
+    port: emailPort,
+    secure: String(process.env.EMAIL_SECURE || process.env.SMTP_SECURE || emailSecureDefault) === "true",
+    user: process.env.EMAIL_USER || process.env.SMTP_USER || "",
+    pass: process.env.EMAIL_PASS || process.env.SMTP_PASS || "",
   },
-  defaultFromEmail: process.env.DEFAULT_FROM_EMAIL || "no-reply@example.com",
+  defaultFromEmail: process.env.EMAIL_FROM || process.env.DEFAULT_FROM_EMAIL || "no-reply@example.com",
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME || "",
     apiKey: process.env.CLOUDINARY_API_KEY || "",
