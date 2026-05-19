@@ -57,6 +57,7 @@ const {
 } = require("../validation/platform.validation");
 
 const platformRoutes = express.Router();
+const cmsRoutes = express.Router();
 const platformController = new PlatformController();
 
 platformRoutes.get("/catalog-prefill", catchErrors(platformController.getCatalogPrefillData));
@@ -267,4 +268,4 @@ platformRoutes.post("/product-option-values", authenticate, allowActions(ACTIONS
 platformRoutes.patch("/product-option-values/:optionValueId", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(updateProductOptionValueSchema), catchErrors(platformController.updateProductOptionValue));
 platformRoutes.delete("/product-option-values/:optionValueId", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(productOptionValueIdSchema), catchErrors(platformController.deleteProductOptionValue));
 
-module.exports = { platformRoutes };
+module.exports = { platformRoutes, cmsRoutes };

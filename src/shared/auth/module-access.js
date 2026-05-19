@@ -5,10 +5,43 @@ const {
 
 const ROLES_WITH_MODULE_ACCESS = new Set(["sub-admin", "seller-sub-admin"]);
 
+const MODULE_ALIASES = {
+  "admin-users": "rbac",
+  admin_users: "rbac",
+  "user-permissions": "rbac",
+  user_permissions: "rbac",
+  product: "products",
+  "product-catalog": "products",
+  seller: "sellers",
+  vendors: "sellers",
+  commissions: "sellers/commissions",
+  "seller-commissions": "sellers/commissions",
+  seller_commissions: "sellers/commissions",
+  order: "orders",
+  "order-status": "orders",
+  order_status: "orders",
+  coupon: "pricing",
+  coupons: "pricing",
+  "discount-coupons": "pricing",
+  discount_coupons: "pricing",
+  "promotion-banners": "cms",
+  promotion_banners: "cms",
+  "content-management": "cms",
+  content_management: "cms",
+  messages: "notifications",
+  "shipping-packages": "delivery",
+  shipping_packages: "delivery",
+  "dynamic-pricing": "dynamic-pricing",
+  dynamic_pricing: "dynamic-pricing",
+  "referral-commerce": "referral",
+  referral_commerce: "referral",
+};
+
 function cleanModuleName(value) {
-  return String(value || "")
+  const normalized = String(value || "")
     .trim()
     .toLowerCase();
+  return MODULE_ALIASES[normalized] || normalized;
 }
 
 function getRequestModule(req) {
@@ -41,6 +74,7 @@ function getRequestModule(req) {
 
     const adminModuleMap = {
       access: "rbac",
+      cms: "cms",
       dashboard: "admin",
       users: "users",
       vendors: "sellers",
@@ -83,10 +117,13 @@ function getRequestModule(req) {
   if (first === "platform" && ["categories", "brands", "hsn-codes"].includes(second)) {
     return "products";
   }
+  if (first === "coupons") {
+    return "pricing";
+  }
   if (first === "pricing" && second === "promotion-banners") {
     return "cms";
   }
-  return first;
+  return cleanModuleName(first);
 }
 
 function usesModuleAccess(auth) {

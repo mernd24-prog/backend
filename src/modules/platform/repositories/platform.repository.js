@@ -45,9 +45,28 @@ class PlatformRepository {
     return CategoryTreeModel.findOne({ categoryKey });
   }
 
+  async getCategoryDescendantKeys(categoryKey) {
+    const category = await this.getCategory(categoryKey);
+    if (!category) return [];
+
+    const keys = [category.categoryKey];
+    for (let index = 0; index < keys.length; index += 1) {
+      const children = await CategoryTreeModel.find({
+        parentKey: keys[index],
+        active: true,
+      }).select("categoryKey");
+      children.forEach((child) => {
+        if (child.categoryKey && !keys.includes(child.categoryKey)) {
+          keys.push(child.categoryKey);
+        }
+      });
+    }
+    return keys;
+  }
+
   async listCategories(filter = {}, pagination = {}) {
     const [items, total] = await Promise.all([
-      CategoryTreeModel.find(filter).sort({ sortOrder: 1, title: 1 }).skip(pagination.skip).limit(pagination.limit),
+      CategoryTreeModel.find(filter).sort({ sortOrder: 1, title: 1 }).skip(pagination.skip).limit(pagination.limit).lean(),
       CategoryTreeModel.countDocuments(filter),
     ]);
     return { items, total };

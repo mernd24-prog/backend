@@ -845,9 +845,9 @@ class SellerService {
 
   assertRbacAssignmentCapability(actorPermissionMap) {
     if (!actorPermissionMap) return;
-    const rbacActions = actorPermissionMap.get("rbac") || new Set();
+    const sellerActions = actorPermissionMap.get("sellers") || new Set();
     const canAssign = ["add", "edit", "update", "approval", "status"].some((action) =>
-      rbacActions.has(action),
+      sellerActions.has(action),
     );
     if (!canAssign) {
       throw new AppError("Forbidden: missing permission to manage access", 403);

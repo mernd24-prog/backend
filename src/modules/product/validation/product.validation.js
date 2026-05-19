@@ -292,6 +292,8 @@ const listProductSchema = Joi.object({
     state: Joi.string(),
     city: Joi.string(),
     productFamilyCode: Joi.string(),
+    family: Joi.string(),
+    familyCode: Joi.string(),
     sku: Joi.string(),
     brand: Joi.string(),
     tags: Joi.string(),
@@ -299,9 +301,15 @@ const listProductSchema = Joi.object({
     minPrice: Joi.number().min(0),
     maxPrice: Joi.number().min(0),
     inStock: Joi.boolean(),
+    rating: Joi.number().min(0).max(5),
     includeAllStatuses: Joi.boolean(),
+    sort: Joi.string().valid("price_asc", "price_desc", "newest", "oldest", "rating", "popular", ""),
     sortBy: Joi.string().valid("price_asc", "price_desc", "newest", "oldest", "rating", "popular"),
-  }).required(),
+  })
+    .pattern(/^attr_[A-Za-z0-9_-]+$/, Joi.string().allow(""))
+    .pattern(/^attribute\.[A-Za-z0-9_-]+$/, Joi.string().allow(""))
+    .unknown(true)
+    .required(),
   params: Joi.object({}).required(),
 });
 

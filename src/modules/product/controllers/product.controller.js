@@ -15,13 +15,27 @@ class ProductController {
 
   list = async (req, res) => {
     const result = await this.productService.listProducts(req.query);
-    res.json(okResponse(result.items, { total: result.total }));
+    const page = Number(req.query.page || 1);
+    const limit = Number(req.query.limit || 20);
+    res.json(okResponse(result.items, {
+      total: result.total,
+      page,
+      limit,
+      totalPages: Math.max(Math.ceil((result.total || 0) / limit), 1),
+    }));
   };
 
   listMine = async (req, res) => {
     const actor = getCurrentUser(req);
     const result = await this.productService.listSellerProducts(req.query, actor);
-    res.json(okResponse(result.items, { total: result.total }));
+    const page = Number(req.query.page || 1);
+    const limit = Number(req.query.limit || 20);
+    res.json(okResponse(result.items, {
+      total: result.total,
+      page,
+      limit,
+      totalPages: Math.max(Math.ceil((result.total || 0) / limit), 1),
+    }));
   };
 
   getOne = async (req, res) => {

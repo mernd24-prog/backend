@@ -352,19 +352,27 @@ class ProductService {
   // ─── List ─────────────────────────────────────────────────────────────────
 
   async listProducts(query) {
-    const pagination = { ...getPage(query), sortBy: query.sortBy };
+    const pagination = { ...getPage(query), sortBy: query.sortBy || query.sort };
     const filter = {};
 
-    if (query.category) filter.category = query.category;
+    if (query.category) {
+      const categoryKeys = await this.platformRepository.getCategoryDescendantKeys(query.category);
+      filter.category = categoryKeys.length ? { $in: categoryKeys } : query.category;
+    }
     if (query.hsnCode) filter.hsnCode = query.hsnCode;
     if (query.color) filter.color = query.color;
-    if (query.productFamilyCode) filter.productFamilyCode = query.productFamilyCode;
+    if (query.productFamilyCode || query.family || query.familyCode) {
+      filter.productFamilyCode = query.productFamilyCode || query.family || query.familyCode;
+    }
     if (query.sku) filter.sku = query.sku;
-    if (query.brand) filter.brand = { $regex: query.brand, $options: "i" };
+    if (query.brand) filter.brand = new RegExp(`^${escapeRegExp(query.brand)}$`, "i");
     if (query.sellerId) filter.sellerId = query.sellerId;
     if (query.productType) filter.productType = query.productType;
     if (query.visibility) filter.visibility = query.visibility;
     if (query.tags) filter.tags = { $in: query.tags.split(",").map((t) => t.trim()) };
+    if (query.rating) filter.rating = { $gte: Number(query.rating) };
+
+    this.applyAttributeFilters(filter, query);
 
     if (query.minPrice !== undefined || query.maxPrice !== undefined) {
       filter.price = {};
@@ -404,14 +412,73 @@ class ProductService {
   }
 
   async listSellerProducts(query, actor) {
-    const pagination = { ...getPage(query), sortBy: query.sortBy };
+    const pagination = { ...getPage(query), sortBy: query.sortBy || query.sort };
     const sellerId = actor.ownerSellerId || actor.userId;
     const filter = {};
     if (query.status) filter.status = query.status;
-    if (query.category) filter.category = query.category;
+    if (query.category) {
+      const categoryKeys = await this.platformRepository.getCategoryDescendantKeys(query.category);
+      filter.category = categoryKeys.length ? { $in: categoryKeys } : query.category;
+    }
     if (query.sku) filter.sku = query.sku;
+    if (query.brand) filter.brand = new RegExp(`^${escapeRegExp(query.brand)}$`, "i");
+    if (query.productFamilyCode || query.family || query.familyCode) {
+      filter.productFamilyCode = query.productFamilyCode || query.family || query.familyCode;
+    }
     if (query.productType) filter.productType = query.productType;
+    this.applyAttributeFilters(filter, query);
     return this.productRepository.paginateBySeller(sellerId, filter, pagination);
+  }
+
+  applyAttributeFilters(filter, query = {}) {
+    const reserved = new Set([
+      "page",
+      "limit",
+      "q",
+      "keyWord",
+      "search",
+      "category",
+      "status",
+      "productType",
+      "visibility",
+      "hsnCode",
+      "color",
+      "country",
+      "state",
+      "city",
+      "productFamilyCode",
+      "family",
+      "familyCode",
+      "sku",
+      "brand",
+      "tags",
+      "sellerId",
+      "minPrice",
+      "maxPrice",
+      "inStock",
+      "includeAllStatuses",
+      "sort",
+      "sortBy",
+      "rating",
+    ]);
+
+    Object.entries(query).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      const attributeKey = key.startsWith("attr_")
+        ? key.replace(/^attr_/, "")
+        : key.startsWith("attribute.")
+          ? key.replace(/^attribute\./, "")
+          : null;
+
+      if (attributeKey) {
+        filter[`attributes.${attributeKey}`] = parseFilterValue(value);
+        return;
+      }
+
+      if (!reserved.has(key)) {
+        filter[`attributes.${key}`] = parseFilterValue(value);
+      }
+    });
   }
 
   // ─── Get single ───────────────────────────────────────────────────────────
@@ -613,6 +680,20 @@ class ProductService {
 // helper
 function isSeller(actor) {
   return actor.role === "seller" || actor.role === "seller-sub-admin";
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function parseFilterValue(value) {
+  if (Array.isArray(value)) return { $in: value.map(String) };
+  const parts = String(value)
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length > 1) return { $in: parts };
+  return parts[0] || value;
 }
 
 module.exports = { ProductService };
