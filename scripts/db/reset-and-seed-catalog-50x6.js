@@ -22,8 +22,153 @@ function slugify(value = "") {
 }
 
 function imageUrl(seed, keywords, width = 1200, height = 1200) {
-  return `https://loremflickr.com/${width}/${height}/${encodeURIComponent(keywords)}?lock=${seed}`;
+  const preset = imagePreset(keywords);
+  const photoId = pick(IMAGE_POOLS[preset] || IMAGE_POOLS.fallback, seed);
+  return `https://images.unsplash.com/${photoId}?auto=format&fit=crop&w=${width}&h=${height}&q=80`;
 }
+
+function brandLogoUrl(name, index) {
+  const colors = ["111827", "1d4ed8", "7c2d12", "365314", "831843", "334155"];
+  return `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=${pick(colors, index)}&color=fff&size=512&bold=true&format=png`;
+}
+
+function imagePreset(value = "") {
+  const text = String(value).toLowerCase();
+
+  const rules = [
+    ["tShirts", /t-?shirts?|tees?/],
+    ["shirts", /casual shirts?|shirts?/],
+    ["denim", /jeans|denim/],
+    ["trousers", /trousers?|pants?/],
+    ["jackets", /jackets?|coats?/],
+    ["dresses", /dresses?/],
+    ["ethnicWear", /sarees?|kurtas?|ethnic/],
+    ["tops", /tops?/],
+    ["sneakers", /sneakers?|sports shoes?|trail shoes?|running shoes?/],
+    ["heels", /heels?|sandals?|formal shoes?/],
+    ["watches", /watches?/],
+    ["eyewear", /sunglasses|eyewear/],
+    ["bags", /handbags?|wallets?|belts?/],
+    ["phones", /android phones?|iphones?|phone cases?|mobile accessories|mobiles?/],
+    ["powerBanks", /power banks?/],
+    ["laptops", /gaming laptops?|business laptops?|laptops?|tablets?/],
+    ["monitors", /monitors?|keyboards?/],
+    ["audio", /headphones?|earbuds?|speakers?|soundbars?|microphones?/],
+    ["camera", /cameras?|lenses?|tripods?/],
+    ["kitchenAppliance", /mixer grinders?|microwave ovens?|air fryers?|coffee makers?|induction cooktops?|kitchen appliance/],
+    ["furniture", /sofas?|beds?|dining tables?|office chairs?|shoe racks?|furniture/],
+    ["homeDecor", /wall decor|lighting|showpieces?|rugs?|curtains?|home decor/],
+    ["skincare", /face wash|moisturizers?|sunscreen|serums?|body lotions?|skincare/],
+    ["hairCare", /shampoo|conditioner|hair serum|hair oil|hair dryers?|hair care/],
+    ["makeup", /lipsticks?|foundations?|eyeliners?|nail polish|makeup kits?|makeup/],
+    ["yoga", /yoga mats?/],
+    ["gym", /dumbbells?|resistance bands?|treadmills?|gym gloves?|fitness|training/],
+    ["backpacks", /backpacks?/],
+    ["camping", /camping tents?|tents?/],
+    ["bottles", /water bottles?|bottles?/],
+    ["cycling", /cycling gear|cycling|bicycle|bike/],
+    ["outdoor", /outdoor/],
+  ];
+
+  const match = rules.find(([, pattern]) => pattern.test(text));
+  if (match) return match[0];
+  if (/fashion|clothing/.test(text)) return "fashion";
+  if (/phone|laptop|audio|camera|electronics|gadget|keyboard|monitor|speaker|earbud|headphone/.test(text)) return "electronics";
+  if (/home|kitchen|furniture|decor|sofa|bed|chair|lighting|curtain|rug|coffee|appliance/.test(text)) return "home";
+  if (/beauty|skin|hair|makeup|serum|shampoo|cosmetic|sunscreen|lipstick|fragrance/.test(text)) return "beauty";
+  if (/sport|fitness|yoga|gym|outdoor|trail|camping|cycling|dumbbell|treadmill/.test(text)) return "sports";
+  return "fallback";
+}
+
+const IMAGE_POOLS = {
+  tShirts: ["photo-1523381210434-271e8be1f52b", "photo-1503341504253-dff4815485f1", "photo-1583743814966-8936f37f4678"],
+  shirts: ["photo-1596755094514-f87e34085b2c", "photo-1602810318383-e386cc2a3ccf", "photo-1598033129183-c4f50c736f10"],
+  denim: ["photo-1541099649105-f69ad21f3246", "photo-1542272604-787c3835535d", "photo-1475178626620-a4d074967452"],
+  trousers: ["photo-1473966968600-fa801b869a1a", "photo-1594633312681-425c7b97ccd1", "photo-1506629905607-d405d7d3b0d2"],
+  jackets: ["photo-1551028719-00167b16eac5", "photo-1543076447-215ad9ba6923", "photo-1520975954732-35dd22299614"],
+  dresses: ["photo-1496747611176-843222e1e57c", "photo-1515372039744-b8f02a3ae446", "photo-1568252542512-9fe8fe9c87bb"],
+  ethnicWear: ["photo-1583391733956-6c78276477e2", "photo-1610030469983-98e550d6193c", "photo-1597983073493-88cd35cf93b0"],
+  tops: ["photo-1503342217505-b0a15ec3261c", "photo-1544441893-675973e31985", "photo-1529139574466-a303027c1d8b"],
+  sneakers: ["photo-1542291026-7eec264c27ff", "photo-1549298916-b41d501d3772", "photo-1460353581641-37baddab0fa2"],
+  heels: ["photo-1543163521-1bf539c55dd2", "photo-1543163521-1bf539c55dd2", "photo-1515347619252-60a4bf4fff4f"],
+  watches: ["photo-1524592094714-0f0654e20314", "photo-1523275335684-37898b6baf30", "photo-1434056886845-dac89ffe9b56"],
+  eyewear: ["photo-1511499767150-a48a237f0083", "photo-1574258495973-f010dfbb5371", "photo-1509695507497-903c140c43b0"],
+  bags: ["photo-1548036328-c9fa89d128fa", "photo-1590874103328-eac38a683ce7", "photo-1553062407-98eeb64c6a62"],
+  phones: ["photo-1511707171634-5f897ff02aa9", "photo-1598327105666-5b89351aff97", "photo-1580910051074-3eb694886505"],
+  powerBanks: ["photo-1609091839311-d5365f9ff1c5", "photo-1622957461168-2023e6c7e602", "photo-1609592806596-b43bada2f7c3"],
+  laptops: ["photo-1496181133206-80ce9b88a853", "photo-1517336714731-489689fd1ca8", "photo-1588872657578-7efd1f1555ed"],
+  monitors: ["photo-1527443224154-c4a3942d3acf", "photo-1547082299-de196ea013d6", "photo-1616763355548-1b606f439f86"],
+  audio: ["photo-1505740420928-5e560c06d30e", "photo-1606220945770-b5b6c2c55bf1", "photo-1545454675-3531b543be5d"],
+  camera: ["photo-1526170375885-4d8ecf77b99f", "photo-1502920917128-1aa500764cbd", "photo-1516035069371-29a1b244cc32"],
+  kitchenAppliance: ["photo-1556911220-bff31c812dba", "photo-1585659722983-3a675dabf23d", "photo-1517668808822-9ebb02f2a0e6"],
+  furniture: ["photo-1555041469-a586c61ea9bc", "photo-1505693416388-ac5ce068fe85", "photo-1493663284031-b7e3aefcae8e"],
+  homeDecor: ["photo-1513506003901-1e6a229e2d15", "photo-1524758631624-e2822e304c36", "photo-1513519245088-0e12902e5a38"],
+  skincare: ["photo-1571781926291-c477ebfd024b", "photo-1620916566398-39f1143ab7be", "photo-1596462502278-27bfdc403348"],
+  hairCare: ["photo-1522335789203-aabd1fc54bc9", "photo-1527799820374-dcf8d9d4a388", "photo-1560066984-138dadb4c035"],
+  makeup: ["photo-1526045478516-99145907023c", "photo-1596462502278-27bfdc403348", "photo-1583241800698-9f8f5d9bb47b"],
+  yoga: ["photo-1518611012118-696072aa579a", "photo-1544367567-0f2fcb009e0b", "photo-1599901860904-17e6ed7083a0"],
+  gym: ["photo-1517836357463-d25dfeac3438", "photo-1599058917212-d750089bc07e", "photo-1534438327276-14e5300c3a48"],
+  backpacks: ["photo-1553062407-98eeb64c6a62", "photo-1622260614153-03223fb72052", "photo-1491637639811-60e2756cc1c7"],
+  camping: ["photo-1504280390367-361c6d9f38f4", "photo-1478131143081-80f7f84ca84d", "photo-1537905569824-f89f14cceb68"],
+  bottles: ["photo-1602143407151-7111542de6e8", "photo-1523362628745-0c100150b504", "photo-1526401485004-2aa9e7a8b042"],
+  cycling: ["photo-1485965120184-e220f721d03e", "photo-1507035895480-2b3156c31fc8", "photo-1517649763962-0c623066013b"],
+  outdoor: ["photo-1500530855697-b586d89ba3ee", "photo-1522163182402-834f871fd851", "photo-1504280390367-361c6d9f38f4"],
+  fashion: [
+    "photo-1483985988355-763728e1935b",
+    "photo-1523381210434-271e8be1f52b",
+    "photo-1496747611176-843222e1e57c",
+    "photo-1515886657613-9f3515b0c78f",
+    "photo-1516762689617-e1cffcef479d",
+    "photo-1503342217505-b0a15ec3261c",
+    "photo-1542291026-7eec264c27ff",
+    "photo-1543163521-1bf539c55dd2",
+  ],
+  electronics: [
+    "photo-1511707171634-5f897ff02aa9",
+    "photo-1496181133206-80ce9b88a853",
+    "photo-1505740420928-5e560c06d30e",
+    "photo-1526170375885-4d8ecf77b99f",
+    "photo-1588872657578-7efd1f1555ed",
+    "photo-1546054454-aa26e2b734c7",
+    "photo-1516321318423-f06f85e504b3",
+    "photo-1517336714731-489689fd1ca8",
+  ],
+  home: [
+    "photo-1556911220-bff31c812dba",
+    "photo-1484154218962-a197022b5858",
+    "photo-1493663284031-b7e3aefcae8e",
+    "photo-1505693416388-ac5ce068fe85",
+    "photo-1513506003901-1e6a229e2d15",
+    "photo-1524758631624-e2822e304c36",
+    "photo-1501045661006-fcebe0257c3f",
+    "photo-1555041469-a586c61ea9bc",
+  ],
+  beauty: [
+    "photo-1596462502278-27bfdc403348",
+    "photo-1522335789203-aabd1fc54bc9",
+    "photo-1571781926291-c477ebfd024b",
+    "photo-1620916566398-39f1143ab7be",
+    "photo-1526045478516-99145907023c",
+    "photo-1608248597279-f99d160bfcbc",
+    "photo-1612817288484-6f916006741a",
+    "photo-1608571423902-eed4a5ad8108",
+  ],
+  sports: [
+    "photo-1517836357463-d25dfeac3438",
+    "photo-1518611012118-696072aa579a",
+    "photo-1599058917212-d750089bc07e",
+    "photo-1526401485004-2aa9e7a8b042",
+    "photo-1530549387789-4c1017266635",
+    "photo-1542291026-7eec264c27ff",
+    "photo-1500530855697-b586d89ba3ee",
+    "photo-1522163182402-834f871fd851",
+  ],
+  fallback: [
+    "photo-1441986300917-64674bd600d8",
+    "photo-1472851294608-062f824d29cc",
+    "photo-1481437156560-3205f6a55735",
+  ],
+};
 
 const CATEGORY_TREE = [
   {
@@ -223,8 +368,10 @@ function makeCategoryDocs() {
 function makeBrands() {
   return BRANDS.map((name, index) => ({
     name,
-    logo: imageUrl(11000 + index, `${name} logo`, 500, 500),
+    logo: brandLogoUrl(name, index),
+    logoUrl: brandLogoUrl(name, index),
     thumbnails: imageUrl(12000 + index, `${name} brand product`, 900, 500),
+    imageUrl: imageUrl(12100 + index, `${name} brand product`, 900, 500),
     active: true,
     sortOrder: index + 1,
   }));
@@ -307,7 +454,7 @@ function makeProduct(leaf, leafIndex, itemIndex, familyCode, brand, preset) {
     images: [
       imageUrl(14000 + leafIndex * 100 + itemIndex, `${leaf.title} ${brand}`, 1200, 1200),
       imageUrl(15000 + leafIndex * 100 + itemIndex, `${leaf.title} ecommerce`, 1200, 1200),
-      imageUrl(16000 + leafIndex * 100 + itemIndex, `${preset} product detail`, 1200, 1200),
+      imageUrl(16000 + leafIndex * 100 + itemIndex, `${leaf.title} product detail`, 1200, 1200),
     ],
     origin: { country: "India", state: "Maharashtra", city: "Mumbai" },
     warranty: {

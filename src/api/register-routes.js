@@ -11,7 +11,8 @@ const { analyticsRoutes } = require("../modules/analytics/routes/analytics.route
 const { pricingRoutes } = require("../modules/pricing/routes/pricing.routes");
 const { walletRoutes } = require("../modules/wallet/routes/wallet.routes");
 const { adminRoutes } = require("../modules/admin/routes/admin.routes");
-const { platformRoutes, cmsRoutes } = require("../modules/platform/routes/platform.routes");
+const { platformRoutes } = require("../modules/platform/routes/platform.routes");
+const { cmsRoutes } = require("../modules/cms/routes/cms.routes");
 const { taxRoutes } = require("../modules/tax/routes/tax.routes");
 const { subscriptionRoutes } = require("../modules/subscription/routes/subscription.routes");
 const { rbacRoutes } = require("../modules/rbac/routes/rbac.routes");
@@ -59,7 +60,6 @@ function registerRoutes(app) {
   app.use(`${env.apiPrefix}/delivery`, deliveryRoutes);
   app.use(`${env.apiPrefix}/file-uploader`, fileUploaderRoutes);
   app.use(`${env.apiPrefix}/meta`, metaRoutes);
-  app.use(`${env.apiPrefix}/cms`, cmsRoutes);
 }
 
 module.exports = { registerRoutes };
