@@ -51,6 +51,10 @@ const socialLoginSchema = Joi.object({
   body: Joi.object({
     provider: Joi.string().valid("google", "firebase").required(),
     idToken: Joi.string().required(),
+    email: Joi.string().email(),
+    firstName: Joi.string().min(1).max(50),
+    lastName: Joi.string().allow("").max(50),
+    avatarUrl: Joi.string().uri().allow(""),
     role: Joi.string()
       .valid(...Object.values(ROLES))
       .default(ROLES.BUYER),

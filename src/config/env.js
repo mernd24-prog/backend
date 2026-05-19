@@ -6,6 +6,7 @@ const defaultMaxDocumentBytes = 5 * 1024 * 1024;
 const maxDocumentBytes = Number(process.env.MAX_DOCUMENT_UPLOAD_BYTES);
 const emailPort = Number(process.env.EMAIL_PORT || process.env.SMTP_PORT || 1025);
 const emailSecureDefault = emailPort === 465 ? "true" : "false";
+const isProductionMode = String(process.env.PRODUCTION || "false").trim() === "true";
 
 const env = {
   nodeEnv: process.env.NODE_ENV || "development",
@@ -56,6 +57,9 @@ const env = {
     pass: process.env.EMAIL_PASS || process.env.SMTP_PASS || "",
   },
   defaultFromEmail: process.env.EMAIL_FROM || process.env.DEFAULT_FROM_EMAIL || "no-reply@example.com",
+  auth: {
+    staticOtp: String(process.env.STATIC_OTP || process.env.DEV_OTP || "123456").trim(),
+  },
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME || "",
     apiKey: process.env.CLOUDINARY_API_KEY || "",
@@ -69,7 +73,7 @@ const env = {
         : defaultMaxDocumentBytes,
   },
   enableCron: String(process.env.ENABLE_CRON || "true") === "true",
-  production: String(process.env.PRODUCTION || "false") === "true",
+  production: isProductionMode,
 };
 
 module.exports = { env };

@@ -21,6 +21,7 @@ const { createOtp } = require("../../../shared/tools/otp");
 const { redis } = require("../../../infrastructure/redis/redis-client");
 const { sendMail } = require("../../../infrastructure/mail/mailer");
 const otpEmailTemplate = require("../../../../templates/otp-email.ejs");
+const { env } = require("../../../config/env");
 const {
   SELLER_ONBOARDING_STATUS,
   makeSellerOnboardingChecklist,
@@ -551,7 +552,7 @@ class AuthService {
         throw new AppError("Account is suspended. Please contact support.", 403);
       }
     }
-    const otp = createOtp();
+    const otp = env.production ? createOtp() : env.auth.staticOtp;
     const otpKey = this.makeOtpKey(email, purpose);
 
     // Store OTP in Redis with 10 minute expiration
@@ -564,7 +565,7 @@ class AuthService {
       otp,
       purpose: this.getOtpPurposeLabel(purpose),
     });
-    await sendMail({
+    const delivery = await sendMail({
       to: email,
       subject: `OTP for ${this.getOtpPurposeLabel(purpose)}`,
       html,
@@ -583,7 +584,11 @@ class AuthService {
       ),
     );
 
-    return { message: "OTP sent successfully" };
+    return {
+      message: env.production ? "OTP sent successfully" : "Static OTP ready",
+      deliveryMode: env.production ? "third_party_email" : "static",
+      ...(env.production ? {} : { otp, emailDelivery: delivery.response }),
+    };
   }
 
   async verifyOtp(payload, requestContext = {}) {

@@ -6,7 +6,12 @@ const { admin, getFirebaseApp } = require("./firebase-admin");
 const googleClient = new OAuth2Client();
 
 class SocialAuthService {
-  async verifyIdentityToken({ provider, idToken }) {
+  async verifyIdentityToken(payload) {
+    const { provider, idToken } = payload;
+    if (!env.production) {
+      return this.verifyStaticToken(payload);
+    }
+
     if (provider === "google") {
       return this.verifyGoogleToken(idToken);
     }
@@ -16,6 +21,37 @@ class SocialAuthService {
     }
 
     throw new AppError("Unsupported social login provider", 400);
+  }
+
+  verifyStaticToken({ provider, idToken, email, firstName, lastName, avatarUrl }) {
+    const staticEmail = email || this.extractEmailFromStaticToken(idToken);
+    if (!staticEmail) {
+      throw new AppError(
+        "Static social login needs an email. Send email or use idToken like static:user@example.com.",
+        400,
+      );
+    }
+
+    const normalizedEmail = staticEmail.toLowerCase();
+    const [localPart] = normalizedEmail.split("@");
+    return {
+      provider,
+      providerUserId: `static:${provider}:${normalizedEmail}`,
+      email: normalizedEmail,
+      emailVerified: true,
+      firstName: firstName || localPart || "Static",
+      lastName: lastName || "User",
+      avatarUrl: avatarUrl || "",
+    };
+  }
+
+  extractEmailFromStaticToken(idToken) {
+    const token = String(idToken || "").trim();
+    const staticTokenMatch = token.match(/^(?:static|dev):(.+@.+)$/i);
+    if (staticTokenMatch) {
+      return staticTokenMatch[1].trim();
+    }
+    return token.includes("@") ? token : "";
   }
 
   async verifyGoogleToken(idToken) {
