@@ -479,6 +479,7 @@ function pageRecord({
 }) {
   const galleryImages = gallery(heroImage, coverImage, thumbnailUrl, ...(metadata.images || []));
   const description = data?.description || excerpt || "";
+  const sections = normalizeSections(data || {}, title);
   return {
     slug,
     title,
@@ -490,7 +491,8 @@ function pageRecord({
     tags,
     image: imageObject(heroImage, title, "hero"),
     gallery: galleryImages.map((url) => imageObject(url, title, "gallery")),
-    sections: normalizeSections(data || {}, title),
+    sections,
+    points: sections.flatMap((section) => section.points || []),
     cta: {
       label: data?.ctaText || "",
       url: data?.ctaTo || routePath || "",

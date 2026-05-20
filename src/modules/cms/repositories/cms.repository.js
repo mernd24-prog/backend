@@ -1,31 +1,34 @@
-const { StaticPageModel } = require("../models/static-page.model");
+const { ContentPageModel } = require("../../platform/models/content-page.model");
 
 class CmsRepository {
   async create(payload) {
-    return StaticPageModel.create(payload);
+    return ContentPageModel.create(payload);
   }
 
   async update(slug, payload) {
-    return StaticPageModel.findOneAndUpdate({ slug }, payload, { new: true });
+    return ContentPageModel.findOneAndUpdate({ slug }, payload, {
+      new: true,
+      runValidators: true,
+    });
   }
 
   async findBySlug(slug) {
-    return StaticPageModel.findOne({ slug });
+    return ContentPageModel.findOne({ slug });
   }
 
   async list(filter = {}, pagination = {}) {
     const [items, total] = await Promise.all([
-      StaticPageModel.find(filter)
-        .sort({ createdAt: -1 })
+      ContentPageModel.find(filter)
+        .sort({ sortOrder: 1, createdAt: -1 })
         .skip(pagination.skip)
         .limit(pagination.limit),
-      StaticPageModel.countDocuments(filter),
+      ContentPageModel.countDocuments(filter),
     ]);
     return { items, total };
   }
 
   async delete(slug) {
-    return StaticPageModel.findOneAndDelete({ slug });
+    return ContentPageModel.findOneAndDelete({ slug });
   }
 }
 

@@ -90,6 +90,7 @@ const contentPageSchema = new mongoose.Schema(
     image: { type: imageSchema, default: () => ({}) },
     gallery: { type: [imageSchema], default: [] },
     sections: { type: [contentSectionSchema], default: [] },
+    points: { type: [contentPointSchema], default: [] },
     cta: { type: ctaSchema, default: () => ({}) },
     seo: { type: seoSchema, default: () => ({}) },
     visibility: {
