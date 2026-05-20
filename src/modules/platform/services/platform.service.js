@@ -286,6 +286,122 @@ class PlatformService {
     return this.platformRepository.deleteGeography(countryCode);
   }
 
+  async createContentPage(payload) {
+    const nextPayload = this.normalizeContentPagePayload(payload);
+    if (nextPayload.published && !nextPayload.publishedAt) {
+      nextPayload.publishedAt = new Date();
+    }
+    return this.platformRepository.createContentPage(nextPayload);
+  }
+
+  async updateContentPage(slug, payload) {
+    const item = await this.platformRepository.getContentPage(slug);
+    if (!item) {
+      throw new AppError("Content page not found", 404);
+    }
+    const nextPayload = this.normalizeContentPagePayload(payload, item);
+    if (nextPayload.published && !nextPayload.publishedAt) {
+      nextPayload.publishedAt = new Date();
+    }
+    return this.platformRepository.updateContentPage(slug, nextPayload);
+  }
+
+  async getContentPage(slug) {
+    const item = await this.platformRepository.getContentPage(slug);
+    if (!item) {
+      throw new AppError("Content page not found", 404);
+    }
+    return item;
+  }
+
+  async listContentPages(query) {
+    const pagination = getPage(query);
+    const filter = {};
+    if (query.pageType) filter.pageType = query.pageType;
+    if (query.status) filter.status = query.status;
+    if (query.language) filter.language = query.language;
+    if (query.published !== undefined) filter.published = query.published === true || query.published === "true";
+    const q = query.q || query.keyWord || query.search;
+    if (q) {
+      filter.$or = [
+        { title: { $regex: q, $options: "i" } },
+        { slug: { $regex: q, $options: "i" } },
+        { description: { $regex: q, $options: "i" } },
+        { body: { $regex: q, $options: "i" } },
+      ];
+    }
+    return this.platformRepository.listContentPages(filter, pagination);
+  }
+
+  normalizeContentPagePayload(payload = {}, existing = {}) {
+    const nextPayload = { ...payload };
+    const imageUrl = nextPayload.image?.url || nextPayload.heroImage || nextPayload.coverImage || "";
+    const imageAlt = nextPayload.image?.alt || nextPayload.title || existing.title || "";
+
+    if (nextPayload.image || imageUrl) {
+      nextPayload.image = {
+        url: imageUrl,
+        alt: imageAlt,
+        title: nextPayload.image?.title || "",
+        caption: nextPayload.image?.caption || "",
+        type: nextPayload.image?.type || "hero",
+      };
+    }
+
+    if (Array.isArray(nextPayload.galleryImages) && !Array.isArray(nextPayload.gallery)) {
+      nextPayload.gallery = nextPayload.galleryImages.map((url) => ({ url, alt: nextPayload.title || "" }));
+    }
+
+    if (Array.isArray(nextPayload.gallery)) {
+      nextPayload.galleryImages = nextPayload.gallery.map((item) => item?.url || "").filter(Boolean);
+    }
+
+    if (nextPayload.image?.url) {
+      nextPayload.heroImage = nextPayload.heroImage || nextPayload.image.url;
+      nextPayload.coverImage = nextPayload.coverImage || nextPayload.image.url;
+      nextPayload.thumbnailUrl = nextPayload.thumbnailUrl || nextPayload.image.url;
+    }
+
+    if (!nextPayload.excerpt && nextPayload.description) {
+      nextPayload.excerpt = nextPayload.description;
+    }
+
+    if (!nextPayload.body && (nextPayload.description || Array.isArray(nextPayload.sections))) {
+      nextPayload.body = this.makeContentPageBody(nextPayload);
+    }
+
+    if (nextPayload.status) {
+      nextPayload.published = nextPayload.status === "published";
+    } else if (nextPayload.published !== undefined) {
+      nextPayload.status = nextPayload.published ? "published" : "draft";
+    }
+
+    return nextPayload;
+  }
+
+  makeContentPageBody(page = {}) {
+    const lines = [`# ${page.title || ""}`];
+    if (page.description) lines.push("", page.description);
+    for (const section of page.sections || []) {
+      if (section.title) lines.push("", `## ${section.title}`);
+      if (section.description) lines.push(section.description);
+      for (const point of section.points || []) {
+        if (point.title || point.description) {
+          lines.push(`- ${[point.title, point.description].filter(Boolean).join(": ")}`);
+        }
+      }
+    }
+    return lines.join("\n").trim();
+  }
+
+  async deleteContentPage(slug) {
+    const item = await this.platformRepository.getContentPage(slug);
+    if (!item) {
+      throw new AppError("Content page not found", 404);
+    }
+    return this.platformRepository.deleteContentPage(slug);
+  }
+
   async listProductReviews(query = {}) {
     const pagination = getPage(query);
     const filter = {};

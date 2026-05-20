@@ -311,6 +311,166 @@ const geographyParamSchema = Joi.object({
   }).required(),
 });
 
+const cmsImageSchema = Joi.object({
+  url: Joi.string().allow("").default(""),
+  alt: Joi.string().allow("").default(""),
+  title: Joi.string().allow("").default(""),
+  caption: Joi.string().allow("").default(""),
+  type: Joi.string().allow("").default(""),
+});
+
+const cmsCtaSchema = Joi.object({
+  label: Joi.string().allow("").default(""),
+  url: Joi.string().allow("").default(""),
+  target: Joi.string().valid("_self", "_blank").default("_self"),
+});
+
+const cmsPointSchema = Joi.object({
+  title: Joi.string().allow("").default(""),
+  description: Joi.string().allow("").default(""),
+  image: cmsImageSchema.default({}),
+  cta: cmsCtaSchema.default({}),
+  sortOrder: Joi.number().integer().min(0).default(0),
+});
+
+const cmsSectionSchema = Joi.object({
+  type: Joi.string().allow("").default("content"),
+  title: Joi.string().allow("").default(""),
+  description: Joi.string().allow("").default(""),
+  image: cmsImageSchema.default({}),
+  gallery: Joi.array().items(cmsImageSchema).default([]),
+  points: Joi.array().items(cmsPointSchema).default([]),
+  cta: cmsCtaSchema.default({}),
+  sortOrder: Joi.number().integer().min(0).default(0),
+});
+
+const cmsSeoSchema = Joi.object({
+  metaTitle: Joi.string().allow("").max(70).default(""),
+  metaDescription: Joi.string().allow("").max(180).default(""),
+  keywords: Joi.array().items(Joi.string().trim()).default([]),
+  focusKeyword: Joi.string().allow("").default(""),
+  canonicalUrl: Joi.string().allow("").default(""),
+  robots: Joi.string().allow("").default("index,follow"),
+  ogTitle: Joi.string().allow("").default(""),
+  ogDescription: Joi.string().allow("").default(""),
+  ogImage: cmsImageSchema.default({}),
+  twitterTitle: Joi.string().allow("").default(""),
+  twitterDescription: Joi.string().allow("").default(""),
+  twitterImage: cmsImageSchema.default({}),
+  schemaType: Joi.string().allow("").default("WebPage"),
+  schemaJson: Joi.object().default({}),
+  breadcrumbs: Joi.array().items(
+    Joi.object({
+      label: Joi.string().allow("").default(""),
+      url: Joi.string().allow("").default(""),
+    }),
+  ).default([]),
+});
+
+const createContentPageSchema = Joi.object({
+  body: Joi.object({
+    slug: Joi.string().trim().required(),
+    title: Joi.string().trim().required(),
+    pageType: Joi.string().trim().required(),
+    status: Joi.string().valid("draft", "published", "archived").default("draft"),
+    description: Joi.string().allow("").default(""),
+    body: Joi.string().allow("").default(""),
+    excerpt: Joi.string().allow(""),
+    category: Joi.string().allow(""),
+    tags: Joi.array().items(Joi.string().trim()).default([]),
+    image: cmsImageSchema.default({}),
+    gallery: Joi.array().items(cmsImageSchema).default([]),
+    sections: Joi.array().items(cmsSectionSchema).default([]),
+    cta: cmsCtaSchema.default({}),
+    seo: cmsSeoSchema.default({}),
+    visibility: Joi.object({
+      channels: Joi.array().items(Joi.string().trim()).default(["web", "app"]),
+      roles: Joi.array().items(Joi.string().trim()).default(["public"]),
+    }).default({ channels: ["web", "app"], roles: ["public"] }),
+    sortOrder: Joi.number().integer().min(0).default(0),
+    coverImage: Joi.string().allow(""),
+    thumbnailUrl: Joi.string().allow(""),
+    heroImage: Joi.string().allow(""),
+    galleryImages: Joi.array().items(Joi.string()).default([]),
+    author: Joi.object({
+      name: Joi.string().allow(""),
+      avatar: Joi.string().allow(""),
+    }).default({}),
+    readTime: Joi.number().integer().min(0).default(0),
+    language: Joi.string().trim().default("en"),
+    published: Joi.boolean().default(false),
+    publishedAt: Joi.date().optional(),
+    metadata: Joi.object().default({}),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
+const updateContentPageSchema = Joi.object({
+  body: Joi.object({
+    slug: Joi.string().trim(),
+    title: Joi.string().trim(),
+    pageType: Joi.string().trim(),
+    status: Joi.string().valid("draft", "published", "archived"),
+    description: Joi.string().allow(""),
+    body: Joi.string().allow(""),
+    excerpt: Joi.string().allow(""),
+    category: Joi.string().allow(""),
+    tags: Joi.array().items(Joi.string().trim()),
+    image: cmsImageSchema,
+    gallery: Joi.array().items(cmsImageSchema),
+    sections: Joi.array().items(cmsSectionSchema),
+    cta: cmsCtaSchema,
+    seo: cmsSeoSchema,
+    visibility: Joi.object({
+      channels: Joi.array().items(Joi.string().trim()),
+      roles: Joi.array().items(Joi.string().trim()),
+    }),
+    sortOrder: Joi.number().integer().min(0),
+    coverImage: Joi.string().allow(""),
+    thumbnailUrl: Joi.string().allow(""),
+    heroImage: Joi.string().allow(""),
+    galleryImages: Joi.array().items(Joi.string()),
+    author: Joi.object({
+      name: Joi.string().allow(""),
+      avatar: Joi.string().allow(""),
+    }),
+    readTime: Joi.number().integer().min(0),
+    language: Joi.string().trim(),
+    published: Joi.boolean(),
+    publishedAt: Joi.date().optional(),
+    metadata: Joi.object(),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    slug: Joi.string().required(),
+  }).required(),
+});
+
+const listContentPagesSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: paginationQuery.concat(
+    Joi.object({
+      q: Joi.string().allow(""),
+      keyWord: Joi.string().allow(""),
+      search: Joi.string().allow(""),
+      pageType: Joi.string(),
+      status: Joi.string().valid("draft", "published", "archived"),
+      language: Joi.string(),
+      published: Joi.boolean(),
+    }),
+  ),
+  params: Joi.object({}).required(),
+});
+
+const contentPageSlugSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    slug: Joi.string().required(),
+  }).required(),
+});
+
 const listProductReviewsSchema = Joi.object({
   body: Joi.object({}).required(),
   query: paginationQuery.concat(
