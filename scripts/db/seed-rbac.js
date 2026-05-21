@@ -292,6 +292,15 @@ async function seedRbac() {
       },
       {
         id: uuidv4(),
+        name: "Seller Admin",
+        slug: "seller-admin",
+        description: "Seller-side admin with assignable seller-panel permissions",
+        type: "system",
+        isSuperAdmin: false,
+        permissionSlugs: [],
+      },
+      {
+        id: uuidv4(),
         name: "Seller Sub Admin",
         slug: "seller-sub-admin",
         description: "Scoped seller-panel admin; permissions are assigned per user",
@@ -490,7 +499,7 @@ async function seedRbac() {
     console.log("Modules created:");
     modules.forEach((m) => console.log(`  - ${m.name} (${m.slug})`));
     console.log(
-      `\nRoles created:\n  - Super Admin\n  - Admin\n  - Sub Admin\n  - Seller\n  - Seller Sub Admin\n  - Moderator\n  - Product Manager\n`,
+      `\nRoles created:\n  - Super Admin\n  - Admin\n  - Sub Admin\n  - Seller\n  - Seller Admin\n  - Seller Sub Admin\n  - Moderator\n  - Product Manager\n`,
     );
 
     process.exit(0);

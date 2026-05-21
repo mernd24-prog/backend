@@ -223,7 +223,7 @@ class AdminRepository {
     return { items, total };
   }
 
-  async listOrders({ status = null, fromDate = null, toDate = null, limit = 50, offset = 0 } = {}) {
+  async listOrders({ status = null, sellerId = null, fromDate = null, toDate = null, limit = 50, offset = 0 } = {}) {
     const values = [];
     const clauses = [];
     let idx = 1;
@@ -231,6 +231,15 @@ class AdminRepository {
     if (status) {
       clauses.push(`status = $${idx++}`);
       values.push(status);
+    }
+    if (sellerId) {
+      clauses.push(`EXISTS (
+        SELECT 1
+        FROM order_items oi
+        WHERE oi.order_id = orders.id
+          AND oi.seller_id = $${idx++}
+      )`);
+      values.push(sellerId);
     }
     if (fromDate) {
       clauses.push(`created_at >= $${idx++}`);
@@ -458,17 +467,20 @@ class AdminRepository {
     return UserModel.findOne({ email });
   }
 
-  async listSubAdmins({ ownerAdminId = null, roles = ["sub-admin", "seller-sub-admin"] } = {}) {
+  async listSubAdmins({
+    ownerAdminId = null,
+    roles = ["sub-admin"],
+  } = {}) {
     const filter = { role: { $in: roles } };
     if (ownerAdminId) {
       filter.ownerAdminId = ownerAdminId;
     }
     return UserModel.find(filter)
-      .select("email phone role profile accountStatus allowedModules ownerAdminId ownerSellerId createdAt updatedAt")
+      .select("email phone role profile accountStatus allowedModules ownerAdminId ownerSellerId createdAt updatedAt lastLoginAt")
       .sort({ createdAt: -1 });
   }
 
-  async updateSubAdminModules(userId, ownerAdminId, allowedModules, roles = ["sub-admin", "seller-sub-admin"]) {
+  async updateSubAdminModules(userId, ownerAdminId, allowedModules, roles = ["sub-admin"]) {
     const filter = { _id: userId, role: { $in: roles } };
     if (ownerAdminId) {
       filter.ownerAdminId = ownerAdminId;
@@ -478,7 +490,7 @@ class AdminRepository {
       filter,
       { $set: { allowedModules } },
       { new: true },
-    ).select("email phone role profile accountStatus allowedModules ownerAdminId ownerSellerId createdAt updatedAt");
+    ).select("email phone role profile accountStatus allowedModules ownerAdminId ownerSellerId createdAt updatedAt lastLoginAt");
   }
 
   async upsertFeatureFlag({ flagKey, description, enabled, rolloutPercentage, targetRules, actorId }) {

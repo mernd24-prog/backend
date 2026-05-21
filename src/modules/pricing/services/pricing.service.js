@@ -165,24 +165,45 @@ class PricingService {
     return this.pricingRepository.incrementCouponUsage(couponId);
   }
 
-  async createCoupon(payload) {
-    return this.pricingRepository.createCoupon(this.normalizeCouponPayload(payload));
+  getSellerCouponScope(actor = {}) {
+    if (!["seller", "seller-admin", "seller-sub-admin"].includes(actor.role)) {
+      return {};
+    }
+    const sellerId = actor.ownerSellerId || actor.userId;
+    return {
+      sellerId,
+      ...(["seller-admin", "seller-sub-admin"].includes(actor.role)
+        ? { createdBy: actor.userId }
+        : {}),
+    };
   }
 
-  async listCoupons() {
-    return this.pricingRepository.listCoupons();
+  async createCoupon(payload, actor = {}) {
+    return this.pricingRepository.createCoupon({
+      ...this.normalizeCouponPayload(payload),
+      ...this.getSellerCouponScope(actor),
+      createdBy: actor.userId || this.getSellerCouponScope(actor).createdBy,
+    });
   }
 
-  async getCoupon(couponId) {
-    const coupon = await this.pricingRepository.findCouponById(couponId);
+  async listCoupons(actor = {}) {
+    return this.pricingRepository.listCoupons(this.getSellerCouponScope(actor));
+  }
+
+  async getCoupon(couponId, actor = {}) {
+    const coupon = await this.pricingRepository.findCouponById(couponId, this.getSellerCouponScope(actor));
     if (!coupon) {
       throw new AppError("Coupon not found", 404);
     }
     return coupon;
   }
 
-  async updateCoupon(couponId, payload) {
-    const coupon = await this.pricingRepository.updateCoupon(couponId, this.normalizeCouponPayload(payload));
+  async updateCoupon(couponId, payload, actor = {}) {
+    const coupon = await this.pricingRepository.updateCoupon(
+      couponId,
+      this.normalizeCouponPayload(payload),
+      this.getSellerCouponScope(actor),
+    );
     if (!coupon) {
       throw new AppError("Coupon not found", 404);
     }
@@ -199,8 +220,8 @@ class PricingService {
     return normalized;
   }
 
-  async deleteCoupon(couponId) {
-    const coupon = await this.pricingRepository.deleteCoupon(couponId);
+  async deleteCoupon(couponId, actor = {}) {
+    const coupon = await this.pricingRepository.deleteCoupon(couponId, this.getSellerCouponScope(actor));
     if (!coupon) {
       throw new AppError("Coupon not found", 404);
     }

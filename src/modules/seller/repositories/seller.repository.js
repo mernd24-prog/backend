@@ -107,7 +107,11 @@ class SellerRepository {
 
   async listSellerSubAdmins(sellerId) {
     const { UserModel } = require("../../user/models/user.model");
-    return UserModel.find({ role: "seller-sub-admin", ownerSellerId: sellerId })
+    return UserModel.find({
+      role: { $in: ["seller-admin", "seller-sub-admin"] },
+      ownerSellerId: sellerId,
+      accountStatus: { $ne: "deleted" },
+    })
       .select("email phone role profile accountStatus allowedModules ownerSellerId createdAt updatedAt")
       .sort({ createdAt: -1 });
   }
@@ -116,16 +120,56 @@ class SellerRepository {
     const { UserModel } = require("../../user/models/user.model");
     return UserModel.findOne({
       _id: userId,
-      role: "seller-sub-admin",
+      role: { $in: ["seller-admin", "seller-sub-admin"] },
       ownerSellerId: sellerId,
+      accountStatus: { $ne: "deleted" },
     }).select("email phone role profile accountStatus allowedModules ownerSellerId createdAt updatedAt");
   }
 
   async updateSellerSubAdminModules(sellerId, userId, allowedModules) {
     const { UserModel } = require("../../user/models/user.model");
     return UserModel.findOneAndUpdate(
-      { _id: userId, role: "seller-sub-admin", ownerSellerId: sellerId },
+      {
+        _id: userId,
+        role: { $in: ["seller-admin", "seller-sub-admin"] },
+        ownerSellerId: sellerId,
+        accountStatus: { $ne: "deleted" },
+      },
       { $set: { allowedModules } },
+      { new: true },
+    ).select("email phone role profile accountStatus allowedModules ownerSellerId createdAt updatedAt");
+  }
+
+  async updateSellerSubAdminStatus(sellerId, userId, accountStatus) {
+    const { UserModel } = require("../../user/models/user.model");
+    return UserModel.findOneAndUpdate(
+      {
+        _id: userId,
+        role: { $in: ["seller-admin", "seller-sub-admin"] },
+        ownerSellerId: sellerId,
+        accountStatus: { $ne: "deleted" },
+      },
+      { $set: { accountStatus } },
+      { new: true },
+    ).select("email phone role profile accountStatus allowedModules ownerSellerId createdAt updatedAt");
+  }
+
+  async deleteSellerSubAdmin(sellerId, userId) {
+    const { UserModel } = require("../../user/models/user.model");
+    return UserModel.findOneAndUpdate(
+      {
+        _id: userId,
+        role: { $in: ["seller-admin", "seller-sub-admin"] },
+        ownerSellerId: sellerId,
+        accountStatus: { $ne: "deleted" },
+      },
+      {
+        $set: {
+          accountStatus: "deleted",
+          allowedModules: [],
+          refreshSessions: [],
+        },
+      },
       { new: true },
     ).select("email phone role profile accountStatus allowedModules ownerSellerId createdAt updatedAt");
   }

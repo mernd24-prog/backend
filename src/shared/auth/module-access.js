@@ -3,7 +3,7 @@ const {
   DEFAULT_SELLER_MODULES,
 } = require("./module-catalog");
 
-const ROLES_WITH_MODULE_ACCESS = new Set(["sub-admin", "seller-sub-admin"]);
+const ROLES_WITH_MODULE_ACCESS = new Set(["admin", "sub-admin", "seller-admin", "seller-sub-admin"]);
 
 function cleanModuleName(value) {
   return String(value || "")

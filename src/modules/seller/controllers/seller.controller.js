@@ -114,6 +114,18 @@ class SellerController {
     const user = await this.sellerService.updateSellerSubAdminModules(req.params.userId, req.body, actor);
     res.json(okResponse(user));
   };
+
+  updateSubAdminStatus = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const user = await this.sellerService.updateSellerSubAdminStatus(req.params.userId, req.body, actor);
+    res.json(okResponse(user));
+  };
+
+  deleteSubAdmin = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.sellerService.deleteSellerSubAdmin(req.params.userId, actor);
+    res.json(okResponse(result));
+  };
 }
 
 module.exports = { SellerController };

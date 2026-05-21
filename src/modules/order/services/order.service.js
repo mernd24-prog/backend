@@ -8,6 +8,7 @@ const { AppError } = require("../../../shared/errors/app-error");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { v4: uuidv4 } = require("uuid");
 const { WalletService } = require("../../wallet/services/wallet.service");
+const { ProductModel } = require("../../product/models/product.model");
 
 class OrderService {
   constructor({
@@ -116,6 +117,12 @@ class OrderService {
 
   async listSellerOrders(actor) {
     const sellerId = actor.ownerSellerId || actor.userId;
+    if (["seller-admin", "seller-sub-admin"].includes(actor.role)) {
+      const products = await ProductModel.find({ sellerId, createdBy: actor.userId }).select("_id");
+      const productIds = products.map((product) => String(product._id));
+      if (!productIds.length) return [];
+      return this.orderRepository.listOrdersBySeller(sellerId, productIds);
+    }
     return this.orderRepository.listOrdersBySeller(sellerId);
   }
 

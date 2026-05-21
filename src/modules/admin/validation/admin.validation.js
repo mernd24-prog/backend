@@ -262,6 +262,7 @@ const listOrdersSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
     status: Joi.string().valid(...Object.values(ORDER_STATUS)),
+    sellerId: Joi.string(),
     fromDate: Joi.date().iso(),
     toDate: Joi.date().iso(),
     limit: Joi.number().integer().min(1).max(500),
@@ -614,6 +615,7 @@ const listAccessModulesSchema = Joi.object({
         "admin",
         "sub-admin",
         "seller",
+        "seller-admin",
         "seller-sub-admin",
         "buyer",
         "super-admin",
@@ -639,6 +641,16 @@ const createAdminSchema = Joi.object({
       firstName: Joi.string().required(),
       lastName: Joi.string().allow("", null),
     }).required(),
+    allowedModules: Joi.array().items(Joi.string()).default([]),
+    modulePermissions: Joi.array().items(
+      Joi.object({
+        module: Joi.string().required(),
+        actions: Joi.array()
+          .items(Joi.string().valid(...permissionActions))
+          .min(1)
+          .required(),
+      }),
+    ).default([]),
   }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),

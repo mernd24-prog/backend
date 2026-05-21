@@ -14,20 +14,20 @@ class PricingRepository {
     return CouponModel.findByIdAndUpdate(couponId, { $inc: { usedCount: 1 } }, { new: true });
   }
 
-  async listCoupons() {
-    return CouponModel.find({}).sort({ createdAt: -1 });
+  async listCoupons(filter = {}) {
+    return CouponModel.find(filter).sort({ createdAt: -1 });
   }
 
-  async findCouponById(couponId) {
-    return CouponModel.findById(couponId);
+  async findCouponById(couponId, filter = {}) {
+    return CouponModel.findOne({ _id: couponId, ...filter });
   }
 
-  async updateCoupon(couponId, payload) {
-    return CouponModel.findByIdAndUpdate(couponId, payload, { new: true });
+  async updateCoupon(couponId, payload, filter = {}) {
+    return CouponModel.findOneAndUpdate({ _id: couponId, ...filter }, payload, { new: true });
   }
 
-  async deleteCoupon(couponId) {
-    return CouponModel.findByIdAndDelete(couponId);
+  async deleteCoupon(couponId, filter = {}) {
+    return CouponModel.findOneAndDelete({ _id: couponId, ...filter });
   }
 
   async listActivePlatformFeeRules(categories = []) {

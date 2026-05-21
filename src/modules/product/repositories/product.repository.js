@@ -231,8 +231,11 @@ class ProductRepository {
 
   // ─── Aggregations for dashboard ───────────────────────────────────────────
 
-  async getInventoryStats(sellerId = null) {
-    const match = sellerId ? { sellerId } : {};
+  async getInventoryStats(sellerId = null, createdBy = null) {
+    const match = {
+      ...(sellerId ? { sellerId } : {}),
+      ...(createdBy ? { createdBy } : {}),
+    };
     return ProductModel.aggregate([
       { $match: match },
       {

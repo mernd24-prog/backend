@@ -4,6 +4,8 @@ const { COUPON_TYPE } = require("../../../shared/domain/commerce-constants");
 const couponSchema = new mongoose.Schema(
   {
     code: { type: String, required: true, unique: true, index: true },
+    sellerId: { type: String, index: true },
+    createdBy: { type: String, index: true },
     title: { type: String, default: "" },
     description: { type: String, default: "" },
     type: { type: String, enum: Object.values(COUPON_TYPE), required: true },

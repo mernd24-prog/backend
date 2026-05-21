@@ -215,7 +215,7 @@ const modulePermissionSchema = Joi.array().items(
 const listSellerAccessModulesSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
-    role: Joi.string().valid("seller", "seller-sub-admin").default("seller-sub-admin"),
+    role: Joi.string().valid("seller", "seller-admin", "seller-sub-admin").default("seller-sub-admin"),
     roleId: Joi.string().guid({ version: "uuidv4" }),
     roleSlug: Joi.string().trim().min(2).max(128),
     userId: Joi.string().trim(),
@@ -236,6 +236,7 @@ const createSellerSubAdminSchema = Joi.object({
       firstName: Joi.string().required(),
       lastName: Joi.string().allow("", null),
     }).required(),
+    role: Joi.string().valid("seller-admin", "seller-sub-admin"),
     allowedModules: Joi.array().items(Joi.string()).min(1).required(),
     modulePermissions: modulePermissionSchema,
   }).required(),
@@ -260,6 +261,25 @@ const updateSellerSubAdminModulesSchema = Joi.object({
   }).required(),
 });
 
+const updateSellerSubAdminStatusSchema = Joi.object({
+  body: Joi.object({
+    accountStatus: Joi.string().valid("active", "suspended").required(),
+    status: Joi.string().valid("active", "suspended"),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    userId: Joi.string().required(),
+  }).required(),
+});
+
+const sellerSubAdminParamSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    userId: Joi.string().required(),
+  }).required(),
+});
+
 module.exports = {
   submitKycSchema,
   uploadSellerKycDocumentsSchema,
@@ -277,4 +297,6 @@ module.exports = {
   createSellerSubAdminSchema,
   listSellerSubAdminsSchema,
   updateSellerSubAdminModulesSchema,
+  updateSellerSubAdminStatusSchema,
+  sellerSubAdminParamSchema,
 };

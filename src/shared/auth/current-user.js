@@ -10,6 +10,7 @@ function getActor(auth = {}) {
     ownerAdminId: auth.ownerAdminId || null,
     ownerSellerId: auth.ownerSellerId || null,
     allowedModules: Array.isArray(auth.allowedModules) ? auth.allowedModules : [],
+    permissions: Array.isArray(auth.permissions) ? auth.permissions : [],
   };
 }
 

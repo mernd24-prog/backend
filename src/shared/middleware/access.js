@@ -41,7 +41,7 @@ function enforceModuleScope(req) {
     return null;
   }
 
-  const allowedModules = Array.isArray(req.auth?.allowedModules)
+    const allowedModules = Array.isArray(req.auth?.allowedModules)
     ? req.auth.allowedModules.map(cleanModuleName)
     : [];
 

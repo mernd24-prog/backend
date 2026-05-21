@@ -60,14 +60,21 @@ class OrderRepository {
     return knex("orders").where("buyer_id", buyerId).orderBy("created_at", "desc");
   }
 
-  async listOrdersBySeller(sellerId) {
+  async listOrdersBySeller(sellerId, productIds = null) {
+    const values = [sellerId];
+    const productFilter = Array.isArray(productIds)
+      ? `AND oi.product_id = ANY($2::text[])`
+      : "";
+    if (Array.isArray(productIds)) values.push(productIds);
+
     const { rows } = await postgresPool.query(
       `SELECT DISTINCT o.*
        FROM orders o
        INNER JOIN order_items oi ON oi.order_id = o.id
        WHERE oi.seller_id = $1
+         ${productFilter}
        ORDER BY o.created_at DESC`,
-      [sellerId],
+      values,
     );
     return rows;
   }

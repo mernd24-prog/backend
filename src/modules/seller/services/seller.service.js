@@ -203,18 +203,18 @@ class SellerService {
   }
 
   assertSellerWebActor(actor) {
-    const allowedRoles = [ROLES.SELLER, ROLES.SELLER_SUB_ADMIN];
+    const allowedRoles = [ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN];
     if (!allowedRoles.includes(actor.role)) {
       throw new AppError("Only seller accounts can access seller web status", 403);
     }
 
-    if (actor.role === ROLES.SELLER_SUB_ADMIN) {
+    if ([ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(actor.role)) {
       const allowedModules = (actor.allowedModules || []).map(cleanModuleName);
       const canViewSellerWeb = ["sellers", "orders", "delivery"].some((moduleName) =>
         allowedModules.includes(moduleName),
       );
       if (!canViewSellerWeb) {
-        throw new AppError("Seller web status is not assigned to this sub-admin", 403);
+        throw new AppError("Seller web status is not assigned to this sub-seller", 403);
       }
     }
 
@@ -235,9 +235,9 @@ class SellerService {
       return sellerId;
     }
 
-    // Seller sub-admins can manage sub-admin access if they have the sellers:add permission.
+    // Seller admins/sub-sellers can manage child access if they have the sellers:add permission.
     // Their owner seller ID is stored in ownerSellerId on the JWT.
-    if (actor.role === ROLES.SELLER_SUB_ADMIN) {
+    if ([ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(actor.role)) {
       const sellerId = actor.ownerSellerId || actor.sellerId;
       if (!sellerId) {
         throw new AppError("Could not determine parent seller account", 403);
@@ -245,7 +245,7 @@ class SellerService {
       return sellerId;
     }
 
-    throw new AppError("Only seller owners or authorised seller sub-admins can manage seller access", 403);
+    throw new AppError("Only seller owners or authorised seller admins can manage seller access", 403);
   }
 
   getSellerWebNextSteps(checklist = {}, kycStatus = null) {
@@ -707,7 +707,7 @@ class SellerService {
       query.userId,
     );
     if (!accessUser) {
-      throw new AppError("Seller sub-admin not found", 404);
+      throw new AppError("Seller sub-seller not found", 404);
     }
     return this.toPlainObject(accessUser);
   }
@@ -722,7 +722,7 @@ class SellerService {
       (accessUser?.allowedModules || []).map(cleanModuleName).filter(Boolean),
     );
     const shouldUseAssignedModules =
-      Boolean(accessUser) && targetRole === ROLES.SELLER_SUB_ADMIN;
+      Boolean(accessUser) && [ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(targetRole);
     let permissionMatrix = null;
 
     try {
@@ -820,7 +820,7 @@ class SellerService {
     if (actor.role === ROLES.SELLER) {
       return null;
     }
-    if (actor.role !== ROLES.SELLER_SUB_ADMIN) {
+    if (![ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(actor.role)) {
       throw new AppError("Forbidden", 403);
     }
     const matrix = await this.rbacService.getPermissionManagementMatrix({
@@ -921,12 +921,15 @@ class SellerService {
     );
     const finalAllowedModules = constrained.allowedModules;
     modulePermissions = constrained.modulePermissions;
+    const targetRole = actor.role === ROLES.SELLER
+      ? (payload.role || ROLES.SELLER_ADMIN)
+      : ROLES.SELLER_SUB_ADMIN;
     const passwordHash = await hashText(payload.password);
     const user = await this.sellerRepository.createManagedUser({
       email: payload.email,
       phone: payload.phone,
       passwordHash,
-      role: ROLES.SELLER_SUB_ADMIN,
+      role: targetRole,
       profile: payload.profile,
       ownerSellerId: sellerId,
       allowedModules: finalAllowedModules,
@@ -938,7 +941,7 @@ class SellerService {
 
     await this.rbacService.assignRoleToUserBySlug(
       String(user.id),
-      ROLES.SELLER_SUB_ADMIN,
+      targetRole,
       actor.userId,
       {
         ignoreMissing: true,
@@ -958,6 +961,29 @@ class SellerService {
   async listSellerSubAdmins(actor) {
     const sellerId = this.assertSellerOwnerActor(actor);
     return this.sellerRepository.listSellerSubAdmins(sellerId);
+  }
+
+  async updateSellerSubAdminStatus(userId, payload, actor) {
+    const sellerId = this.assertSellerOwnerActor(actor);
+    const accountStatus = payload.accountStatus || payload.status;
+    const updated = await this.sellerRepository.updateSellerSubAdminStatus(
+      sellerId,
+      userId,
+      accountStatus,
+    );
+    if (!updated) {
+      throw new AppError("Seller sub-seller not found", 404);
+    }
+    return updated;
+  }
+
+  async deleteSellerSubAdmin(userId, actor) {
+    const sellerId = this.assertSellerOwnerActor(actor);
+    const deleted = await this.sellerRepository.deleteSellerSubAdmin(sellerId, userId);
+    if (!deleted) {
+      throw new AppError("Seller sub-seller not found", 404);
+    }
+    return { success: true, userId };
   }
 
   async updateSellerSubAdminModules(userId, payload, actor) {
@@ -982,7 +1008,7 @@ class SellerService {
     modulePermissions = constrained.modulePermissions;
     const updated = await this.sellerRepository.updateSellerSubAdminModules(sellerId, userId, allowedModules);
     if (!updated) {
-      throw new AppError("Seller sub-admin not found", 404);
+      throw new AppError("Seller sub-seller not found", 404);
     }
     await this.rbacService.syncUserModulePermissions(
       String(userId),

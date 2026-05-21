@@ -83,7 +83,8 @@ class ProductController {
   inventoryStats = async (req, res) => {
     const actor = getCurrentUser(req);
     const sellerId = actor.role === "admin" ? req.query.sellerId : actor.ownerSellerId || actor.userId;
-    const stats = await this.productService.getInventoryStats(sellerId);
+    const createdBy = ["seller-admin", "seller-sub-admin"].includes(actor.role) ? actor.userId : null;
+    const stats = await this.productService.getInventoryStats(sellerId, createdBy);
     res.json(okResponse(stats));
   };
 

@@ -21,6 +21,8 @@ const {
   createSellerSubAdminSchema,
   listSellerSubAdminsSchema,
   updateSellerSubAdminModulesSchema,
+  updateSellerSubAdminStatusSchema,
+  sellerSubAdminParamSchema,
 } = require("../validation/seller.validation");
 const { ACTIONS } = require("../../../shared/constants/actions");
 const { ROLES } = require("../../../shared/constants/roles");
@@ -61,7 +63,7 @@ sellerRoutes.patch(
 sellerRoutes.get(
   "/me/access/modules",
   authenticate,
-  allowRoles(ROLES.SELLER, ROLES.SELLER_SUB_ADMIN),
+  allowRoles(ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN),
   checkInput(listSellerAccessModulesSchema),
   catchErrors(sellerController.listAccessModules),
 );
@@ -155,8 +157,8 @@ sellerRoutes.get(
 sellerRoutes.post(
   "/me/sub-admins",
   authenticate,
-  allowRoles(ROLES.SELLER, ROLES.SELLER_SUB_ADMIN),
-  // Seller sub-admins need the sellers:add permission to create sub-sub-admins.
+  allowRoles(ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN),
+  // Seller admins/sub-sellers need the sellers:add permission to create child seller accounts.
   // Sellers (full role) are exempt from the permission check (isSuperAdmin bypass in allowPermissions).
   allowPermissions("sellers:add"),
   checkInput(createSellerSubAdminSchema),
@@ -165,7 +167,7 @@ sellerRoutes.post(
 sellerRoutes.get(
   "/me/sub-admins",
   authenticate,
-  allowRoles(ROLES.SELLER, ROLES.SELLER_SUB_ADMIN),
+  allowRoles(ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN),
   allowPermissions("sellers:view"),
   checkInput(listSellerSubAdminsSchema),
   catchErrors(sellerController.listSubAdmins),
@@ -173,10 +175,26 @@ sellerRoutes.get(
 sellerRoutes.patch(
   "/me/sub-admins/:userId/modules",
   authenticate,
-  allowRoles(ROLES.SELLER, ROLES.SELLER_SUB_ADMIN),
+  allowRoles(ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN),
   allowPermissions("sellers:edit"),
   checkInput(updateSellerSubAdminModulesSchema),
   catchErrors(sellerController.updateSubAdminModules),
+);
+sellerRoutes.patch(
+  "/me/sub-admins/:userId/status",
+  authenticate,
+  allowRoles(ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN),
+  allowPermissions("sellers:status"),
+  checkInput(updateSellerSubAdminStatusSchema),
+  catchErrors(sellerController.updateSubAdminStatus),
+);
+sellerRoutes.delete(
+  "/me/sub-admins/:userId",
+  authenticate,
+  allowRoles(ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN),
+  allowPermissions("sellers:delete"),
+  checkInput(sellerSubAdminParamSchema),
+  catchErrors(sellerController.deleteSubAdmin),
 );
 
 module.exports = { sellerRoutes };

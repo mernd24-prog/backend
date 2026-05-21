@@ -240,7 +240,7 @@ class ProductService {
     this.validateVariants(payload.variants || []);
     this._validateProductType(productType, payload);
 
-    const isSeller = actor.role === "seller" || actor.role === "seller-sub-admin";
+    const isSeller = isSellerRole(actor);
     const status = isSeller
       ? PRODUCT_STATUS.PENDING_APPROVAL
       : payload.status || PRODUCT_STATUS.DRAFT;
@@ -290,9 +290,12 @@ class ProductService {
     if (!existingProduct) throw new AppError("Product not found", 404);
 
     if (
-      (actor.role === "seller" || actor.role === "seller-sub-admin") &&
+      isSellerRole(actor) &&
       existingProduct.sellerId !== (actor.ownerSellerId || actor.userId)
     ) {
+      throw new AppError("Permission denied", 403);
+    }
+    if (isScopedSellerRole(actor) && String(existingProduct.createdBy || "") !== String(actor.userId || "")) {
       throw new AppError("Permission denied", 403);
     }
 
@@ -407,6 +410,7 @@ class ProductService {
     const pagination = { ...getPage(query), sortBy: query.sortBy };
     const sellerId = actor.ownerSellerId || actor.userId;
     const filter = {};
+    if (isScopedSellerRole(actor)) filter.createdBy = actor.userId;
     if (query.status) filter.status = query.status;
     if (query.category) filter.category = query.category;
     if (query.sku) filter.sku = query.sku;
@@ -571,8 +575,8 @@ class ProductService {
     return updatedProduct;
   }
 
-  async getInventoryStats(sellerId = null) {
-    const [stats] = await this.productRepository.getInventoryStats(sellerId);
+  async getInventoryStats(sellerId = null, createdBy = null) {
+    const [stats] = await this.productRepository.getInventoryStats(sellerId, createdBy);
     return stats || {
       totalProducts: 0,
       totalStock: 0,
@@ -590,9 +594,12 @@ class ProductService {
 
     const sellerId = actor.ownerSellerId || actor.userId;
     if (
-      ["seller", "seller-sub-admin"].includes(actor.role) &&
+      isSellerRole(actor) &&
       existingProduct.sellerId !== sellerId
     ) {
+      throw new AppError("Permission denied", 403);
+    }
+    if (isScopedSellerRole(actor) && String(existingProduct.createdBy || "") !== String(actor.userId || "")) {
       throw new AppError("Permission denied", 403);
     }
 
@@ -612,7 +619,15 @@ class ProductService {
 
 // helper
 function isSeller(actor) {
-  return actor.role === "seller" || actor.role === "seller-sub-admin";
+  return isSellerRole(actor);
+}
+
+function isSellerRole(actor) {
+  return ["seller", "seller-admin", "seller-sub-admin"].includes(actor.role);
+}
+
+function isScopedSellerRole(actor) {
+  return ["seller-admin", "seller-sub-admin"].includes(actor.role);
 }
 
 module.exports = { ProductService };

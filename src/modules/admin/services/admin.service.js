@@ -1086,10 +1086,10 @@ class AdminService {
   }
 
   async getActorAssignablePermissionMap(actor = {}) {
-    if (actor.isSuperAdmin || actor.role === ROLES.ADMIN) {
+    if (actor.isSuperAdmin || actor.role === ROLES.SUPER_ADMIN) {
       return null;
     }
-    if (actor.role !== ROLES.SUB_ADMIN) {
+    if (![ROLES.ADMIN, ROLES.SUB_ADMIN].includes(actor.role)) {
       throw new AppError("Forbidden", 403);
     }
 
@@ -1177,6 +1177,11 @@ class AdminService {
     if (existing) {
       throw new AppError("User already exists", 409);
     }
+    const allowedModules = this.sanitizeModules(payload.allowedModules || [], ROLES.ADMIN);
+    const modulePermissions = this.normalizeModulePermissions(
+      payload.modulePermissions,
+      allowedModules,
+    );
     const passwordHash = await hashText(payload.password);
     const user = await this.adminRepository.createManagedUser({
       email: payload.email,
@@ -1188,7 +1193,7 @@ class AdminService {
       emailVerified: true,
       authProviders: [],
       refreshSessions: [],
-      allowedModules: [],
+      allowedModules,
     });
 
     await this.rbacService.assignRoleToUserBySlug(
@@ -1200,6 +1205,14 @@ class AdminService {
         ignoreExisting: true,
       },
     );
+
+    if (allowedModules.length) {
+      await this.rbacService.syncUserModulePermissions(
+        String(user.id),
+        modulePermissions,
+        actor.userId,
+      );
+    }
 
     return user;
   }
@@ -1277,11 +1290,8 @@ class AdminService {
 
   async updatePlatformSubAdminModules(userId, payload, actor) {
     const existingUser = await this.adminRepository.getUserById(userId);
-    if (!existingUser || ![ROLES.SUB_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(existingUser.role)) {
+    if (!existingUser || existingUser.role !== ROLES.SUB_ADMIN) {
       throw new AppError("Sub-admin not found", 404);
-    }
-    if (existingUser.role === ROLES.SELLER_SUB_ADMIN && actor.role === ROLES.SUB_ADMIN && !actor.isSuperAdmin) {
-      throw new AppError("Forbidden", 403);
     }
 
     let allowedModules = this.sanitizeModules(payload.allowedModules, existingUser.role);
