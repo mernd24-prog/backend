@@ -32,6 +32,7 @@ const {
 const { ROLES } = require("../../../shared/constants/roles");
 const {
   adminOverviewSchema,
+  listActivityLogsSchema,
   listVendorsSchema,
   listUsersSchema,
   createManagedUserSchema,
@@ -287,6 +288,12 @@ adminRoutes.get(
   "/access/modules",
   checkInput(listAccessModulesSchema),
   catchErrors(adminController.listAccessModules),
+);
+adminRoutes.get(
+  "/access/activity-logs",
+  allowPermissions("rbac:view"),
+  checkInput(listActivityLogsSchema),
+  catchErrors(adminController.listActivityLogs),
 );
 adminRoutes.post(
   "/access/admins",

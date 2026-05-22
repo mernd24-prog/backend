@@ -12,6 +12,15 @@ class AdminController {
     res.json(okResponse(data));
   };
 
+  listActivityLogs = async (req, res) => {
+    const result = await this.adminService.listActivityLogs(req.query);
+    res.json(okResponse(result.logs, {
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+    }));
+  };
+
   listVendors = async (req, res) => {
     const result = await this.adminService.listVendors(req.query);
     res.json(okResponse(result.items, { total: result.total }));

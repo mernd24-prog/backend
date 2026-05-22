@@ -12,6 +12,8 @@ function auditLog(req, res, next) {
       path: req.originalUrl,
       statusCode: res.statusCode,
       requestId: req.id,
+      ip: req.ip || req.headers["x-forwarded-for"] || req.socket?.remoteAddress || null,
+      userAgent: req.headers["user-agent"] || null,
     }).catch(() => {});
   });
 

@@ -14,6 +14,8 @@ const {
 } = require("../../../infrastructure/postgres/postgres-client");
 const { hashText } = require("../../../shared/tools/hash");
 const { ROLES } = require("../../../shared/constants/roles");
+const { AuditLogModel } = require("../../../shared/logger/audit-log.model");
+const { UserModel } = require("../../user/models/user.model");
 const {
   DEFAULT_PLATFORM_MODULES,
   DEFAULT_SELLER_MODULES,
@@ -45,6 +47,149 @@ class AdminService {
 
   async getOverview() {
     return this.adminRepository.getOverviewStats();
+  }
+
+  inferActivityAction(log = {}) {
+    const method = String(log.method || "").toUpperCase();
+    const path = String(log.path || "").toLowerCase();
+    if (path.includes("/auth/login")) return "login";
+    if (path.includes("/logout")) return "logout";
+    if (path.includes("approve") || path.includes("approval")) return "approve";
+    if (path.includes("reject")) return "reject";
+    if (method === "POST") return "create";
+    if (method === "PATCH" || method === "PUT") return "update";
+    if (method === "DELETE") return "delete";
+    return "view";
+  }
+
+  inferActivityModule(path = "") {
+    const parts = String(path || "").split("?")[0].split("/").filter(Boolean);
+    const apiIndex = parts.indexOf("api");
+    const first = apiIndex >= 0 ? parts[apiIndex + 1] : parts[0];
+    const second = apiIndex >= 0 ? parts[apiIndex + 2] : parts[1];
+    const third = apiIndex >= 0 ? parts[apiIndex + 3] : parts[2];
+
+    if (first === "auth") return "auth";
+    if (first === "admin") {
+      if (second === "access") return "rbac";
+      if (second === "referral") return third === "fraud" ? "fraud" : "referral";
+      if (second === "cms") return "cms";
+      if (second === "dashboard") return "admin";
+      if (second === "vendors") return "sellers";
+      if (second === "common" || second === "platform") return "platform";
+      return second || "admin";
+    }
+    return cleanModuleName(first || "system");
+  }
+
+  formatActivityDescription(log = {}, action, moduleName) {
+    const method = String(log.method || "").toUpperCase();
+    const status = Number(log.statusCode || 0);
+    const result = status >= 400 ? "failed" : "completed";
+    return `${action} ${moduleName} ${result} via ${method} ${log.path}`;
+  }
+
+  async listActivityLogs({
+    page = 1,
+    limit = 30,
+    search = "",
+    action = "",
+    module = "",
+    statusCode,
+    dateFrom,
+    dateTo,
+  } = {}) {
+    const safePage = Math.max(1, Number(page) || 1);
+    const safeLimit = Math.min(100, Math.max(1, Number(limit) || 30));
+    const filter = {};
+
+    if (search) {
+      filter.$or = [
+        { path: { $regex: search, $options: "i" } },
+        { method: { $regex: search, $options: "i" } },
+        { actorId: { $regex: search, $options: "i" } },
+        { requestId: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    if (statusCode) filter.statusCode = Number(statusCode);
+
+    if (dateFrom || dateTo) {
+      filter.createdAt = {};
+      if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
+      if (dateTo) filter.createdAt.$lte = new Date(dateTo);
+    }
+
+    if (action && action !== "all") {
+      const actionFilters = {
+        login: { path: /\/auth\/login/i },
+        logout: { path: /logout/i },
+        create: { method: "POST" },
+        update: { method: { $in: ["PATCH", "PUT"] } },
+        delete: { method: "DELETE" },
+        approve: { path: /approve|approval/i },
+        reject: { path: /reject/i },
+        view: { method: "GET" },
+      };
+      Object.assign(filter, actionFilters[action] || {});
+    }
+
+    const skip = (safePage - 1) * safeLimit;
+    const [items, total] = await Promise.all([
+      AuditLogModel.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(safeLimit)
+        .lean(),
+      AuditLogModel.countDocuments(filter),
+    ]);
+
+    const actorIds = Array.from(new Set(
+      items
+        .map((item) => item.actorId)
+        .filter((actorId) => /^[a-f0-9]{24}$/i.test(String(actorId || ""))),
+    ));
+    const actors = actorIds.length
+      ? await UserModel.find({ _id: { $in: actorIds } })
+          .select("email role profile")
+          .lean()
+      : [];
+    const actorMap = new Map(actors.map((actor) => [String(actor._id), actor]));
+
+    const logs = items
+      .map((item) => {
+        const actor = actorMap.get(String(item.actorId));
+        const inferredAction = this.inferActivityAction(item);
+        const inferredModule = this.inferActivityModule(item.path);
+        return {
+          id: String(item._id),
+          _id: String(item._id),
+          actorId: item.actorId || null,
+          actorName: actor
+            ? [actor.profile?.firstName, actor.profile?.lastName].filter(Boolean).join(" ") || actor.email
+            : item.actorId || "System",
+          actorRole: actor?.role || "",
+          action: inferredAction,
+          module: inferredModule,
+          description: this.formatActivityDescription(item, inferredAction, inferredModule),
+          method: item.method,
+          path: item.path,
+          statusCode: item.statusCode,
+          ip: item.ip || "",
+          userAgent: item.userAgent || "",
+          requestId: item.requestId || "",
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        };
+      })
+      .filter((item) => !module || module === "all" || item.module === module);
+
+    return {
+      logs,
+      total: module && module !== "all" ? logs.length : total,
+      page: safePage,
+      limit: safeLimit,
+    };
   }
 
   toPlainObject(value = {}) {

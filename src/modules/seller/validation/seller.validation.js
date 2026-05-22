@@ -18,7 +18,6 @@ const sellerKycDocumentKeys = [
 const submitKycSchema = Joi.object({
   body: Joi.object({
     panNumber: Joi.string().pattern(panPattern).required(),
-    gstNumber: Joi.string().pattern(gstPattern).allow("", null),
     aadhaarNumber: Joi.string().pattern(aadhaarPattern).allow("", null),
     legalName: Joi.string().min(2).max(120).required(),
     businessType: Joi.string().valid("individual", "proprietorship", "partnership", "private_limited"),

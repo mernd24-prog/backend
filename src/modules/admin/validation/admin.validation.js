@@ -33,6 +33,21 @@ const adminOverviewSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
+const listActivityLogsSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    page: Joi.number().integer().min(1),
+    limit: Joi.number().integer().min(1).max(100),
+    search: Joi.string().allow(""),
+    action: Joi.string().allow(""),
+    module: Joi.string().allow(""),
+    statusCode: Joi.number().integer().min(100).max(599),
+    dateFrom: Joi.date(),
+    dateTo: Joi.date(),
+  }).required(),
+  params: Joi.object({}).required(),
+});
+
 const listVendorsSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
@@ -720,6 +735,7 @@ const updatePlatformSubAdminModulesSchema = Joi.object({
 
 module.exports = {
   adminOverviewSchema,
+  listActivityLogsSchema,
   listVendorsSchema,
   listUsersSchema,
   createManagedUserSchema,
