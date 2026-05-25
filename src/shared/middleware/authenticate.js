@@ -3,8 +3,51 @@ const { env } = require("../../config/env");
 const { AppError } = require("../errors/app-error");
 const { UserModel } = require("../../modules/user/models/user.model");
 const { ROLES } = require("../constants/roles");
+const { RbacService } = require("../../modules/rbac/services/rbac.service");
 
-function authenticate(req, res, next) {
+const rbacService = new RbacService();
+const permissionCache = new Map();
+const PERMISSION_CACHE_TTL_MS = 30 * 1000;
+
+function isSuperAdminPayload(payload = {}) {
+  return payload.isSuperAdmin === true || payload.role === ROLES.SUPER_ADMIN;
+}
+
+async function hydrateAuthPermissions(payload = {}) {
+  if (!payload.sub || isSuperAdminPayload(payload)) {
+    return { ...payload, permissions: [] };
+  }
+
+  const cached = permissionCache.get(payload.sub);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { ...payload, permissions: cached.permissions, allowedModules: cached.allowedModules };
+  }
+
+  try {
+    const effectivePermissions = await rbacService.getUserEffectivePermissions(payload.sub);
+    const permissions = Array.isArray(effectivePermissions)
+      ? effectivePermissions.map((permission) => permission.slug).filter(Boolean)
+      : [];
+    const allowedModules = Array.from(
+      new Set([
+        ...(Array.isArray(payload.allowedModules) ? payload.allowedModules : []),
+        ...permissions
+          .map((permission) => String(permission || "").split(":")[0])
+          .filter(Boolean),
+      ]),
+    );
+    permissionCache.set(payload.sub, {
+      permissions,
+      allowedModules,
+      expiresAt: Date.now() + PERMISSION_CACHE_TTL_MS,
+    });
+    return { ...payload, permissions, allowedModules };
+  } catch (error) {
+    return { ...payload, permissions: [] };
+  }
+}
+
+async function authenticate(req, res, next) {
   const authHeader = req.headers.authorization;
 
   if (!authHeader?.startsWith("Bearer ")) {
@@ -14,7 +57,8 @@ function authenticate(req, res, next) {
   const token = authHeader.replace("Bearer ", "");
 
   try {
-    req.auth = jwt.verify(token, env.jwtAccessSecret);
+    const payload = jwt.verify(token, env.jwtAccessSecret);
+    req.auth = await hydrateAuthPermissions(payload);
     return next();
   } catch (error) {
     return next(new AppError("Invalid or expired token", 401));

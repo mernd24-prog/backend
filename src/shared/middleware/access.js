@@ -22,7 +22,7 @@ function isSuperAdmin(req) {
 }
 
 function isPlatformAdminRole(role) {
-  return [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(role);
+  return role === ROLES.SUPER_ADMIN;
 }
 
 // Full (owner) seller bypasses permission checks on seller-scoped slugs.

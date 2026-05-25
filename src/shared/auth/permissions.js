@@ -1,10 +1,27 @@
-const PERMISSION_ACTIONS = ["view", "add", "update", "edit", "delete", "action", "status", "approval"];
+const PERMISSION_ACTIONS = [
+  "view",
+  "create",
+  "add",
+  "edit",
+  "update",
+  "delete",
+  "approve",
+  "approval",
+  "reject",
+  "assign",
+  "export",
+  "import",
+  "status_change",
+  "status",
+  "restore",
+  "bulk_action",
+  "action",
+];
 
 const normalizeAction = (action = "") => {
   const value = String(action || "").trim().toLowerCase();
-  if (value === "create") return "add";
-  if (value === "edit") return "update";
-  if (["approve", "review", "manage"].includes(value)) return "action";
+  if (value === "review") return "approval";
+  if (value === "manage") return "status";
   return value;
 };
 

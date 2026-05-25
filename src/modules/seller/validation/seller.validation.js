@@ -192,13 +192,22 @@ const sellerTrackingOrderSchema = Joi.object({
 
 const permissionActions = [
   "view",
+  "create",
   "add",
   "edit",
   "update",
-  "action",
   "delete",
-  "status",
+  "approve",
   "approval",
+  "reject",
+  "assign",
+  "export",
+  "import",
+  "status_change",
+  "status",
+  "restore",
+  "bulk_action",
+  "action",
 ];
 
 const modulePermissionSchema = Joi.array().items(

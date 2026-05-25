@@ -1,6 +1,19 @@
 const { RbacRepository } = require("../repositories/rbac.repository");
 const { AppError } = require("../../../shared/errors/app-error");
-const { v4: uuidv4 } = require("uuid");
+
+const slugifyModule = (value = "") =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9/_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const toRouteCode = (routePath = "") =>
+  String(routePath || "")
+    .replace(/^\/app\/?/, "")
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
 
 class RbacService {
   constructor({ rbacRepository = new RbacRepository() } = {}) {
@@ -8,15 +21,82 @@ class RbacService {
   }
 
   // MODULE OPERATIONS
+  normalizeModulePayload(moduleData = {}) {
+    const moduleName = moduleData.moduleName || moduleData.name;
+    const moduleKey = slugifyModule(moduleData.moduleKey || moduleData.key || moduleData.slug || moduleName);
+    const moduleSlug = slugifyModule(moduleData.moduleSlug || moduleData.slug || moduleKey);
+    const status = moduleData.status || (moduleData.active === false ? "inactive" : "active");
+    const metadata = {
+      ...(moduleData.metadata || {}),
+      ...(Array.isArray(moduleData.allowedRoles)
+        ? { allowedRoles: moduleData.allowedRoles }
+        : {}),
+    };
+    const payload = {
+      name: moduleName,
+      slug: moduleSlug,
+      moduleKey,
+      description: moduleData.description,
+      icon: moduleData.icon,
+      routePath: moduleData.routePath,
+      parentModuleId: moduleData.parentModuleId || moduleData.parentModule || null,
+      moduleType: moduleData.moduleType || "module",
+      order: Number(moduleData.order || 0),
+      status,
+      active: moduleData.active !== undefined ? Boolean(moduleData.active) : status === "active",
+      modulePermissions: Array.isArray(moduleData.permissions)
+        ? moduleData.permissions
+        : Array.isArray(moduleData.modulePermissions)
+          ? moduleData.modulePermissions
+          : [],
+      isVisibleInSidebar: moduleData.isVisibleInSidebar !== false,
+      metadata,
+    };
+    if (!payload.name) throw new AppError("Module name is required", 400);
+    if (!payload.moduleKey) throw new AppError("Module key is required", 400);
+    if (
+      payload.isVisibleInSidebar &&
+      payload.moduleType !== "group" &&
+      !toRouteCode(payload.routePath)
+    ) {
+      throw new AppError("Route path is required for sidebar modules", 400);
+    }
+    return payload;
+  }
+
+  serializeModule(module = {}) {
+    const plain = typeof module.toJSON === "function" ? module.toJSON() : module;
+    return {
+      ...plain,
+      moduleName: plain.name,
+      moduleKey: plain.moduleKey || plain.slug,
+      moduleSlug: plain.slug,
+      parentModule: plain.parentModule
+        ? {
+            id: plain.parentModule.id,
+            moduleName: plain.parentModule.name,
+            moduleKey: plain.parentModule.moduleKey || plain.parentModule.slug,
+            moduleSlug: plain.parentModule.slug,
+          }
+        : null,
+      allowedRoles: plain.metadata?.allowedRoles || [],
+      permissions: plain.permissions || plain.modulePermissions || [],
+    };
+  }
+
   async createModule(moduleData) {
-    const existingModule = await this.rbacRepository.getModuleBySlug(
-      moduleData.slug,
-    );
+    const payload = this.normalizeModulePayload(moduleData);
+    const existingModule = await this.rbacRepository.getModuleBySlug(payload.slug);
     if (existingModule) {
       throw new AppError("Module with this slug already exists", 409);
     }
 
-    return this.rbacRepository.createModule(moduleData);
+    if (payload.moduleKey && payload.moduleKey !== payload.slug) {
+      const existingByKey = await this.rbacRepository.getModuleBySlug(payload.moduleKey);
+      if (existingByKey) throw new AppError("Module with this key already exists", 409);
+    }
+
+    return this.serializeModule(await this.rbacRepository.createModule(payload));
   }
 
   async getModule(id) {
@@ -24,11 +104,38 @@ class RbacService {
     if (!module) {
       throw new AppError("Module not found", 404);
     }
-    return module;
+    return this.serializeModule(module);
   }
 
   async listModules(filters) {
-    return this.rbacRepository.listModules(filters);
+    const result = await this.rbacRepository.listModules(filters);
+    return {
+      ...result,
+      items: result.items.map((item) => this.serializeModule(item)),
+    };
+  }
+
+  async listSidebarModules() {
+    const rows = await this.rbacRepository.listSidebarModules();
+    const modules = rows.map((row) => this.serializeModule(row));
+    const byId = new Map(modules.map((item) => [item.id, { ...item, children: [] }]));
+    const byKey = new Map(modules.map((item) => [item.moduleKey || item.moduleSlug, byId.get(item.id)]));
+    const roots = [];
+
+    byId.forEach((item) => {
+      const parent = item.parentModuleId
+        ? byId.get(item.parentModuleId)
+        : byKey.get(item.metadata?.parentModule || item.parentModuleKey);
+      if (parent) parent.children.push(item);
+      else roots.push(item);
+    });
+
+    const sortTree = (items) =>
+      items
+        .sort((left, right) => Number(left.order || 0) - Number(right.order || 0) || String(left.moduleName).localeCompare(String(right.moduleName)))
+        .map((item) => ({ ...item, children: sortTree(item.children || []) }));
+
+    return sortTree(roots);
   }
 
   async getPermissionManagementMatrix(filters = {}) {
@@ -53,13 +160,22 @@ class RbacService {
       },
       actions: [
         "view",
+        "create",
         "add",
         "edit",
         "update",
-        "action",
         "delete",
-        "status",
+        "approve",
         "approval",
+        "reject",
+        "assign",
+        "export",
+        "import",
+        "status_change",
+        "status",
+        "restore",
+        "bulk_action",
+        "action",
       ],
       assignedPermissionIds: matrix.assignedPermissionIds,
     };
@@ -72,14 +188,46 @@ class RbacService {
     }
 
     // Check if slug is being updated and if it's unique
-    if (updates.slug && updates.slug !== module.slug) {
-      const existing = await this.rbacRepository.getModuleBySlug(updates.slug);
+    const payload = this.normalizeModulePayload({ ...module.toJSON(), ...updates });
+
+    if (payload.slug && payload.slug !== module.slug) {
+      const existing = await this.rbacRepository.getModuleBySlug(payload.slug);
       if (existing) {
         throw new AppError("Module with this slug already exists", 409);
       }
     }
+    if (payload.moduleKey && payload.moduleKey !== module.moduleKey) {
+      const existing = await this.rbacRepository.getModuleBySlug(payload.moduleKey);
+      if (existing) throw new AppError("Module with this key already exists", 409);
+    }
 
-    return this.rbacRepository.updateModule(id, updates);
+    return this.serializeModule(await this.rbacRepository.updateModule(id, payload));
+  }
+
+  async changeModuleStatus(id, status) {
+    if (!["active", "inactive", "draft"].includes(status)) {
+      throw new AppError("Invalid module status", 400);
+    }
+    return this.serializeModule(
+      await this.rbacRepository.updateModule(id, {
+        status,
+        active: status === "active",
+      }),
+    );
+  }
+
+  async reorderModules(items = []) {
+    const updated = [];
+    for (const item of items) {
+      if (!item.id) continue;
+      updated.push(
+        await this.rbacRepository.updateModule(item.id, {
+          order: Number(item.order || 0),
+          ...(item.parentModuleId !== undefined ? { parentModuleId: item.parentModuleId || null } : {}),
+        }),
+      );
+    }
+    return updated.map((item) => this.serializeModule(item));
   }
 
   async deleteModule(id) {
@@ -190,6 +338,10 @@ class RbacService {
 
   async removePermissionFromRole(roleId, permissionId) {
     return this.rbacRepository.removePermissionFromRole(roleId, permissionId);
+  }
+
+  async syncRolePermissions(roleId, permissionIds = []) {
+    return this.rbacRepository.syncRolePermissions(roleId, permissionIds);
   }
 
   async bulkAssignPermissionsToRole(roleId, permissionIds) {

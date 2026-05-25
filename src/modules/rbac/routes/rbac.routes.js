@@ -20,6 +20,8 @@ const {
   createModuleSchema,
   updateModuleSchema,
   listModulesSchema,
+  moduleStatusSchema,
+  reorderModulesSchema,
   permissionManagementSchema,
   moduleParamSchema,
   createPermissionSchema,
@@ -33,6 +35,7 @@ const {
   assignPermissionSchema,
   removePermissionSchema,
   bulkAssignPermissionsSchema,
+  syncPermissionsSchema,
   userPermissionParamSchema,
   assignRoleSchema,
   removeRoleSchema,
@@ -60,6 +63,26 @@ rbacRoutes.get(
   allowPermissions("rbac:view"),
   checkInput(permissionManagementSchema),
   catchErrors(moduleController.permissionManagement),
+);
+
+rbacRoutes.get(
+  "/modules/sidebar",
+  checkInput({ query: listModulesSchema.query }),
+  catchErrors(moduleController.sidebarModules),
+);
+
+rbacRoutes.post(
+  "/modules/reorder",
+  allowPermissions("rbac:update"),
+  checkInput(reorderModulesSchema),
+  catchErrors(moduleController.reorderModules),
+);
+
+rbacRoutes.patch(
+  "/modules/:moduleId/status",
+  allowPermissions("rbac:update"),
+  checkInput(moduleStatusSchema),
+  catchErrors(moduleController.changeStatus),
 );
 
 rbacRoutes.get(
@@ -201,6 +224,14 @@ rbacRoutes.post(
   }),
   allowPermissions("rbac:update"),
   catchErrors(roleController.bulkAssignPermissions),
+);
+
+// Sync (replace) all permissions for a role at once
+rbacRoutes.put(
+  "/roles/:roleId/permissions",
+  checkInput({ ...roleParamSchema, body: syncPermissionsSchema.body }),
+  allowPermissions("rbac:update"),
+  catchErrors(roleController.syncPermissions),
 );
 
 // USER PERMISSIONS ROUTES

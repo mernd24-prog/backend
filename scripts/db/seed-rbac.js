@@ -5,28 +5,48 @@ const {
 const {
   MODULE_CATALOG,
 } = require("../../src/shared/auth/module-catalog");
+const {
+  SIDEBAR_MODULES,
+} = require("../../src/shared/auth/admin-sidebar-catalog");
 
 const STANDARD_PERMISSION_ACTIONS = [
   { key: "view", label: "View" },
+  { key: "create", label: "Create" },
   { key: "add", label: "Add" },
   { key: "edit", label: "Edit" },
   { key: "update", label: "Update" },
-  { key: "action", label: "Action" },
   { key: "delete", label: "Delete" },
-  { key: "status", label: "Status" },
+  { key: "approve", label: "Approve" },
   { key: "approval", label: "Approval" },
+  { key: "reject", label: "Reject" },
+  { key: "assign", label: "Assign" },
+  { key: "export", label: "Export" },
+  { key: "import", label: "Import" },
+  { key: "status_change", label: "Status Change" },
+  { key: "status", label: "Status" },
+  { key: "restore", label: "Restore" },
+  { key: "bulk_action", label: "Bulk Action" },
+  { key: "action", label: "Action" },
 ];
 
 const LEGACY_MODULE_SLUGS = ["product", "user", "order", "seller", "settings"];
 
 function makeModuleList() {
-  return MODULE_CATALOG.map((module, index) => ({
+  const platformModules = MODULE_CATALOG.map((module, index) => ({
     id: uuidv4(),
     name: module.name,
     slug: module.slug,
+    moduleKey: module.slug,
     description: module.description,
     icon: module.icon || "grid",
-    order: module.order || index + 1,
+    routePath: module.routePath || null,
+    parentModule: null,
+    parentModuleId: null,
+    moduleType: "module",
+    status: "active",
+    modulePermissions: STANDARD_PERMISSION_ACTIONS.map((action) => action.key),
+    isVisibleInSidebar: false,
+    order: Math.round(Number(module.order || index + 1) * 10),
     metadata: {
       ...(module.metadata || {}),
       tab: module.tab,
@@ -36,8 +56,35 @@ function makeModuleList() {
       apiAliases: module.apiAliases || [],
       contentTypes: module.contentTypes || [],
       examples: module.examples || [],
+      allowedRoles: module.allowedRoles || ["super-admin", "admin", "sub-admin"],
     },
-  }))
+  }));
+
+  const sidebarModules = SIDEBAR_MODULES.map((module) => ({
+    id: uuidv4(),
+    name: module.moduleName,
+    slug: `sidebar-${module.moduleSlug}`,
+    moduleKey: `sidebar-${module.moduleKey}`,
+    description: module.description || `${module.moduleName} admin module`,
+    icon: module.icon || "MdViewModule",
+    routePath: module.routePath || null,
+    parentModule: module.parentModule ? `sidebar-${module.parentModule}` : null,
+    parentModuleId: null,
+    moduleType: module.moduleType || "page",
+    status: module.status || "active",
+    modulePermissions: module.permissions || ["view"],
+    isVisibleInSidebar: module.isVisibleInSidebar !== false,
+    order: Number(module.order || 0),
+    metadata: {
+      requiredModule: module.requiredModule || module.moduleKey,
+      routeKey: module.moduleKey,
+      tab: module.tab || null,
+      allowedRoles: module.allowedRoles || ["super-admin", "admin", "sub-admin"],
+      source: "sidebar-seed",
+    },
+  }));
+
+  return [...platformModules, ...sidebarModules]
     .sort(
       (left, right) =>
         left.order - right.order || left.name.localeCompare(right.name),
@@ -48,6 +95,7 @@ function moduleDbReplacements(module) {
   return {
     ...module,
     metadata: JSON.stringify(module.metadata || {}),
+    modulePermissions: JSON.stringify(module.modulePermissions || []),
   };
 }
 
@@ -87,14 +135,14 @@ async function seedRbac() {
 
     const modules = makeModuleList();
 
-    // Insert or update modules
+    // Insert or update modules without parent ids first.
     for (const module of modules) {
       const [existingModules] = await sequelize.query(
         `SELECT id FROM modules
-         WHERE slug = :slug OR name = :name
+         WHERE slug = :slug OR name = :name OR module_key = :moduleKey
          LIMIT 1`,
         {
-          replacements: { slug: module.slug, name: module.name },
+          replacements: { slug: module.slug, name: module.name, moduleKey: module.moduleKey },
           transaction,
         },
       );
@@ -105,29 +153,70 @@ async function seedRbac() {
           `UPDATE modules
            SET name = :name,
                slug = :slug,
+               module_key = :moduleKey,
                description = :description,
                icon = :icon,
+               route_path = :routePath,
+               module_type = :moduleType,
                "order" = :order,
+               status = :status,
+               module_permissions = CAST(:modulePermissions AS jsonb),
+               is_visible_in_sidebar = :isVisibleInSidebar,
                metadata = CAST(:metadata AS jsonb),
-               active = true,
+               active = :active,
                updated_at = NOW()
            WHERE id = :id`,
           {
-            replacements: moduleDbReplacements(module),
+            replacements: moduleDbReplacements({ ...module, active: module.status === "active" }),
             transaction,
           },
         );
       } else {
         await sequelize.query(
-          `INSERT INTO modules (id, name, slug, description, icon, "order", metadata, active, created_at, updated_at)
-           VALUES (:id, :name, :slug, :description, :icon, :order, CAST(:metadata AS jsonb), true, NOW(), NOW())`,
+          `INSERT INTO modules (id, name, slug, module_key, description, icon, route_path, parent_module_id, module_type, "order", status, module_permissions, is_visible_in_sidebar, metadata, active, created_at, updated_at)
+           VALUES (:id, :name, :slug, :moduleKey, :description, :icon, :routePath, :parentModuleId, :moduleType, :order, :status, CAST(:modulePermissions AS jsonb), :isVisibleInSidebar, CAST(:metadata AS jsonb), :active, NOW(), NOW())`,
           {
-            replacements: moduleDbReplacements(module),
+            replacements: moduleDbReplacements({ ...module, active: module.status === "active" }),
             transaction,
           },
         );
       }
     }
+
+    const [moduleRows] = await sequelize.query(
+      `SELECT id, module_key FROM modules WHERE module_key = ANY($1::text[])`,
+      { bind: [modules.map((module) => module.moduleKey)], transaction },
+    );
+    const idsByKey = new Map(moduleRows.map((row) => [row.module_key, row.id]));
+    modules.forEach((module) => {
+      if (idsByKey.has(module.moduleKey)) module.id = idsByKey.get(module.moduleKey);
+    });
+    for (const module of modules) {
+      if (!module.parentModule) continue;
+      const parentId = idsByKey.get(module.parentModule);
+      const moduleId = idsByKey.get(module.moduleKey);
+      if (!parentId || !moduleId) continue;
+      await sequelize.query(
+        `UPDATE modules SET parent_module_id = :parentId, updated_at = NOW() WHERE id = :moduleId`,
+        { replacements: { parentId, moduleId }, transaction },
+      );
+      module.parentModuleId = parentId;
+      module.id = moduleId;
+    }
+
+    await sequelize.query(
+      `UPDATE modules
+       SET active = false,
+           status = 'inactive',
+           is_visible_in_sidebar = false,
+           updated_at = NOW()
+       WHERE metadata->>'source' = 'sidebar-seed'
+         AND module_key <> ALL($1::text[])`,
+      {
+        bind: [modules.map((module) => module.moduleKey)],
+        transaction,
+      },
+    );
 
     console.log(`✓ Created ${modules.length} modules`);
 

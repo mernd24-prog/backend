@@ -3,7 +3,7 @@ const dotenv = require("dotenv");
 dotenv.config();
 
 const defaultMaxDocumentBytes = 5 * 1024 * 1024;
-const maxDocumentBytes = Number(process.env.MAX_DOCUMENT_UPLOAD_BYTES);
+const maxDocumentBytes = Number(process.env.MAX_DOCUMENT_UPLOAD_BYTES||500*1024*1024);
 const emailPort = Number(process.env.EMAIL_PORT || process.env.SMTP_PORT || 1025);
 const emailSecureDefault = emailPort === 465 ? "true" : "false";
 const isProductionMode = String(process.env.PRODUCTION || "false").trim() === "true";
@@ -66,7 +66,7 @@ const env = {
     apiSecret: process.env.CLOUDINARY_API_SECRET || "",
   },
   upload: {
-    jsonBodyLimit: process.env.JSON_BODY_LIMIT || "10mb",
+    jsonBodyLimit: process.env.JSON_BODY_LIMIT || "50mb",
     maxDocumentBytes:
       Number.isFinite(maxDocumentBytes) && maxDocumentBytes > 0
         ? maxDocumentBytes

@@ -616,21 +616,28 @@ class SellerService {
 
   normalizePermissionAction(action) {
     const aliases = {
-      create: "add",
-      approve: "approval",
       review: "approval",
       manage: "status",
-      action: "status",
     };
     const normalized = aliases[action] || action;
     const allowed = new Set([
       "view",
+      "create",
       "add",
       "edit",
       "update",
       "delete",
-      "status",
+      "approve",
       "approval",
+      "reject",
+      "assign",
+      "export",
+      "import",
+      "status_change",
+      "status",
+      "restore",
+      "bulk_action",
+      "action",
     ]);
     return allowed.has(normalized) ? normalized : null;
   }
@@ -674,7 +681,25 @@ class SellerService {
       ...permission,
       assigned: moduleAllowed && (forceAssigned || Boolean(permission.assigned)),
     }));
-    const actions = ["view", "add", "edit", "update", "delete", "status", "approval"];
+    const actions = [
+      "view",
+      "create",
+      "add",
+      "edit",
+      "update",
+      "delete",
+      "approve",
+      "approval",
+      "reject",
+      "assign",
+      "export",
+      "import",
+      "status_change",
+      "status",
+      "restore",
+      "bulk_action",
+      "action",
+    ];
     const permissionsByAction = actions.reduce((lookup, action) => {
       lookup[action] =
         normalizedPermissions.find((permission) => permission.action === action) ||

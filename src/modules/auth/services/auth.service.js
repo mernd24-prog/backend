@@ -194,7 +194,6 @@ class AuthService {
       email: user.email,
       role: user.role,
       roles: user.role ? [user.role] : [],
-      permissions: [],
       isSuperAdmin: false,
       allowedModules: Array.isArray(user.allowedModules) ? user.allowedModules : [],
       ownerAdminId: user.ownerAdminId || null,
@@ -210,14 +209,8 @@ class AuthService {
       if (superAdminRecord) {
         payload.isSuperAdmin = true;
       }
-
-      const effectivePermissions = await this.rbacService.getUserEffectivePermissions(user.id);
-      payload.permissions = Array.isArray(effectivePermissions)
-        ? effectivePermissions.map((permission) => permission.slug).filter(Boolean)
-        : [];
     } catch (error) {
-      // Preserve login flow if RBAC lookup fails; deny-by-default still applies via authorization middleware.
-      payload.permissions = [];
+      // Preserve login flow if RBAC lookup fails; authorization middleware still denies by default.
     }
 
     return payload;

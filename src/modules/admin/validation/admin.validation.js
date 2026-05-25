@@ -8,13 +8,22 @@ const {
 const accountStatuses = ["active", "suspended", "pending_approval"];
 const permissionActions = [
   "view",
+  "create",
   "add",
   "edit",
   "update",
-  "action",
   "delete",
-  "status",
+  "approve",
   "approval",
+  "reject",
+  "assign",
+  "export",
+  "import",
+  "status_change",
+  "status",
+  "restore",
+  "bulk_action",
+  "action",
 ];
 const sellerOnboardingStatuses = [
   "initiated",

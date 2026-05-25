@@ -59,6 +59,13 @@ class RoleController {
     const result = await this.rbacService.bulkAssignPermissionsToRole(roleId, permissionIds);
     res.json(okResponse(result));
   };
+
+  syncPermissions = async (req, res) => {
+    const { roleId } = req.params;
+    const { permissionIds } = req.body;
+    const result = await this.rbacService.syncRolePermissions(roleId, Array.isArray(permissionIds) ? permissionIds : []);
+    res.json(okResponse(result));
+  };
 }
 
 module.exports = { RoleController };

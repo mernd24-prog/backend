@@ -13,7 +13,7 @@ const {
 } = require("../upload/file-upload.service");
 
 const fileUploaderRoutes = express.Router();
-const maxImageBytes = 5 * 1024 * 1024;
+const maxImageBytes = 10 * 1024 * 1024;
 const tempUploadDir = path.join(os.tmpdir(), "ecommerce-uploads");
 
 const storage = multer.diskStorage({

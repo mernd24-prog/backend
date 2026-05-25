@@ -16,13 +16,22 @@ const {
 
 const PERMISSION_ACTIONS = [
   "view",
+  "create",
   "add",
   "edit",
   "update",
-  "action",
   "delete",
-  "status",
+  "approve",
   "approval",
+  "reject",
+  "assign",
+  "export",
+  "import",
+  "status_change",
+  "status",
+  "restore",
+  "bulk_action",
+  "action",
 ];
 const PERMISSION_ACTION_ORDER = PERMISSION_ACTIONS.reduce(
   (lookup, action, index) => {
@@ -50,24 +59,53 @@ class RbacRepository {
 
   async getModuleBySlug(slug) {
     return Module.findOne({
-      where: { slug },
+      where: { [Op.or]: [{ slug }, { moduleKey: slug }] },
       include: [{ association: "permissions" }],
     });
   }
 
   async listModules(filters = {}) {
-    const { active = true, limit = 100, offset = 0 } = filters;
-    const where = active !== null ? { active } : {};
+    const { active = true, includeInactive = false, limit = 100, offset = 0, q, status, sidebar, parentModuleId } = filters;
+    const where = includeInactive || active === null ? {} : { active };
+    if (status) where.status = status;
+    if (sidebar !== undefined) where.isVisibleInSidebar = sidebar;
+    if (parentModuleId !== undefined) where.parentModuleId = parentModuleId || null;
+    if (q) {
+      where[Op.or] = [
+        { name: { [Op.iLike]: `%${q}%` } },
+        { slug: { [Op.iLike]: `%${q}%` } },
+        { moduleKey: { [Op.iLike]: `%${q}%` } },
+      ];
+    }
 
     const { count, rows } = await Module.findAndCountAll({
       where,
-      include: [{ association: "permissions" }],
+      include: [{ association: "permissions" }, { association: "parentModule" }],
       limit,
       offset,
-      order: [["order", "ASC"]],
+      order: [["order", "ASC"], ["name", "ASC"]],
     });
 
     return { items: rows, total: count };
+  }
+
+  async listSidebarModules(filters = {}) {
+    const where = {
+      active: true,
+      status: "active",
+      isVisibleInSidebar: true,
+    };
+    if (filters.moduleKeys?.length) {
+      where[Op.or] = [
+        { moduleKey: { [Op.in]: filters.moduleKeys } },
+        { "$parentModule.module_key$": { [Op.in]: filters.moduleKeys } },
+      ];
+    }
+    return Module.findAll({
+      where,
+      include: [{ association: "parentModule" }],
+      order: [["order", "ASC"], ["name", "ASC"]],
+    });
   }
 
   async listPermissionManagementModules(filters = {}) {
@@ -164,6 +202,15 @@ class RbacRepository {
         id: plainModule.id,
         name: plainModule.name,
         slug: plainModule.slug,
+        moduleKey: plainModule.moduleKey,
+        moduleName: plainModule.name,
+        moduleSlug: plainModule.slug,
+        routePath: plainModule.routePath,
+        parentModuleId: plainModule.parentModuleId,
+        moduleType: plainModule.moduleType,
+        status: plainModule.status,
+        modulePermissions: plainModule.modulePermissions || [],
+        isVisibleInSidebar: plainModule.isVisibleInSidebar,
         description: plainModule.description,
         icon: plainModule.icon,
         order: plainModule.order,
@@ -375,6 +422,36 @@ class RbacRepository {
     }
 
     return { deleted: true };
+  }
+
+  async syncRolePermissions(roleId, permissionIds = []) {
+    const role = await Role.findByPk(roleId);
+    if (!role) throw new AppError("Role not found", 404);
+
+    return sequelize.transaction(async (transaction) => {
+      if (permissionIds.length > 0) {
+        await RolePermission.destroy({
+          where: { roleId, permissionId: { [Op.notIn]: permissionIds } },
+          transaction,
+        });
+        const existing = await RolePermission.findAll({
+          where: { roleId },
+          attributes: ["permissionId"],
+          transaction,
+        });
+        const existingSet = new Set(existing.map((rp) => rp.permissionId));
+        const toAdd = permissionIds.filter((id) => !existingSet.has(id));
+        if (toAdd.length) {
+          await RolePermission.bulkCreate(
+            toAdd.map((permissionId) => ({ id: uuidv4(), roleId, permissionId })),
+            { transaction, ignoreDuplicates: true },
+          );
+        }
+      } else {
+        await RolePermission.destroy({ where: { roleId }, transaction });
+      }
+      return { synced: true, permissionCount: permissionIds.length };
+    });
   }
 
   async getRolePermissions(roleId) {

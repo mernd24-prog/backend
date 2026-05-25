@@ -995,11 +995,11 @@ class AdminService {
   }
 
   roleUsesAssignedModules(role) {
-    return [ROLES.SUB_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(role);
+    return [ROLES.ADMIN, ROLES.SUB_ADMIN, ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(role);
   }
 
   roleHasFullModuleAccess(role) {
-    return [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(role);
+    return role === ROLES.SUPER_ADMIN;
   }
 
   getRbacModuleMap(modules = []) {
@@ -1030,7 +1030,25 @@ class AdminService {
       ...permission,
       assigned: moduleAllowed && (forceAssigned || Boolean(permission.assigned)),
     }));
-    const actions = ["view", "add", "edit", "update", "delete", "status", "approval"];
+    const actions = [
+      "view",
+      "create",
+      "add",
+      "edit",
+      "update",
+      "delete",
+      "approve",
+      "approval",
+      "reject",
+      "assign",
+      "export",
+      "import",
+      "status_change",
+      "status",
+      "restore",
+      "bulk_action",
+      "action",
+    ];
     const permissionsByAction = actions.reduce((lookup, action) => {
       lookup[action] =
         normalizedPermissions.find((permission) => permission.action === action) ||
@@ -1054,21 +1072,28 @@ class AdminService {
 
   normalizePermissionAction(action) {
     const aliases = {
-      create: "add",
-      approve: "approval",
       review: "approval",
       manage: "status",
-      action: "status",
     };
     const normalized = aliases[action] || action;
     const allowed = new Set([
       "view",
+      "create",
       "add",
       "edit",
       "update",
       "delete",
-      "status",
+      "approve",
       "approval",
+      "reject",
+      "assign",
+      "export",
+      "import",
+      "status_change",
+      "status",
+      "restore",
+      "bulk_action",
+      "action",
     ]);
     return allowed.has(normalized) ? normalized : null;
   }
@@ -1125,7 +1150,9 @@ class AdminService {
       (accessUser?.allowedModules || []).map(cleanModuleName).filter(Boolean),
     );
     const shouldUseAssignedModules =
-      Boolean(accessUser) && this.roleUsesAssignedModules(targetRole);
+      Boolean(accessUser) &&
+      this.roleUsesAssignedModules(targetRole) &&
+      !(targetRole === ROLES.ADMIN && assignedModuleSet.size === 0);
     let permissionMatrix = null;
 
     try {

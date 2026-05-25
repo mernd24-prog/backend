@@ -2,35 +2,69 @@ const Joi = require("joi");
 
 const permissionActions = [
   "view",
+  "create",
   "add",
   "edit",
   "update",
-  "action",
   "delete",
-  "status",
+  "approve",
   "approval",
+  "reject",
+  "assign",
+  "export",
+  "import",
+  "status_change",
+  "status",
+  "restore",
+  "bulk_action",
+  "action",
 ];
 
 const createModuleSchema = {
   body: Joi.object({
-    name: Joi.string().min(3).max(128).required(),
-    slug: Joi.string().min(3).max(128).required(),
+    name: Joi.string().min(2).max(128),
+    moduleName: Joi.string().min(2).max(128),
+    slug: Joi.string().min(2).max(128),
+    moduleSlug: Joi.string().min(2).max(128),
+    moduleKey: Joi.string().min(2).max(128),
     description: Joi.string().max(1000),
     icon: Joi.string().max(128),
+    routePath: Joi.string().max(256).allow("", null),
+    parentModule: Joi.string().allow("", null),
+    parentModuleId: Joi.string().uuid().allow("", null),
+    moduleType: Joi.string().valid("group", "module", "page", "action").default("module"),
     order: Joi.number().integer().default(0),
+    status: Joi.string().valid("active", "inactive", "draft").default("active"),
+    allowedRoles: Joi.array().items(Joi.string().trim().min(2).max(64)).default([]),
+    permissions: Joi.array().items(Joi.string()).default([]),
+    modulePermissions: Joi.array().items(Joi.string()).default([]),
+    isVisibleInSidebar: Joi.boolean().default(true),
     active: Joi.boolean().default(true),
     metadata: Joi.object().default({}),
-  }),
+  }).or("name", "moduleName").or("slug", "moduleSlug", "moduleKey", "name", "moduleName"),
 };
 
 const updateModuleSchema = {
   body: Joi.object({
-    name: Joi.string().min(3).max(128),
-    slug: Joi.string().min(3).max(128),
+    name: Joi.string().min(2).max(128),
+    moduleName: Joi.string().min(2).max(128),
+    slug: Joi.string().min(2).max(128),
+    moduleSlug: Joi.string().min(2).max(128),
+    moduleKey: Joi.string().min(2).max(128),
     description: Joi.string().max(1000),
     icon: Joi.string().max(128),
+    routePath: Joi.string().max(256).allow("", null),
+    parentModule: Joi.string().allow("", null),
+    parentModuleId: Joi.string().uuid().allow("", null),
+    moduleType: Joi.string().valid("group", "module", "page", "action"),
     order: Joi.number().integer(),
-    active: Joi.boolean(),
+    status: Joi.string().valid("active", "inactive", "draft"),
+    allowedRoles: Joi.array().items(Joi.string().trim().min(2).max(64)),
+    permissions: Joi.array().items(Joi.string()),
+    modulePermissions: Joi.array().items(Joi.string()),
+    isVisibleInSidebar: Joi.boolean(),
+    active: Joi.boolean().allow(null),
+    includeInactive: Joi.boolean().default(false),
     metadata: Joi.object(),
   }).min(1),
 };
@@ -38,6 +72,11 @@ const updateModuleSchema = {
 const listModulesSchema = {
   query: Joi.object({
     active: Joi.boolean(),
+    includeInactive: Joi.boolean().default(false),
+    status: Joi.string().valid("active", "inactive", "draft"),
+    q: Joi.string().allow(""),
+    sidebar: Joi.boolean(),
+    parentModuleId: Joi.string().uuid().allow("", null),
     limit: Joi.number().integer().min(1).max(1000).default(100),
     offset: Joi.number().integer().min(0).default(0),
   }),
@@ -56,6 +95,23 @@ const moduleParamSchema = {
   params: Joi.object({
     moduleId: Joi.string().uuid().required(),
   }),
+};
+
+const moduleStatusSchema = {
+  body: Joi.object({
+    status: Joi.string().valid("active", "inactive", "draft").required(),
+  }).required(),
+  params: moduleParamSchema.params,
+};
+
+const reorderModulesSchema = {
+  body: Joi.object({
+    modules: Joi.array().items(Joi.object({
+      id: Joi.string().uuid().required(),
+      order: Joi.number().integer().required(),
+      parentModuleId: Joi.string().uuid().allow("", null),
+    })).required(),
+  }).required(),
 };
 
 const createPermissionSchema = {
@@ -153,6 +209,12 @@ const bulkAssignPermissionsSchema = {
   }),
 };
 
+const syncPermissionsSchema = {
+  body: Joi.object({
+    permissionIds: Joi.array().items(Joi.string().uuid()).required(),
+  }),
+};
+
 const userPermissionParamSchema = {
   params: Joi.object({
     userId: Joi.string().required(),
@@ -195,6 +257,8 @@ module.exports = {
   listModulesSchema,
   permissionManagementSchema,
   moduleParamSchema,
+  moduleStatusSchema,
+  reorderModulesSchema,
   createPermissionSchema,
   updatePermissionSchema,
   listPermissionsSchema,
@@ -206,6 +270,7 @@ module.exports = {
   assignPermissionSchema,
   removePermissionSchema,
   bulkAssignPermissionsSchema,
+  syncPermissionsSchema,
   userPermissionParamSchema,
   assignRoleSchema,
   removeRoleSchema,

@@ -137,9 +137,16 @@ const Module = sequelize.define(
     id: { type: DataTypes.UUID, primaryKey: true },
     name: { type: DataTypes.STRING(128), allowNull: false, unique: true },
     slug: { type: DataTypes.STRING(128), allowNull: false, unique: true },
+    moduleKey: { type: DataTypes.STRING(128), allowNull: true, unique: true, field: "module_key" },
     description: { type: DataTypes.TEXT },
     icon: { type: DataTypes.STRING(128) },
+    routePath: { type: DataTypes.STRING(256), field: "route_path" },
+    parentModuleId: { type: DataTypes.UUID, field: "parent_module_id" },
+    moduleType: { type: DataTypes.STRING(32), allowNull: false, defaultValue: "module", field: "module_type" },
     order: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    status: { type: DataTypes.STRING(32), allowNull: false, defaultValue: "active" },
+    modulePermissions: { type: DataTypes.JSONB, allowNull: false, defaultValue: [], field: "module_permissions" },
+    isVisibleInSidebar: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, field: "is_visible_in_sidebar" },
     active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     metadata: { type: DataTypes.JSONB, defaultValue: {} },
   },
@@ -259,6 +266,8 @@ const SuperAdmin = sequelize.define(
 // Define relationships
 Permission.belongsTo(Module, { foreignKey: "module_id", as: "module" });
 Module.hasMany(Permission, { foreignKey: "module_id", as: "permissions" });
+Module.belongsTo(Module, { foreignKey: "parent_module_id", as: "parentModule" });
+Module.hasMany(Module, { foreignKey: "parent_module_id", as: "children" });
 
 RolePermission.belongsTo(Role, { foreignKey: "role_id", as: "role" });
 RolePermission.belongsTo(Permission, { foreignKey: "permission_id", as: "permission" });
