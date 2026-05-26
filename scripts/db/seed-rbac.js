@@ -356,10 +356,10 @@ async function seedRbac() {
         id: uuidv4(),
         name: "Admin",
         slug: "admin",
-        description: "Administrator with broad access",
+        description: "Administrator identity role; module/action access is assigned per user",
         type: "system",
         isSuperAdmin: false,
-        permissionSlugs: permissionSlugsForModules(allModuleSlugs),
+        permissionSlugs: [],
       },
       {
         id: uuidv4(),

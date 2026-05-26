@@ -205,7 +205,7 @@ rbacRoutes.get(
 rbacRoutes.post(
   "/roles/:roleId/permissions",
   checkInput({ ...roleParamSchema, body: assignPermissionSchema.body }),
-  allowPermissions("rbac:update"),
+  allowPermissions("rbac:assign"),
   catchErrors(roleController.assignPermissionToRole),
 );
 
@@ -222,7 +222,7 @@ rbacRoutes.post(
     ...roleParamSchema,
     body: bulkAssignPermissionsSchema.body,
   }),
-  allowPermissions("rbac:update"),
+  allowPermissions("rbac:assign"),
   catchErrors(roleController.bulkAssignPermissions),
 );
 
@@ -230,7 +230,7 @@ rbacRoutes.post(
 rbacRoutes.put(
   "/roles/:roleId/permissions",
   checkInput({ ...roleParamSchema, body: syncPermissionsSchema.body }),
-  allowPermissions("rbac:update"),
+  allowPermissions("rbac:assign"),
   catchErrors(roleController.syncPermissions),
 );
 
@@ -265,7 +265,7 @@ rbacRoutes.post(
     ...userPermissionParamSchema,
     body: assignPermissionSchema.body,
   }),
-  allowPermissions("rbac:update"),
+  allowPermissions("rbac:assign"),
   catchErrors(permissionAssignmentController.assignPermissionToUser),
 );
 
@@ -285,7 +285,7 @@ rbacRoutes.post(
     ...userPermissionParamSchema,
     body: bulkAssignPermissionsSchema.body,
   }),
-  allowPermissions("rbac:update"),
+  allowPermissions("rbac:assign"),
   catchErrors(permissionAssignmentController.bulkAssignPermissionsToUser),
 );
 
@@ -313,7 +313,7 @@ rbacRoutes.post(
     ...userPermissionParamSchema,
     body: assignRoleSchema.body,
   }),
-  allowPermissions("rbac:update"),
+  allowPermissions("rbac:assign"),
   catchErrors(permissionAssignmentController.assignRoleToUser),
 );
 
@@ -333,7 +333,7 @@ rbacRoutes.post(
     ...userPermissionParamSchema,
     body: bulkAssignRolesSchema.body,
   }),
-  allowPermissions("rbac:update"),
+  allowPermissions("rbac:assign"),
   catchErrors(permissionAssignmentController.bulkAssignRolesToUser),
 );
 

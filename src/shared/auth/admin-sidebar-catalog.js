@@ -36,7 +36,7 @@ const SIDEBAR_MODULES = [
   { moduleName: "Returns", moduleKey: "order-return-reasons", moduleSlug: "order-return-reasons", icon: "MdUndo", routePath: "/app/order-return-reasons", moduleType: "page", order: 72, parentModule: "orders-management", requiredModule: "returns" },
   { moduleName: "Refunds", moduleKey: "refunds", moduleSlug: "refunds", icon: "MdCurrencyRupee", routePath: "/app/refunds", moduleType: "page", order: 73, parentModule: "orders-management", requiredModule: "orders" },
   { moduleName: "Transactions", moduleKey: "transactions", moduleSlug: "transactions", icon: "MdPayments", routePath: "/app/transactions", moduleType: "page", order: 74, parentModule: "orders-management", requiredModule: "wallets" },
-  { moduleName: "Shipment Tracking", moduleKey: "shipment-tracking", moduleSlug: "shipment-tracking", icon: "MdLocalShipping", routePath: "/app/shipment-tracking", moduleType: "page", order: 75, parentModule: "orders-management", requiredModule: "orders" },
+  { moduleName: "Shipment Tracking", moduleKey: "shipment-tracking", moduleSlug: "shipment-tracking", icon: "MdLocalShipping", routePath: "/app/shipment-tracking", moduleType: "page", order: 75, parentModule: "orders-management", requiredModule: "orders", isVisibleInSidebar: false },
   { moduleName: "Subscription Orders", moduleKey: "subscription-orders", moduleSlug: "subscription-orders", icon: "MdSubscriptions", routePath: "/app/subscription-orders", moduleType: "page", order: 76, parentModule: "orders-management", requiredModule: "subscriptions" },
 
   { moduleName: "Users & Access", moduleKey: "users-access", moduleSlug: "users-access", icon: "MdPeople", moduleType: "group", order: 90, parentModule: null, requiredModule: "users" },
@@ -52,14 +52,14 @@ const SIDEBAR_MODULES = [
   { moduleName: "Coupons", moduleKey: "discount-coupons", moduleSlug: "discount-coupons", icon: "MdConfirmationNumber", routePath: "/app/discount-coupons", moduleType: "page", order: 111, parentModule: "marketing", requiredModule: "pricing" },
   { moduleName: "Special Price", moduleKey: "special-price", moduleSlug: "special-price", icon: "MdPriceChange", routePath: "/app/special-price", moduleType: "page", order: 112, parentModule: "marketing", requiredModule: "pricing" },
   { moduleName: "Volume Discounts", moduleKey: "volume-discounts", moduleSlug: "volume-discounts", icon: "MdDiscount", routePath: "/app/volume-discounts", moduleType: "page", order: 113, parentModule: "marketing", requiredModule: "pricing" },
-  { moduleName: "Campaigns", moduleKey: "campaigns", moduleSlug: "campaigns", icon: "MdCampaign", routePath: "/app/campaigns", moduleType: "page", order: 114, parentModule: "marketing", requiredModule: "pricing" },
-  { moduleName: "Banners", moduleKey: "promotions-banners", moduleSlug: "promotions-banners", icon: "MdWeb", routePath: "/app/promotions-banners", moduleType: "page", order: 115, parentModule: "marketing", requiredModule: "cms" },
-  { moduleName: "Notifications", moduleKey: "messages", moduleSlug: "messages", icon: "MdNotifications", routePath: "/app/messages", moduleType: "page", order: 116, parentModule: "marketing", requiredModule: "notifications" },
+  { moduleName: "Campaigns", moduleKey: "campaigns", moduleSlug: "campaigns", icon: "MdCampaign", routePath: "/app/PPC-promotions-management", moduleType: "page", order: 114, parentModule: "marketing", requiredModule: "pricing" },
+  { moduleName: "Banners", moduleKey: "promotions-banners", moduleSlug: "promotions-banners", icon: "MdWeb", routePath: "/app/content-management/promotion-banner", moduleType: "page", order: 115, parentModule: "marketing", requiredModule: "cms" },
+  { moduleName: "Notifications", moduleKey: "messages", moduleSlug: "messages", icon: "MdNotifications", routePath: "/app/messages", moduleType: "page", order: 116, parentModule: "marketing", requiredModule: "notifications", isVisibleInSidebar: false },
   { moduleName: "Similar Products", moduleKey: "similar-products", moduleSlug: "similar-products", icon: "MdCompareArrows", routePath: "/app/similar-products", moduleType: "page", order: 117, parentModule: "marketing", requiredModule: "recommendations" },
   { moduleName: "Frequently Bought Together", moduleKey: "frequently-bought-together", moduleSlug: "frequently-bought-together", icon: "MdAddShoppingCart", routePath: "/app/frequently-bought-together", moduleType: "page", order: 118, parentModule: "marketing", requiredModule: "recommendations" },
   { moduleName: "Referral Commerce", moduleKey: "referral-commerce", moduleSlug: "referral-commerce", icon: "MdShare", routePath: "/app/referral-commerce", moduleType: "page", order: 119, parentModule: "marketing", requiredModule: "referral" },
   { moduleName: "Reward On Purchase", moduleKey: "reward-on-purchase", moduleSlug: "reward-on-purchase", icon: "MdCardGiftcard", routePath: "/app/reward-on-purchase", moduleType: "page", order: 120, parentModule: "marketing", requiredModule: "loyalty" },
-  { moduleName: "Badges", moduleKey: "badges", moduleSlug: "badges", icon: "MdWorkspacePremium", routePath: "/app/badges", moduleType: "page", order: 121, parentModule: "marketing", requiredModule: "pricing" },
+  { moduleName: "Badges", moduleKey: "badges", moduleSlug: "badges", icon: "MdWorkspacePremium", routePath: "/app/badges", moduleType: "page", order: 121, parentModule: "marketing", requiredModule: "pricing", isVisibleInSidebar: false },
 
   { moduleName: "Tax & Compliance", moduleKey: "tax-compliance", moduleSlug: "tax-compliance", icon: "MdAccountBalance", moduleType: "group", order: 130, parentModule: null, requiredModule: "tax" },
   { moduleName: "HSN Codes", moduleKey: "hsn-code", moduleSlug: "hsn-code", icon: "MdQrCode", routePath: "/app/hsn-code", moduleType: "page", order: 131, parentModule: "tax-compliance", requiredModule: "tax" },
@@ -82,10 +82,10 @@ const SIDEBAR_MODULES = [
   { moduleName: "Zip / Pin Codes", moduleKey: "zip-codes", moduleSlug: "zip-codes", icon: "MdPinDrop", routePath: "/app/zip-codes", moduleType: "page", order: 174, parentModule: "location-management", requiredModule: "locations" },
 
   { moduleName: "Settings", moduleKey: "settings-menu", moduleSlug: "settings-menu", icon: "CiSettings", moduleType: "group", order: 190, parentModule: null, requiredModule: "admin" },
-  { moduleName: "General Settings", moduleKey: "settings", moduleSlug: "settings", icon: "MdSettings", routePath: "/app/settings", moduleType: "page", order: 191, parentModule: "settings-menu", requiredModule: "admin" },
-  { moduleName: "Payment Settings", moduleKey: "payment-settings", moduleSlug: "payment-settings", icon: "MdPayment", routePath: "/app/payment-settings", moduleType: "page", order: 192, parentModule: "settings-menu", requiredModule: "payments" },
+  { moduleName: "General Settings", moduleKey: "settings", moduleSlug: "settings", icon: "MdSettings", routePath: "/app/settings", moduleType: "page", order: 191, parentModule: "settings-menu", requiredModule: "admin", isVisibleInSidebar: false },
+  { moduleName: "Payment Settings", moduleKey: "payment-settings", moduleSlug: "payment-settings", icon: "MdPayment", routePath: "/app/payment-settings", moduleType: "page", order: 192, parentModule: "settings-menu", requiredModule: "payments", isVisibleInSidebar: false },
   { moduleName: "Content Pages", moduleKey: "content-management", moduleSlug: "content-management", icon: "MdArticle", routePath: "/app/content-management", moduleType: "page", order: 193, parentModule: "settings-menu", requiredModule: "cms" },
-  { moduleName: "SEO Settings", moduleKey: "seo-settings", moduleSlug: "seo-settings", icon: "MdLanguage", routePath: "/app/seo-settings", moduleType: "page", order: 194, parentModule: "settings-menu", requiredModule: "admin" },
+  { moduleName: "SEO Settings", moduleKey: "seo-settings", moduleSlug: "seo-settings", icon: "MdLanguage", routePath: "/app/seo-settings", moduleType: "page", order: 194, parentModule: "settings-menu", requiredModule: "admin", isVisibleInSidebar: false },
 ];
 
 module.exports = { SIDEBAR_MODULES };

@@ -60,7 +60,7 @@ class PermissionAssignmentController {
   getUserEffectivePermissions = async (req, res) => {
     const { userId } = req.params;
     const permissions =
-      await this.rbacService.getUserEffectivePermissions(userId);
+      await this.rbacService.getUserEffectivePermissionSummary(userId);
     res.json(okResponse(permissions));
   };
 

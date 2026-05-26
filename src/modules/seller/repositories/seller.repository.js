@@ -1,6 +1,24 @@
 const { knex, postgresPool } = require("../../../infrastructure/postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
 const { UserRepository } = require("../../user/repositories/user.repository");
+const {
+  SESSION_INVALIDATION_REASONS,
+  makeSessionInvalidationUpdate,
+  mergeMongoUpdates,
+  normalizeAccountStatus,
+} = require("../../../shared/auth/session-state");
+
+function statusSessionFields(accountStatus) {
+  if (accountStatus === undefined || accountStatus === null || accountStatus === "") return {};
+  const status = normalizeAccountStatus(accountStatus);
+  const now = new Date();
+  return {
+    ...(status === "active" ? { blockedAt: null, deactivatedAt: null, deletedAt: null } : {}),
+    ...(status === "deleted" ? { deletedAt: now, refreshSessions: [] } : {}),
+    ...(status === "suspended" || status === "blocked" ? { blockedAt: now, refreshSessions: [] } : {}),
+    ...(status === "inactive" || status === "disabled" || status === "deactivated" ? { deactivatedAt: now, refreshSessions: [] } : {}),
+  };
+}
 
 class SellerRepository {
   constructor({ userRepository = new UserRepository() } = {}) {
@@ -68,21 +86,35 @@ class SellerRepository {
   }
 
   async updateSellerAccountStatus(sellerId, accountStatus, onboardingStatus = null) {
-    return this.userRepository.updateById(sellerId, {
-      $set: {
-        accountStatus,
-        ...(onboardingStatus ? { "sellerProfile.onboardingStatus": onboardingStatus } : {}),
-      },
-    });
+    return this.userRepository.updateById(
+      sellerId,
+      mergeMongoUpdates(
+        {
+          $set: {
+            accountStatus,
+            ...(onboardingStatus ? { "sellerProfile.onboardingStatus": onboardingStatus } : {}),
+            ...statusSessionFields(accountStatus),
+          },
+        },
+        makeSessionInvalidationUpdate(SESSION_INVALIDATION_REASONS.ACCOUNT_STATUS_CHANGED),
+      ),
+    );
   }
 
   async updateSellerOnboardingState(sellerId, sellerProfile, accountStatus) {
-    return this.userRepository.updateById(sellerId, {
-      $set: {
-        sellerProfile,
-        accountStatus,
-      },
-    });
+    return this.userRepository.updateById(
+      sellerId,
+      mergeMongoUpdates(
+        {
+          $set: {
+            sellerProfile,
+            accountStatus,
+            ...statusSessionFields(accountStatus),
+          },
+        },
+        makeSessionInvalidationUpdate(SESSION_INVALIDATION_REASONS.ACCOUNT_STATUS_CHANGED),
+      ),
+    );
   }
 
   async updateSellerSettings(sellerId, payload) {
@@ -135,7 +167,10 @@ class SellerRepository {
         ownerSellerId: sellerId,
         accountStatus: { $ne: "deleted" },
       },
-      { $set: { allowedModules } },
+      mergeMongoUpdates(
+        { $set: { allowedModules } },
+        makeSessionInvalidationUpdate(SESSION_INVALIDATION_REASONS.PERMISSIONS_CHANGED),
+      ),
       { new: true },
     ).select("email phone role profile accountStatus allowedModules createdBy createdByRole parentAdminId parentSellerId hierarchyLevel ownerAdminId ownerSellerId createdAt updatedAt lastLoginAt");
   }
@@ -149,7 +184,10 @@ class SellerRepository {
         ownerSellerId: sellerId,
         accountStatus: { $ne: "deleted" },
       },
-      { $set: { accountStatus } },
+      mergeMongoUpdates(
+        { $set: { accountStatus, ...statusSessionFields(accountStatus) } },
+        makeSessionInvalidationUpdate(SESSION_INVALIDATION_REASONS.ACCOUNT_STATUS_CHANGED),
+      ),
       { new: true },
     ).select("email phone role profile accountStatus allowedModules createdBy createdByRole parentAdminId parentSellerId hierarchyLevel ownerAdminId ownerSellerId createdAt updatedAt lastLoginAt");
   }
@@ -164,11 +202,17 @@ class SellerRepository {
         accountStatus: { $ne: "deleted" },
       },
       {
-        $set: {
-          accountStatus: "deleted",
-          allowedModules: [],
-          refreshSessions: [],
-        },
+        ...mergeMongoUpdates(
+          {
+            $set: {
+              accountStatus: "deleted",
+              allowedModules: [],
+              refreshSessions: [],
+              deletedAt: new Date(),
+            },
+          },
+          makeSessionInvalidationUpdate(SESSION_INVALIDATION_REASONS.USER_DELETED),
+        ),
       },
       { new: true },
     ).select("email phone role profile accountStatus allowedModules createdBy createdByRole parentAdminId parentSellerId hierarchyLevel ownerAdminId ownerSellerId createdAt updatedAt lastLoginAt");

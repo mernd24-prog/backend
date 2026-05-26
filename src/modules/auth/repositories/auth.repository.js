@@ -1,5 +1,10 @@
 const { UserRepository } = require("../../user/repositories/user.repository");
 const { postgresPool } = require("../../../infrastructure/postgres/postgres-client");
+const {
+  SESSION_INVALIDATION_REASONS,
+  makeSessionInvalidationUpdate,
+  mergeMongoUpdates,
+} = require("../../../shared/auth/session-state");
 
 class AuthRepository {
   constructor({ userRepository = new UserRepository() } = {}) {
@@ -16,6 +21,11 @@ class AuthRepository {
 
   async findUserById(userId) {
     return this.userRepository.findById(userId);
+  }
+
+  async findUserWithPasswordById(userId) {
+    const { UserModel } = require("../../user/models/user.model");
+    return UserModel.findById(userId);
   }
 
   async findUserByProvider(provider, providerUserId) {
@@ -46,7 +56,19 @@ class AuthRepository {
   }
 
   async updatePassword(userId, passwordHash) {
-    return this.userRepository.updateById(userId, { $set: { passwordHash } });
+    return this.userRepository.updateById(
+      userId,
+      mergeMongoUpdates(
+        {
+          $set: {
+            passwordHash,
+            passwordChangedAt: new Date(),
+            refreshSessions: [],
+          },
+        },
+        makeSessionInvalidationUpdate(SESSION_INVALIDATION_REASONS.PASSWORD_CHANGED),
+      ),
+    );
   }
 
   async findSellerKycBySellerId(sellerId) {

@@ -2,6 +2,11 @@ const { RbacRepository } = require("../repositories/rbac.repository");
 const { AppError } = require("../../../shared/errors/app-error");
 const { ROLES } = require("../../../shared/constants/roles");
 const { UserModel } = require("../../user/models/user.model");
+const { cleanModuleName, DEFAULT_SELLER_MODULES } = require("../../../shared/auth/module-access");
+const {
+  SESSION_INVALIDATION_REASONS,
+  makeSessionInvalidationUpdate,
+} = require("../../../shared/auth/session-state");
 
 const slugifyModule = (value = "") =>
   String(value || "")
@@ -101,6 +106,25 @@ class RbacService {
     return this.serializeModule(await this.rbacRepository.createModule(payload));
   }
 
+  async invalidateUserAuthSession(userId, reason = SESSION_INVALIDATION_REASONS.PERMISSIONS_CHANGED) {
+    if (!userId) return null;
+    return UserModel.findByIdAndUpdate(
+      userId,
+      makeSessionInvalidationUpdate(reason),
+      { new: true },
+    ).catch(() => null);
+  }
+
+  async invalidateUsersForRole(roleId, reason = SESSION_INVALIDATION_REASONS.PERMISSIONS_CHANGED) {
+    const userIds = await this.rbacRepository.getUserIdsForRole(roleId).catch(() => []);
+    if (!userIds.length) return { invalidated: 0 };
+    await UserModel.updateMany(
+      { _id: { $in: userIds } },
+      makeSessionInvalidationUpdate(reason),
+    );
+    return { invalidated: userIds.length };
+  }
+
   async getModule(id) {
     const module = await this.rbacRepository.getModuleById(id);
     if (!module) {
@@ -120,24 +144,20 @@ class RbacService {
   async listSidebarModules(filters = {}, actor = {}) {
     const isSuperAdmin = actor.isSuperAdmin || actor.role === "super-admin";
     const allowedModules = Array.isArray(actor.allowedModules)
-      ? actor.allowedModules.map(slugifyModule).filter(Boolean)
+      ? actor.allowedModules.map(cleanModuleName).filter(Boolean)
       : [];
     const permissionModules = Array.isArray(actor.permissions)
       ? actor.permissions
           .map((permission) => String(permission || "").toLowerCase().split(":")[0])
-          .map(slugifyModule)
+          .map(cleanModuleName)
           .filter(Boolean)
       : [];
-    const moduleScope = Array.from(new Set([...allowedModules, ...permissionModules]));
+    const moduleScope = new Set([...allowedModules, ...permissionModules]);
 
-    if (!isSuperAdmin && !moduleScope.length) {
+    if (!isSuperAdmin && !moduleScope.size) {
       return [];
     }
-    const rows = await this.rbacRepository.listSidebarModules(
-      isSuperAdmin
-        ? filters
-        : { ...filters, moduleKeys: moduleScope },
-    );
+    const rows = await this.rbacRepository.listSidebarModules(filters);
     const modules = rows.map((row) => this.serializeModule(row));
     const byId = new Map(modules.map((item) => [item.id, { ...item, children: [] }]));
     const byKey = new Map(modules.map((item) => [item.moduleKey || item.moduleSlug, byId.get(item.id)]));
@@ -151,17 +171,77 @@ class RbacService {
       else roots.push(item);
     });
 
+    const moduleAllowed = (item = {}) => {
+      if (isSuperAdmin) return true;
+      const candidates = [
+        item.metadata?.requiredModule,
+        item.requiredModule,
+        item.moduleKey,
+        item.moduleSlug,
+        item.slug,
+      ]
+        .map(cleanModuleName)
+        .filter(Boolean);
+      return candidates.some((candidate) => moduleScope.has(candidate));
+    };
+
+    const filterTree = (items = []) =>
+      items
+        .map((item) => {
+          const children = filterTree(item.children || []);
+          if (!moduleAllowed(item) && !children.length) {
+            return null;
+          }
+          return { ...item, children };
+        })
+        .filter(Boolean);
+
     const sortTree = (items) =>
       items
         .sort((left, right) => Number(left.order || 0) - Number(right.order || 0) || String(left.moduleName).localeCompare(String(right.moduleName)))
         .map((item) => ({ ...item, children: sortTree(item.children || []) }));
 
-    return sortTree(roots);
+    return sortTree(filterTree(roots));
   }
 
   async getPermissionManagementMatrix(filters = {}) {
     const matrix =
       await this.rbacRepository.listPermissionManagementModules(filters);
+    if (filters.userId) {
+      const effectivePermissions = await this.getUserEffectivePermissions(filters.userId);
+      const assignedPermissionIds = new Set(
+        (effectivePermissions || []).map((permission) => permission.id).filter(Boolean),
+      );
+      matrix.items = matrix.items.map((module) => {
+        const permissions = (module.permissions || []).map((permission) => ({
+          ...permission,
+          assigned: assignedPermissionIds.has(permission.id),
+        }));
+        const permissionsByAction = Object.keys(module.permissionsByAction || {}).reduce(
+          (lookup, action) => {
+            lookup[action] =
+              permissions.find((permission) => permission.action === action) || null;
+            return lookup;
+          },
+          {},
+        );
+        const permissionKeys = Object.keys(permissionsByAction).reduce(
+          (lookup, action) => {
+            lookup[action] = Boolean(permissionsByAction[action]?.assigned);
+            return lookup;
+          },
+          {},
+        );
+        return {
+          ...module,
+          permissions,
+          permissionsByAction,
+          permissionKeys,
+          assignedPermissionCount: permissions.filter((permission) => permission.assigned).length,
+        };
+      });
+      matrix.assignedPermissionIds = Array.from(assignedPermissionIds);
+    }
     const permissionCount = matrix.items.reduce(
       (total, module) => total + module.permissions.length,
       0,
@@ -344,25 +424,39 @@ class RbacService {
       }
     }
 
-    return this.rbacRepository.updateRole(id, updates);
+    const result = await this.rbacRepository.updateRole(id, updates);
+    if (
+      Object.prototype.hasOwnProperty.call(updates, "active") ||
+      Object.prototype.hasOwnProperty.call(updates, "slug")
+    ) {
+      await this.invalidateUsersForRole(id, SESSION_INVALIDATION_REASONS.ROLE_CHANGED);
+    }
+    return result;
   }
 
   async deleteRole(id) {
     await this.getRole(id);
+    await this.invalidateUsersForRole(id, SESSION_INVALIDATION_REASONS.ROLE_CHANGED);
     return this.rbacRepository.deleteRole(id);
   }
 
   // ROLE PERMISSION ASSIGNMENT
   async assignPermissionToRole(roleId, permissionId) {
-    return this.rbacRepository.assignPermissionToRole(roleId, permissionId);
+    const result = await this.rbacRepository.assignPermissionToRole(roleId, permissionId);
+    await this.invalidateUsersForRole(roleId);
+    return result;
   }
 
   async removePermissionFromRole(roleId, permissionId) {
-    return this.rbacRepository.removePermissionFromRole(roleId, permissionId);
+    const result = await this.rbacRepository.removePermissionFromRole(roleId, permissionId);
+    await this.invalidateUsersForRole(roleId);
+    return result;
   }
 
   async syncRolePermissions(roleId, permissionIds = []) {
-    return this.rbacRepository.syncRolePermissions(roleId, permissionIds);
+    const result = await this.rbacRepository.syncRolePermissions(roleId, permissionIds);
+    await this.invalidateUsersForRole(roleId);
+    return result;
   }
 
   async bulkAssignPermissionsToRole(roleId, permissionIds) {
@@ -379,6 +473,10 @@ class RbacService {
       } catch (error) {
         errors.push({ permissionId, error: error.message });
       }
+    }
+
+    if (results.length) {
+      await this.invalidateUsersForRole(roleId);
     }
 
     return { assigned: results, errors };
@@ -421,16 +519,20 @@ class RbacService {
 
   async assignPermissionToUser(userId, permissionId, grantedBy, actor = {}) {
     await this.assertCanAssignUserPermissions(actor, userId, [permissionId]);
-    return this.rbacRepository.assignPermissionToUser(
+    const result = await this.rbacRepository.assignPermissionToUser(
       userId,
       permissionId,
       grantedBy,
     );
+    await this.invalidateUserAuthSession(userId);
+    return result;
   }
 
   async removePermissionFromUser(userId, permissionId, actor = {}) {
     await this.assertCanAssignUserPermissions(actor, userId, []);
-    return this.rbacRepository.removePermissionFromUser(userId, permissionId);
+    const result = await this.rbacRepository.removePermissionFromUser(userId, permissionId);
+    await this.invalidateUserAuthSession(userId);
+    return result;
   }
 
   async bulkAssignPermissionsToUser(userId, permissionIds, grantedBy, actor = {}) {
@@ -451,6 +553,10 @@ class RbacService {
       }
     }
 
+    if (results.length) {
+      await this.invalidateUserAuthSession(userId);
+    }
+
     return { assigned: results, errors };
   }
 
@@ -459,11 +565,13 @@ class RbacService {
   }
 
   async syncUserModulePermissions(userId, modulePermissions, grantedBy) {
-    return this.rbacRepository.syncUserModulePermissions(
+    const result = await this.rbacRepository.syncUserModulePermissions(
       userId,
       modulePermissions,
       grantedBy,
     );
+    await this.invalidateUserAuthSession(userId);
+    return result;
   }
 
   // USER ROLE ASSIGNMENT
@@ -479,13 +587,17 @@ class RbacService {
     await this.assertCanAssignUserPermissions(actor, userId, []);
   }
 
-  async assignRoleToUser(userId, roleId, assignedBy, actor = {}) {
+  async assignRoleToUser(userId, roleId, assignedBy, actor = {}, options = {}) {
     await this.assertCanAssignUserRole(actor, userId, roleId);
-    return this.rbacRepository.assignRoleToUser(userId, roleId, assignedBy);
+    const result = await this.rbacRepository.assignRoleToUser(userId, roleId, assignedBy);
+    if (!options.skipSessionInvalidation) {
+      await this.invalidateUserAuthSession(userId, SESSION_INVALIDATION_REASONS.ROLE_CHANGED);
+    }
+    return result;
   }
 
   async assignRoleToUserBySlug(userId, roleSlug, assignedBy, options = {}) {
-    const { ignoreMissing = false, ignoreExisting = true } = options;
+    const { ignoreMissing = false, ignoreExisting = true, skipSessionInvalidation = false } = options;
     const role = await this.rbacRepository.getRoleBySlug(roleSlug);
 
     if (!role) {
@@ -496,7 +608,7 @@ class RbacService {
     }
 
     try {
-      return await this.assignRoleToUser(userId, role.id, assignedBy);
+      return await this.assignRoleToUser(userId, role.id, assignedBy, {}, { skipSessionInvalidation });
     } catch (error) {
       if (
         ignoreExisting &&
@@ -511,7 +623,9 @@ class RbacService {
 
   async removeRoleFromUser(userId, roleId, actor = {}) {
     await this.assertCanAssignUserRole(actor, userId, roleId);
-    return this.rbacRepository.removeRoleFromUser(userId, roleId);
+    const result = await this.rbacRepository.removeRoleFromUser(userId, roleId);
+    await this.invalidateUserAuthSession(userId, SESSION_INVALIDATION_REASONS.ROLE_CHANGED);
+    return result;
   }
 
   async bulkAssignRolesToUser(userId, roleIds, assignedBy, actor = {}) {
@@ -532,6 +646,10 @@ class RbacService {
       }
     }
 
+    if (results.length) {
+      await this.invalidateUserAuthSession(userId, SESSION_INVALIDATION_REASONS.ROLE_CHANGED);
+    }
+
     return { assigned: results, errors };
   }
 
@@ -541,7 +659,135 @@ class RbacService {
 
   // GET EFFECTIVE PERMISSIONS
   async getUserEffectivePermissions(userId) {
+    const user = await UserModel.findById(userId)
+      .select("role allowedModules")
+      .lean()
+      .catch(() => null);
+
+    if (user?.role === ROLES.SUPER_ADMIN) {
+      const permissions = await this.rbacRepository.listAllActivePermissions();
+      return permissions.map((permission) => {
+        const plain = typeof permission.toJSON === "function" ? permission.toJSON() : permission;
+        return {
+          ...plain,
+          moduleSlug: plain.module?.slug || plain.moduleSlug,
+          moduleKey: plain.module?.moduleKey || plain.moduleKey,
+          moduleName: plain.module?.name || plain.moduleName,
+        };
+      });
+    }
+
+    const scopedDirectRoles = new Set([
+      ROLES.ADMIN,
+      ROLES.SUB_ADMIN,
+      ROLES.SELLER_ADMIN,
+      ROLES.SELLER_SUB_ADMIN,
+    ]);
+
+    if (user && scopedDirectRoles.has(user.role)) {
+      const allowedModuleSet = new Set(
+        (user.allowedModules || []).map(cleanModuleName).filter(Boolean),
+      );
+
+      const rolePermissions = await this.rbacRepository.getUserEffectivePermissions(userId);
+      if (rolePermissions.length) {
+        if (!allowedModuleSet.size) {
+          return rolePermissions;
+        }
+        const scopedRolePermissions = rolePermissions.filter((permission) =>
+          allowedModuleSet.has(cleanModuleName(permission.moduleSlug || permission.slug?.split(":")[0])),
+        );
+        if (scopedRolePermissions.length) {
+          return scopedRolePermissions;
+        }
+      }
+
+      const directPermissions =
+        await this.rbacRepository.getUserDirectEffectivePermissions(userId);
+      if (directPermissions.length) {
+        return allowedModuleSet.size
+          ? directPermissions.filter((permission) =>
+              allowedModuleSet.has(cleanModuleName(permission.moduleSlug || permission.slug?.split(":")[0])),
+            )
+          : directPermissions;
+      }
+
+      if (!allowedModuleSet.size) {
+        return [];
+      }
+
+      const allPermissions = await this.rbacRepository.listAllActivePermissions();
+      return allPermissions
+        .map((permission) => {
+          const plain = typeof permission.toJSON === "function" ? permission.toJSON() : permission;
+          return {
+            ...plain,
+            moduleSlug: plain.module?.slug || plain.moduleSlug,
+            moduleKey: plain.module?.moduleKey || plain.moduleKey,
+            moduleName: plain.module?.name || plain.moduleName,
+          };
+        })
+        .filter((permission) =>
+          allowedModuleSet.has(cleanModuleName(permission.moduleSlug || permission.slug?.split(":")[0])),
+        );
+    }
+
     return this.rbacRepository.getUserEffectivePermissions(userId);
+  }
+
+  async getUserEffectivePermissionSummary(userId) {
+    const user = await UserModel.findById(userId)
+      .select("email role allowedModules ownerAdminId ownerSellerId")
+      .lean();
+    if (!user) {
+      throw new AppError("User not found", 404);
+    }
+
+    const permissions = await this.getUserEffectivePermissions(userId);
+    const assignedPermissions = permissions.map((permission) => permission.slug).filter(Boolean);
+    const assignedModules = Array.from(
+      new Set(
+        assignedPermissions
+          .map((permission) => cleanModuleName(permission.split(":")[0]))
+          .filter(Boolean),
+      ),
+    );
+    const permissionsByAction = assignedPermissions.reduce((lookup, permission) => {
+      const [moduleSlug, action] = String(permission).split(":");
+      const normalizedModule = cleanModuleName(moduleSlug);
+      if (!normalizedModule || !action) return lookup;
+      if (!lookup[normalizedModule]) lookup[normalizedModule] = {};
+      lookup[normalizedModule][action] = true;
+      return lookup;
+    }, {});
+    const actor = {
+      userId: String(user._id || user.id),
+      role: user.role,
+      roles: user.role ? [user.role] : [],
+      isSuperAdmin: user.role === ROLES.SUPER_ADMIN,
+      ownerAdminId: user.ownerAdminId || null,
+      ownerSellerId: user.ownerSellerId || null,
+      allowedModules: assignedModules.length
+        ? assignedModules
+        : (user.allowedModules || []).map(cleanModuleName).filter(Boolean),
+      permissions: assignedPermissions,
+    };
+
+    if (user.role === ROLES.SELLER && !actor.allowedModules.length) {
+      actor.allowedModules = DEFAULT_SELLER_MODULES;
+    }
+
+    const sidebarModules = await this.listSidebarModules({}, actor);
+
+    return {
+      role: user.role,
+      userType: user.role,
+      assignedModules,
+      assignedPermissions,
+      permissionsByAction,
+      sidebarModules,
+      effectivePermissions: assignedPermissions,
+    };
   }
 
   async userHasPermission(userId, permissionSlug) {

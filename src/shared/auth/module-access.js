@@ -14,6 +14,24 @@ const MODULE_ALIASES = {
   seller_users: "sellers",
   "seller-staff": "sellers",
   seller_staff: "sellers",
+  "seller-management": "sellers",
+  seller_management: "sellers",
+  country: "locations",
+  countries: "locations",
+  state: "locations",
+  states: "locations",
+  city: "locations",
+  cities: "locations",
+  zipcode: "locations",
+  zipcodes: "locations",
+  "zip-code": "locations",
+  "zip-codes": "locations",
+  pincode: "locations",
+  pincodes: "locations",
+  "pin-code": "locations",
+  "pin-codes": "locations",
+  "hsn-code": "tax",
+  "hsn-codes": "tax",
   product: "products",
   "product-catalog": "products",
   seller: "sellers",
@@ -62,17 +80,29 @@ function getRequestModule(req) {
   if (first === "admin") {
     if (
       second === "access" &&
-      ["modules", "admins", "sub-admins"].includes(third)
+      third === "modules"
     ) {
       return null;
     }
 
-    if (second === "platform" && ["categories", "brands", "hsn-codes"].includes(third)) {
-      return "products";
+    if (second === "platform" && third === "hsn-codes") {
+      return "tax";
     }
 
-    if (second === "common" && ["countries", "states", "cities"].includes(third)) {
-      return "products";
+    if (second === "platform" && third === "product-reviews") {
+      return "orders";
+    }
+
+    if (second === "platform" && ["categories", "brands"].includes(third)) {
+      return "platform";
+    }
+
+    if (second === "common" && ["countries", "states", "cities", "zip-codes"].includes(third)) {
+      return "locations";
+    }
+
+    if (second === "common" && ["taxes", "sub-taxes", "tax-rules"].includes(third)) {
+      return "tax";
     }
 
     if (second === "platform" && third === "content-pages") {
@@ -85,6 +115,7 @@ function getRequestModule(req) {
       dashboard: "admin",
       "seller-users": "sellers",
       users: "users",
+      "admin-users": "rbac",
       vendors: "sellers",
       products: "products",
       orders: "orders",
@@ -110,6 +141,9 @@ function getRequestModule(req) {
   if (first === "sellers" && second === "commissions") {
     return "sellers/commissions";
   }
+  if (first === "rbac" && second === "modules" && third === "sidebar") {
+    return null;
+  }
   if (first === "sellers" && second === "me" && third === "dashboard") {
     return "analytics";
   }
@@ -122,8 +156,14 @@ function getRequestModule(req) {
   if (first === "platform" && second === "cms") {
     return "cms";
   }
-  if (first === "platform" && ["categories", "brands", "hsn-codes"].includes(second)) {
-    return "products";
+  if (first === "platform" && second === "hsn-codes") {
+    return "tax";
+  }
+  if (first === "platform" && second === "product-reviews") {
+    return "orders";
+  }
+  if (first === "platform" && ["categories", "brands"].includes(second)) {
+    return "platform";
   }
   if (first === "coupons") {
     return "pricing";

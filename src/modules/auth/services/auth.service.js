@@ -15,6 +15,7 @@ const { eventPublisher } = require("../../../infrastructure/events/event-publish
 const { socialAuthService } = require("../../../infrastructure/auth/social-auth.service");
 const { securityEventService } = require("../../../shared/security/security-event.service");
 const { SECURITY_EVENTS } = require("../../../shared/constants/security-events");
+const { Role } = require("../../../infrastructure/sequelize/models");
 const { WalletService } = require("../../wallet/services/wallet.service");
 const { ReferralService } = require("../../referral/services/referral.service");
 const { createOtp } = require("../../../shared/tools/otp");
@@ -31,6 +32,13 @@ const {
   hasCompleteSellerProfile: hasCompleteSellerProfileForOnboarding,
   getSellerOnboardingStatus,
 } = require("../../../shared/domain/seller-onboarding");
+const {
+  AUTH_ERROR_CODES,
+  authError,
+  getSessionAuthError,
+  getStatusAuthError,
+  normalizeAccountStatus,
+} = require("../../../shared/auth/session-state");
 
 class AuthService {
   constructor({
@@ -188,14 +196,54 @@ class AuthService {
     };
   }
 
-  async makeTokenPayload(user) {
+  sanitizeAuthUser(user, accessSummary = null) {
+    const plainUser = this.toPlainObject(user);
+    delete plainUser.passwordHash;
+    if (Array.isArray(plainUser.refreshSessions)) {
+      plainUser.refreshSessions = plainUser.refreshSessions.map((session) => {
+        const cleanSession = { ...session };
+        delete cleanSession.tokenHash;
+        return cleanSession;
+      });
+    }
+
+    if (!accessSummary) {
+      return plainUser;
+    }
+
+    return {
+      ...plainUser,
+      allowedModules: accessSummary.assignedModules?.length
+        ? accessSummary.assignedModules
+        : plainUser.allowedModules || [],
+      assignedModules: accessSummary.assignedModules,
+      assignedPermissions: accessSummary.assignedPermissions,
+      permissions: accessSummary.effectivePermissions,
+      permissionsByAction: accessSummary.permissionsByAction,
+      sidebarModules: accessSummary.sidebarModules,
+      effectivePermissions: accessSummary.effectivePermissions,
+    };
+  }
+
+  async makeTokenPayload(user, accessSummary = null) {
+    const assignedModules = Array.isArray(accessSummary?.assignedModules)
+      ? accessSummary.assignedModules
+      : [];
     const payload = {
       sub: user.id,
       email: user.email,
       role: user.role,
       roles: user.role ? [user.role] : [],
       isSuperAdmin: false,
-      allowedModules: Array.isArray(user.allowedModules) ? user.allowedModules : [],
+      userType: user.role,
+      status: user.accountStatus || "active",
+      tokenVersion: Number(user.tokenVersion || 0),
+      sessionVersion: Number(user.sessionVersion || 0),
+      permissionVersion: Number(user.permissionVersion || 0),
+      issuedAt: new Date().toISOString(),
+      allowedModules: assignedModules.length
+        ? assignedModules
+        : Array.isArray(user.allowedModules) ? user.allowedModules : [],
       ownerAdminId: user.ownerAdminId || null,
       ownerSellerId: user.ownerSellerId || null,
     };
@@ -229,11 +277,40 @@ class AuthService {
         {
           ignoreMissing: true,
           ignoreExisting: true,
+          skipSessionInvalidation: true,
         },
       );
     } catch (error) {
       return null;
     }
+  }
+
+  async assertActiveRoleForLogin(user) {
+    if (!user?.role) {
+      throw authError(AUTH_ERROR_CODES.ROLE_CHANGED, 401);
+    }
+    const role = await Role.findOne({ where: { slug: user.role } }).catch(() => null);
+    if (role && role.active === false) {
+      throw authError(AUTH_ERROR_CODES.ROLE_INACTIVE, 403);
+    }
+  }
+
+  async assertUserCanAuthenticate(user, options = {}) {
+    if (!user) {
+      throw authError(AUTH_ERROR_CODES.USER_NOT_FOUND, 401);
+    }
+
+    const status = normalizeAccountStatus(user.accountStatus);
+    const allowSellerOnboarding =
+      options.allowSellerOnboarding === true &&
+      user.role === ROLES.SELLER &&
+      status === "pending_approval";
+    const statusError = getStatusAuthError(user);
+    if (statusError && !allowSellerOnboarding) {
+      throw statusError;
+    }
+
+    await this.assertActiveRoleForLogin(user);
   }
 
   async register(payload, requestContext = {}) {
@@ -347,7 +424,7 @@ class AuthService {
   async getAuthStatus(userId) {
     const user = await this.authRepository.findUserById(userId);
     if (!user) {
-      throw new AppError("User not found", 404);
+      throw authError(AUTH_ERROR_CODES.USER_NOT_FOUND, 401);
     }
 
     const isSeller = user.role === ROLES.SELLER;
@@ -405,6 +482,8 @@ class AuthService {
       });
       throw new AppError("Invalid credentials", 401);
     }
+
+    await this.assertUserCanAuthenticate(user, { allowSellerOnboarding: true });
 
     if (!user.passwordHash) {
       await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
@@ -502,6 +581,8 @@ class AuthService {
         user = await this.authRepository.linkSocialProvider(user.id, providerProfile);
       }
 
+      await this.assertUserCanAuthenticate(user, { allowSellerOnboarding: true });
+
       const sellerFlowState = await this.getSellerLoginFlowState(user);
       if (sellerFlowState?.requiresOnboarding) {
         return this.makeOnboardingResponse(user);
@@ -532,14 +613,12 @@ class AuthService {
     }
     if (purpose === "login") {
       if (!existingUser) {
-        throw new AppError("User not found", 404);
+        throw authError(AUTH_ERROR_CODES.USER_NOT_FOUND, 401);
       }
       if (!this.isSellerRole(existingUser.role)) {
         throw new AppError("OTP login is only available for seller accounts", 403);
       }
-      if (existingUser.accountStatus === "suspended") {
-        throw new AppError("Account is suspended. Please contact support.", 403);
-      }
+      await this.assertUserCanAuthenticate(existingUser, { allowSellerOnboarding: true });
     }
     const otp = env.production ? createOtp() : env.auth.staticOtp;
     const otpKey = this.makeOtpKey(email, purpose);
@@ -602,14 +681,12 @@ class AuthService {
     if (purpose === "login") {
       const user = await this.authRepository.findUserByEmail(email);
       if (!user) {
-        throw new AppError("User not found", 404);
+        throw authError(AUTH_ERROR_CODES.USER_NOT_FOUND, 401);
       }
       if (!this.isSellerRole(user.role)) {
         throw new AppError("OTP login is only available for seller accounts", 403);
       }
-      if (user.accountStatus === "suspended") {
-        throw new AppError("Account is suspended. Please contact support.", 403);
-      }
+      await this.assertUserCanAuthenticate(user, { allowSellerOnboarding: true });
       const sellerFlowState = await this.getSellerLoginFlowState(user);
       if (sellerFlowState?.requiresOnboarding) {
         return this.makeOnboardingResponse(user);
@@ -645,8 +722,9 @@ class AuthService {
     const passwordHash = await hashText(newPassword);
     const user = await this.authRepository.findUserByEmail(email);
     if (!user) {
-      throw new AppError("User not found", 404);
+      throw authError(AUTH_ERROR_CODES.USER_NOT_FOUND, 401);
     }
+    await this.assertUserCanAuthenticate(user);
 
     await this.authRepository.updatePassword(user.id, passwordHash);
     await redis.del(this.makeOtpKey(email, "forgot_password"));
@@ -673,10 +751,11 @@ class AuthService {
   async changePassword(payload, requestContext = {}) {
     const { userId, currentPassword, newPassword } = payload;
 
-    const user = await this.authRepository.userRepository.findById(userId);
+    const user = await this.authRepository.findUserWithPasswordById(userId);
     if (!user) {
-      throw new AppError("User not found", 404);
+      throw authError(AUTH_ERROR_CODES.USER_NOT_FOUND, 401);
     }
+    await this.assertUserCanAuthenticate(user);
 
     if (!user.passwordHash) {
       throw new AppError("Password login not enabled", 400);
@@ -708,7 +787,12 @@ class AuthService {
         ...requestContext,
         metadata: { reason: "invalid_signature_or_expired" },
       });
-      throw new AppError("Invalid refresh token", 401);
+      throw authError(
+        error?.name === "TokenExpiredError"
+          ? AUTH_ERROR_CODES.TOKEN_EXPIRED
+          : AUTH_ERROR_CODES.TOKEN_INVALID,
+        401,
+      );
     }
 
     const user = await this.authRepository.findUserByEmail(payload.email);
@@ -719,7 +803,14 @@ class AuthService {
         ...requestContext,
         metadata: { reason: "user_not_found" },
       });
-      throw new AppError("Invalid refresh token", 401);
+      throw authError(AUTH_ERROR_CODES.USER_NOT_FOUND, 401);
+    }
+
+    await this.assertUserCanAuthenticate(user, { allowSellerOnboarding: true });
+
+    const sessionError = getSessionAuthError(user, payload);
+    if (sessionError) {
+      throw sessionError;
     }
 
     const currentSession = await this.findMatchingRefreshSession(user.refreshSessions || [], refreshToken);
@@ -731,7 +822,7 @@ class AuthService {
         ...requestContext,
         metadata: { reason: "session_not_found" },
       });
-      throw new AppError("Invalid refresh token", 401);
+      throw authError(AUTH_ERROR_CODES.SESSION_INVALID, 401);
     }
 
     const sellerFlowState = await this.getSellerLoginFlowState(user);
@@ -755,7 +846,10 @@ class AuthService {
     successEventType = SECURITY_EVENTS.AUTH_LOGIN_SUCCESS,
     replacedSessionId = null,
   ) {
-    const tokenPayload = await this.makeTokenPayload(user);
+    const accessSummary = await this.rbacService
+      .getUserEffectivePermissionSummary(String(user.id))
+      .catch(() => null);
+    const tokenPayload = await this.makeTokenPayload(user, accessSummary);
 
     const accessToken = makeAccessToken(tokenPayload);
     const refreshToken = makeRefreshToken(tokenPayload);
@@ -786,12 +880,13 @@ class AuthService {
     });
 
     return {
-      user,
+      user: this.sanitizeAuthUser(user, accessSummary),
       tokens: {
         accessToken,
         refreshToken,
       },
       flowState: await this.getAuthStatus(user.id),
+      permissions: accessSummary,
     };
   }
 

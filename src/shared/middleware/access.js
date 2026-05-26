@@ -62,6 +62,36 @@ const PERMISSION_ACTION_ALIASES = {
   action: ["status", "status_change", "manage"],
 };
 
+const METHOD_ACTIONS = {
+  GET: "view",
+  POST: "create",
+  PUT: "update",
+  PATCH: "update",
+  DELETE: "delete",
+};
+
+function inferRequestAction(req) {
+  const method = String(req.method || "GET").toUpperCase();
+  const path = String(req.originalUrl || req.path || "").toLowerCase();
+
+  if (path.includes("/approve") || path.includes("/approval")) return "approve";
+  if (path.includes("/reject")) return "reject";
+  if (path.includes("/access/sub-admins") && path.includes("/modules")) {
+    return method === "GET" ? "view" : "assign";
+  }
+  if (path.includes("/assign") || path.includes("/permissions") || path.includes("/roles")) {
+    return method === "GET" ? "view" : "assign";
+  }
+  if (path.includes("/status") || path.includes("/moderate") || path.includes("/review")) {
+    return method === "GET" ? "view" : "status_change";
+  }
+  if (path.includes("/bulk")) return method === "GET" ? "view" : "bulk_action";
+  if (path.includes("/import")) return "import";
+  if (path.includes("/export")) return "export";
+
+  return METHOD_ACTIONS[method] || "view";
+}
+
 function buildPermissionCandidates(permissionSlug = "") {
   const value = String(permissionSlug || "").trim().toLowerCase();
   if (!value.includes(":")) {
@@ -76,6 +106,21 @@ function buildPermissionCandidates(permissionSlug = "") {
       ...actionCandidates,
       ...actionCandidates.map((action) => `${moduleSlug}:${action}`),
     ]),
+  );
+}
+
+function hasGrantedPermission(auth = {}, moduleName, action = "view") {
+  if (auth.isSuperAdmin || auth.role === ROLES.SUPER_ADMIN) return true;
+
+  const normalizedModule = cleanModuleName(moduleName);
+  const permissionSlug = `${normalizedModule}:${action}`;
+  const permissionCandidates = buildPermissionCandidates(permissionSlug);
+  const grantedPermissions = Array.isArray(auth.permissions)
+    ? auth.permissions
+    : [];
+
+  return permissionCandidates.some((candidate) =>
+    grantedPermissions.includes(candidate),
   );
 }
 
@@ -106,6 +151,27 @@ function enforceModuleScope(req) {
   return null;
 }
 
+function enforceRequestPermission(req) {
+  if (!usesModuleAccess(req.auth)) {
+    return null;
+  }
+
+  const requestModule = getRequestModule(req);
+  if (!requestModule) {
+    return null;
+  }
+
+  const requestAction = inferRequestAction(req);
+  if (hasGrantedPermission(req.auth, requestModule, requestAction)) {
+    return null;
+  }
+
+  return new AppError(
+    `Forbidden: permission denied for ${cleanModuleName(requestModule)}:${requestAction}`,
+    403,
+  );
+}
+
 function flattenRoles(roles = []) {
   return roles.flatMap((role) => (Array.isArray(role) ? role : [role]));
 }
@@ -128,7 +194,23 @@ function allowRoles(...roles) {
     const userRoles = getUserRoles(req);
     const allowedRoles = flattenRoles(roles);
     const allowed = allowedRoles.some((role) => userRoles.includes(role));
-    if (!allowed) {
+    const superAdminOnly =
+      allowedRoles.length === 1 && allowedRoles[0] === ROLES.SUPER_ADMIN;
+    if (!allowed && superAdminOnly) {
+      return next(new AppError("Forbidden", 403));
+    }
+
+    const permissionError = enforceRequestPermission(req);
+    if (permissionError && allowed) {
+      return next(permissionError);
+    }
+    if (!allowed && permissionError) {
+      return next(permissionError);
+    }
+    if (!allowed && !usesModuleAccess(req.auth)) {
+      return next(new AppError("Forbidden", 403));
+    }
+    if (!allowed && !getRequestModule(req)) {
       return next(new AppError("Forbidden", 403));
     }
 
@@ -152,6 +234,30 @@ function allowActions(...actions) {
     }
 
     const userRoles = getUserRoles(req);
+    if (usesModuleAccess(req.auth)) {
+      const requestModule = getRequestModule(req);
+      const requestAction = inferRequestAction(req);
+      const allowed = requestModule
+        ? hasGrantedPermission(req.auth, requestModule, requestAction)
+        : actions.every((action) =>
+            Array.isArray(req.auth.permissions) &&
+            req.auth.permissions.includes(action),
+          );
+
+      if (!allowed) {
+        return next(
+          new AppError(
+            requestModule
+              ? `Forbidden: permission denied for ${cleanModuleName(requestModule)}:${requestAction}`
+              : "Forbidden",
+            403,
+          ),
+        );
+      }
+
+      return next();
+    }
+
     const allowed = actions.every((action) => {
       if (
         Array.isArray(req.auth.permissions) &&

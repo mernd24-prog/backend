@@ -475,6 +475,44 @@ class AdminService {
     }));
   }
 
+  async enrichParentAdminInfo(items = []) {
+    const list = items.map((item) => this.toPlainObject(item));
+    const parentIds = Array.from(
+      new Set(
+        list
+          .map((item) => item.parentAdminId || item.ownerAdminId)
+          .filter(Boolean)
+          .map(String),
+      ),
+    );
+    if (!parentIds.length) return list;
+
+    const parents = await UserModel.find({ _id: { $in: parentIds } })
+      .select("email profile role")
+      .lean();
+    const parentMap = new Map(parents.map((parent) => [String(parent._id), parent]));
+
+    return list.map((item) => {
+      const parent = parentMap.get(String(item.parentAdminId || item.ownerAdminId || ""));
+      const parentName =
+        [parent?.profile?.firstName, parent?.profile?.lastName].filter(Boolean).join(" ") ||
+        parent?.email ||
+        "";
+      return {
+        ...item,
+        parentAdmin: parent
+          ? {
+              id: String(parent._id),
+              email: parent.email,
+              role: parent.role,
+              profile: parent.profile || {},
+            }
+          : item.parentAdmin || null,
+        parentAdminName: parentName || item.parentAdminName || null,
+      };
+    });
+  }
+
   async createUser(payload, actor = {}) {
     const existing = await this.adminRepository.findUserByEmail(payload.email);
     if (existing) {
@@ -1752,9 +1790,10 @@ class AdminService {
       throw new AppError("Forbidden", 403);
     }
     const result = await this.adminRepository.listSubAdmins(listQuery);
+    const withParentInfo = await this.enrichParentAdminInfo(result.items);
     return {
       ...result,
-      items: await this.enrichPermissionSummary(result.items),
+      items: await this.enrichPermissionSummary(withParentInfo),
     };
   }
 

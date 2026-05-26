@@ -4,6 +4,35 @@ const { ProductModel } = require("../../product/models/product.model");
 const { v4: uuidv4 } = require("uuid");
 const { randomBytes } = require("crypto");
 const { hashText } = require("../../../shared/tools/hash");
+const {
+  SESSION_INVALIDATION_REASONS,
+  makeSessionInvalidationUpdate,
+  mergeMongoUpdates,
+  normalizeAccountStatus,
+} = require("../../../shared/auth/session-state");
+
+function statusSessionFields(accountStatus) {
+  if (accountStatus === undefined || accountStatus === null || accountStatus === "") return {};
+  const status = normalizeAccountStatus(accountStatus);
+  const now = new Date();
+  return {
+    ...(status === "active" ? { blockedAt: null, deactivatedAt: null, deletedAt: null } : {}),
+    ...(status === "deleted" ? { deletedAt: now, refreshSessions: [] } : {}),
+    ...(status === "suspended" || status === "blocked" ? { blockedAt: now, refreshSessions: [] } : {}),
+    ...(status === "inactive" || status === "disabled" || status === "deactivated" ? { deactivatedAt: now, refreshSessions: [] } : {}),
+  };
+}
+
+function invalidationReasonForUserPayload(payload = {}) {
+  if (payload.role) return SESSION_INVALIDATION_REASONS.ROLE_CHANGED;
+  if (Object.prototype.hasOwnProperty.call(payload, "allowedModules")) {
+    return SESSION_INVALIDATION_REASONS.PERMISSIONS_CHANGED;
+  }
+  if (payload.accountStatus || payload.status) {
+    return SESSION_INVALIDATION_REASONS.ACCOUNT_STATUS_CHANGED;
+  }
+  return null;
+}
 
 class AdminRepository {
   async getOverviewStats() {
@@ -165,6 +194,7 @@ class AdminRepository {
   }
 
   async updateUserById(userId, payload) {
+    const invalidationReason = invalidationReasonForUserPayload(payload);
     const update = {
       $set: {
         ...(payload.accountStatus ? { accountStatus: payload.accountStatus } : {}),
@@ -180,38 +210,55 @@ class AdminRepository {
         ...(payload.hierarchyLevel !== undefined ? { hierarchyLevel: payload.hierarchyLevel } : {}),
         ...(payload.ownerAdminId !== undefined ? { ownerAdminId: payload.ownerAdminId } : {}),
         ...(payload.ownerSellerId !== undefined ? { ownerSellerId: payload.ownerSellerId } : {}),
+        ...statusSessionFields(payload.accountStatus),
       },
     };
-    return UserModel.findByIdAndUpdate(userId, update, {
+    return UserModel.findByIdAndUpdate(
+      userId,
+      invalidationReason
+        ? mergeMongoUpdates(update, makeSessionInvalidationUpdate(invalidationReason))
+        : update,
+      {
       new: true,
-    }).select("-passwordHash -refreshSessions.tokenHash");
+      },
+    ).select("-passwordHash -refreshSessions.tokenHash");
   }
 
   async deactivateUserById(userId, reason = null) {
     return UserModel.findByIdAndUpdate(
       userId,
-      {
-        $set: {
-          accountStatus: "suspended",
-          deactivatedAt: new Date(),
-          deactivationReason: reason || null,
+      mergeMongoUpdates(
+        {
+          $set: {
+            accountStatus: "suspended",
+            deactivatedAt: new Date(),
+            blockedAt: new Date(),
+            deactivationReason: reason || null,
+            refreshSessions: [],
+          },
         },
-      },
+        makeSessionInvalidationUpdate(SESSION_INVALIDATION_REASONS.ACCOUNT_STATUS_CHANGED),
+      ),
       { new: true },
     ).select("-passwordHash -refreshSessions.tokenHash");
   }
 
   async updateVendorStatus(sellerId, payload) {
+    const accountStatus = payload.accountStatus;
     return UserModel.findByIdAndUpdate(
       sellerId,
-      {
-        $set: {
-          accountStatus: payload.accountStatus,
-          ...(payload.onboardingStatus
-            ? { "sellerProfile.onboardingStatus": payload.onboardingStatus }
-            : {}),
+      mergeMongoUpdates(
+        {
+          $set: {
+            accountStatus,
+            ...(payload.onboardingStatus
+              ? { "sellerProfile.onboardingStatus": payload.onboardingStatus }
+              : {}),
+            ...statusSessionFields(accountStatus),
+          },
         },
-      },
+        makeSessionInvalidationUpdate(SESSION_INVALIDATION_REASONS.ACCOUNT_STATUS_CHANGED),
+      ),
       { new: true },
     ).select("-passwordHash -refreshSessions.tokenHash");
   }
@@ -536,7 +583,10 @@ class AdminRepository {
 
     return UserModel.findOneAndUpdate(
       filter,
-      { $set: { allowedModules } },
+      mergeMongoUpdates(
+        { $set: { allowedModules } },
+        makeSessionInvalidationUpdate(SESSION_INVALIDATION_REASONS.PERMISSIONS_CHANGED),
+      ),
       { new: true },
     ).select("email phone role profile accountStatus allowedModules createdBy createdByRole parentAdminId parentSellerId hierarchyLevel ownerAdminId ownerSellerId createdAt updatedAt lastLoginAt");
   }

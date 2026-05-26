@@ -95,12 +95,6 @@ class RbacRepository {
       status: "active",
       isVisibleInSidebar: true,
     };
-    if (filters.moduleKeys?.length) {
-      where[Op.or] = [
-        { moduleKey: { [Op.in]: filters.moduleKeys } },
-        { "$parentModule.module_key$": { [Op.in]: filters.moduleKeys } },
-      ];
-    }
     return Module.findAll({
       where,
       include: [{ association: "parentModule" }],
@@ -661,9 +655,24 @@ class RbacRepository {
     });
   }
 
+  async getUserIdsForRole(roleId) {
+    const rows = await UserRole.findAll({
+      where: { roleId, revokedAt: null },
+      attributes: ["userId"],
+      raw: true,
+    });
+    return rows.map((row) => row.userId).filter(Boolean);
+  }
+
   async getUserEffectivePermissions(userId) {
     const query = `
-      SELECT DISTINCT p.* FROM permissions p
+      SELECT DISTINCT
+        p.*,
+        m.slug AS "moduleSlug",
+        m.module_key AS "moduleKey",
+        m.name AS "moduleName"
+      FROM permissions p
+      INNER JOIN modules m ON m.id = p.module_id
       LEFT JOIN role_permissions rp ON p.id = rp.permission_id
       LEFT JOIN user_roles ur ON rp.role_id = ur.role_id
       LEFT JOIN user_permissions up ON p.id = up.permission_id
@@ -679,6 +688,37 @@ class RbacRepository {
       replacements: { userId },
       type: sequelize.QueryTypes.SELECT,
       raw: true,
+    });
+  }
+
+  async getUserDirectEffectivePermissions(userId) {
+    const query = `
+      SELECT DISTINCT
+        p.*,
+        m.slug AS "moduleSlug",
+        m.module_key AS "moduleKey",
+        m.name AS "moduleName"
+      FROM permissions p
+      INNER JOIN modules m ON m.id = p.module_id
+      INNER JOIN user_permissions up ON p.id = up.permission_id
+      WHERE up.user_id = :userId
+        AND up.revoked_at IS NULL
+        AND p.active = true
+      ORDER BY p.id
+    `;
+
+    return sequelize.query(query, {
+      replacements: { userId },
+      type: sequelize.QueryTypes.SELECT,
+      raw: true,
+    });
+  }
+
+  async listAllActivePermissions() {
+    return Permission.findAll({
+      where: { active: true },
+      include: [{ association: "module" }],
+      order: [["slug", "ASC"]],
     });
   }
 

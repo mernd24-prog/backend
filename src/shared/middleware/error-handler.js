@@ -15,7 +15,7 @@ function errorHandler(error, req, res, next) {
     message = "Request payload too large. Please reduce the size of the data you are sending.";
   }
 
-  res.status(statusCode).json(failResponse(message, error.details));
+  res.status(statusCode).json(failResponse(message, error.details, error.code));
 }
 
 module.exports = { errorHandler };
