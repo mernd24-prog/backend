@@ -147,7 +147,10 @@ class SellerService {
     if (seller) {
       const existingProfile = this.mergeSellerProfile(
         this.mergeKycIntoSellerProfile(seller.sellerProfile || {}, record),
-        { bankDetails: payload.bankDetails || {} },
+        {
+          bankDetails: payload.bankDetails || {},
+          ...(payload.dateOfBirth ? { dateOfBirth: payload.dateOfBirth } : {}),
+        },
       );
       await this.sellerRepository.updateSellerProfile(
         sellerId,
