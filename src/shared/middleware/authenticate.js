@@ -197,4 +197,56 @@ async function authenticatePendingSeller(req, res, next) {
   }
 }
 
-module.exports = { authenticate, authenticatePendingSeller };
+// Accepts both regular access tokens and onboarding tokens — used for /auth/status
+// so sellers in onboarding/rejection flow can fetch their flow state without being
+// force-logged-out by the session-version check that regular access tokens carry.
+async function authenticateForStatus(req, res, next) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader?.startsWith("Bearer ")) {
+    return next(authError(AUTH_ERROR_CODES.TOKEN_INVALID, 401));
+  }
+
+  const token = authHeader.replace("Bearer ", "");
+
+  try {
+    const payload = jwt.verify(token, env.jwtAccessSecret);
+
+    if (payload.isOnboarding === true && payload.role === ROLES.SELLER) {
+      const user = await UserModel.findById(payload.sub)
+        .select("-passwordHash -refreshSessions.tokenHash")
+        .lean()
+        .catch(() => null);
+
+      if (!user) {
+        return next(authError(AUTH_ERROR_CODES.USER_NOT_FOUND, 401));
+      }
+
+      const status = normalizeAccountStatus(user.accountStatus);
+      const statusError = getStatusAuthError(user);
+      if (statusError && status !== "pending_approval") {
+        return next(statusError);
+      }
+
+      req.auth = { ...payload, sub: String(payload.sub), user };
+      return next();
+    }
+
+    req.auth = await hydrateAuthPermissions(payload);
+    return next();
+  } catch (error) {
+    if (error?.statusCode) {
+      return next(error);
+    }
+    return next(
+      authError(
+        error?.name === "TokenExpiredError"
+          ? AUTH_ERROR_CODES.TOKEN_EXPIRED
+          : AUTH_ERROR_CODES.TOKEN_INVALID,
+        401,
+      ),
+    );
+  }
+}
+
+module.exports = { authenticate, authenticatePendingSeller, authenticateForStatus };

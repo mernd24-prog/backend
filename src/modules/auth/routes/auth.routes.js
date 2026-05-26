@@ -3,7 +3,7 @@ const { AuthController } = require("../controllers/auth.controller");
 const { checkInput } = require("../../../shared/middleware/check-input");
 const { catchErrors } = require("../../../shared/middleware/catch-errors");
 const { authRateLimit } = require("../../../shared/middleware/auth-rate-limit");
-const { authenticate } = require("../../../shared/middleware/authenticate");
+const { authenticate, authenticateForStatus } = require("../../../shared/middleware/authenticate");
 const {
   loginSchema,
   refreshSchema,
@@ -36,7 +36,7 @@ authRoutes.post("/resend-otp", checkInput(resendOtpSchema), catchErrors(authCont
 authRoutes.post("/forgot-password", checkInput(forgotPasswordSchema), catchErrors(authController.forgotPassword));
 authRoutes.post("/reset-password", checkInput(resetPasswordSchema), catchErrors(authController.resetPassword));
 authRoutes.post("/change-password", authenticate, checkInput(changePasswordSchema), catchErrors(authController.changePassword));
-authRoutes.get("/status", authenticate, catchErrors(authController.status));
+authRoutes.get("/status", authenticateForStatus, catchErrors(authController.status));
 
 module.exports = { authRoutes };
   
