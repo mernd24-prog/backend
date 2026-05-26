@@ -22,6 +22,18 @@ const toRouteCode = (routePath = "") =>
     .replace(/^\/+/, "")
     .replace(/\/+$/, "");
 
+const SIDEBAR_PERMISSION_ACTIONS = [
+  "view",
+  "create",
+  "update",
+  "delete",
+  "status_change",
+  "approve",
+  "reject",
+  "assign",
+  "export",
+];
+
 class RbacService {
   constructor({ rbacRepository = new RbacRepository() } = {}) {
     this.rbacRepository = rbacRepository;
@@ -242,6 +254,23 @@ class RbacService {
       });
       matrix.assignedPermissionIds = Array.from(assignedPermissionIds);
     }
+    if (filters.scope === "sidebar") {
+      const assignedSlugs = new Set(
+        matrix.items.flatMap((module) =>
+          (module.permissions || [])
+            .filter((permission) => permission.assigned)
+            .map((permission) => permission.slug),
+        ),
+      );
+      matrix.items = matrix.items
+        .filter((module) =>
+          module.isVisibleInSidebar !== false &&
+          module.routePath &&
+          module.metadata?.source === "sidebar-seed",
+        )
+        .map((module) => this.applySidebarPermissionAssignments(module, assignedSlugs));
+      matrix.total = matrix.items.length;
+    }
     const permissionCount = matrix.items.reduce(
       (total, module) => total + module.permissions.length,
       0,
@@ -251,6 +280,28 @@ class RbacService {
       0,
     );
 
+    const actions = filters.scope === "sidebar"
+      ? SIDEBAR_PERMISSION_ACTIONS
+      : [
+          "view",
+          "create",
+          "add",
+          "edit",
+          "update",
+          "delete",
+          "approve",
+          "approval",
+          "reject",
+          "assign",
+          "export",
+          "import",
+          "status_change",
+          "status",
+          "restore",
+          "bulk_action",
+          "action",
+        ];
+
     return {
       role: matrix.role,
       modules: matrix.items,
@@ -259,27 +310,69 @@ class RbacService {
         permissions: permissionCount,
         assignedPermissions: assignedPermissionCount,
       },
-      actions: [
-        "view",
-        "create",
-        "add",
-        "edit",
-        "update",
-        "delete",
-        "approve",
-        "approval",
-        "reject",
-        "assign",
-        "export",
-        "import",
-        "status_change",
-        "status",
-        "restore",
-        "bulk_action",
-        "action",
-      ],
+      actions,
       assignedPermissionIds: matrix.assignedPermissionIds,
     };
+  }
+
+  applySidebarPermissionAssignments(module = {}, assignedSlugs = new Set()) {
+    const requiredModule = cleanModuleName(module.metadata?.requiredModule);
+    const permissions = (module.permissions || [])
+      .filter((permission) => SIDEBAR_PERMISSION_ACTIONS.includes(permission.action))
+      .map((permission) => {
+        const equivalentBackendSlug = requiredModule
+          ? `${requiredModule}:${permission.action}`
+          : "";
+        return {
+          ...permission,
+          assigned: Boolean(permission.assigned || assignedSlugs.has(equivalentBackendSlug)),
+        };
+      });
+    const permissionsByAction = SIDEBAR_PERMISSION_ACTIONS.reduce(
+      (lookup, action) => {
+        lookup[action] = permissions.find((permission) => permission.action === action) || null;
+        return lookup;
+      },
+      {},
+    );
+    const permissionKeys = Object.keys(permissionsByAction).reduce(
+      (lookup, action) => {
+        lookup[action] = Boolean(permissionsByAction[action]?.assigned);
+        return lookup;
+      },
+      {},
+    );
+    return {
+      ...module,
+      permissions,
+      permissionsByAction,
+      permissionKeys,
+      assignedPermissionCount: permissions.filter((permission) => permission.assigned).length,
+    };
+  }
+
+  async expandSidebarPermissionIds(permissionIds = []) {
+    const ids = Array.from(new Set((permissionIds || []).filter(Boolean)));
+    if (!ids.length) return [];
+
+    const permissions = await this.rbacRepository.getPermissionsByIds(ids);
+    const backendSlugs = permissions
+      .map((permission) => {
+        const plain = typeof permission.toJSON === "function" ? permission.toJSON() : permission;
+        const module = plain.module || {};
+        const moduleKey = cleanModuleName(module.moduleKey || module.slug);
+        const requiredModule = cleanModuleName(module.metadata?.requiredModule);
+        const isSidebarModule =
+          module.metadata?.source === "sidebar-seed" ||
+          moduleKey.startsWith("sidebar-");
+        if (!isSidebarModule || !requiredModule || !plain.action) return null;
+        return `${requiredModule}:${plain.action}`;
+      })
+      .filter(Boolean);
+
+    const backendPermissionIds =
+      await this.rbacRepository.getPermissionIdsBySlugs(backendSlugs);
+    return Array.from(new Set([...ids, ...backendPermissionIds]));
   }
 
   async updateModule(id, updates) {
@@ -442,9 +535,7 @@ class RbacService {
 
   // ROLE PERMISSION ASSIGNMENT
   async assignPermissionToRole(roleId, permissionId) {
-    const result = await this.rbacRepository.assignPermissionToRole(roleId, permissionId);
-    await this.invalidateUsersForRole(roleId);
-    return result;
+    return this.bulkAssignPermissionsToRole(roleId, [permissionId]);
   }
 
   async removePermissionFromRole(roleId, permissionId) {
@@ -454,16 +545,18 @@ class RbacService {
   }
 
   async syncRolePermissions(roleId, permissionIds = []) {
-    const result = await this.rbacRepository.syncRolePermissions(roleId, permissionIds);
+    const expandedPermissionIds = await this.expandSidebarPermissionIds(permissionIds);
+    const result = await this.rbacRepository.syncRolePermissions(roleId, expandedPermissionIds);
     await this.invalidateUsersForRole(roleId);
     return result;
   }
 
   async bulkAssignPermissionsToRole(roleId, permissionIds) {
+    const expandedPermissionIds = await this.expandSidebarPermissionIds(permissionIds);
     const results = [];
     const errors = [];
 
-    for (const permissionId of permissionIds) {
+    for (const permissionId of expandedPermissionIds) {
       try {
         const result = await this.rbacRepository.assignPermissionToRole(
           roleId,
@@ -471,6 +564,9 @@ class RbacService {
         );
         results.push(result);
       } catch (error) {
+        if (error instanceof AppError && error.statusCode === 409) {
+          continue;
+        }
         errors.push({ permissionId, error: error.message });
       }
     }
@@ -518,14 +614,7 @@ class RbacService {
   }
 
   async assignPermissionToUser(userId, permissionId, grantedBy, actor = {}) {
-    await this.assertCanAssignUserPermissions(actor, userId, [permissionId]);
-    const result = await this.rbacRepository.assignPermissionToUser(
-      userId,
-      permissionId,
-      grantedBy,
-    );
-    await this.invalidateUserAuthSession(userId);
-    return result;
+    return this.bulkAssignPermissionsToUser(userId, [permissionId], grantedBy, actor);
   }
 
   async removePermissionFromUser(userId, permissionId, actor = {}) {
@@ -536,11 +625,12 @@ class RbacService {
   }
 
   async bulkAssignPermissionsToUser(userId, permissionIds, grantedBy, actor = {}) {
-    await this.assertCanAssignUserPermissions(actor, userId, permissionIds);
+    const expandedPermissionIds = await this.expandSidebarPermissionIds(permissionIds);
+    await this.assertCanAssignUserPermissions(actor, userId, expandedPermissionIds);
     const results = [];
     const errors = [];
 
-    for (const permissionId of permissionIds) {
+    for (const permissionId of expandedPermissionIds) {
       try {
         const result = await this.rbacRepository.assignPermissionToUser(
           userId,
@@ -549,6 +639,9 @@ class RbacService {
         );
         results.push(result);
       } catch (error) {
+        if (error instanceof AppError && error.statusCode === 409) {
+          continue;
+        }
         errors.push({ permissionId, error: error.message });
       }
     }

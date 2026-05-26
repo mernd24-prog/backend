@@ -155,15 +155,38 @@ class CommonManagementService {
 
   async listCities(query = {}) {
     const filter = {};
+    const countryId = query.countryId || query.country_code;
     const stateId = query.stateId || query.state_code;
     if (stateId) filter.stateId = stateId;
-    const result = await this.list(AdminCityModel, query, filter, { name: 1 }, "stateId");
+    if (!stateId && countryId) {
+      const states = await AdminStateModel.find({ countryId }).select("_id").lean();
+      filter.stateId = { $in: states.map((state) => state._id) };
+    }
+    const result = await this.list(AdminCityModel, query, filter, { name: 1 }, {
+      path: "stateId",
+      select: "name countryId",
+      populate: { path: "countryId", select: "name code" },
+    });
     result.items = result.items.map((item) =>
       this.toLegacy(item, {
         state_code: item.stateId
           ? {
               _id: String(item.stateId._id || item.stateId),
               name: item.stateId.name,
+              countryId: item.stateId.countryId
+                ? {
+                    _id: String(item.stateId.countryId._id || item.stateId.countryId),
+                    name: item.stateId.countryId.name,
+                    code: item.stateId.countryId.code,
+                  }
+                : null,
+            }
+          : null,
+        country_code: item.stateId?.countryId
+          ? {
+              _id: String(item.stateId.countryId._id || item.stateId.countryId),
+              name: item.stateId.countryId.name,
+              code: item.stateId.countryId.code,
             }
           : null,
       }),
@@ -171,28 +194,46 @@ class CommonManagementService {
     return result;
   }
 
+  async assertStateCountry(stateId, countryId) {
+    if (!stateId || !countryId) return;
+    const state = await AdminStateModel.findOne({ _id: stateId, countryId }).select("_id").lean();
+    if (!state) throw new AppError("State does not belong to selected country", 400);
+  }
+
   async createCity(payload) {
+    const stateId = payload.stateId || payload.state_code;
+    await this.assertStateCountry(stateId, payload.countryId || payload.country_code);
     const city = await AdminCityModel.create({
       name: payload.name,
-      stateId: payload.stateId || payload.state_code,
+      stateId,
       active: payload.active ?? payload.isDisable !== true,
     });
-    return this.toLegacy(await city.populate("stateId"));
+    return this.toLegacy(await city.populate({
+      path: "stateId",
+      select: "name countryId",
+      populate: { path: "countryId", select: "name code" },
+    }));
   }
 
   async updateCity(id, payload) {
+    const stateId = payload.stateId || payload.state_code;
+    await this.assertStateCountry(stateId, payload.countryId || payload.country_code);
     const city = await AdminCityModel.findByIdAndUpdate(
       id,
       {
         ...(payload.name !== undefined ? { name: payload.name } : {}),
-        ...(payload.stateId || payload.state_code
-          ? { stateId: payload.stateId || payload.state_code }
+        ...(stateId
+          ? { stateId }
           : {}),
         ...(payload.active !== undefined ? { active: payload.active } : {}),
         ...(payload.isDisable !== undefined ? { active: !payload.isDisable } : {}),
       },
       { new: true },
-    ).populate("stateId");
+    ).populate({
+      path: "stateId",
+      select: "name countryId",
+      populate: { path: "countryId", select: "name code" },
+    });
     if (!city) throw new AppError("City not found", 404);
     return this.toLegacy(city);
   }

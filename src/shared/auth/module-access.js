@@ -76,6 +76,7 @@ function getRequestModule(req) {
   const first = parts[apiIndex + 2];
   const second = parts[apiIndex + 3];
   const third = parts[apiIndex + 4];
+  const fourth = parts[apiIndex + 5];
 
   if (first === "admin") {
     if (
@@ -91,6 +92,10 @@ function getRequestModule(req) {
 
     if (second === "platform" && third === "product-reviews") {
       return "orders";
+    }
+
+    if (second === "products" && (third === "inventory" || fourth === "inventory")) {
+      return "inventory";
     }
 
     if (second === "platform" && ["categories", "brands"].includes(third)) {
@@ -161,6 +166,9 @@ function getRequestModule(req) {
   }
   if (first === "platform" && second === "product-reviews") {
     return "orders";
+  }
+  if (first === "products" && (second === "inventory" || third === "inventory")) {
+    return "inventory";
   }
   if (first === "platform" && ["categories", "brands"].includes(second)) {
     return "platform";

@@ -91,6 +91,8 @@ const stateUpdateBody = {
 
 const cityBody = {
   name: Joi.string().trim().required(),
+  countryId: Joi.string(),
+  country_code: Joi.string(),
   stateId: Joi.string(),
   state_code: Joi.string(),
   active: Joi.boolean(),
@@ -99,6 +101,8 @@ const cityBody = {
 
 const cityUpdateBody = {
   name: Joi.string().trim(),
+  countryId: Joi.string(),
+  country_code: Joi.string(),
   stateId: Joi.string(),
   state_code: Joi.string(),
   active: Joi.boolean(),

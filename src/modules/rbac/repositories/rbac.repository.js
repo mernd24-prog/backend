@@ -283,6 +283,26 @@ class RbacRepository {
     return { items: rows, total: count };
   }
 
+  async getPermissionsByIds(permissionIds = []) {
+    const ids = Array.from(new Set((permissionIds || []).filter(Boolean)));
+    if (!ids.length) return [];
+    return Permission.findAll({
+      where: { id: { [Op.in]: ids } },
+      include: [{ association: "module" }],
+    });
+  }
+
+  async getPermissionIdsBySlugs(permissionSlugs = []) {
+    const slugs = Array.from(new Set((permissionSlugs || []).filter(Boolean)));
+    if (!slugs.length) return [];
+    const rows = await Permission.findAll({
+      where: { slug: { [Op.in]: slugs }, active: true },
+      attributes: ["id"],
+      raw: true,
+    });
+    return rows.map((row) => row.id).filter(Boolean);
+  }
+
   async updatePermission(id, updates) {
     const permission = await Permission.findByPk(id);
     if (!permission) {

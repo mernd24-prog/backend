@@ -88,6 +88,7 @@ const permissionManagementSchema = {
     roleSlug: Joi.string().trim().min(2).max(128),
     userId: Joi.string().trim(),
     active: Joi.boolean().default(true),
+    scope: Joi.string().valid("all", "sidebar").default("all"),
   }).oxor("roleId", "roleSlug", "userId"),
 };
 
