@@ -390,7 +390,7 @@ class AdminService {
       return;
     }
     if (String(user.createdBy || "") === String(actor.userId)) return;
-    throw new AppError("Forbidden: user is outside your hierarchy", 403);
+    throw new AppError("Forbidden: user is outside your hierarchy 1", 403);
   }
 
   async listVendors(query, actor = {}) {
@@ -578,6 +578,14 @@ class AdminService {
       allowedModules,
       ...this.getHierarchyPayload(role, actor, payload),
     });
+
+    // Seller is the root of their own seller-side hierarchy; self-reference so
+    // seller-admin/seller-sub-admin filters scope correctly to this seller.
+    if (isSeller) {
+      const sellerUserId = String(user.id || user._id);
+      await this.adminRepository.updateUserById(sellerUserId, { ownerSellerId: sellerUserId });
+      user.ownerSellerId = sellerUserId;
+    }
 
     await this.rbacService.assignRoleToUserBySlug(
       String(user.id),
@@ -1238,28 +1246,35 @@ class AdminService {
   }
 
   getPermissionAssignmentData(permissions = [], moduleAllowed, forceAssigned) {
-    const normalizedPermissions = permissions.map((permission) => ({
-      ...permission,
-      assigned: moduleAllowed && (forceAssigned || Boolean(permission.assigned)),
-    }));
+    const byAction = new Map();
+    permissions.forEach((permission) => {
+      const action = this.normalizePermissionAction(permission.action);
+      if (!action) return;
+
+      const assigned = moduleAllowed && (forceAssigned || Boolean(permission.assigned));
+      const current = byAction.get(action);
+      const preferCanonicalRow = !current || permission.action === action;
+      const nextPermission = preferCanonicalRow
+        ? { ...permission, action, assigned }
+        : { ...current, assigned: Boolean(current.assigned || assigned) };
+
+      nextPermission.assigned = Boolean((current?.assigned || false) || assigned);
+      byAction.set(action, nextPermission);
+    });
+    const normalizedPermissions = Array.from(byAction.values());
     const actions = [
       "view",
       "create",
-      "add",
-      "edit",
       "update",
       "delete",
       "approve",
-      "approval",
       "reject",
       "assign",
       "export",
       "import",
       "status_change",
-      "status",
       "restore",
       "bulk_action",
-      "action",
     ];
     const permissionsByAction = actions.reduce((lookup, action) => {
       lookup[action] =
@@ -1284,8 +1299,13 @@ class AdminService {
 
   normalizePermissionAction(action) {
     const aliases = {
-      review: "approval",
-      manage: "status",
+      add: "create",
+      edit: "update",
+      status: "status_change",
+      approval: "approve",
+      action: "status_change",
+      review: "approve",
+      manage: "status_change",
     };
     const normalized = aliases[action] || action;
     const allowed = new Set([
@@ -1349,6 +1369,7 @@ class AdminService {
     const accessUser = query.userId
       ? this.toPlainObject(await this.adminRepository.getUserById(query.userId))
       : null;
+      console.log("Access user:", accessUser);
     if (query.userId && !accessUser?._id && !accessUser?.id) {
       throw new AppError("User not found", 404);
     }
@@ -1358,7 +1379,7 @@ class AdminService {
       actor.role === ROLES.ADMIN &&
       String(accessUser.ownerAdminId || "") !== String(actor.ownerAdminId || actor.userId)
     ) {
-      throw new AppError("Forbidden: user is outside your hierarchy", 403);
+      throw new AppError("Forbidden: user is outside your hierarchy 2", 403);
     }
 
     const targetRole =
@@ -1673,6 +1694,12 @@ class AdminService {
       ...this.getHierarchyPayload(ROLES.ADMIN, actor, payload),
     });
 
+    // Admin is the root of their own sub-hierarchy; self-reference so filters
+    // using ownerAdminId correctly scope sub-admins and sellers to this admin.
+    const adminUserId = String(user.id || user._id);
+    await this.adminRepository.updateUserById(adminUserId, { ownerAdminId: adminUserId });
+    user.ownerAdminId = adminUserId;
+
     await this.rbacService.assignRoleToUserBySlug(
       String(user.id),
       ROLES.ADMIN,
@@ -1766,6 +1793,14 @@ class AdminService {
       refreshSessions: [],
       ...this.getHierarchyPayload(targetRole, actor, payload),
     });
+
+    // Seller is the root of their own seller-side hierarchy; self-reference so
+    // seller-admin/seller-sub-admin filters scope correctly to this seller.
+    if (isSeller) {
+      const sellerUserId = String(user.id || user._id);
+      await this.adminRepository.updateUserById(sellerUserId, { ownerSellerId: sellerUserId });
+      user.ownerSellerId = sellerUserId;
+    }
 
     await this.rbacService.assignRoleToUserBySlug(
       String(user.id),
@@ -1871,7 +1906,7 @@ class AdminService {
       actor.role === ROLES.ADMIN &&
       String(existingUser.ownerAdminId || "") !== String(actor.ownerAdminId || actor.userId)
     ) {
-      throw new AppError("Forbidden: user is outside your hierarchy", 403);
+      throw new AppError("Forbidden: user is outside your hierarchy 3", 403);
     }
 
     let allowedModules = this.sanitizeModules(payload.allowedModules, existingUser.role);

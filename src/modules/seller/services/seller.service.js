@@ -256,7 +256,7 @@ class SellerService {
       return sellerId;
     }
 
-    // Seller admins/sub-sellers can manage child access if they have the sellers:add permission.
+    // Seller admins/sub-sellers can manage child access if they have the sellers:create permission.
     // Their owner seller ID is stored in ownerSellerId on the JWT.
     if ([ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(actor.role)) {
       const sellerId = actor.ownerSellerId || actor.sellerId;
@@ -637,8 +637,13 @@ class SellerService {
 
   normalizePermissionAction(action) {
     const aliases = {
-      review: "approval",
-      manage: "status",
+      add: "create",
+      edit: "update",
+      status: "status_change",
+      approval: "approve",
+      action: "status_change",
+      review: "approve",
+      manage: "status_change",
     };
     const normalized = aliases[action] || action;
     const allowed = new Set([
@@ -696,28 +701,35 @@ class SellerService {
   }
 
   getPermissionAssignmentData(permissions = [], moduleAllowed, forceAssigned) {
-    const normalizedPermissions = permissions.map((permission) => ({
-      ...permission,
-      assigned: moduleAllowed && (forceAssigned || Boolean(permission.assigned)),
-    }));
+    const byAction = new Map();
+    permissions.forEach((permission) => {
+      const action = this.normalizePermissionAction(permission.action);
+      if (!action) return;
+
+      const assigned = moduleAllowed && (forceAssigned || Boolean(permission.assigned));
+      const current = byAction.get(action);
+      const preferCanonicalRow = !current || permission.action === action;
+      const nextPermission = preferCanonicalRow
+        ? { ...permission, action, assigned }
+        : { ...current, assigned: Boolean(current.assigned || assigned) };
+
+      nextPermission.assigned = Boolean((current?.assigned || false) || assigned);
+      byAction.set(action, nextPermission);
+    });
+    const normalizedPermissions = Array.from(byAction.values());
     const actions = [
       "view",
       "create",
-      "add",
-      "edit",
       "update",
       "delete",
       "approve",
-      "approval",
       "reject",
       "assign",
       "export",
       "import",
       "status_change",
-      "status",
       "restore",
       "bulk_action",
-      "action",
     ];
     const permissionsByAction = actions.reduce((lookup, action) => {
       lookup[action] =

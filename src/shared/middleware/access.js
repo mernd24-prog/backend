@@ -51,16 +51,26 @@ function getAuthorizedModuleScope(auth = {}) {
 
 const PERMISSION_ACTION_ALIASES = {
   create: ["add"],
-  add: ["create"],
-  edit: ["update"],
   update: ["edit"],
-  approve: ["approval"],
-  approval: ["approve"],
-  status: ["status_change", "action"],
-  status_change: ["status", "action"],
-  manage: ["status", "action"],
-  action: ["status", "status_change", "manage"],
+  approve: ["approval", "review"],
+  status_change: ["status", "action", "manage"],
 };
+
+const ACTION_CANONICAL = Object.entries(PERMISSION_ACTION_ALIASES).reduce(
+  (lookup, [canonical, aliases]) => {
+    lookup[canonical] = canonical;
+    aliases.forEach((alias) => {
+      lookup[alias] = canonical;
+    });
+    return lookup;
+  },
+  {},
+);
+
+function normalizePermissionAction(action = "view") {
+  const value = String(action || "view").trim().toLowerCase();
+  return ACTION_CANONICAL[value] || value;
+}
 
 const METHOD_ACTIONS = {
   GET: "view",
@@ -79,7 +89,14 @@ function inferRequestAction(req) {
   if (path.includes("/access/sub-admins") && path.includes("/modules")) {
     return method === "GET" ? "view" : "assign";
   }
-  if (path.includes("/assign") || path.includes("/permissions") || path.includes("/roles")) {
+  if (
+    /\/roles\/[^/]+\/permissions/.test(path) ||
+    /\/users\/[^/]+\/permissions/.test(path) ||
+    /\/users\/[^/]+\/roles/.test(path)
+  ) {
+    return method === "GET" ? "view" : "assign";
+  }
+  if (path.includes("/assign")) {
     return method === "GET" ? "view" : "assign";
   }
   if (path.includes("/status") || path.includes("/moderate") || path.includes("/review")) {
@@ -89,7 +106,7 @@ function inferRequestAction(req) {
   if (path.includes("/import")) return "import";
   if (path.includes("/export")) return "export";
 
-  return METHOD_ACTIONS[method] || "view";
+  return normalizePermissionAction(METHOD_ACTIONS[method] || "view");
 }
 
 function buildPermissionCandidates(permissionSlug = "") {
@@ -97,9 +114,10 @@ function buildPermissionCandidates(permissionSlug = "") {
   if (!value.includes(":")) {
     return [value].filter(Boolean);
   }
-  const [moduleSlug, actionSlug] = value.split(":");
+  const [moduleSlug, rawActionSlug] = value.split(":");
+  const actionSlug = normalizePermissionAction(rawActionSlug);
   const aliases = PERMISSION_ACTION_ALIASES[actionSlug] || [];
-  const actionCandidates = Array.from(new Set([actionSlug, ...aliases]));
+  const actionCandidates = Array.from(new Set([actionSlug, rawActionSlug, ...aliases].filter(Boolean)));
   return Array.from(
     new Set([
       value,

@@ -81,7 +81,7 @@ rbacRoutes.post(
 
 rbacRoutes.patch(
   "/modules/:moduleId/status",
-  allowPermissions("rbac:update"),
+  allowPermissions("rbac:status_change"),
   checkInput(moduleStatusSchema),
   catchErrors(moduleController.changeStatus),
 );
@@ -102,7 +102,7 @@ rbacRoutes.get(
 
 rbacRoutes.post(
   "/modules",
-  allowPermissions("rbac:add"),
+  allowPermissions("rbac:create"),
   checkInput(createModuleSchema),
   catchErrors(moduleController.createModule),
 );
@@ -138,7 +138,7 @@ rbacRoutes.get(
 
 rbacRoutes.post(
   "/permissions",
-  allowPermissions("rbac:add"),
+  allowPermissions("rbac:create"),
   checkInput(createPermissionSchema),
   catchErrors(permissionController.createPermission),
 );
@@ -177,7 +177,7 @@ rbacRoutes.get(
 
 rbacRoutes.post(
   "/roles",
-  allowPermissions("rbac:add"),
+  allowPermissions("rbac:create"),
   checkInput(createRoleSchema),
   catchErrors(roleController.createRole),
 );

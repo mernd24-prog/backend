@@ -158,9 +158,9 @@ sellerRoutes.post(
   "/me/sub-admins",
   authenticate,
   allowRoles(ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN),
-  // Seller admins/sub-sellers need the sellers:add permission to create child seller accounts.
+  // Seller admins/sub-sellers need the sellers:create permission to create child seller accounts.
   // Sellers (full role) are exempt from the permission check (isSuperAdmin bypass in allowPermissions).
-  allowPermissions("sellers:add"),
+  allowPermissions("sellers:create"),
   checkInput(createSellerSubAdminSchema),
   catchErrors(sellerController.createSubAdmin),
 );
@@ -176,7 +176,7 @@ sellerRoutes.patch(
   "/me/sub-admins/:userId/modules",
   authenticate,
   allowRoles(ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN),
-  allowPermissions("sellers:edit"),
+  allowPermissions("sellers:update"),
   checkInput(updateSellerSubAdminModulesSchema),
   catchErrors(sellerController.updateSubAdminModules),
 );
@@ -184,7 +184,7 @@ sellerRoutes.patch(
   "/me/sub-admins/:userId/status",
   authenticate,
   allowRoles(ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN),
-  allowPermissions("sellers:status"),
+  allowPermissions("sellers:status_change"),
   checkInput(updateSellerSubAdminStatusSchema),
   catchErrors(sellerController.updateSubAdminStatus),
 );

@@ -1,41 +1,37 @@
 const PERMISSION_ACTIONS = [
   "view",
   "create",
-  "add",
-  "edit",
   "update",
   "delete",
   "approve",
-  "approval",
   "reject",
   "assign",
   "export",
   "import",
   "status_change",
-  "status",
   "restore",
   "bulk_action",
-  "action",
 ];
 
 const ACTION_EQUIVALENTS = {
   create: ["add"],
-  add: ["create"],
-  edit: ["update"],
   update: ["edit"],
-  approve: ["approval"],
-  approval: ["approve"],
-  status: ["status_change", "action"],
-  status_change: ["status", "action"],
-  manage: ["status", "action"],
-  action: ["status", "status_change", "manage"],
+  approve: ["approval", "review"],
+  status_change: ["status", "action", "manage"],
 };
 
 const normalizeAction = (action = "") => {
   const value = String(action || "").trim().toLowerCase();
-  if (value === "review") return "approval";
-  if (value === "manage") return "status";
-  return value;
+  const aliases = {
+    add: "create",
+    edit: "update",
+    status: "status_change",
+    approval: "approve",
+    action: "status_change",
+    review: "approve",
+    manage: "status_change",
+  };
+  return aliases[value] || value;
 };
 
 const makePermission = (module, action = "view") =>

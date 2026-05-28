@@ -27,9 +27,11 @@ const notificationPreferenceRoutes = require("../modules/notification/routes/not
 const { deliveryRoutes } = require("../modules/delivery/routes/delivery.routes");
 const { fileUploaderRoutes } = require("../shared/routes/file-uploader.routes");
 const { metaRoutes } = require("../shared/routes/meta.routes");
+const { commonManagementRoutes } = require("../modules/admin/routes/common-management.routes");
 
 function registerRoutes(app) {
   app.use(`${env.apiPrefix}/auth`, authRoutes);
+  app.use(`${env.apiPrefix}/global`, commonManagementRoutes);
   app.use(`${env.apiPrefix}/users`, userRoutes);
   app.use(`${env.apiPrefix}/products`, productRoutes);
   app.use(`${env.apiPrefix}/carts`, cartRoutes);

@@ -6,21 +6,16 @@ const PERMISSION_EFFECTS = {
 const PERMISSION_ACTIONS = [
   "view",
   "create",
-  "add",
-  "edit",
   "update",
   "delete",
   "approve",
-  "approval",
   "reject",
   "assign",
   "export",
   "import",
   "status_change",
-  "status",
   "restore",
   "bulk_action",
-  "action",
 ];
 
 const SIDEBAR_PERMISSION_ACTIONS = [
@@ -37,7 +32,12 @@ const SIDEBAR_PERMISSION_ACTIONS = [
 ];
 
 const ACTION_ALIASES = {
-  review: "approval",
+  add: "create",
+  edit: "update",
+  status: "status_change",
+  approval: "approve",
+  action: "status_change",
+  review: "approve",
   manage: "status_change",
 };
 

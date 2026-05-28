@@ -7,6 +7,7 @@ const {
   PERMISSION_ACTIONS,
   SIDEBAR_PERMISSION_ACTIONS,
   modulePermissionAssignmentsWithImplicitView,
+  normalizePermissionAction,
   permissionSlug,
 } = require("../../../shared/auth/rbac-permissions");
 const {
@@ -787,9 +788,14 @@ class RbacService {
 
   normalizePermissionRow(permission = {}) {
     const plain = typeof permission.toJSON === "function" ? permission.toJSON() : permission;
+    const moduleSlug = plain.module?.slug || plain.moduleSlug || plain.slug?.split(":")[0];
+    const action = normalizePermissionAction(plain.action || plain.slug?.split(":")[1]);
+    const normalizedSlug = permissionSlug(moduleSlug, action);
     return {
       ...plain,
-      moduleSlug: plain.module?.slug || plain.moduleSlug,
+      action,
+      slug: normalizedSlug || plain.slug,
+      moduleSlug,
       moduleKey: plain.module?.moduleKey || plain.moduleKey,
       moduleName: plain.module?.name || plain.moduleName,
     };
@@ -816,8 +822,10 @@ class RbacService {
 
   async addImplicitViewPermissions(permissions = [], deniedPermissions = []) {
     const byId = new Map();
-    const deniedIds = new Set(deniedPermissions.map((permission) => permission.id).filter(Boolean));
-    const deniedSlugs = new Set(deniedPermissions.map((permission) => permission.slug).filter(Boolean));
+    const normalizedDeniedPermissions =
+      deniedPermissions.map((permission) => this.normalizePermissionRow(permission));
+    const deniedIds = new Set(normalizedDeniedPermissions.map((permission) => permission.id).filter(Boolean));
+    const deniedSlugs = new Set(normalizedDeniedPermissions.map((permission) => permission.slug).filter(Boolean));
     const missingViewSlugs = new Set();
 
     permissions.map((permission) => this.normalizePermissionRow(permission)).forEach((permission) => {
@@ -856,7 +864,14 @@ class RbacService {
 
     if (user?.role === ROLES.SUPER_ADMIN) {
       const permissions = await this.rbacRepository.listAllActivePermissions();
-      return permissions.map((permission) => this.normalizePermissionRow(permission));
+      return Array.from(
+        new Map(
+          permissions
+            .map((permission) => this.normalizePermissionRow(permission))
+            .filter((permission) => permission.slug)
+            .map((permission) => [permission.slug, permission]),
+        ).values(),
+      );
     }
 
     const [
@@ -868,8 +883,10 @@ class RbacService {
       this.rbacRepository.getUserRoleEffectivePermissions(userId),
       this.rbacRepository.getUserDirectEffectivePermissions(userId),
     ]);
-    const deniedIds = new Set(deniedPermissions.map((permission) => permission.id).filter(Boolean));
-    const deniedSlugs = new Set(deniedPermissions.map((permission) => permission.slug).filter(Boolean));
+    const normalizedDeniedPermissions =
+      deniedPermissions.map((permission) => this.normalizePermissionRow(permission));
+    const deniedIds = new Set(normalizedDeniedPermissions.map((permission) => permission.id).filter(Boolean));
+    const deniedSlugs = new Set(normalizedDeniedPermissions.map((permission) => permission.slug).filter(Boolean));
     const rolePermissions = this.scopePermissionsForUser(
       user,
       rolePermissionRows.map((permission) => this.normalizePermissionRow(permission)),
@@ -885,7 +902,15 @@ class RbacService {
       byId.set(permission.id, permission);
     });
 
-    return this.addImplicitViewPermissions(Array.from(byId.values()), deniedPermissions);
+    const withImplicitView = await this.addImplicitViewPermissions(Array.from(byId.values()), deniedPermissions);
+    return Array.from(
+      new Map(
+        withImplicitView
+          .map((permission) => this.normalizePermissionRow(permission))
+          .filter((permission) => permission.slug)
+          .map((permission) => [permission.slug, permission]),
+      ).values(),
+    );
   }
 
   async getUserEffectivePermissionSummary(userId) {
@@ -907,18 +932,24 @@ class RbacService {
       this.rbacRepository.getUserDirectEffectivePermissions(userId),
       this.rbacRepository.getUserDeniedPermissions(userId),
     ]);
-    const deniedPermissions = deniedPermissionRows
-      .map((permission) => this.normalizePermissionRow(permission))
-      .map((permission) => permission.slug)
-      .filter(Boolean);
+    const toUniquePermissionSlugs = (rows = []) =>
+      Array.from(
+        new Set(
+          rows
+            .map((permission) => this.normalizePermissionRow(permission))
+            .map((permission) => permission.slug)
+            .filter(Boolean),
+        ),
+      );
+    const deniedPermissions = toUniquePermissionSlugs(deniedPermissionRows);
     const rolePermissions = this.scopePermissionsForUser(
       user,
       rolePermissionRows.map((permission) => this.normalizePermissionRow(permission)),
-    ).map((permission) => permission.slug).filter(Boolean);
-    const extraUserPermissions = directPermissionRows
-      .map((permission) => this.normalizePermissionRow(permission))
-      .map((permission) => permission.slug)
-      .filter(Boolean);
+    );
+    const rolePermissionSlugs = Array.from(
+      new Set(rolePermissions.map((permission) => permission.slug).filter(Boolean)),
+    );
+    const extraUserPermissions = toUniquePermissionSlugs(directPermissionRows);
     const assignedPermissions = permissions.map((permission) => permission.slug).filter(Boolean);
     const assignedModules = Array.from(
       new Set(
@@ -953,11 +984,11 @@ class RbacService {
       userType: user.role,
       assignedModules,
       assignedPermissions,
-      rolePermissions,
+      rolePermissions: rolePermissionSlugs,
       extraUserPermissions,
       deniedPermissions,
       permissionBreakdown: {
-        rolePermissions,
+        rolePermissions: rolePermissionSlugs,
         extraUserPermissions,
         deniedPermissions,
         effectivePermissions: assignedPermissions,
