@@ -52,6 +52,8 @@ const SIDEBAR_MODULES = [
   { moduleName: "Roles & Permissions", moduleKey: "roles-permissions", moduleSlug: "roles-permissions", icon: "MdSecurity", routePath: "/app/roles-permissions", moduleType: "page", order: 97, parentModule: "users-access", requiredModule: "rbac" },
   { moduleName: "Module Management", moduleKey: "module-management", moduleSlug: "module-management", icon: "MdViewModule", routePath: "/app/module-management", moduleType: "page", order: 98, parentModule: "users-access", requiredModule: "rbac" },
   { moduleName: "Activity Logs", moduleKey: "activity-logs", moduleSlug: "activity-logs", icon: "MdHistory", routePath: "/app/activity-logs", moduleType: "page", order: 99, parentModule: "users-access", requiredModule: "rbac" },
+  { moduleName: "RBAC Audit Log", moduleKey: "rbac-audit-log", moduleSlug: "rbac-audit-log", icon: "MdManageSearch", routePath: "/app/rbac-audit-log", moduleType: "page", order: 100, parentModule: "users-access", requiredModule: "rbac" },
+  { moduleName: "Permission Templates", moduleKey: "permission-templates", moduleSlug: "permission-templates", icon: "MdDashboardCustomize", routePath: "/app/permission-templates", moduleType: "page", order: 101, parentModule: "users-access", requiredModule: "rbac" },
 
   { moduleName: "Marketing", moduleKey: "marketing", moduleSlug: "marketing", icon: "MdCampaign", moduleType: "group", order: 110, parentModule: null, requiredModule: "pricing" },
   { moduleName: "Coupons", moduleKey: "discount-coupons", moduleSlug: "discount-coupons", icon: "MdConfirmationNumber", routePath: "/app/discount-coupons", moduleType: "page", order: 111, parentModule: "marketing", requiredModule: "coupons" },

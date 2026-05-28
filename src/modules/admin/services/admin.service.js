@@ -602,6 +602,7 @@ class AdminService {
         String(user.id),
         modulePermissions,
         actor.userId,
+        actor,
       );
     }
 
@@ -1715,6 +1716,7 @@ class AdminService {
         String(user.id),
         modulePermissions,
         actor.userId,
+        actor,
       );
     }
 
@@ -1816,6 +1818,7 @@ class AdminService {
       String(user.id),
       modulePermissions,
       actor.userId,
+      actor,
     );
 
     return user;
@@ -1943,6 +1946,7 @@ class AdminService {
       String(userId),
       modulePermissions,
       actor.userId,
+      actor,
     );
     return updated;
   }

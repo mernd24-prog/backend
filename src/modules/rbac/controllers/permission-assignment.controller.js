@@ -2,6 +2,13 @@ const { okResponse } = require("../../../shared/http/reply");
 const { RbacService } = require("../services/rbac.service");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
 
+const getActorMeta = (req) => ({
+  ...getCurrentUser(req),
+  ipAddress: req.ip || req.headers["x-forwarded-for"],
+  userAgent: req.headers["user-agent"],
+  requestId: req.headers["x-request-id"],
+});
+
 class PermissionAssignmentController {
   constructor({ rbacService = new RbacService() } = {}) {
     this.rbacService = rbacService;
@@ -123,6 +130,59 @@ class PermissionAssignmentController {
       assignedBy,
       actor,
     );
+    res.json(okResponse(result));
+  };
+
+  // FORCE LOGOUT
+  forceLogoutUser = async (req, res) => {
+    const { userId } = req.params;
+    const actor = getActorMeta(req);
+    const result = await this.rbacService.forceLogoutUser(userId, actor);
+    res.json(okResponse(result));
+  };
+
+  // COPY PERMISSIONS
+  copyUserPermissions = async (req, res) => {
+    const { userId } = req.params;
+    const { sourceUserId, copyModules = true, copyPermissions = true, mergeMode = "replace" } = req.body;
+    const actor = getActorMeta(req);
+    const result = await this.rbacService.copyUserPermissions(userId, sourceUserId, actor, { copyModules, copyPermissions, mergeMode });
+    res.json(okResponse(result));
+  };
+
+  // APPLY TEMPLATE
+  applyPermissionTemplate = async (req, res) => {
+    const { userId } = req.params;
+    const { templateSlug, mergeMode = "replace" } = req.body;
+    const actor = getActorMeta(req);
+    const result = await this.rbacService.applyPermissionTemplate(userId, templateSlug, actor, mergeMode);
+    res.json(okResponse(result));
+  };
+
+  // AUDIT LOGS
+  listAuditLogs = async (req, res) => {
+    const result = await this.rbacService.listAuditLogs(req.query);
+    res.json(okResponse(result));
+  };
+
+  // PERMISSION TEMPLATES CRUD
+  listPermissionTemplates = async (req, res) => {
+    const result = await this.rbacService.listPermissionTemplates(req.query);
+    res.json(okResponse(result));
+  };
+
+  getPermissionTemplate = async (req, res) => {
+    const result = await this.rbacService.getPermissionTemplate(req.params.templateId);
+    res.json(okResponse(result));
+  };
+
+  createPermissionTemplate = async (req, res) => {
+    const result = await this.rbacService.createPermissionTemplate(req.body);
+    res.status(201).json(okResponse(result));
+  };
+
+  updatePermissionTemplate = async (req, res) => {
+    const result = await this.rbacService.updatePermissionTemplate(req.params.templateId, req.body);
     res.json(okResponse(result));
   };
 

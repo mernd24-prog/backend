@@ -43,6 +43,12 @@ const {
   bulkAssignRolesSchema,
   checkPermissionSchema,
   checkRoleSchema,
+  copyFromSchema,
+  applyTemplateSchema,
+  listAuditLogsSchema,
+  templateParamSchema,
+  createTemplateSchema,
+  updateTemplateSchema,
 } = require("../validation/rbac.validation");
 const { ROLES } = require("../../../shared/constants/roles");
 
@@ -346,6 +352,66 @@ rbacRoutes.post(
   }),
   allowPermissions("rbac:assign"),
   catchErrors(permissionAssignmentController.bulkAssignRolesToUser),
+);
+
+// FORCE LOGOUT
+rbacRoutes.post(
+  "/users/:userId/force-logout",
+  checkInput(userPermissionParamSchema),
+  allowPermissions("rbac:assign"),
+  catchErrors(permissionAssignmentController.forceLogoutUser),
+);
+
+// COPY PERMISSIONS
+rbacRoutes.post(
+  "/users/:userId/copy-from",
+  checkInput({ ...userPermissionParamSchema, body: copyFromSchema.body }),
+  allowPermissions("rbac:assign"),
+  catchErrors(permissionAssignmentController.copyUserPermissions),
+);
+
+// APPLY TEMPLATE
+rbacRoutes.post(
+  "/users/:userId/apply-template",
+  checkInput({ ...userPermissionParamSchema, body: applyTemplateSchema.body }),
+  allowPermissions("rbac:assign"),
+  catchErrors(permissionAssignmentController.applyPermissionTemplate),
+);
+
+// AUDIT LOGS
+rbacRoutes.get(
+  "/audit-logs",
+  allowPermissions("rbac:view"),
+  checkInput(listAuditLogsSchema),
+  catchErrors(permissionAssignmentController.listAuditLogs),
+);
+
+// PERMISSION TEMPLATES
+rbacRoutes.get(
+  "/templates",
+  allowPermissions("rbac:view"),
+  catchErrors(permissionAssignmentController.listPermissionTemplates),
+);
+
+rbacRoutes.get(
+  "/templates/:templateId",
+  allowPermissions("rbac:view"),
+  checkInput(templateParamSchema),
+  catchErrors(permissionAssignmentController.getPermissionTemplate),
+);
+
+rbacRoutes.post(
+  "/templates",
+  allowPermissions("rbac:create"),
+  checkInput(createTemplateSchema),
+  catchErrors(permissionAssignmentController.createPermissionTemplate),
+);
+
+rbacRoutes.patch(
+  "/templates/:templateId",
+  allowPermissions("rbac:update"),
+  checkInput({ ...templateParamSchema, body: updateTemplateSchema.body }),
+  catchErrors(permissionAssignmentController.updatePermissionTemplate),
 );
 
 module.exports = { rbacRoutes };

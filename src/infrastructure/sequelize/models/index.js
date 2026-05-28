@@ -263,6 +263,51 @@ const SuperAdmin = sequelize.define(
   },
 );
 
+const RbacAuditLog = sequelize.define(
+  "RbacAuditLog",
+  {
+    id: { type: DataTypes.UUID, primaryKey: true },
+    actorId: { type: DataTypes.STRING(64), allowNull: false, field: "actor_id" },
+    actorRole: { type: DataTypes.STRING(64), field: "actor_role" },
+    targetUserId: { type: DataTypes.STRING(64), allowNull: false, field: "target_user_id" },
+    targetRole: { type: DataTypes.STRING(64), field: "target_role" },
+    action: { type: DataTypes.STRING(64), allowNull: false },
+    moduleSlug: { type: DataTypes.STRING(128), field: "module_slug" },
+    permissionSlug: { type: DataTypes.STRING(256), field: "permission_slug" },
+    oldValue: { type: DataTypes.JSONB, field: "old_value" },
+    newValue: { type: DataTypes.JSONB, field: "new_value" },
+    ipAddress: { type: DataTypes.STRING(64), field: "ip_address" },
+    userAgent: { type: DataTypes.TEXT, field: "user_agent" },
+    requestId: { type: DataTypes.STRING(64), field: "request_id" },
+  },
+  {
+    tableName: "rbac_audit_logs",
+    timestamps: true,
+    createdAt: "created_at",
+    updatedAt: false,
+  },
+);
+
+const PermissionTemplate = sequelize.define(
+  "PermissionTemplate",
+  {
+    id: { type: DataTypes.UUID, primaryKey: true },
+    slug: { type: DataTypes.STRING(128), allowNull: false, unique: true },
+    name: { type: DataTypes.STRING(128), allowNull: false },
+    description: { type: DataTypes.TEXT },
+    roleScope: { type: DataTypes.ARRAY(DataTypes.STRING), allowNull: false, defaultValue: [], field: "role_scope" },
+    permissionSlugs: { type: DataTypes.JSONB, allowNull: false, defaultValue: [], field: "permission_slugs" },
+    isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, field: "is_active" },
+    metadata: { type: DataTypes.JSONB, defaultValue: {} },
+  },
+  {
+    tableName: "permission_templates",
+    timestamps: true,
+    createdAt: "created_at",
+    updatedAt: "updated_at",
+  },
+);
+
 // Define relationships
 Permission.belongsTo(Module, { foreignKey: "module_id", as: "module" });
 Module.hasMany(Permission, { foreignKey: "module_id", as: "permissions" });
@@ -296,4 +341,6 @@ module.exports = {
   UserPermission,
   UserRole,
   SuperAdmin,
+  RbacAuditLog,
+  PermissionTemplate,
 };

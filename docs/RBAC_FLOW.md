@@ -1,769 +1,620 @@
 # RBAC Flow Guide
 
-This guide explains the simplified RBAC model for the ecommerce admin and seller system.
+Complete reference for the Role-Based Access Control system used across the admin panel and seller portal.
 
-The whole system should be understood as two questions:
+---
 
-1. Can the user see and open this management area?
-2. Inside that area, which actions can the user perform?
+## 1. Permission Slug Format
 
-In code, the first question is `module:view`. The second question is the action permission, such as `module:create`, `module:update`, or `module:delete`.
+Every permission is a two-part string:
 
-## Core Rule
-
-Use one permission shape everywhere:
-
-```text
+```
 module:action
 ```
 
 Examples:
 
-```text
+```
 products:view
 products:create
 products:update
-orders:view
 orders:status_change
 rbac:assign
-countries:delete
+seller_kyc:approve
+admin_users:delete
 ```
 
-`module:view` is the base permission.
+`module:view` is the **base permission**. It controls sidebar visibility, page access, and all GET endpoints. Any other action automatically implies `view` — the backend adds it implicitly.
 
-- It shows the sidebar item.
-- It allows the page route to open.
-- It allows GET/list/detail API reads.
+---
 
-If any non-view action is assigned, `view` is automatically added for that module.
+## 2. Available Actions
 
-Example:
+Defined in `src/shared/auth/rbac-permissions.js → PERMISSION_ACTIONS`:
 
-```json
+| Action        | What it gates                                   |
+|---------------|-------------------------------------------------|
+| `view`        | Sidebar item, page open, all GET reads          |
+| `create`      | POST endpoints, Add button                      |
+| `update`      | PATCH/PUT endpoints, Edit button                |
+| `delete`      | DELETE endpoints, Delete button                 |
+| `approve`     | Approve endpoints / buttons                     |
+| `reject`      | Reject endpoints / buttons                      |
+| `assign`      | Role/module/permission assignment endpoints     |
+| `export`      | Export endpoint, Export button                  |
+| `import`      | Import endpoint, Import button                  |
+| `status_change` | Status-toggle endpoints, Active/Inactive controls |
+| `restore`     | Restore/undelete endpoints                      |
+| `bulk_action` | Bulk-operation endpoints                        |
+
+Sidebar-only action subset (`SIDEBAR_PERMISSION_ACTIONS`):  
+`view, create, update, delete, status_change, approve, reject, assign, export, import`  
+(`restore` and `bulk_action` are not used in sidebar permission assignments.)
+
+### Action aliases (backend normalizes these before comparing)
+
+| Alias     | Canonical        |
+|-----------|------------------|
+| `add`     | `create`         |
+| `edit`    | `update`         |
+| `status`  | `status_change`  |
+| `approval`| `approve`        |
+| `action`  | `status_change`  |
+| `review`  | `approve`        |
+| `manage`  | `status_change`  |
+
+---
+
+## 3. Data Stores
+
+### MongoDB (`UserModel`)
+
+Stores identity, role, and hierarchy scope:
+
+```
+role               — string role slug ("admin", "sub-admin", "seller", …)
+allowedModules     — array of module slugs this user can access
+ownerAdminId       — root admin _id for platform-side hierarchy scoping
+ownerSellerId      — root seller _id for seller-side hierarchy scoping
+permissionVersion  — incremented when permissions change; invalidates cache
+sessionVersion     — incremented when session should be forced out
+tokenVersion       — incremented when all tokens should be invalidated
+```
+
+### PostgreSQL (via Sequelize)
+
+Stores the RBAC catalog and all assignments:
+
+| Table               | Purpose                                              |
+|---------------------|------------------------------------------------------|
+| `modules`           | Permission modules (products, orders, rbac, …)       |
+| `permissions`       | Individual `module:action` permission records        |
+| `roles`             | Role definitions (admin, sub-admin, seller, …)       |
+| `role_permissions`  | Which permissions a role has                         |
+| `user_permissions`  | Per-user allow and deny overrides                    |
+| `user_roles`        | Which roles a user has been assigned                 |
+| `super_admins`      | Super-admin registry                                 |
+
+`user_permissions.metadata.effect` is `"allow"` or `"deny"`.
+
+---
+
+## 4. Authentication Middleware (`authenticate`)
+
+File: `src/shared/middleware/authenticate.js`
+
+On every protected request:
+
+1. Extracts `Bearer <token>` from `Authorization` header.
+2. Verifies the JWT with `env.jwtAccessSecret`.
+3. Calls `hydrateAuthPermissions(payload)` which:
+   - Loads the MongoDB user (`UserModel.findById`).
+   - Validates `accountStatus`, `role`, role active state, session/token version.
+   - Calls `RbacService.getUserEffectivePermissions(userId)` to get all effective permission slugs.
+   - Builds `allowedModules` = union of Mongo `allowedModules` + modules inferred from permission slugs.
+   - Returns the enriched `req.auth` object.
+4. Sets `req.auth` with:
+
+```js
 {
-  "modulePermissions": [
-    { "module": "products", "actions": ["update"] }
-  ]
+  sub: userId,
+  role,
+  roles: [role],
+  isSuperAdmin,
+  allowedModules,        // merged from Mongo + permissions
+  permissions,           // ["products:view", "orders:create", …]
+  ownerAdminId,          // from Mongo user record
+  ownerSellerId,         // from Mongo user record
+  tokenVersion,
+  sessionVersion,
+  permissionVersion,
 }
 ```
 
-RBAC stores this as:
+### Permission cache
 
-```text
-products:view
-products:update
+Set `PERMISSION_CACHE_TTL_MS` env var to enable in-process caching of effective permissions.  
+Cache key: `userId:sessionVersion:permissionVersion` — invalidated automatically when either version increments.
+
+---
+
+## 5. Effective Permission Calculation
+
+File: `src/modules/rbac/services/rbac.service.js → getUserEffectivePermissions`
+
 ```
-
-## Final Permission Calculation
-
-Effective permissions are calculated like this:
-
-```text
-finalPermissions =
-  rolePermissions
-  + userDirectPermissions
-  + sidebarExpandedPermissions
+effectivePermissions =
+  scope( rolePermissions + directAllowPermissions )
+  + implicitViewPermissions
   - deniedPermissions
 ```
 
-Important details:
+Step by step:
 
-- Super admin bypasses restriction and receives all active permissions.
-- Role permissions come from `role_permissions`.
-- Direct user permissions come from `user_permissions` with `metadata.effect = "allow"`.
-- Denied permissions come from `user_permissions` with `metadata.effect = "deny"`.
-- Deny wins over role and direct allow.
-- Sidebar permissions expand to real backend module permissions.
-- Non-view actions imply `view`.
-- Denying a non-view action does not auto-deny `view`; deny `module:view` separately when the page itself should disappear.
+1. **Super-admin** → returns all active permissions from the entire catalog. No further checks.
+2. **Role permissions** — from `user_roles → role_permissions` for all roles assigned to the user.
+3. **Direct allow permissions** — from `user_permissions` where `metadata.effect = "allow"`.
+4. **Module scope filter** — for `admin`, `sub-admin`, `seller-admin`, `seller-sub-admin`: permissions are filtered to only those whose module is in `user.allowedModules`.
+5. **Denied permissions** — removed from the set. Comes from `user_permissions` where `metadata.effect = "deny"`. **Deny wins over role and direct allow.**
+6. **Implicit view** — after removing denied, for every non-view permission remaining, `module:view` is added if not already present and not explicitly denied.
+7. Deduplicated by slug.
 
-## User Types
+### Denied permissions rule
 
-### Super Admin
+- Denying `products:update` does not deny `products:view`. Deny `products:view` separately if the page itself should be hidden.
+- A deny in `user_permissions` removes the slug even if it comes from the user's role.
 
-- Full platform access.
-- Can create admins.
-- Can create roles.
-- Can assign any module/action.
-- Cannot be restricted.
+---
 
-### Admin
+## 6. Authorization Middleware
 
-- Gets modules/actions assigned by Super Admin.
-- Can create sub-admins under himself.
-- Can assign only modules/actions he already has.
-- Cannot assign permissions he does not have.
+File: `src/shared/middleware/access.js`
 
-### Admin Sub Admin
+Three middleware factories are used across routes:
 
-- Gets modules/actions assigned by Admin or Super Admin.
-- Can work only inside assigned modules.
-- Cannot assign roles/permissions unless an `assign` permission is granted for the relevant management area. RBAC APIs require `rbac:assign`; admin-user module assignment can require `admin_users:assign`.
+### `allowRoles(...roles)`
 
-### Seller
+Used on route groups. Does in order:
 
-- Owner of a seller account/store.
-- Gets seller-side module permissions by role.
-- Can create seller admins and seller sub-admins.
-- Can assign only seller-side modules/actions.
+1. Checks `isSuperAdmin` → pass.
+2. Calls `enforceModuleScope` — verifies the inferred request module is in `req.auth.allowedModules`.
+3. Checks if user's role is in the allowed list.
+4. Calls `enforceRequestPermission` — verifies the user has `module:inferredAction` in `req.auth.permissions`.
 
-### Seller Admin
+### `allowPermissions(...slugs)`
 
-- Created under a seller.
-- Can manage assigned seller modules.
-- Can create seller sub-admins only if assignment permission is granted through the seller staff APIs.
-- Cannot access platform/admin modules.
+Used on individual routes requiring a specific permission. Does:
 
-### Seller Sub Admin
+1. Checks `isSuperAdmin` → pass.
+2. **Owner seller bypass** — if user is `seller` role AND all required slugs start with `sellers:`, pass.
+3. Calls `enforceModuleScope`.
+4. Checks every required slug against `req.auth.permissions` (aliases expanded).
 
-- Lowest seller staff level.
-- Can access only assigned seller modules/actions.
+### `allowActions(...actions)`
 
-## Action Meaning
+Lower-level check against specific action strings. Used for non-module routes.
 
-Use these actions consistently in backend, frontend, sidebar, and matrix UI:
+### HTTP method → action inference
 
-```text
-view          show sidebar, open page, allow GET
-create        show Add button, allow POST
-update        show Edit button, allow PATCH/PUT
-delete        show Delete button, allow DELETE
-status_change show status toggle, allow status endpoints
-approve       show approve button, allow approval endpoint
-reject        show reject button, allow reject endpoint
-export        show export button, allow export endpoint
-import        show import button, allow import endpoint
-assign        allow permission/role/module assignment
+File: `src/shared/middleware/access.js → inferRequestAction`
+
+| Method  | Default action |
+|---------|---------------|
+| GET     | `view`        |
+| POST    | `create`      |
+| PUT     | `update`      |
+| PATCH   | `update`      |
+| DELETE  | `delete`      |
+
+Path pattern overrides (checked first):
+
+| Path pattern                             | Action          |
+|------------------------------------------|-----------------|
+| `/approve` or `/approval`                | `approve`       |
+| `/reject`                                | `reject`        |
+| `/access/sub-admins/:id/modules` (non-GET) | `assign`      |
+| `/roles/:id/permissions` (non-GET)       | `assign`        |
+| `/users/:id/permissions` (non-GET)       | `assign`        |
+| `/users/:id/roles` (non-GET)             | `assign`        |
+| `/assign` (non-GET)                      | `assign`        |
+| `/status`, `/moderate`, `/review` (non-GET) | `status_change` |
+| `/bulk` (non-GET)                        | `bulk_action`   |
+| `/import`                                | `import`        |
+| `/export`                                | `export`        |
+
+---
+
+## 7. Module Scope Enforcement
+
+`enforceModuleScope` (called inside `allowRoles` and `allowPermissions`) uses `getRequestModule(req)` to detect the module from the URL, then checks it against:
+
+```
+allowedModules = union(user.allowedModules, modules derived from req.auth.permissions)
 ```
 
-Legacy aliases still exist for compatibility:
-
-```text
-add  <-> create
-edit <-> update
-status <-> status_change
-approval <-> approve
-```
-
-## Sidebar Rule
-
-Sidebar visibility is based on `module:view`.
-
-Examples:
-
-```text
-products:view = show Product Management
-orders:view   = show Order Management
-rbac:view     = show Roles & Permissions
-countries:view = show Country Management
-```
-
-The sidebar catalog is:
-
-```text
-src/shared/auth/admin-sidebar-catalog.js
-```
-
-Each sidebar item has `requiredModule`.
-
-Example:
-
-```js
-{
-  moduleName: "All Products",
-  routePath: "/app/product-catalog",
-  requiredModule: "products"
-}
-```
-
-The sidebar API is:
-
-```http
-GET /api/rbac/modules/sidebar
-```
-
-If a user receives a sidebar permission, RBAC expands it to the backend module permission.
-
-Example:
-
-```text
-sidebar-product-catalog:view
-```
-
-The sidebar item has:
-
-```text
-requiredModule = products
-```
-
-RBAC expands it to:
-
-```text
-products:view
-```
-
-Expansion happens in:
-
-```text
-RbacService.expandSidebarPermissionIds()
-```
-
-## Page Rule
-
-Frontend page routes should require `module:view`.
-
-If the user opens a URL directly without `module:view`:
-
-- block the route;
-- show the unauthorized page/message;
-- do not load API data.
-
-Frontend helpers should use this shape:
-
-```js
-hasPermission("products", "view")
-canView("products")
-```
-
-## Button Rule
-
-Buttons and row actions should map directly to action permissions:
-
-```text
-create        Add button
-update        Edit button
-delete        Delete button
-status_change Active/inactive/status controls
-approve       Approve button
-reject        Reject button
-export        Export button
-import        Import button
-assign        Assign role/module/permission controls
-```
-
-Frontend helpers should use this shape:
-
-```js
-canCreate("products")
-canUpdate("orders")
-canDelete("countries")
-hasPermission("rbac", "assign")
-```
-
-Frontend hiding is only UX. The backend still validates API access.
-
-## API Rule
-
-Every protected request must pass backend authorization:
-
-1. `authenticate` validates the token.
-2. Current RBAC permissions are hydrated into `req.auth`.
-3. `access.js` detects the request module and action.
-4. The request is blocked unless the user has the needed permission.
-
-Key files:
-
-```text
-src/shared/middleware/authenticate.js
-src/shared/middleware/access.js
-src/shared/auth/module-access.js
-```
-
-HTTP methods map to actions:
-
-```text
-GET    -> view
-POST   -> create
-PUT    -> update
-PATCH  -> update
-DELETE -> delete
-```
-
-Path overrides:
-
-```text
-/approve      -> approve
-/approval     -> approve
-/reject       -> reject
-/status       -> status_change
-/permissions  -> assign, unless GET
-/roles        -> assign, unless GET
-/bulk         -> bulk_action, unless GET
-/import       -> import
-/export       -> export
-```
-
-## Main Data Stores
-
-Mongo user document stores identity and scope:
-
-```text
-role
-allowedModules
-ownerAdminId
-ownerSellerId
-permissionVersion
-sessionVersion
-```
-
-SQL stores RBAC catalog and assignments:
-
-```text
-modules
-permissions
-roles
-role_permissions
-user_permissions
-user_roles
-super_admins
-```
-
-`user_permissions.metadata.effect` decides direct allow/deny:
-
-```json
-{ "effect": "allow" }
-```
-
-```json
-{ "effect": "deny" }
-```
-
-## Required Management Modules
-
-Use these module slugs for permission assignment and route checks:
-
-```text
-admin              Dashboard
-users              User Management
-admin_users        Admin/Sub Admin Management
-rbac               Roles & Permissions
-sellers            Seller/Vendor Management
-seller_kyc         Seller KYC Management
-seller_bank        Seller Bank Management
-products           Product Management
-categories         Category Management
-sub_categories     Sub Category Management
-sub_sub_categories Sub Sub Category Management
-brands             Brand Management
-option_masters     Option Master Management
-option_values      Option Value Management
-inventory          Inventory Management
-orders             Order Management
-coupons            Coupon Management
-banners            Banner Management
-cms_pages          CMS/Page Management
-reviews            Review & Rating Management
-notifications      Notification Management
-reports            Report Management
-countries          Country Management
-states             State Management
-cities             City Management
-zip_codes          Zip Code Management
-```
-
-These modules are seeded from:
-
-```text
-src/shared/auth/module-catalog.js
-scripts/db/seed-rbac.js
-```
-
-Sidebar entries are seeded from:
-
-```text
-src/shared/auth/admin-sidebar-catalog.js
-```
-
-Route-to-module mapping is centralized in:
-
-```text
-src/shared/auth/module-access.js
-```
-
-## Location Modules
-
-Location management is split into separate modules:
-
-```text
-countries:view/create/update/delete/status_change
-states:view/create/update/delete/status_change
-cities:view/create/update/delete/status_change
-zip_codes:view/create/update/delete/status_change
-```
-
-Data dependency:
-
-```text
-State belongs to Country
-City belongs to Country + State
-Zip Code belongs to Country + State + City
-```
-
-API route mapping:
-
-```text
-/api/admin/common/countries  -> countries
-/api/admin/common/states     -> states
-/api/admin/common/cities     -> cities
-/api/admin/common/zip-codes  -> zip_codes
-```
-
-## Role Permissions
-
-Use role permissions when every user with that role should receive the same access.
-
-Routes:
-
-```http
-GET  /api/rbac/roles/:roleId/permissions
-POST /api/rbac/roles/:roleId/permissions
-POST /api/rbac/roles/:roleId/permissions/bulk
-PUT  /api/rbac/roles/:roleId/permissions
-```
-
-The `PUT` route replaces all role permissions:
+If the request module is not in scope → **403 Forbidden: module access denied**.
+
+Route → module mapping is centralized in:
+`src/shared/auth/module-access.js → getRequestModule`
+
+---
+
+## 8. Full Module Catalog
+
+Defined in `src/shared/auth/module-catalog.js`. Seeded to PostgreSQL `modules` table via `scripts/db/seed-rbac.js`.
+
+### Platform modules (`forPlatform = true`) — assignable to admin / sub-admin
+
+| Tab                  | Slug               | Name                            |
+|----------------------|--------------------|----------------------------------|
+| Dashboard            | `admin`            | Admin Dashboard                  |
+| Catalog Management   | `products`         | Product Management               |
+| Catalog Management   | `platform`         | Platform Catalog                 |
+| Catalog Management   | `categories`       | Category Management              |
+| Catalog Management   | `sub_categories`   | Sub Category Management          |
+| Catalog Management   | `sub_sub_categories` | Sub Sub Category Management    |
+| Catalog Management   | `brands`           | Brand Management                 |
+| Catalog Management   | `option_masters`   | Option Master Management         |
+| Catalog Management   | `option_values`    | Option Value Management          |
+| Inventory Management | `inventory`        | Inventory Management             |
+| Orders Management    | `orders`           | Order Management                 |
+| Orders Management    | `returns`          | Return Management                |
+| Orders Management    | `payments`         | Payment Management               |
+| Orders Management    | `wallets`          | Wallet Management                |
+| Orders Management    | `carts`            | Cart Management                  |
+| Orders Management    | `subscriptions`    | Subscription Management          |
+| Users & Access       | `admin_users`      | Admin/Sub Admin Management       |
+| Users & Access       | `rbac`             | RBAC Management                  |
+| Users & Access       | `users`            | User Management                  |
+| Users & Access       | `sellers`          | Seller Management                |
+| Users & Access       | `seller_kyc`       | Seller KYC Management            |
+| Users & Access       | `seller_bank`      | Seller Bank Management           |
+| Marketing            | `coupons`          | Coupon Management                |
+| Marketing            | `pricing`          | Pricing & Promotions             |
+| Marketing            | `dynamic-pricing`  | Dynamic Pricing                  |
+| Marketing            | `referral`         | Referral Commerce                |
+| Marketing            | `loyalty`          | Loyalty Management               |
+| Marketing            | `recommendations`  | Recommendation Management        |
+| Marketing            | `banners`          | Banner Management                |
+| Marketing            | `notifications`    | Notification Management          |
+| Tax & Compliance     | `tax`              | Tax Management                   |
+| Tax & Compliance     | `delivery`         | Delivery Management              |
+| Tax & Compliance     | `warranty`         | Warranty Management              |
+| Reports & Analytics  | `analytics`        | Analytics                        |
+| Reports & Analytics  | `reports`          | Report Management                |
+| Location Management  | `countries`        | Country Management               |
+| Location Management  | `states`           | State Management                 |
+| Location Management  | `cities`           | City Management                  |
+| Location Management  | `zip_codes`        | Zip Code Management              |
+| Settings             | `cms_pages`        | CMS/Page Management              |
+| Settings             | `cms`              | CMS Management                   |
+| Settings             | `reviews`          | Review & Rating Management       |
+| Settings             | `fraud`            | Fraud Management                 |
+
+### Seller modules (`forSeller = true`) — assignable to seller / seller-admin / seller-sub-admin
+
+`products`, `inventory`, `orders`, `returns`, `sellers`, `sellers/commissions`, `coupons`, `pricing`, `notifications`, `analytics`, `reports`, `delivery`
+
+---
+
+## 9. RBAC API Routes
+
+All routes require `authenticate` + `allowRoles(admin, sub-admin)`.
+
+Base path: `/api/rbac`
+
+### Modules
+
+| Method | Path                          | Permission required  | Description                        |
+|--------|-------------------------------|---------------------|------------------------------------|
+| GET    | `/modules`                    | `rbac:view`         | List all modules                   |
+| GET    | `/modules/:moduleId`          | `rbac:view`         | Get single module                  |
+| POST   | `/modules`                    | `rbac:create`       | Create module                      |
+| PATCH  | `/modules/:moduleId`          | `rbac:update`       | Update module                      |
+| DELETE | `/modules/:moduleId`          | `rbac:delete`       | Delete module                      |
+| PATCH  | `/modules/:moduleId/status`   | `rbac:status_change`| Activate / deactivate module       |
+| POST   | `/modules/reorder`            | `rbac:update`       | Reorder modules                    |
+| GET    | `/modules/sidebar`            | _(none, open)_      | Sidebar tree filtered by user perms |
+| GET    | `/permission-management/modules` | `rbac:view`      | Permission matrix (role or user)   |
+
+#### Permission management matrix query params
+
+| Param         | Effect                                          |
+|---------------|-------------------------------------------------|
+| `roleId`      | Matrix pre-loaded with role permissions         |
+| `roleSlug`    | Matrix pre-loaded by role slug                  |
+| `userId`      | Matrix pre-loaded with user effective + denied permissions |
+| `scope=sidebar` | Filters to sidebar-visible modules only       |
+| `active`      | Filter by module active state                   |
+
+### Permissions
+
+| Method | Path                       | Permission required | Description              |
+|--------|----------------------------|---------------------|--------------------------|
+| GET    | `/permissions`             | `rbac:view`         | List permissions         |
+| GET    | `/permissions/:id`         | `rbac:view`         | Get single permission    |
+| POST   | `/permissions`             | `rbac:create`       | Create permission        |
+| PATCH  | `/permissions/:id`         | `rbac:update`       | Update permission        |
+| DELETE | `/permissions/:id`         | `rbac:delete`       | Delete permission        |
+
+### Roles
+
+| Method | Path                            | Permission required | Description                      |
+|--------|---------------------------------|---------------------|----------------------------------|
+| GET    | `/roles`                        | `rbac:view`         | List roles                       |
+| GET    | `/roles/:roleId`                | `rbac:view`         | Get single role                  |
+| POST   | `/roles`                        | `rbac:create`       | Create role                      |
+| PATCH  | `/roles/:roleId`                | `rbac:update`       | Update role (invalidates sessions)|
+| DELETE | `/roles/:roleId`                | `rbac:delete`       | Delete role (invalidates sessions)|
+| GET    | `/roles/:roleId/permissions`    | `rbac:view`         | Get role's permissions           |
+| POST   | `/roles/:roleId/permissions`    | `rbac:assign`       | Add single permission to role    |
+| DELETE | `/roles/:roleId/permissions`    | `rbac:delete`       | Remove permission from role      |
+| POST   | `/roles/:roleId/permissions/bulk` | `rbac:assign`     | Add multiple permissions to role |
+| PUT    | `/roles/:roleId/permissions`    | `rbac:assign`       | **Replace** all role permissions |
+
+### User Permissions
+
+| Method | Path                                  | Permission required | Description                        |
+|--------|---------------------------------------|---------------------|------------------------------------|
+| GET    | `/users/:userId/permissions`          | `rbac:view`         | Get user's direct permissions      |
+| GET    | `/users/:userId/permissions/effective`| `rbac:view`         | Full effective permission breakdown|
+| GET    | `/users/:userId/permissions/check`    | `rbac:view`         | Check if user has a specific slug  |
+| POST   | `/users/:userId/permissions`          | `rbac:assign`       | Add single permission to user      |
+| DELETE | `/users/:userId/permissions`          | `rbac:delete`       | Remove single permission from user |
+| POST   | `/users/:userId/permissions/bulk`     | `rbac:assign`       | Add multiple permissions to user   |
+| PUT    | `/users/:userId/permissions`          | `rbac:assign`       | **Sync** allow + deny permissions  |
+
+`PUT /users/:userId/permissions` payload:
 
 ```json
 {
-  "permissionIds": ["permission-uuid-1", "permission-uuid-2"]
+  "permissionIds": ["uuid-1", "uuid-2"],
+  "deniedPermissionIds": ["uuid-3"]
 }
 ```
 
-Changing role permissions invalidates assigned users' auth sessions so fresh permissions are loaded.
+This replaces all direct allow and deny records for the user in one call.
 
-## User Direct Permissions And Denies
+### User Roles
 
-Use user permissions when one user needs custom access.
+| Method | Path                             | Permission required | Description                     |
+|--------|----------------------------------|---------------------|---------------------------------|
+| GET    | `/users/:userId/roles`           | `rbac:view`         | Get user's roles                |
+| GET    | `/users/:userId/roles/check`     | `rbac:view`         | Check if user has a role        |
+| POST   | `/users/:userId/roles`           | `rbac:assign`       | Assign role to user             |
+| DELETE | `/users/:userId/roles`           | `rbac:delete`       | Remove role from user           |
+| POST   | `/users/:userId/roles/bulk`      | `rbac:assign`       | Bulk assign roles               |
 
-Routes:
+---
 
-```http
-GET    /api/rbac/users/:userId/permissions
-GET    /api/rbac/users/:userId/permissions/effective
-POST   /api/rbac/users/:userId/permissions
-POST   /api/rbac/users/:userId/permissions/bulk
-PUT    /api/rbac/users/:userId/permissions
-DELETE /api/rbac/users/:userId/permissions
+## 10. Admin Access API Routes
+
+Base path: `/api/admin`
+
+Auth: `authenticate` + `allowRoles(admin, sub-admin)` on all routes below.
+
+### Module access matrix (used by UI permission editor)
+
+| Method | Path                | Permission | Description                                |
+|--------|---------------------|------------|--------------------------------------------|
+| GET    | `/access/modules`   | _(inferred)_ | Returns assignable modules + permission matrix for a role or user |
+
+Query params: `userId`, `roleId`, `roleSlug`, `includePermissions`, `active`
+
+### Activity logs
+
+| Method | Path                    | Permission  | Description            |
+|--------|-------------------------|-------------|------------------------|
+| GET    | `/access/activity-logs` | `rbac:view` | Paginated audit log    |
+
+### Admin users (classic access paths)
+
+| Method | Path                              | Role required                  | Description                           |
+|--------|-----------------------------------|--------------------------------|---------------------------------------|
+| POST   | `/access/admins`                  | `super-admin` only             | Create admin                          |
+| GET    | `/access/admins`                  | `super-admin` or `admin`       | List admins                           |
+| POST   | `/access/sub-admins`              | `super-admin` or `admin`       | Create sub-admin                      |
+| GET    | `/access/sub-admins`              | `super-admin` or `admin`       | List sub-admins                       |
+| PATCH  | `/access/sub-admins/:userId/modules` | `super-admin` or `admin`    | Update sub-admin modules + permissions|
+
+### Admin users (alternate paths used by frontend admin-users pages)
+
+| Method | Path                         | Role required                | Description               |
+|--------|------------------------------|------------------------------|---------------------------|
+| GET    | `/admin-users/admins`        | `super-admin` or `admin`     | List admins               |
+| GET    | `/admin-users/sub-admins`    | `super-admin` or `admin`     | List sub-admins           |
+| POST   | `/admin-users/admin`         | `super-admin` only           | Create admin              |
+| POST   | `/admin-users/sub-admin`     | `super-admin` or `admin`     | Create sub-admin          |
+| PUT    | `/admin-users/:userId`       | `super-admin` or `admin`     | Update admin user profile |
+| PUT    | `/admin-users/:userId/permissions` | `super-admin` or `admin` | Update modules/permissions|
+| PUT    | `/admin-users/:userId/status`| `super-admin` or `admin`     | Change account status     |
+
+### Seller users (platform side)
+
+| Method | Path                               | Role required             | Description                  |
+|--------|------------------------------------|---------------------------|------------------------------|
+| GET    | `/seller-users/sellers`            | `super-admin` or `admin`  | List sellers                 |
+| GET    | `/seller-users/seller-admins`      | `super-admin` or `admin`  | List seller-admins           |
+| GET    | `/seller-users/seller-sub-admins`  | `super-admin` or `admin`  | List seller-sub-admins       |
+| POST   | `/seller-users/seller-admin`       | `super-admin` or `admin`  | Create seller-admin          |
+| POST   | `/seller-users/seller-sub-admin`   | `super-admin` or `admin`  | Create seller-sub-admin      |
+
+---
+
+## 11. Module + Permission Assignment Flow
+
+### The main method: `syncUserModulePermissions`
+
+Used by `createAdmin`, `createPlatformSubAdmin`, `createSellerStaff`, and `updatePlatformSubAdminModules` in `AdminService`.
+
+```js
+await rbacService.syncUserModulePermissions(userId, modulePermissions, grantedBy);
 ```
 
-Use `PUT` to sync direct allow and deny permissions in one call:
+`modulePermissions` shape:
 
 ```json
-{
-  "permissionIds": ["allow-permission-uuid"],
-  "deniedPermissionIds": ["deny-permission-uuid"]
-}
+[
+  { "module": "products", "actions": ["view", "create", "update"] },
+  { "module": "orders",   "actions": ["view", "status_change"]     },
+  { "module": "rbac",     "actions": ["view", "assign"]            }
+]
 ```
 
-This updates `user_permissions` using:
+- `view` is automatically prepended to every module's action list if not present.
+- This syncs `user_permissions` for the user — replaces previous module-scoped permissions.
+- Invalidates user auth session after sync (forces fresh permission load on next request).
 
-```text
-metadata.effect = allow
-metadata.effect = deny
-```
-
-Denied permissions are removed from the final effective permission set even if they come from a role.
-
-## Admin/Sub-Admin Assignment Flow
-
-Use admin access APIs for admin-side users because they update both Mongo scope and SQL permissions.
-
-Create sub-admin:
-
-```http
-POST /api/admin/access/sub-admins
-```
-
-Update modules and actions:
-
-```http
-PATCH /api/admin/access/sub-admins/:userId/modules
-```
-
-Payload:
+### PATCH `/access/sub-admins/:userId/modules` payload
 
 ```json
 {
   "allowedModules": ["products", "orders", "rbac"],
   "modulePermissions": [
     { "module": "products", "actions": ["view", "create", "update"] },
-    { "module": "orders", "actions": ["view", "status_change"] },
-    { "module": "rbac", "actions": ["view", "assign"] }
+    { "module": "orders",   "actions": ["view", "status_change"]     },
+    { "module": "rbac",     "actions": ["view", "assign"]            }
   ]
 }
 ```
 
-Code path:
+### Delegation constraints (non-super-admin actors)
 
-```text
-src/modules/admin/services/admin.service.js
+Enforced in `AdminService.constrainModuleAssignmentByActor`:
+
+1. Target user must be inside actor's hierarchy (`ownerAdminId` or `ownerSellerId` must match).
+2. Actor can only assign modules they themselves have in `allowedModules`.
+3. Actor can only assign actions they themselves have as permissions.
+4. If these constraints are violated → **403**.
+
+---
+
+## 12. Sidebar Module API
+
+```
+GET /api/rbac/modules/sidebar
 ```
 
-Rules:
+- Returns the full sidebar tree filtered to only modules the requesting user has `module:view` for.
+- Super-admin sees everything.
+- Tree is nested by `parentModuleId`.
+- Sorted by `order` then name.
 
-- Super Admin can assign anything.
-- Admin can assign only modules/actions he already has.
-- Sub-admin cannot assign unless the relevant `assign` permission is granted.
+Sidebar modules are seeded separately with `metadata.source = "sidebar-seed"`.
 
-## Seller Staff Assignment Flow
+### Sidebar permission expansion
 
-Use seller staff APIs for seller admins and seller sub-admins.
+When a sidebar permission is assigned (e.g., a sidebar item for the products page), the backend expands it to the real backend module permission:
 
-Payload:
-
-```json
-{
-  "allowedModules": ["products", "orders", "inventory"],
-  "modulePermissions": [
-    { "module": "products", "actions": ["view", "create", "update"] },
-    { "module": "orders", "actions": ["view"] },
-    { "module": "inventory", "actions": ["view", "update"] }
-  ]
-}
+```
+sidebar item → metadata.requiredModule = "products"
+assigned action = "view"
+expanded to → products:view
 ```
 
-Code path:
+This is done in `RbacService.expandSidebarPermissionIds()`. The expansion also adds implicit `view` for any non-view actions.
 
-```text
-src/modules/seller/services/seller.service.js
+---
+
+## 13. Effective Permissions Debug API
+
 ```
-
-Rules:
-
-- Seller can assign only seller-side modules/actions.
-- Seller Admin can assign only if the seller staff flow allows it and the actor has the permission.
-- Seller Sub Admin cannot assign unless explicitly allowed.
-- Seller staff cannot access platform/admin-only modules.
-
-## Permission Matrix UI
-
-Use one matrix UI for role and user permission assignment.
-
-Endpoint:
-
-```http
-GET /api/rbac/permission-management/modules
-```
-
-For a role:
-
-```http
-GET /api/rbac/permission-management/modules?roleSlug=sub-admin
-```
-
-For a user:
-
-```http
-GET /api/rbac/permission-management/modules?userId=<userId>
-```
-
-For sidebar-specific assignment:
-
-```http
-GET /api/rbac/permission-management/modules?scope=sidebar
-GET /api/rbac/permission-management/modules?userId=<userId>&scope=sidebar
-GET /api/rbac/permission-management/modules?roleSlug=sub-admin&scope=sidebar
-```
-
-Matrix columns:
-
-```text
-Module name
-View
-Create
-Update
-Delete
-Status Change
-Approve
-Reject
-Export
-Import
-```
-
-UI rules:
-
-- Auto-check `View` when any other action is checked.
-- Disable actions the current actor cannot delegate.
-- For user-specific view, show role permissions, extra user permissions, denied permissions, and final effective permissions.
-- Add an "Effective Permissions" modal using the effective permissions endpoint.
-
-The matrix response includes:
-
-```text
-modules
-permissions
-permissionsByAction
-permissionKeys
-assignedPermissionCount
-assignedPermissionIds
-deniedPermissionIds
-totals
-actions
-```
-
-## Effective Permissions Debug API
-
-Use this whenever access is confusing:
-
-```http
 GET /api/rbac/users/:userId/permissions/effective
 ```
 
-The response includes:
+Response shape:
 
-```text
-assignedModules
-assignedPermissions
-rolePermissions
-extraUserPermissions
-deniedPermissions
-permissionBreakdown
-permissionsByAction
-sidebarModules
-effectivePermissions
+```json
+{
+  "role": "sub-admin",
+  "userType": "sub-admin",
+  "assignedModules": ["products", "orders"],
+  "assignedPermissions": ["products:view", "products:create", "orders:view"],
+  "rolePermissions": ["products:view"],
+  "extraUserPermissions": ["products:create"],
+  "deniedPermissions": [],
+  "permissionBreakdown": {
+    "rolePermissions": [...],
+    "extraUserPermissions": [...],
+    "deniedPermissions": [],
+    "effectivePermissions": [...]
+  },
+  "permissionsByAction": {
+    "products": { "view": true, "create": true },
+    "orders": { "view": true }
+  },
+  "sidebarModules": [...],
+  "effectivePermissions": ["products:view", "products:create", "orders:view"]
+}
 ```
 
-This answers questions like:
+Use this endpoint to answer:
+- Why can this user see (or not see) a module?
+- Which source gave a permission (role vs direct)?
+- Which deny removed a permission?
+- Why is a sidebar item missing?
 
-```text
-Why can this user see Products?
-Why can this user not update Orders?
-Why is this sidebar item missing?
-Which role gave this permission?
-Which user-level deny removed it?
-```
+---
 
-## Frontend Utility Contract
+## 14. Session Invalidation
 
-The frontend should keep all permission checks in reusable utilities:
+Defined in `src/shared/auth/session-state.js`.
 
-```js
-hasPermission(module, action)
-canView(module)
-canCreate(module)
-canUpdate(module)
-canDelete(module)
-PermissionGuard
-ProtectedRoute
-SidebarPermissionFilter
-ActionButtonGuard
-```
+Triggered automatically by:
 
-Expected behavior:
+| Event                             | Method called                           |
+|-----------------------------------|-----------------------------------------|
+| Permission assigned/removed/synced | `invalidateUserAuthSession(userId)`    |
+| Role assigned/removed             | `invalidateUserAuthSession(userId, ROLE_CHANGED)` |
+| Role permissions changed          | `invalidateUsersForRole(roleId)`        |
+| Role deleted/updated (slug/active)| `invalidateUsersForRole(roleId)`        |
 
-```js
-canView("products")       // products:view
-canCreate("products")     // products:create
-canUpdate("products")     // products:update
-canDelete("products")     // products:delete
-hasPermission("rbac", "assign")
-```
+Invalidation increments `sessionVersion` and `permissionVersion` on the Mongo user, which causes the JWT validation to fail on the next request and forces re-login.
 
-Frontend route protection must use `module:view`.
+---
 
-Frontend action buttons must use the matching action permission.
+## 15. User Type Behavior Summary
 
-Never hardcode sidebar visibility by role. Use the sidebar API and permission helpers.
+| Role               | Module access       | Can assign to                          | Notes                                       |
+|--------------------|---------------------|----------------------------------------|---------------------------------------------|
+| `super-admin`      | All permissions     | Anyone                                 | Bypasses all checks; not in module-scope logic |
+| `admin`            | Assigned modules    | sub-admin, seller, seller-admin, seller-sub-admin under them | Can delegate only modules/actions they have |
+| `sub-admin`        | Assigned modules    | (none by default)                      | Can assign if `rbac:assign` or `admin_users:assign` granted |
+| `seller`           | Seller modules      | seller-admin, seller-sub-admin under them | Owner-seller bypass on `sellers:*` checks  |
+| `seller-admin`     | Assigned seller modules | seller-sub-admin under their seller | Needs explicit assign permission           |
+| `seller-sub-admin` | Assigned seller modules | (none)                               |                                             |
 
-## Delegation Rules
+---
 
-Non-super-admin actors cannot assign freely.
+## 16. Common Debug Checklist
 
-Backend checks:
+1. Check `user.role` in MongoDB.
+2. Check `user.allowedModules` in MongoDB.
+3. Call `GET /api/rbac/users/:userId/permissions/effective` — confirm the needed slug is present.
+4. Confirm the API route maps to the expected module in `src/shared/auth/module-access.js → getRequestModule`.
+5. Confirm the inferred action matches — check `inferRequestAction` in `src/shared/middleware/access.js`.
+6. If a sidebar item is missing — confirm `module:view` is in effective permissions.
+7. If permissions were just changed — the session is auto-invalidated; user must get a new token.
+8. If a deny is unexpectedly present — check `user_permissions` where `metadata.effect = "deny"`.
+9. If actor gets 403 on assignment — check `constrainModuleAssignmentByActor` — actor may lack the module or action themselves.
 
-- Target user must be inside the actor's hierarchy.
-- Admin can assign to sub-admins, sellers, seller-admins, and seller-sub-admins under that admin.
-- Seller or seller-admin can assign to seller-admin/seller-sub-admin under that seller.
-- Actor cannot assign permission IDs he does not already have.
-- Scoped admin/seller actors cannot assign unavailable modules/actions.
+---
 
-Code paths:
+## 17. File Map
 
-```text
-RbacService.assertCanAssignUserPermissions()
-AdminService.constrainModuleAssignmentByActor()
-SellerService.constrainModuleAssignmentByActor()
-```
-
-## Common Debug Checklist
-
-If access is not working:
-
-1. Check the Mongo user `role`.
-2. Check Mongo `allowedModules`.
-3. Call `GET /api/rbac/users/:userId/permissions/effective`.
-4. Confirm the needed slug exists, for example `products:update`.
-5. Confirm no deny removes it.
-6. Confirm the API route maps to the expected module in `module-access.js`.
-7. Confirm the inferred action is correct.
-8. If sidebar is missing, confirm `module:view` exists.
-9. If permissions were just changed, force a fresh token/session.
-
-## File Map
-
-RBAC routes:
-
-```text
-src/modules/rbac/routes/rbac.routes.js
-```
-
-RBAC business logic:
-
-```text
-src/modules/rbac/services/rbac.service.js
-```
-
-RBAC database queries:
-
-```text
-src/modules/rbac/repositories/rbac.repository.js
-```
-
-Shared permission helpers:
-
-```text
-src/shared/auth/rbac-permissions.js
-```
-
-Route auth and permission checks:
-
-```text
-src/shared/middleware/authenticate.js
-src/shared/middleware/access.js
-```
-
-API route to module mapping:
-
-```text
-src/shared/auth/module-access.js
-```
-
-Backend module catalog:
-
-```text
-src/shared/auth/module-catalog.js
-```
-
-Sidebar catalog:
-
-```text
-src/shared/auth/admin-sidebar-catalog.js
-```
-
-Admin/sub-admin assignment flow:
-
-```text
-src/modules/admin/services/admin.service.js
-```
-
-Seller staff assignment flow:
-
-```text
-src/modules/seller/services/seller.service.js
-```
-
-RBAC seeding:
-
-```text
-scripts/db/seed-rbac.js
-```
+| Purpose                                  | File                                                          |
+|------------------------------------------|---------------------------------------------------------------|
+| RBAC API routes                          | `src/modules/rbac/routes/rbac.routes.js`                      |
+| RBAC service (all business logic)        | `src/modules/rbac/services/rbac.service.js`                   |
+| RBAC repository (all SQL queries)        | `src/modules/rbac/repositories/rbac.repository.js`            |
+| Permission constants and helpers         | `src/shared/auth/rbac-permissions.js`                         |
+| JWT authentication + permission hydration| `src/shared/middleware/authenticate.js`                       |
+| Role/permission/module enforcement       | `src/shared/middleware/access.js`                             |
+| Route → module slug mapping              | `src/shared/auth/module-access.js`                            |
+| Module catalog (seeded to PostgreSQL)    | `src/shared/auth/module-catalog.js`                           |
+| Sidebar catalog                          | `src/shared/auth/admin-sidebar-catalog.js`                    |
+| Role slug constants                      | `src/shared/constants/roles.js`                               |
+| Legacy role action policies              | `src/shared/constants/access-policies.js`                     |
+| Admin access + assignment service        | `src/modules/admin/services/admin.service.js`                 |
+| Admin access routes                      | `src/modules/admin/routes/admin.routes.js`                    |
+| RBAC seeding script                      | `scripts/db/seed-rbac.js`                                     |

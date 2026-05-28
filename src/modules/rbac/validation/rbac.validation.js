@@ -3,21 +3,16 @@ const Joi = require("joi");
 const permissionActions = [
   "view",
   "create",
-  "add",
-  "edit",
   "update",
   "delete",
   "approve",
-  "approval",
   "reject",
   "assign",
   "export",
   "import",
   "status_change",
-  "status",
   "restore",
   "bulk_action",
-  "action",
 ];
 
 const createModuleSchema = {
@@ -259,6 +254,64 @@ const checkRoleSchema = {
   }),
 };
 
+const copyFromSchema = {
+  body: Joi.object({
+    sourceUserId: Joi.string().required(),
+    copyModules: Joi.boolean().default(true),
+    copyPermissions: Joi.boolean().default(true),
+    mergeMode: Joi.string().valid("replace", "merge").default("replace"),
+  }),
+};
+
+const applyTemplateSchema = {
+  body: Joi.object({
+    templateSlug: Joi.string().required(),
+    mergeMode: Joi.string().valid("replace", "merge").default("replace"),
+  }),
+};
+
+const listAuditLogsSchema = {
+  query: Joi.object({
+    actorId: Joi.string(),
+    targetUserId: Joi.string(),
+    action: Joi.string().valid("grant", "revoke", "role_assign", "role_remove", "module_add", "module_remove", "template_apply", "force_logout", "copy_permissions"),
+    moduleSlug: Joi.string(),
+    from: Joi.date().iso(),
+    to: Joi.date().iso(),
+    page: Joi.number().integer().min(1).default(1),
+    limit: Joi.number().integer().min(1).max(200).default(50),
+  }),
+};
+
+const templateParamSchema = {
+  params: Joi.object({
+    templateId: Joi.string().required(),
+  }),
+};
+
+const createTemplateSchema = {
+  body: Joi.object({
+    slug: Joi.string().min(2).max(128).required(),
+    name: Joi.string().min(2).max(128).required(),
+    description: Joi.string().max(1000),
+    roleScope: Joi.array().items(Joi.string()).default([]),
+    permissionSlugs: Joi.array().items(Joi.string()).required(),
+    isActive: Joi.boolean().default(true),
+    metadata: Joi.object().default({}),
+  }),
+};
+
+const updateTemplateSchema = {
+  body: Joi.object({
+    name: Joi.string().min(2).max(128),
+    description: Joi.string().max(1000),
+    roleScope: Joi.array().items(Joi.string()),
+    permissionSlugs: Joi.array().items(Joi.string()),
+    isActive: Joi.boolean(),
+    metadata: Joi.object(),
+  }).min(1),
+};
+
 module.exports = {
   createModuleSchema,
   updateModuleSchema,
@@ -286,4 +339,10 @@ module.exports = {
   bulkAssignRolesSchema,
   checkPermissionSchema,
   checkRoleSchema,
+  copyFromSchema,
+  applyTemplateSchema,
+  listAuditLogsSchema,
+  templateParamSchema,
+  createTemplateSchema,
+  updateTemplateSchema,
 };

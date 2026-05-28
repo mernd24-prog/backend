@@ -1,3 +1,4 @@
+const { v4: uuidv4 } = require("uuid");
 const { RbacRepository } = require("../repositories/rbac.repository");
 const { AppError } = require("../../../shared/errors/app-error");
 const { ROLES } = require("../../../shared/constants/roles");
@@ -14,6 +15,7 @@ const {
   SESSION_INVALIDATION_REASONS,
   makeSessionInvalidationUpdate,
 } = require("../../../shared/auth/session-state");
+const { RbacAuditLog, PermissionTemplate } = require("../../../infrastructure/sequelize/models");
 
 const slugifyModule = (value = "") =>
   String(value || "")
@@ -680,7 +682,7 @@ class RbacService {
     return this.rbacRepository.getUserPermissions(userId);
   }
 
-  async syncUserModulePermissions(userId, modulePermissions, grantedBy) {
+  async syncUserModulePermissions(userId, modulePermissions, grantedBy, actor = {}) {
     const normalizedModulePermissions = modulePermissionAssignmentsWithImplicitView(
       modulePermissions,
       cleanModuleName,
@@ -691,6 +693,19 @@ class RbacService {
       grantedBy,
     );
     await this.invalidateUserAuthSession(userId);
+    if (actor.userId) {
+      const user = await UserModel.findById(userId).select("role").lean().catch(() => null);
+      this.writeAuditLog({
+        actorId: actor.userId,
+        actorRole: actor.role,
+        targetUserId: userId,
+        targetRole: user?.role,
+        action: "grant",
+        newValue: { modules: normalizedModulePermissions.map((m) => m.module || m) },
+        ipAddress: actor.ipAddress,
+        requestId: actor.requestId,
+      });
+    }
     return result;
   }
 
@@ -712,6 +727,18 @@ class RbacService {
     const result = await this.rbacRepository.assignRoleToUser(userId, roleId, assignedBy);
     if (!options.skipSessionInvalidation) {
       await this.invalidateUserAuthSession(userId, SESSION_INVALIDATION_REASONS.ROLE_CHANGED);
+    }
+    if (actor.userId) {
+      const role = await this.rbacRepository.getRoleById(roleId).catch(() => null);
+      this.writeAuditLog({
+        actorId: actor.userId,
+        actorRole: actor.role,
+        targetUserId: userId,
+        action: "role_assign",
+        newValue: { roleId, roleSlug: role?.slug },
+        ipAddress: actor.ipAddress,
+        requestId: actor.requestId,
+      });
     }
     return result;
   }
@@ -745,6 +772,18 @@ class RbacService {
     await this.assertCanAssignUserRole(actor, userId, roleId);
     const result = await this.rbacRepository.removeRoleFromUser(userId, roleId);
     await this.invalidateUserAuthSession(userId, SESSION_INVALIDATION_REASONS.ROLE_CHANGED);
+    if (actor.userId) {
+      const role = await this.rbacRepository.getRoleById(roleId).catch(() => null);
+      this.writeAuditLog({
+        actorId: actor.userId,
+        actorRole: actor.role,
+        targetUserId: userId,
+        action: "role_remove",
+        oldValue: { roleId, roleSlug: role?.slug },
+        ipAddress: actor.ipAddress,
+        requestId: actor.requestId,
+      });
+    }
     return result;
   }
 
@@ -1007,6 +1046,220 @@ class RbacService {
   async userHasRole(userId, roleSlug) {
     const roles = await this.rbacRepository.getUserRoles(userId);
     return roles.some((ur) => ur.role && ur.role.slug === roleSlug);
+  }
+
+  // AUDIT LOGGING
+  writeAuditLog(entry = {}) {
+    if (!entry.actorId || !entry.targetUserId || !entry.action) return;
+    const record = {
+      id: uuidv4(),
+      actorId: String(entry.actorId),
+      actorRole: entry.actorRole || null,
+      targetUserId: String(entry.targetUserId),
+      targetRole: entry.targetRole || null,
+      action: entry.action,
+      moduleSlug: entry.moduleSlug || null,
+      permissionSlug: entry.permissionSlug || null,
+      oldValue: entry.oldValue || null,
+      newValue: entry.newValue || null,
+      ipAddress: entry.ipAddress || null,
+      userAgent: entry.userAgent || null,
+      requestId: entry.requestId || null,
+    };
+    RbacAuditLog.create(record).catch(() => {});
+  }
+
+  async listAuditLogs(filters = {}) {
+    const { Op } = require("sequelize");
+    const {
+      actorId, targetUserId, action, moduleSlug,
+      from, to, page = 1, limit = 50,
+    } = filters;
+
+    const where = {};
+    if (actorId) where.actorId = actorId;
+    if (targetUserId) where.targetUserId = targetUserId;
+    if (action) where.action = action;
+    if (moduleSlug) where.moduleSlug = moduleSlug;
+    if (from || to) {
+      where.created_at = {};
+      if (from) where.created_at[Op.gte] = new Date(from);
+      if (to) where.created_at[Op.lte] = new Date(to);
+    }
+
+    const offset = (Number(page) - 1) * Number(limit);
+    const { count, rows } = await RbacAuditLog.findAndCountAll({
+      where,
+      order: [["created_at", "DESC"]],
+      limit: Number(limit),
+      offset,
+    });
+
+    return { items: rows, total: count, page: Number(page), limit: Number(limit) };
+  }
+
+  // FORCE LOGOUT
+  async forceLogoutUser(userId, actor = {}) {
+    if (!userId) throw new AppError("User ID required", 400);
+    if (!actor.isSuperAdmin && actor.role !== ROLES.SUPER_ADMIN) {
+      await this.assertCanAssignUserPermissions(actor, userId, []);
+    }
+    const user = await UserModel.findById(userId).select("role email").lean();
+    if (!user) throw new AppError("User not found", 404);
+
+    const updated = await this.invalidateUserAuthSession(userId, SESSION_INVALIDATION_REASONS.FORCE_LOGOUT);
+    this.writeAuditLog({
+      actorId: actor.userId,
+      actorRole: actor.role,
+      targetUserId: userId,
+      targetRole: user.role,
+      action: "force_logout",
+      ipAddress: actor.ipAddress,
+      userAgent: actor.userAgent,
+      requestId: actor.requestId,
+    });
+    return { success: true, newSessionVersion: updated?.sessionVersion ?? null };
+  }
+
+  // COPY PERMISSIONS
+  async copyUserPermissions(targetUserId, sourceUserId, actor = {}, options = {}) {
+    const { copyModules = true, copyPermissions = true, mergeMode = "replace" } = options;
+    if (!targetUserId || !sourceUserId) throw new AppError("Both targetUserId and sourceUserId required", 400);
+    if (String(targetUserId) === String(sourceUserId)) throw new AppError("Source and target cannot be the same user", 400);
+
+    const [source, target] = await Promise.all([
+      UserModel.findById(sourceUserId).select("role allowedModules").lean(),
+      UserModel.findById(targetUserId).select("role allowedModules").lean(),
+    ]);
+    if (!source) throw new AppError("Source user not found", 404);
+    if (!target) throw new AppError("Target user not found", 404);
+
+    const grantedBy = actor.userId;
+    let expandedIds = [];
+
+    if (copyPermissions) {
+      const sourcePerms = await this.rbacRepository.getUserDirectEffectivePermissions(sourceUserId);
+      const permissionIds = sourcePerms.map((p) => p.id).filter(Boolean);
+      if (permissionIds.length) {
+        expandedIds = await this.expandSidebarPermissionIds(permissionIds);
+      }
+    }
+
+    // Validate hierarchy + that actor has all permissions being copied
+    if (!actor.isSuperAdmin && actor.role !== ROLES.SUPER_ADMIN) {
+      await this.assertCanAssignUserPermissions(actor, targetUserId, expandedIds);
+    }
+
+    if (copyModules && source.allowedModules?.length) {
+      let srcModules = source.allowedModules;
+      // Constrain copied modules to what actor is allowed to assign
+      if (!actor.isSuperAdmin && actor.role !== ROLES.SUPER_ADMIN) {
+        const actorModuleScope = new Set((actor.allowedModules || []).map(cleanModuleName));
+        srcModules = srcModules.filter((m) => actorModuleScope.has(cleanModuleName(m)));
+      }
+      if (srcModules.length) {
+        const newModules = mergeMode === "merge"
+          ? Array.from(new Set([...(target.allowedModules || []), ...srcModules]))
+          : srcModules;
+        await UserModel.findByIdAndUpdate(targetUserId, { allowedModules: newModules });
+      }
+    }
+
+    if (copyPermissions && expandedIds.length) {
+      if (mergeMode === "replace") {
+        await this.rbacRepository.syncUserPermissions(targetUserId, expandedIds, [], grantedBy);
+      } else {
+        for (const pid of expandedIds) {
+          await this.rbacRepository.assignPermissionToUser(targetUserId, pid, grantedBy).catch(() => {});
+        }
+      }
+    }
+
+    await this.invalidateUserAuthSession(targetUserId);
+    this.writeAuditLog({
+      actorId: actor.userId,
+      actorRole: actor.role,
+      targetUserId,
+      targetRole: target.role,
+      action: "copy_permissions",
+      newValue: { sourceUserId, mergeMode, copyModules, copyPermissions },
+      ipAddress: actor.ipAddress,
+      requestId: actor.requestId,
+    });
+    return { success: true };
+  }
+
+  // PERMISSION TEMPLATES
+  async listPermissionTemplates(filters = {}) {
+    const where = {};
+    if (filters.isActive !== undefined) where.isActive = filters.isActive;
+    if (filters.roleScope) where.roleScope = { [require("sequelize").Op.contains]: [filters.roleScope] };
+    const rows = await PermissionTemplate.findAll({ where, order: [["name", "ASC"]] });
+    return rows;
+  }
+
+  async getPermissionTemplate(idOrSlug) {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrSlug);
+    const where = isUuid
+      ? { [require("sequelize").Op.or]: [{ id: idOrSlug }, { slug: idOrSlug }] }
+      : { slug: idOrSlug };
+    const template = await PermissionTemplate.findOne({ where });
+    if (!template) throw new AppError("Template not found", 404);
+    return template;
+  }
+
+  async createPermissionTemplate(data) {
+    const existing = await PermissionTemplate.findOne({ where: { slug: data.slug } });
+    if (existing) throw new AppError("Template with this slug already exists", 409);
+    return PermissionTemplate.create({ id: uuidv4(), ...data });
+  }
+
+  async updatePermissionTemplate(idOrSlug, updates) {
+    const template = await this.getPermissionTemplate(idOrSlug);
+    await template.update(updates);
+    return template;
+  }
+
+  async applyPermissionTemplate(userId, templateSlug, actor = {}, mergeMode = "replace") {
+    const template = await this.getPermissionTemplate(templateSlug);
+    if (!template.isActive) throw new AppError("Template is inactive", 400);
+
+    const user = await UserModel.findById(userId).select("role").lean();
+    if (!user) throw new AppError("User not found", 404);
+
+    if (template.roleScope?.length && !template.roleScope.includes(user.role)) {
+      throw new AppError(`Template '${templateSlug}' is not applicable to role '${user.role}'`, 400);
+    }
+
+    const slugs = template.permissionSlugs || [];
+    const permissionIds = await this.rbacRepository.getPermissionIdsBySlugs(slugs);
+    const expandedIds = await this.expandSidebarPermissionIds(permissionIds);
+
+    // Validate hierarchy + that actor has every permission in the template
+    if (!actor.isSuperAdmin && actor.role !== ROLES.SUPER_ADMIN) {
+      await this.assertCanAssignUserPermissions(actor, userId, expandedIds);
+    }
+
+    if (mergeMode === "replace") {
+      await this.rbacRepository.syncUserPermissions(userId, expandedIds, [], actor.userId);
+    } else {
+      for (const pid of expandedIds) {
+        await this.rbacRepository.assignPermissionToUser(userId, pid, actor.userId).catch(() => {});
+      }
+    }
+
+    await this.invalidateUserAuthSession(userId);
+    this.writeAuditLog({
+      actorId: actor.userId,
+      actorRole: actor.role,
+      targetUserId: userId,
+      targetRole: user.role,
+      action: "template_apply",
+      newValue: { templateSlug, mergeMode, permissionCount: expandedIds.length },
+      ipAddress: actor.ipAddress,
+      requestId: actor.requestId,
+    });
+    return { success: true, applied: expandedIds.length };
   }
 
   // SUPER ADMIN OPERATIONS
