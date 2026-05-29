@@ -8,11 +8,24 @@ const emailPort = Number(process.env.EMAIL_PORT || process.env.SMTP_PORT || 1025
 const emailSecureDefault = emailPort === 465 ? "true" : "false";
 const isProductionMode = String(process.env.PRODUCTION || "false").trim() === "true";
 
+const parseOriginList = (value, fallback = "*") => {
+  const raw = String(value || fallback).trim();
+  if (!raw || raw === "*") return "*";
+  const origins = raw
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  return origins.length ? origins : "*";
+};
+
 const env = {
   nodeEnv: process.env.NODE_ENV || "development",
   port: Number(process.env.PORT || 4000),
   appName: process.env.APP_NAME || "ecommerce",
   apiPrefix: process.env.API_PREFIX || "/api/v1",
+  cors: {
+    origin: parseOriginList(process.env.CORS_ORIGIN || process.env.CORS_ORIGINS),
+  },
   mongoUri: process.env.MONGO_URI || "mongodb://localhost:27017/ecommerce",
   postgresUrl:
     process.env.POSTGRES_URL || "postgresql://postgres:postgres@localhost:5432/ecommerce",
@@ -47,7 +60,9 @@ const env = {
     maxWalletUsagePerOrderPercent: Number(process.env.MAX_WALLET_USAGE_PER_ORDER_PERCENT || 30),
   },
   socket: {
-    corsOrigin: process.env.SOCKET_CORS_ORIGIN || "*",
+    corsOrigin: parseOriginList(
+      process.env.SOCKET_CORS_ORIGIN || process.env.CORS_ORIGIN || process.env.CORS_ORIGINS,
+    ),
   },
   smtp: {
     host: process.env.EMAIL_HOST || process.env.SMTP_HOST || "localhost",

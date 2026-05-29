@@ -1370,7 +1370,6 @@ class AdminService {
     const accessUser = query.userId
       ? this.toPlainObject(await this.adminRepository.getUserById(query.userId))
       : null;
-      console.log("Access user:", accessUser);
     if (query.userId && !accessUser?._id && !accessUser?.id) {
       throw new AppError("User not found", 404);
     }
