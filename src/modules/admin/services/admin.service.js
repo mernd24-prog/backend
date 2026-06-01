@@ -377,6 +377,7 @@ class AdminService {
 
   assertActorCanSeeUser(user = {}, actor = {}) {
     if (!actor.userId || actor.isSuperAdmin || actor.role === ROLES.SUPER_ADMIN) return;
+    if (this.getRecordId(user) === String(actor.userId)) return;
     if (
       actor.role === ROLES.ADMIN &&
       String(user.ownerAdminId || "") === String(actor.ownerAdminId || actor.userId)
@@ -1373,14 +1374,7 @@ class AdminService {
     if (query.userId && !accessUser?._id && !accessUser?.id) {
       throw new AppError("User not found", 404);
     }
-    if (
-      accessUser &&
-      !actor.isSuperAdmin &&
-      actor.role === ROLES.ADMIN &&
-      String(accessUser.ownerAdminId || "") !== String(actor.ownerAdminId || actor.userId)
-    ) {
-      throw new AppError("Forbidden: user is outside your hierarchy 2", 403);
-    }
+    if (accessUser) this.assertActorCanSeeUser(accessUser, actor);
 
     const targetRole =
       accessUser?.role || query.roleSlug || query.role || ROLES.SUB_ADMIN;

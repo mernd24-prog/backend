@@ -41,6 +41,44 @@ function registerRealtimeSubscribers() {
     emitToUser(event.payload.userId, "notification:new", event.payload);
   });
 
+  [
+    DOMAIN_EVENTS.RETURN_REQUESTED_V1,
+    DOMAIN_EVENTS.RETURN_APPROVED_V1,
+    DOMAIN_EVENTS.RETURN_REJECTED_V1,
+    DOMAIN_EVENTS.RETURN_RECEIVED_V1,
+    DOMAIN_EVENTS.RETURN_REFUNDED_V1,
+    DOMAIN_EVENTS.REFUND_PROCESSED_V1,
+    DOMAIN_EVENTS.REFUND_FAILED_V1,
+  ].forEach((eventName) => {
+    eventBus.subscribe(eventName, async (event) => {
+      emitToUser(event.payload.buyerId, "return:update", event.payload);
+      emitToOrder(event.payload.orderId, "return:update", event.payload);
+      emitToRole(ROLES.ADMIN, "admin:return:update", event.payload);
+    });
+  });
+
+  [
+    DOMAIN_EVENTS.SHIPMENT_CREATED_V1,
+    DOMAIN_EVENTS.SHIPMENT_TRACKING_UPDATED_V1,
+    DOMAIN_EVENTS.SHIPMENT_DELIVERED_V1,
+    DOMAIN_EVENTS.SHIPMENT_FAILED_V1,
+    DOMAIN_EVENTS.SHIPMENT_RTO_V1,
+  ].forEach((eventName) => {
+    eventBus.subscribe(eventName, async (event) => {
+      emitToUser(event.payload.buyerId, "shipment:update", event.payload);
+      emitToOrder(event.payload.orderId, "shipment:update", event.payload);
+      emitToRole(ROLES.ADMIN, "admin:shipment:update", event.payload);
+    });
+  });
+
+  [DOMAIN_EVENTS.INVOICE_GENERATED_V1, DOMAIN_EVENTS.CREDIT_NOTE_GENERATED_V1].forEach((eventName) => {
+    eventBus.subscribe(eventName, async (event) => {
+      emitToUser(event.payload.buyerId, "tax:update", event.payload);
+      emitToOrder(event.payload.orderId, "tax:update", event.payload);
+      emitToRole(ROLES.ADMIN, "admin:tax:update", event.payload);
+    });
+  });
+
   eventBus.subscribe(DOMAIN_EVENTS.SELLER_KYC_SUBMITTED_V1, async (event) => {
     emitToUser(event.payload.sellerId, "kyc:submitted", event.payload);
     emitToRole(ROLES.ADMIN, "admin:kyc:update", event.payload);

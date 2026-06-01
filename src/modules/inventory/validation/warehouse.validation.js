@@ -22,6 +22,24 @@ const listWarehousesSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
+const listInventoryTransactionsSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    type: Joi.string().valid("reservation", "release", "sale", "return", "adjustment", "damage"),
+    status: Joi.string(),
+    productId: Joi.string(),
+    sellerId: Joi.string(),
+    orderId: Joi.string(),
+    returnId: Joi.string(),
+    shipmentId: Joi.string(),
+    referenceType: Joi.string(),
+    referenceId: Joi.string(),
+    limit: Joi.number().integer().min(1).max(200),
+    offset: Joi.number().integer().min(0),
+  }).required(),
+  params: Joi.object({}).required(),
+});
+
 const warehouseBody = {
   name: Joi.string().trim().required(),
   code: Joi.string().trim().required(),
@@ -92,6 +110,7 @@ const warehouseDeleteSchema = Joi.object({
 
 module.exports = {
   listWarehousesSchema,
+  listInventoryTransactionsSchema,
   createWarehouseSchema,
   updateWarehouseSchema,
   warehouseParamSchema,

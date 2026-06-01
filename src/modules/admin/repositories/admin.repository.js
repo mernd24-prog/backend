@@ -290,14 +290,37 @@ class AdminRepository {
     return { items, total };
   }
 
-  async listOrders({ status = null, sellerId = null, fromDate = null, toDate = null, limit = 50, offset = 0 } = {}) {
+  async listOrders({
+    status = null,
+    paymentStatus = null,
+    deliveryStatus = null,
+    sellerId = null,
+    buyerId = null,
+    search = null,
+    fromDate = null,
+    toDate = null,
+    limit = 50,
+    offset = 0,
+  } = {}) {
     const values = [];
     const clauses = [];
     let idx = 1;
 
     if (status) {
-      clauses.push(`status = $${idx++}`);
+      clauses.push(`orders.status = $${idx++}`);
       values.push(status);
+    }
+    if (paymentStatus) {
+      clauses.push(`orders.payment_status = $${idx++}`);
+      values.push(paymentStatus);
+    }
+    if (deliveryStatus) {
+      clauses.push(`orders.delivery_status = $${idx++}`);
+      values.push(deliveryStatus);
+    }
+    if (buyerId) {
+      clauses.push(`orders.buyer_id = $${idx++}`);
+      values.push(buyerId);
     }
     if (sellerId) {
       clauses.push(`EXISTS (
@@ -308,28 +331,44 @@ class AdminRepository {
       )`);
       values.push(sellerId);
     }
+    if (search) {
+      clauses.push(`(orders.order_number ILIKE $${idx} OR orders.id::text ILIKE $${idx})`);
+      values.push(`%${search}%`);
+      idx += 1;
+    }
     if (fromDate) {
-      clauses.push(`created_at >= $${idx++}`);
+      clauses.push(`orders.created_at >= $${idx++}`);
       values.push(fromDate);
     }
     if (toDate) {
-      clauses.push(`created_at <= $${idx++}`);
+      clauses.push(`orders.created_at <= $${idx++}`);
       values.push(toDate);
     }
 
     const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-    values.push(limit, offset);
+    const pagingValues = [...values, limit, offset];
 
-    const { rows } = await postgresPool.query(
+    const [listResult, countResult] = await Promise.all([
+      postgresPool.query(
       `SELECT *
        FROM orders
        ${whereSql}
        ORDER BY created_at DESC
        LIMIT $${idx++}
        OFFSET $${idx}`,
-      values,
-    );
-    return rows;
+        pagingValues,
+      ),
+      postgresPool.query(
+        `SELECT COUNT(*)::INT AS total
+         FROM orders
+         ${whereSql}`,
+        values,
+      ),
+    ]);
+    return {
+      list: listResult.rows,
+      total: Number(countResult.rows[0]?.total || 0),
+    };
   }
 
   async listPayments({ status = null, provider = null, fromDate = null, toDate = null, limit = 50, offset = 0 } = {}) {

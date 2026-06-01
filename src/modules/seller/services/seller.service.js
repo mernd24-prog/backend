@@ -770,6 +770,17 @@ class SellerService {
     }
 
     const sellerId = this.assertSellerOwnerActor(actor);
+    if (String(query.userId) === String(actor.userId)) {
+      return {
+        _id: actor.userId,
+        id: actor.userId,
+        role: actor.role,
+        allowedModules: actor.allowedModules || [],
+        ownerAdminId: actor.ownerAdminId || null,
+        ownerSellerId: actor.ownerSellerId || sellerId,
+      };
+    }
+
     const accessUser = await this.sellerRepository.findSellerSubAdminById(
       sellerId,
       query.userId,
@@ -810,48 +821,85 @@ class SellerService {
       });
     }
 
+    const assignedModulesFromPermissions = new Set(
+      (permissionMatrix?.modules || [])
+        .filter((module) =>
+          (module.permissions || []).some((permission) => permission.assigned),
+        )
+        .map((module) => cleanModuleName(module.slug || module.moduleSlug || module.moduleKey))
+        .filter(Boolean),
+    );
+    const effectiveAssignedModuleSet = new Set([
+      ...assignedModuleSet,
+      ...assignedModulesFromPermissions,
+    ]);
+
+    const actorPermissionMap = await this.getActorAssignablePermissionMap(actor);
     const rbacModulesBySlug = this.getRbacModuleMap(permissionMatrix.modules);
     const includePermissions = query.includePermissions !== false;
-    const modules = DEFAULT_SELLER_MODULES.map((moduleSlug) => {
-      const rbacModule = rbacModulesBySlug.get(moduleSlug) || null;
-      const metadata = rbacModule?.metadata || {};
-      const moduleAllowed =
-        !shouldUseAssignedModules ||
-        assignedModuleSet.has(cleanModuleName(moduleSlug));
-      const forceAssigned =
-        moduleAllowed && targetRole === ROLES.SELLER && !permissionMatrix.role;
-      const assignmentData = includePermissions
-        ? this.getPermissionAssignmentData(
-            rbacModule?.permissions || [],
-            moduleAllowed,
-            forceAssigned,
-          )
-        : {};
+    const modules = DEFAULT_SELLER_MODULES
+      .filter((moduleSlug) => {
+        if (!actorPermissionMap) return true;
+        const actorActions = actorPermissionMap.get(cleanModuleName(moduleSlug));
+        return Boolean(actorActions?.has("view"));
+      })
+      .map((moduleSlug) => {
+        const rbacModule = rbacModulesBySlug.get(moduleSlug) || null;
+        const metadata = rbacModule?.metadata || {};
+        const actorActions = actorPermissionMap?.get(cleanModuleName(moduleSlug)) || null;
+        const moduleAllowed =
+          !shouldUseAssignedModules ||
+          effectiveAssignedModuleSet.has(cleanModuleName(moduleSlug));
+        const forceAssigned =
+          moduleAllowed && targetRole === ROLES.SELLER && !permissionMatrix.role;
+        const assignmentData = includePermissions
+          ? this.getPermissionAssignmentData(
+              rbacModule?.permissions || [],
+              moduleAllowed,
+              forceAssigned,
+            )
+          : {};
+        const permissions = includePermissions
+          ? (assignmentData.permissions || []).map((permission) => ({
+              ...permission,
+              assignable: !actorActions || actorActions.has(permission.action),
+            }))
+          : undefined;
+        const permissionsByAction = includePermissions
+          ? Object.keys(assignmentData.permissionsByAction || {}).reduce(
+              (lookup, action) => {
+                const permission =
+                  permissions.find((item) => item.action === action) || null;
+                lookup[action] = permission;
+                return lookup;
+              },
+              {},
+            )
+          : undefined;
 
-      return {
-        slug: moduleSlug,
-        name: rbacModule?.name || this.formatModuleName(moduleSlug),
-        icon: rbacModule?.icon || null,
-        description: rbacModule?.description || null,
-        tab: metadata.tab || null,
-        forPlatform: false,
-        forSeller: true,
-        apiPath: metadata.apiPath || null,
-        apiAliases: metadata.apiAliases || [],
-        metadata,
-        assignable: true,
-        assigned: moduleAllowed,
-        source: rbacModule ? "rbac" : "seller",
-        permissions: includePermissions ? assignmentData.permissions : undefined,
-        permissionsByAction: includePermissions
-          ? assignmentData.permissionsByAction
-          : undefined,
-        permissionKeys: includePermissions
-          ? assignmentData.permissionKeys
-          : undefined,
-        assignedPermissionCount: assignmentData.assignedPermissionCount || 0,
-      };
-    });
+        return {
+          slug: moduleSlug,
+          name: rbacModule?.name || this.formatModuleName(moduleSlug),
+          icon: rbacModule?.icon || null,
+          description: rbacModule?.description || null,
+          tab: metadata.tab || null,
+          forPlatform: false,
+          forSeller: true,
+          apiPath: metadata.apiPath || null,
+          apiAliases: metadata.apiAliases || [],
+          metadata,
+          assignable: true,
+          assignableActions: actorActions ? Array.from(actorActions) : undefined,
+          assigned: moduleAllowed,
+          source: rbacModule ? "rbac" : "seller",
+          permissions,
+          permissionsByAction,
+          permissionKeys: includePermissions
+            ? assignmentData.permissionKeys
+            : undefined,
+          assignedPermissionCount: assignmentData.assignedPermissionCount || 0,
+        };
+      });
 
     return {
       role: targetRole,
@@ -1038,6 +1086,7 @@ class SellerService {
       String(user.id),
       modulePermissions,
       actor.userId,
+      actor,
     );
 
     auditService.create(req, {
@@ -1111,6 +1160,7 @@ class SellerService {
       String(userId),
       modulePermissions,
       actor.userId,
+      actor,
     );
     return updated;
   }

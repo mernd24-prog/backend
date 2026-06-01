@@ -17,7 +17,8 @@ class PermissionAssignmentController {
   // USER PERMISSIONS
   getUserPermissions = async (req, res) => {
     const { userId } = req.params;
-    const permissions = await this.rbacService.getUserPermissions(userId);
+    const actor = getCurrentUser(req);
+    const permissions = await this.rbacService.getUserPermissions(userId, actor);
     res.json(okResponse(permissions));
   };
 
@@ -82,15 +83,17 @@ class PermissionAssignmentController {
 
   getUserEffectivePermissions = async (req, res) => {
     const { userId } = req.params;
+    const actor = getCurrentUser(req);
     const permissions =
-      await this.rbacService.getUserEffectivePermissionSummary(userId);
+      await this.rbacService.getUserEffectivePermissionSummary(userId, actor);
     res.json(okResponse(permissions));
   };
 
   // USER ROLES
   getUserRoles = async (req, res) => {
     const { userId } = req.params;
-    const roles = await this.rbacService.getUserRoles(userId);
+    const actor = getCurrentUser(req);
+    const roles = await this.rbacService.getUserRoles(userId, actor);
     res.json(okResponse(roles));
   };
 
@@ -190,10 +193,12 @@ class PermissionAssignmentController {
   checkUserPermission = async (req, res) => {
     const { userId } = req.params;
     const { permissionSlug } = req.query;
+    const actor = getCurrentUser(req);
 
     const hasPermission = await this.rbacService.userHasPermission(
       userId,
       permissionSlug,
+      actor,
     );
     res.json(okResponse({ hasPermission }));
   };
@@ -201,8 +206,9 @@ class PermissionAssignmentController {
   checkUserRole = async (req, res) => {
     const { userId } = req.params;
     const { roleSlug } = req.query;
+    const actor = getCurrentUser(req);
 
-    const hasRole = await this.rbacService.userHasRole(userId, roleSlug);
+    const hasRole = await this.rbacService.userHasRole(userId, roleSlug, actor);
     res.json(okResponse({ hasRole }));
   };
 }

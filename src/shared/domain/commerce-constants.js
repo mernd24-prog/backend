@@ -81,12 +81,16 @@ const PAYMENT_STATUS = {
   CAPTURED: "captured",
   FAILED: "failed",
   REFUNDED: "refunded",
+  CANCELLED: "cancelled",
 };
 
 const PAYMENT_PROVIDER = {
   RAZORPAY: "razorpay",
   STRIPE: "stripe",
   COD: "cod",
+  MANUAL_BANK_TRANSFER: "manual_bank_transfer",
+  MANUAL_UPI: "manual_upi",
+  WALLET_ONLY: "wallet_only",
 };
 
 const KYC_STATUS = {

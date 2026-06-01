@@ -1,4 +1,4 @@
-const { knex } = require("../../../infrastructure/postgres/postgres-client");
+const { knex, postgresPool } = require("../../../infrastructure/postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
 const { OutboxRepository } = require("../../../infrastructure/postgres/outbox.repository");
 
@@ -22,8 +22,11 @@ class PaymentRepository {
       verification_method: payload.verificationMethod || null,
       metadata: JSON.stringify(payload.metadata || {}),
       verified_at: payload.verifiedAt || null,
-      failed_reason: payload.failedReason || null,
-    };
+        failed_reason: payload.failedReason || null,
+        idempotency_key: payload.idempotencyKey || null,
+        approved_by: payload.approvedBy || null,
+        approved_at: payload.approvedAt || null,
+      };
 
     const trx = await knex.transaction();
 
@@ -81,6 +84,50 @@ class PaymentRepository {
     return payment || null;
   }
 
+  async findByProviderPaymentId(providerPaymentId) {
+    const [payment] = await knex("payments")
+      .where("provider_payment_id", providerPaymentId)
+      .orderBy("created_at", "desc")
+      .limit(1);
+    return payment || null;
+  }
+
+  async findById(paymentId) {
+    const [payment] = await knex("payments").where("id", paymentId).limit(1);
+    return payment || null;
+  }
+
+  async findByIdempotencyKey(idempotencyKey) {
+    if (!idempotencyKey) return null;
+    const [payment] = await knex("payments").where("idempotency_key", idempotencyKey).limit(1);
+    return payment || null;
+  }
+
+  async findWebhookEvent(provider, eventId) {
+    const [event] = await knex("payment_webhook_events")
+      .where({ provider, provider_event_id: eventId })
+      .limit(1);
+    return event || null;
+  }
+
+  async recordWebhookEvent(payload) {
+    const [event] = await knex("payment_webhook_events")
+      .insert({
+        id: uuidv4(),
+        provider: payload.provider,
+        provider_event_id: payload.providerEventId,
+        event_type: payload.eventType,
+        payment_id: payload.paymentId || null,
+        order_id: payload.orderId || null,
+        status: payload.status || "processed",
+        payload: payload.payload || {},
+      })
+      .onConflict(["provider", "provider_event_id"])
+      .ignore()
+      .returning("*");
+    return event || null;
+  }
+
   async updatePaymentStatus(paymentId, payload, event = null) {
     const trx = await knex.transaction();
 
@@ -94,6 +141,8 @@ class PaymentRepository {
           metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify(payload.metadata || {})]),
           verified_at: payload.verifiedAt || knex.raw("COALESCE(verified_at, ?)", [null]),
           failed_reason: payload.failedReason || knex.raw("COALESCE(failed_reason, ?)", [null]),
+          approved_by: payload.approvedBy || knex.raw("COALESCE(approved_by, ?)", [null]),
+          approved_at: payload.approvedAt || knex.raw("COALESCE(approved_at, ?)", [null]),
         })
         .returning("*");
 
@@ -116,6 +165,8 @@ class PaymentRepository {
     status = null,
     provider = null,
     buyerId = null,
+    orderId = null,
+    search = null,
     fromDate = null,
     toDate = null,
     limit = 50,
@@ -136,6 +187,15 @@ class PaymentRepository {
     if (buyerId) {
       clauses.push(`buyer_id = $${index++}`);
       values.push(buyerId);
+    }
+    if (orderId) {
+      clauses.push(`order_id = $${index++}`);
+      values.push(orderId);
+    }
+    if (search) {
+      clauses.push(`(transaction_reference ILIKE $${index} OR provider_order_id ILIKE $${index} OR provider_payment_id ILIKE $${index} OR order_id::text ILIKE $${index})`);
+      values.push(`%${search}%`);
+      index += 1;
     }
     if (fromDate) {
       clauses.push(`created_at >= $${index++}`);

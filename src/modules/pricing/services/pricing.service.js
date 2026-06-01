@@ -4,6 +4,8 @@ const { PricingRepository } = require("../repositories/pricing.repository");
 const { ProductRepository } = require("../../product/repositories/product.repository");
 const { WalletRepository } = require("../../wallet/repositories/wallet.repository");
 const { PlatformRepository } = require("../../platform/repositories/platform.repository");
+const { PaymentMethodConfigRepository } = require("../../payment/repositories/payment-method-config.repository");
+const { PAYMENT_PROVIDER } = require("../../../shared/domain/commerce-constants");
 const { redis } = require("../../../infrastructure/redis/redis-client");
 const { env } = require("../../../config/env");
 
@@ -13,16 +15,18 @@ class PricingService {
     productRepository = new ProductRepository(),
     walletRepository = new WalletRepository(),
     platformRepository = new PlatformRepository(),
+    paymentMethodConfigRepository = new PaymentMethodConfigRepository(),
     redisClient = redis,
   } = {}) {
     this.pricingRepository = pricingRepository;
     this.productRepository = productRepository;
     this.walletRepository = walletRepository;
     this.platformRepository = platformRepository;
+    this.paymentMethodConfigRepository = paymentMethodConfigRepository;
     this.redis = redisClient;
   }
 
-  async priceOrder({ items, couponCode = null, walletAmount = 0, shippingAddress, userId }) {
+  async priceOrder({ items, couponCode = null, walletAmount = 0, shippingAddress, userId, paymentProvider = PAYMENT_PROVIDER.RAZORPAY }) {
     const productIds = items.map((item) => item.productId);
     const products = await this.productRepository.findByIds(productIds);
     const productMap = new Map(products.map((product) => [String(product.id), product]));
@@ -58,11 +62,17 @@ class PricingService {
         }
 
         const taxData = await this.getProductTaxData(product);
-        const unitPrice = Number(variant?.salePrice ?? variant?.price ?? product.price);
+        const unitPrice = Number(variant?.salePrice ?? variant?.price ?? product.salePrice ?? product.price);
         const lineTotal = unitPrice * item.quantity;
+        const gstInclusive = Boolean(product.gstInclusive ?? product.gst_inclusive);
 
         return {
           productId: String(product.id),
+          title: product.title,
+          slug: product.slug,
+          sku: variant?.sku || product.sku || item.variantSku || "",
+          image: variant?.images?.[0] || product.images?.[0] || null,
+          brand: product.brand || null,
           variantId: variant ? String(variant._id || variant.id || item.variantId || "") : "",
           variantSku: variant?.sku || item.variantSku || "",
           variantTitle: variant?.title || item.variantTitle || "",
@@ -74,11 +84,23 @@ class PricingService {
           lineTotal,
           gstRate: taxData.gstRate,
           cessRate: taxData.cessRate,
+          gstInclusive,
           hsnCode: product.hsnCode,
           taxExempt: taxData.exempt,
           taxType: taxData.taxType,
           origin: product.origin || {},
-          title: product.title,
+          productSnapshot: {
+            title: product.title,
+            slug: product.slug,
+            sku: variant?.sku || product.sku || "",
+            variantTitle: variant?.title || "",
+            brand: product.brand || null,
+            category: product.category,
+            image: variant?.images?.[0] || product.images?.[0] || null,
+            hsnCode: product.hsnCode || null,
+            gstRate: taxData.gstRate,
+            gstInclusive,
+          },
         };
       }),
     );
@@ -92,28 +114,124 @@ class PricingService {
       shippingAddress,
     );
     const platformFee = await this.calculatePlatformFee(pricedItems);
+    for (const item of pricedItems) {
+      const fee = platformFee.breakup.find((entry) => entry.productId === item.productId);
+      if (fee) {
+        item.platformFeeAmount = fee.totalFee;
+        item.settlementAmount = Number(
+          Math.max(0, Number(item.taxableAmount || item.lineTotal || 0) - Number(fee.totalFee || 0)).toFixed(2),
+        );
+        item.pricingSnapshot = {
+          commissionPercent: fee.commissionPercent,
+          commissionFee: fee.commissionFee,
+          fixedFee: fee.fixedFee,
+          closingFee: fee.closingFee,
+          platformFeeAmount: fee.totalFee,
+        };
+      }
+    }
+    const codCharge = await this.calculateCodCharge(paymentProvider, subtotalAmount - discount.discountAmount);
     const walletBreakup = await this.calculateWalletUsage(userId, walletAmount, subtotalAmount);
+    const customerItemsAmount = Number((subtotalAmount - discount.discountAmount).toFixed(2));
     const totalAmount = Number(
-      (subtotalAmount - discount.discountAmount + taxBreakup.totalTaxAmount + platformFee.totalFeeAmount).toFixed(2),
+      (customerItemsAmount + taxBreakup.taxPayableAmount + codCharge.amount).toFixed(2),
     );
     const payableAmount = Number((totalAmount - walletBreakup.walletAppliedAmount).toFixed(2));
+    const settlement = this.calculateSellerSettlement(pricedItems);
 
     return {
       items: pricedItems,
       pricing: {
         subtotalAmount,
+        customerItemsAmount,
         discountAmount: discount.discountAmount,
         walletAppliedAmount: walletBreakup.walletAppliedAmount,
         taxAmount: taxBreakup.totalTaxAmount,
+        taxIncludedAmount: taxBreakup.taxIncludedAmount,
+        taxPayableAmount: taxBreakup.taxPayableAmount,
         taxBreakup,
         platformFeeAmount: platformFee.totalFeeAmount,
         platformFeeBreakup: platformFee.breakup,
+        sellerSettlementBreakup: settlement.sellers,
+        sellerPayoutAmount: settlement.totalSellerPayout,
+        paymentProvider,
+        codChargeAmount: codCharge.amount,
+        codChargeBreakup: codCharge.breakup,
         totalAmount,
         payableAmount,
         appliedCouponCode: discount.appliedCouponCode,
       },
       couponToConsume: discount.couponToConsume,
       walletToReserveAmount: walletBreakup.walletAppliedAmount,
+    };
+  }
+
+  calculateSellerSettlement(pricedItems) {
+    const sellers = new Map();
+    for (const item of pricedItems) {
+      const sellerId = item.sellerId || "platform";
+      const current = sellers.get(sellerId) || {
+        sellerId,
+        grossSalesAmount: 0,
+        taxableAmount: 0,
+        taxAmount: 0,
+        platformFeeAmount: 0,
+        sellerPayoutAmount: 0,
+      };
+      current.grossSalesAmount += Number(item.lineTotal || 0);
+      current.taxableAmount += Number(item.taxableAmount || 0);
+      current.taxAmount += Number(item.taxAmount || 0);
+      current.platformFeeAmount += Number(item.platformFeeAmount || 0);
+      current.sellerPayoutAmount += Number(item.settlementAmount || 0);
+      sellers.set(sellerId, current);
+    }
+
+    const normalized = [...sellers.values()].map((seller) => ({
+      ...seller,
+      grossSalesAmount: Number(seller.grossSalesAmount.toFixed(2)),
+      taxableAmount: Number(seller.taxableAmount.toFixed(2)),
+      taxAmount: Number(seller.taxAmount.toFixed(2)),
+      platformFeeAmount: Number(seller.platformFeeAmount.toFixed(2)),
+      sellerPayoutAmount: Number(seller.sellerPayoutAmount.toFixed(2)),
+    }));
+
+    return {
+      sellers: normalized,
+      totalSellerPayout: Number(normalized.reduce((sum, seller) => sum + seller.sellerPayoutAmount, 0).toFixed(2)),
+    };
+  }
+
+  async calculateCodCharge(paymentProvider, orderAmount) {
+    if (paymentProvider !== PAYMENT_PROVIDER.COD) {
+      return { amount: 0, breakup: null };
+    }
+
+    const config = await this.paymentMethodConfigRepository.getCodConfig();
+    if (!config.enabled) {
+      throw new AppError("Cash on Delivery is currently disabled", 400);
+    }
+
+    const amount = Number(orderAmount || 0);
+    const min = config.min_order_amount === null || config.min_order_amount === undefined ? null : Number(config.min_order_amount);
+    const max = config.max_order_amount === null || config.max_order_amount === undefined ? null : Number(config.max_order_amount);
+    if (min !== null && amount < min) {
+      throw new AppError(`Cash on Delivery is available for orders above ${min}`, 400);
+    }
+    if (max !== null && amount > max) {
+      throw new AppError(`Cash on Delivery is available for orders up to ${max}`, 400);
+    }
+
+    const charge = Number(Number(config.charge_amount || 0).toFixed(2));
+    return {
+      amount: charge,
+      breakup: {
+        method: PAYMENT_PROVIDER.COD,
+        enabled: Boolean(config.enabled),
+        chargeAmount: charge,
+        minOrderAmount: min,
+        maxOrderAmount: max,
+        currency: config.currency || "INR",
+      },
     };
   }
 
@@ -274,7 +392,8 @@ class PricingService {
     for (const item of pricedItems) {
       const proportion = subtotalAmount > 0 ? item.lineTotal / subtotalAmount : 0;
       const itemDiscount = Number((discountAmount * proportion).toFixed(2));
-      const taxableAmount = Number((item.lineTotal - itemDiscount).toFixed(2));
+      const discountedLineTotal = Number((item.lineTotal - itemDiscount).toFixed(2));
+      let taxableAmount = discountedLineTotal;
 
       let itemTax = 0;
       let itemCess = 0;
@@ -298,8 +417,17 @@ class PricingService {
       }
 
       if (itemTaxMode !== "zero_rated_export" && itemTaxMode !== "exempt") {
-        itemTax = Number((taxableAmount * (item.gstRate / 100)).toFixed(2));
-        itemCess = Number((taxableAmount * (item.cessRate / 100)).toFixed(2));
+        if (item.gstInclusive) {
+          const totalRate = Number(item.gstRate || 0) + Number(item.cessRate || 0);
+          taxableAmount = totalRate > 0
+            ? Number(((discountedLineTotal * 100) / (100 + totalRate)).toFixed(2))
+            : discountedLineTotal;
+          itemTax = Number((taxableAmount * (item.gstRate / 100)).toFixed(2));
+          itemCess = Number((discountedLineTotal - taxableAmount - itemTax).toFixed(2));
+        } else {
+          itemTax = Number((taxableAmount * (item.gstRate / 100)).toFixed(2));
+          itemCess = Number((taxableAmount * (item.cessRate / 100)).toFixed(2));
+        }
       }
 
       totalTaxAmount += itemTax + itemCess;
@@ -322,21 +450,40 @@ class PricingService {
       result.items.push({
         productId: item.productId,
         lineTotal: item.lineTotal,
+        discountedLineTotal,
         taxableAmount,
         gstRate: item.gstRate,
         cessRate: item.cessRate,
+        gstInclusive: Boolean(item.gstInclusive),
         taxType: item.taxType,
         taxMode: itemTaxMode,
         taxAmount: itemTax,
         cessAmount: itemCess,
+        taxIncludedAmount: item.gstInclusive ? itemTax + itemCess : 0,
+        taxPayableAmount: item.gstInclusive ? 0 : itemTax + itemCess,
       });
+    }
+
+    for (const item of pricedItems) {
+      const itemTax = result.items.find((taxItem) => taxItem.productId === item.productId);
+      if (itemTax) {
+        item.taxAmount = itemTax.taxAmount + itemTax.cessAmount;
+        item.taxableAmount = itemTax.taxableAmount;
+        item.taxIncludedAmount = itemTax.taxIncludedAmount;
+        item.taxPayableAmount = itemTax.taxPayableAmount;
+        item.taxBreakup = itemTax;
+        item.settlementAmount = Number(Math.max(0, itemTax.taxableAmount - Number(item.platformFeeAmount || 0)).toFixed(2));
+      }
     }
 
     result.cgstAmount = Number(cgstAmount.toFixed(2));
     result.sgstAmount = Number(sgstAmount.toFixed(2));
     result.igstAmount = Number(igstAmount.toFixed(2));
     result.cessAmount = Number(cessAmount.toFixed(2));
+    result.taxableAmount = Number(result.items.reduce((sum, item) => sum + Number(item.taxableAmount || 0), 0).toFixed(2));
     result.totalTaxAmount = Number(totalTaxAmount.toFixed(2));
+    result.taxIncludedAmount = Number(result.items.reduce((sum, item) => sum + Number(item.taxIncludedAmount || 0), 0).toFixed(2));
+    result.taxPayableAmount = Number(result.items.reduce((sum, item) => sum + Number(item.taxPayableAmount || 0), 0).toFixed(2));
     result.taxMode = hasMixedTaxMode
       ? "mixed"
       : isExport

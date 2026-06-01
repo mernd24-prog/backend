@@ -1,9 +1,9 @@
 const { DynamicPricingModel } = require("../models/dynamic-pricing.model");
+const { ProductModel } = require("../../product/models/product.model");
 const {
   setCached,
   getCached,
   deleteCached,
-  cacheKeys,
   CACHE_TTL,
 } = require("../../../infrastructure/cache/redis-client");
 const { logger } = require("../../../shared/logger/logger");
@@ -16,7 +16,11 @@ class DynamicPricingService {
   // Get Final Price
   // ==============================
   async getPriceForProduct(productId, userTier = "standard", quantity = 1) {
-    const cacheKey = cacheKeys.product(productId);
+    const product = await ProductModel.findById(productId)
+      .select("price salePrice variants")
+      .lean();
+    const productPrice = this.getProductPrice(product);
+    const cacheKey = `dynamic-price:${productId}`;
 
     let pricing = await getCached(cacheKey);
 
@@ -28,9 +32,12 @@ class DynamicPricingService {
       }
     }
 
-    if (!pricing) return null;
+    if (!pricing) return productPrice;
 
     let finalPrice = pricing.currentPrice;
+    if (!this.isDynamicPriceUsable(finalPrice, productPrice)) {
+      return productPrice;
+    }
 
     // ==============================
     // Loyalty Discount
@@ -64,7 +71,10 @@ class DynamicPricingService {
       );
     }
 
-    return this.roundPrice(finalPrice);
+    const roundedPrice = this.roundPrice(finalPrice);
+    return this.isDynamicPriceUsable(roundedPrice, productPrice)
+      ? roundedPrice
+      : productPrice;
   }
 
   // ==============================
@@ -154,7 +164,7 @@ class DynamicPricingService {
   // Cache Invalidation
   // ==============================
   async clearCache(productId) {
-    const cacheKey = cacheKeys.product(productId);
+    const cacheKey = `dynamic-price:${productId}`;
     await deleteCached(cacheKey);
   }
 
@@ -163,6 +173,36 @@ class DynamicPricingService {
   // ==============================
   roundPrice(price) {
     return Math.round(price * 100) / 100;
+  }
+
+  getProductPrice(product) {
+    if (!product) return null;
+    const defaultVariant = Array.isArray(product.variants)
+      ? product.variants.find((variant) => variant.isDefault) || product.variants[0]
+      : null;
+    return this.firstPrice(
+      defaultVariant?.salePrice,
+      defaultVariant?.price,
+      product.salePrice,
+      product.price,
+    );
+  }
+
+  firstPrice(...values) {
+    for (const value of values) {
+      const price = Number(value);
+      if (Number.isFinite(price) && price > 0) {
+        return this.roundPrice(price);
+      }
+    }
+    return null;
+  }
+
+  isDynamicPriceUsable(dynamicPrice, productPrice) {
+    const price = Number(dynamicPrice);
+    if (!Number.isFinite(price) || price <= 0) return false;
+    if (!productPrice) return true;
+    return price >= productPrice * 0.5 && price <= productPrice * 2;
   }
 }
 

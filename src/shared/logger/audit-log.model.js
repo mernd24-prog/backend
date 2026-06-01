@@ -2,31 +2,21 @@ const { mongoose } = require("../../infrastructure/mongo/mongo-client");
 
 const auditLogSchema = new mongoose.Schema(
   {
-    // Actor
-    actorId:   { type: String, index: true },
-    actorName: { type: String },
-    actorRole: { type: String },
-
-    // Business context
-    module:     { type: String, index: true },
-    action:     { type: String, index: true },
-    entityId:   { type: String, index: true },
-    entityType: { type: String },
-    description:{ type: String },
-
-    // State change
-    oldData:      { type: mongoose.Schema.Types.Mixed },
-    newData:      { type: mongoose.Schema.Types.Mixed },
-    changedFields:{ type: [String], default: [] },
-    reason:       { type: String },
-
-    // HTTP context
-    method:     { type: String },
-    path:       { type: String, index: true },
-    statusCode: { type: Number },
-    requestId:  { type: String },
-    ip:         { type: String },
-    userAgent:  { type: String },
+    actorId: { type: String, index: true },
+    method: { type: String, required: true },
+    path: { type: String, required: true, index: true },
+    statusCode: { type: Number, required: true },
+    requestId: { type: String },
+    ip: { type: String },
+    userAgent: { type: String },
+    eventName: { type: String, index: true },
+    targetType: { type: String, index: true },
+    targetId: { type: String, index: true },
+    beforeStatus: { type: String },
+    afterStatus: { type: String },
+    reason: { type: String },
+    metadata: { type: Object, default: {} },
+    idempotencyKey: { type: String, unique: true, sparse: true, index: true },
   },
   { timestamps: true },
 );

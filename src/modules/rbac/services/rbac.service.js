@@ -211,7 +211,11 @@ class RbacService {
     return sortTree(filterTree(roots));
   }
 
-  async getPermissionManagementMatrix(filters = {}) {
+  async getPermissionManagementMatrix(filters = {}, actor = {}) {
+    if (filters.userId) {
+      await this.assertCanViewUserAccess(actor, filters.userId);
+    }
+
     const matrix =
       await this.rbacRepository.listPermissionManagementModules(filters);
     if (filters.userId) {
@@ -611,6 +615,35 @@ class RbacService {
     }
   }
 
+  async assertCanViewUserAccess(actor = {}, targetUserId) {
+    if (!targetUserId || !actor.userId) return;
+    if (actor.isSuperAdmin || actor.role === ROLES.SUPER_ADMIN) return;
+    if (String(actor.userId) === String(targetUserId)) return;
+
+    const target = await UserModel.findById(targetUserId)
+      .select("role ownerAdminId ownerSellerId")
+      .lean();
+    if (!target) throw new AppError("User not found", 404);
+
+    const validAdminTarget =
+      actor.role === ROLES.ADMIN &&
+      [
+        ROLES.SUB_ADMIN,
+        ROLES.SELLER,
+        ROLES.SELLER_ADMIN,
+        ROLES.SELLER_SUB_ADMIN,
+      ].includes(target.role) &&
+      String(target.ownerAdminId || "") === String(actor.ownerAdminId || actor.userId);
+    const validSellerTarget =
+      [ROLES.SELLER, ROLES.SELLER_ADMIN].includes(actor.role) &&
+      [ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(target.role) &&
+      String(target.ownerSellerId || "") === String(actor.ownerSellerId || actor.userId);
+
+    if (!validAdminTarget && !validSellerTarget) {
+      throw new AppError("Forbidden: user is outside your readable hierarchy", 403);
+    }
+  }
+
   async assignPermissionToUser(userId, permissionId, grantedBy, actor = {}) {
     return this.bulkAssignPermissionsToUser(userId, [permissionId], grantedBy, actor);
   }
@@ -678,7 +711,8 @@ class RbacService {
     return result;
   }
 
-  async getUserPermissions(userId) {
+  async getUserPermissions(userId, actor = {}) {
+    await this.assertCanViewUserAccess(actor, userId);
     return this.rbacRepository.getUserPermissions(userId);
   }
 
@@ -812,7 +846,8 @@ class RbacService {
     return { assigned: results, errors };
   }
 
-  async getUserRoles(userId) {
+  async getUserRoles(userId, actor = {}) {
+    await this.assertCanViewUserAccess(actor, userId);
     return this.rbacRepository.getUserRoles(userId);
   }
 
@@ -952,7 +987,9 @@ class RbacService {
     );
   }
 
-  async getUserEffectivePermissionSummary(userId) {
+  async getUserEffectivePermissionSummary(userId, actor = {}) {
+    await this.assertCanViewUserAccess(actor, userId);
+
     const user = await UserModel.findById(userId)
       .select("email role allowedModules ownerAdminId ownerSellerId")
       .lean();
@@ -1005,7 +1042,7 @@ class RbacService {
       lookup[normalizedModule][action] = true;
       return lookup;
     }, {});
-    const actor = {
+    const sidebarActor = {
       userId: String(user._id || user.id),
       role: user.role,
       roles: user.role ? [user.role] : [],
@@ -1016,7 +1053,7 @@ class RbacService {
       permissions: assignedPermissions,
     };
 
-    const sidebarModules = await this.listSidebarModules({}, actor);
+    const sidebarModules = await this.listSidebarModules({}, sidebarActor);
 
     return {
       role: user.role,
@@ -1038,12 +1075,14 @@ class RbacService {
     };
   }
 
-  async userHasPermission(userId, permissionSlug) {
+  async userHasPermission(userId, permissionSlug, actor = {}) {
+    await this.assertCanViewUserAccess(actor, userId);
     const permissions = await this.getUserEffectivePermissions(userId);
     return permissions.some((p) => p.slug === permissionSlug);
   }
 
-  async userHasRole(userId, roleSlug) {
+  async userHasRole(userId, roleSlug, actor = {}) {
+    await this.assertCanViewUserAccess(actor, userId);
     const roles = await this.rbacRepository.getUserRoles(userId);
     return roles.some((ur) => ur.role && ur.role.slug === roleSlug);
   }
@@ -1133,6 +1172,7 @@ class RbacService {
     ]);
     if (!source) throw new AppError("Source user not found", 404);
     if (!target) throw new AppError("Target user not found", 404);
+    await this.assertCanViewUserAccess(actor, sourceUserId);
 
     const grantedBy = actor.userId;
     let expandedIds = [];

@@ -299,7 +299,11 @@ const listOrdersSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
     status: Joi.string().valid(...Object.values(ORDER_STATUS)),
+    paymentStatus: Joi.string().valid(...Object.values(PAYMENT_STATUS)),
+    deliveryStatus: Joi.string().max(64),
     sellerId: Joi.string(),
+    buyerId: Joi.string(),
+    search: Joi.string().trim().max(128),
     fromDate: Joi.date().iso(),
     toDate: Joi.date().iso(),
     limit: Joi.number().integer().min(1).max(500),

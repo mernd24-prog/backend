@@ -558,6 +558,8 @@ adminRoutes.patch(
 );
 adminRoutes.get(
   "/orders",
+  authenticate,
+  allowPermissions("orders:view"),
   checkInput(listOrdersSchema),
   catchErrors(adminController.listOrders),
 );

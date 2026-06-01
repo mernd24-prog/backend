@@ -19,8 +19,10 @@ class ModuleController {
   };
 
   permissionManagement = async (req, res) => {
+    const actor = getCurrentUser(req);
     const result = await this.rbacService.getPermissionManagementMatrix(
       req.query,
+      actor,
     );
     res.json(okResponse(result));
   };
