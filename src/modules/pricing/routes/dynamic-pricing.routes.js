@@ -44,7 +44,7 @@ router.get("/price", authenticate, async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      data: { price },
+      data: { productId: value.productId, quantity: value.quantity, price },
     });
   } catch (err) {
     next(err);

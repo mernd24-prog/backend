@@ -46,27 +46,85 @@ const returnValidation = {
       .items(
         Joi.object({
           productId: Joi.string().required(),
+          variantId: Joi.string().allow("", null),
+          variantSku: Joi.string().allow("", null),
           quantity: Joi.number().positive().required(),
-          unitPrice: Joi.number().positive().required(),
+          unitPrice: Joi.number().positive(),
+          taxAmount: Joi.number().min(0),
+          refundAmount: Joi.number().min(0),
+          photos: Joi.array().items(Joi.string()),
         }),
       )
       .required(),
     reason: Joi.string().valid("defective", "not_as_described", "changed_mind", "other").required(),
     description: Joi.string().max(500),
+    photos: Joi.array().items(Joi.string()),
   }),
 
   approveReturn: Joi.object({
+    returnId: Joi.string().required(),
     refundAmount: Joi.number().positive().required(),
+    note: Joi.string().allow("", null),
   }),
 
   shipReturn: Joi.object({
+    returnId: Joi.string().required(),
     trackingNumber: Joi.string().required(),
+  }),
+  rejectReturn: Joi.object({
+    returnId: Joi.string().required(),
+    reason: Joi.string().required(),
+  }),
+  scheduleReturn: Joi.object({
+    returnId: Joi.string().required(),
+    trackingNumber: Joi.string().allow("", null),
+    note: Joi.string().allow("", null),
+  }),
+  receiveReturn: Joi.object({
+    returnId: Joi.string().required(),
+    notes: Joi.string().allow("", null),
+  }),
+  qcReturn: Joi.object({
+    returnId: Joi.string().required(),
+    passed: Joi.boolean().required(),
+    condition: Joi.string().allow("", null),
+    notes: Joi.string().allow("", null),
+  }),
+  replacementReturn: Joi.object({
+    returnId: Joi.string().required(),
+    replacementOrderId: Joi.string().allow("", null),
+    replacementShipmentId: Joi.string().allow("", null),
+    note: Joi.string().allow("", null),
+  }),
+  closeReturn: Joi.object({
+    returnId: Joi.string().required(),
+    reason: Joi.string().allow("", null),
+    note: Joi.string().allow("", null),
+  }),
+  listReturns: Joi.object({
+    status: Joi.string(),
+    orderId: Joi.string(),
+    buyerId: Joi.string(),
+    sellerId: Joi.string(),
+    reason: Joi.string(),
+    search: Joi.string().allow("", null),
+    fromDate: Joi.date(),
+    toDate: Joi.date(),
+    limit: Joi.number().integer().min(1).max(200).default(50),
+    offset: Joi.number().integer().min(0).default(0),
+  }),
+  getReturnById: Joi.object({
+    returnId: Joi.string().required(),
   }),
   getReturnByOrder: Joi.object({
     orderId: Joi.string().required(),
   }),
   processRefund: Joi.object({
     returnId: Joi.string().required(),
+    refundAmount: Joi.number().positive(),
+    referenceId: Joi.string().allow("", null),
+    method: Joi.string().allow("", null),
+    note: Joi.string().allow("", null),
   }),
 };
 

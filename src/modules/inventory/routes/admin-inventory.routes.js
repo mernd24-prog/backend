@@ -4,6 +4,7 @@ const { catchErrors } = require("../../../shared/middleware/catch-errors");
 const { checkInput } = require("../../../shared/middleware/check-input");
 const {
   listWarehousesSchema,
+  listInventoryTransactionsSchema,
   createWarehouseSchema,
   updateWarehouseSchema,
   warehouseParamSchema,
@@ -14,6 +15,11 @@ const {
 const adminInventoryRoutes = express.Router();
 const warehouseController = new WarehouseController();
 
+adminInventoryRoutes.get(
+  "/transactions",
+  checkInput(listInventoryTransactionsSchema),
+  catchErrors(warehouseController.listTransactions),
+);
 adminInventoryRoutes.get(
   "/warehouses",
   checkInput(listWarehousesSchema),

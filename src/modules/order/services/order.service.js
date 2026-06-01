@@ -1,7 +1,7 @@
 const { OrderRepository } = require("../repositories/order.repository");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
-const { ORDER_STATUS } = require("../../../shared/domain/commerce-constants");
+const { ORDER_STATUS, PAYMENT_PROVIDER, PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const { PricingService } = require("../../pricing/services/pricing.service");
 const { InventoryService } = require("../../inventory/services/inventory.service");
 const { AppError } = require("../../../shared/errors/app-error");
@@ -9,6 +9,7 @@ const { eventPublisher } = require("../../../infrastructure/events/event-publish
 const { v4: uuidv4 } = require("uuid");
 const { WalletService } = require("../../wallet/services/wallet.service");
 const { ProductModel } = require("../../product/models/product.model");
+const { TaxService } = require("../../tax/services/tax.service");
 
 class OrderService {
   constructor({
@@ -16,22 +17,36 @@ class OrderService {
     pricingService = new PricingService(),
     inventoryService = new InventoryService(),
     walletService = new WalletService(),
+    taxService = new TaxService({ orderRepository }),
   } = {}) {
     this.orderRepository = orderRepository;
     this.pricingService = pricingService;
     this.inventoryService = inventoryService;
     this.walletService = walletService;
+    this.taxService = taxService;
   }
 
   async createOrder(payload, actor) {
+    if (payload.idempotencyKey) {
+      const existingOrder = await this.orderRepository.findByBuyerIdempotencyKey(
+        actor.userId,
+        payload.idempotencyKey,
+      );
+      if (existingOrder) {
+        return existingOrder;
+      }
+    }
+
     const pricedOrder = await this.pricingService.priceOrder({
       items: payload.items,
       couponCode: payload.couponCode,
       walletAmount: payload.walletAmount,
       shippingAddress: payload.shippingAddress,
       userId: actor.userId,
+      paymentProvider: payload.paymentProvider,
     });
     const orderId = uuidv4();
+    const payableAmount = pricedOrder.pricing.payableAmount;
     const orderEvent = makeEvent(
       DOMAIN_EVENTS.ORDER_CREATED_V1,
       {
@@ -40,6 +55,7 @@ class OrderService {
         totalAmount: pricedOrder.pricing.totalAmount,
         payableAmount: pricedOrder.pricing.payableAmount,
         platformFeeAmount: pricedOrder.pricing.platformFeeAmount,
+        codChargeAmount: pricedOrder.pricing.codChargeAmount,
         currency: payload.currency || "INR",
         itemCount: pricedOrder.items.length,
       },
@@ -48,20 +64,19 @@ class OrderService {
       },
     );
 
-    await this.inventoryService.reserveForOrder(orderId, actor.userId, pricedOrder.items);
-    await this.walletService.hold(
-      actor.userId,
-      pricedOrder.walletToReserveAmount,
-      orderId,
-      { reason: "order_checkout" },
-    );
-
     try {
-      const payableAmount = pricedOrder.pricing.payableAmount;
+      await this.inventoryService.reserveForOrder(orderId, actor.userId, pricedOrder.items);
+      await this.walletService.hold(
+        actor.userId,
+        pricedOrder.walletToReserveAmount,
+        orderId,
+        { reason: "order_checkout" },
+      );
 
       const order = await this.orderRepository.createOrder(
         {
           id: orderId,
+          orderNumber: payload.orderNumber,
           currency: payload.currency || "INR",
           subtotalAmount: pricedOrder.pricing.subtotalAmount,
           discountAmount: pricedOrder.pricing.discountAmount,
@@ -73,10 +88,28 @@ class OrderService {
           taxBreakup: pricedOrder.pricing.taxBreakup,
           platformFeeAmount: pricedOrder.pricing.platformFeeAmount,
           platformFeeBreakup: pricedOrder.pricing.platformFeeBreakup,
+          paymentProvider: pricedOrder.pricing.paymentProvider,
+          codChargeAmount: pricedOrder.pricing.codChargeAmount,
           shippingAddress: payload.shippingAddress,
+          metadata: {
+            paymentProvider: pricedOrder.pricing.paymentProvider,
+            codCharge: pricedOrder.pricing.codChargeBreakup,
+            pricingSummary: {
+              customerItemsAmount: pricedOrder.pricing.customerItemsAmount,
+              taxIncludedAmount: pricedOrder.pricing.taxIncludedAmount,
+              taxPayableAmount: pricedOrder.pricing.taxPayableAmount,
+              platformFeeChargedToCustomer: false,
+              sellerPayoutAmount: pricedOrder.pricing.sellerPayoutAmount,
+            },
+            idempotencyKey: payload.idempotencyKey || undefined,
+          },
           items: pricedOrder.items,
           buyerId: actor.userId,
           status: payableAmount > 0 ? ORDER_STATUS.PENDING_PAYMENT : ORDER_STATUS.CONFIRMED,
+          paymentStatus: payableAmount > 0 ? PAYMENT_STATUS.INITIATED : PAYMENT_STATUS.CAPTURED,
+          deliveryStatus: null,
+          createdBy: actor.userId,
+          actorRole: actor.role,
         },
         orderEvent,
       );
@@ -85,6 +118,7 @@ class OrderService {
       if (payableAmount <= 0) {
         await this.walletService.capture(actor.userId, orderId);
         await this.inventoryService.commitForOrder(orderId);
+        await this.taxService.createInvoice(orderId);
         await eventPublisher.publish(
           makeEvent(
             DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
@@ -102,7 +136,7 @@ class OrderService {
           ),
         );
       }
-      return order;
+      return this.orderRepository.findByIdWithItems(order.id);
     } catch (error) {
       await this.inventoryService.releaseForOrder(orderId);
       await this.walletService.release(actor.userId, orderId);
@@ -111,19 +145,78 @@ class OrderService {
     }
   }
 
-  async listMyOrders(actor) {
-    return this.orderRepository.listOrdersByBuyer(actor.userId);
+  async quoteOrder(payload, actor) {
+    const pricedOrder = await this.pricingService.priceOrder({
+      items: payload.items,
+      couponCode: payload.couponCode,
+      walletAmount: payload.walletAmount,
+      shippingAddress: payload.shippingAddress,
+      userId: actor.userId,
+      paymentProvider: payload.paymentProvider,
+    });
+    const pricing = pricedOrder.pricing;
+
+    return {
+      quote: {
+        currency: payload.currency || "INR",
+        paymentProvider: pricing.paymentProvider,
+        appliedCouponCode: pricing.appliedCouponCode,
+        subtotalAmount: pricing.subtotalAmount,
+        discountAmount: pricing.discountAmount,
+        walletAppliedAmount: pricing.walletAppliedAmount,
+        taxAmount: pricing.taxAmount,
+        taxIncludedAmount: pricing.taxIncludedAmount,
+        taxPayableAmount: pricing.taxPayableAmount,
+        platformFeeAmount: pricing.platformFeeAmount,
+        codChargeAmount: pricing.codChargeAmount,
+        totalAmount: pricing.totalAmount,
+        payableAmount: pricing.payableAmount,
+      },
+      items: pricedOrder.items,
+      taxBreakup: pricing.taxBreakup,
+      platformFeeBreakup: pricing.platformFeeBreakup,
+      sellerSettlements: pricing.sellerSettlementBreakup,
+      summary: {
+        itemAmount: pricing.subtotalAmount,
+        customerItemsAmount: pricing.customerItemsAmount,
+        discountAmount: pricing.discountAmount,
+        walletDiscountAmount: pricing.walletAppliedAmount,
+        taxAmount: pricing.taxAmount,
+        taxIncludedAmount: pricing.taxIncludedAmount,
+        taxPayableAmount: pricing.taxPayableAmount,
+        platformFeeAmount: pricing.platformFeeAmount,
+        codChargeAmount: pricing.codChargeAmount,
+        customerTotalAmount: pricing.totalAmount,
+        customerPayableAmount: pricing.payableAmount,
+        sellerPayoutAmount: pricing.sellerPayoutAmount,
+        platformFeeChargedToCustomer: false,
+      },
+    };
   }
 
-  async listSellerOrders(actor) {
+  async listMyOrders(actor, filters = {}) {
+    return this.orderRepository.listOrdersByBuyer(actor.userId, filters);
+  }
+
+  async listSellerOrders(actor, filters = {}) {
     const sellerId = actor.ownerSellerId || actor.userId;
+    let orders;
     if (["seller-admin", "seller-sub-admin"].includes(actor.role)) {
       const products = await ProductModel.find({ sellerId, createdBy: actor.userId }).select("_id");
       const productIds = products.map((product) => String(product._id));
       if (!productIds.length) return [];
-      return this.orderRepository.listOrdersBySeller(sellerId, productIds);
+      orders = await this.orderRepository.listOrdersBySeller(sellerId, productIds, filters);
+      return orders.map((order) => this.filterOrderForSeller(order, sellerId));
     }
-    return this.orderRepository.listOrdersBySeller(sellerId);
+    orders = await this.orderRepository.listOrdersBySeller(sellerId, null, filters);
+    return orders.map((order) => this.filterOrderForSeller(order, sellerId));
+  }
+
+  async listAdminOrders(actor, filters = {}) {
+    if (!["admin", "sub-admin", "super-admin"].includes(actor.role) && !actor.isSuperAdmin) {
+      throw new AppError("Only admin users can list all orders", 403);
+    }
+    return this.orderRepository.listOrdersForAdmin(filters);
   }
 
   async getOrder(orderId, actor) {
@@ -133,9 +226,9 @@ class OrderService {
     }
 
     const isOwner = order.buyer_id === actor.userId;
-    const isAdmin = ["admin", "super-admin"].includes(actor.role);
+    const isAdmin = ["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin;
     const sellerId = actor.ownerSellerId || actor.userId;
-    const isSeller = ["seller", "seller-sub-admin"].includes(actor.role)
+    const isSeller = ["seller", "seller-admin", "seller-sub-admin"].includes(actor.role)
       ? await this.orderRepository.isSellerInOrder(orderId, sellerId)
       : false;
 
@@ -143,13 +236,139 @@ class OrderService {
       throw new AppError("You are not allowed to view this order", 403);
     }
 
-    return order;
+    if (isAdmin) {
+      return order;
+    }
+
+    const scopedOrder = !isOwner && isSeller
+      ? this.filterOrderForSeller(order, sellerId)
+      : order;
+
+    const visibleNotes = (order.notes || []).filter((note) => {
+      if (isOwner) return note.visibility === "buyer";
+      if (isSeller) return ["seller", "internal"].includes(note.visibility);
+      return false;
+    });
+
+    return { ...scopedOrder, notes: visibleNotes };
+  }
+
+  filterOrderForSeller(order = {}, sellerId) {
+    const sellerKey = String(sellerId || "");
+    const items = (order.items || []).filter((item) => String(item.seller_id || item.sellerId || "") === sellerKey);
+    const productIds = new Set(items.map((item) => String(item.product_id || item.productId || "")));
+    const relations = order.relations || {};
+    const sellers = (relations.sellers || []).filter((seller) => String(seller.id || seller._id || "") === sellerKey);
+    const sellerSettlements = (relations.sellerSettlements || []).filter((settlement) => String(settlement.sellerId || "") === sellerKey);
+    const taxBreakup = this.normalizeJson(order.tax_breakup, {});
+    const taxItems = Array.isArray(taxBreakup.items)
+      ? taxBreakup.items.filter((item) => productIds.has(String(item.productId || item.product_id || "")))
+      : [];
+    const sellerTaxBreakup = this.buildScopedTaxBreakup(taxBreakup, taxItems);
+    const subtotalAmount = Number(items.reduce((sum, item) => sum + Number(item.line_total || item.lineTotal || 0), 0).toFixed(2));
+    const platformFeeAmount = Number(items.reduce((sum, item) => sum + Number(item.platform_fee_amount || item.platformFeeAmount || 0), 0).toFixed(2));
+    const sellerPayoutAmount = Number(
+      sellerSettlements.reduce((sum, settlement) => sum + Number(settlement.sellerPayoutAmount || 0), 0).toFixed(2),
+    );
+    const customerTotalAmount = Number((subtotalAmount + Number(sellerTaxBreakup.taxPayableAmount || 0)).toFixed(2));
+
+    return {
+      ...order,
+      subtotal_amount: subtotalAmount,
+      tax_amount: Number(sellerTaxBreakup.totalTaxAmount || 0),
+      total_amount: customerTotalAmount,
+      payable_amount: customerTotalAmount,
+      platform_fee_amount: platformFeeAmount,
+      tax_breakup: sellerTaxBreakup,
+      platform_fee_breakup: this.filterPlatformFeeBreakup(order.platform_fee_breakup, productIds),
+      items,
+      summary: {
+        ...(order.summary || {}),
+        itemAmount: subtotalAmount,
+        subtotalAmount,
+        taxAmount: Number(sellerTaxBreakup.totalTaxAmount || 0),
+        taxIncludedAmount: Number(sellerTaxBreakup.taxIncludedAmount || 0),
+        taxPayableAmount: Number(sellerTaxBreakup.taxPayableAmount || 0),
+        platformFeeAmount,
+        customerTotalAmount,
+        customerPayableAmount: customerTotalAmount,
+        sellerPayoutAmount,
+        platformFeeChargedToCustomer: false,
+      },
+      relations: {
+        ...relations,
+        sellers,
+        sellerSettlements,
+      },
+    };
+  }
+
+  buildScopedTaxBreakup(original = {}, items = []) {
+    const totals = items.reduce(
+      (acc, item) => {
+        const taxAmount = Number(item.taxAmount || item.tax_amount || 0);
+        const cessAmount = Number(item.cessAmount || item.cess_amount || 0);
+        const totalItemTax = taxAmount + cessAmount;
+        const mode = item.taxMode || item.tax_mode;
+        acc.taxableAmount += Number(item.taxableAmount || item.taxable_amount || 0);
+        acc.totalTaxAmount += totalItemTax;
+        acc.taxIncludedAmount += Number(item.taxIncludedAmount || item.tax_included_amount || 0);
+        acc.taxPayableAmount += Number(item.taxPayableAmount || item.tax_payable_amount || 0);
+        acc.cessAmount += cessAmount;
+        if (mode === "cgst_sgst") {
+          acc.cgstAmount += taxAmount / 2;
+          acc.sgstAmount += taxAmount / 2;
+        } else if (mode === "igst") {
+          acc.igstAmount += taxAmount;
+        }
+        return acc;
+      },
+      {
+        taxableAmount: 0,
+        cgstAmount: 0,
+        sgstAmount: 0,
+        igstAmount: 0,
+        cessAmount: 0,
+        totalTaxAmount: 0,
+        taxIncludedAmount: 0,
+        taxPayableAmount: 0,
+      },
+    );
+
+    return {
+      ...original,
+      taxableAmount: Number(totals.taxableAmount.toFixed(2)),
+      cgstAmount: Number(totals.cgstAmount.toFixed(2)),
+      sgstAmount: Number(totals.sgstAmount.toFixed(2)),
+      igstAmount: Number(totals.igstAmount.toFixed(2)),
+      cessAmount: Number(totals.cessAmount.toFixed(2)),
+      totalTaxAmount: Number(totals.totalTaxAmount.toFixed(2)),
+      taxIncludedAmount: Number(totals.taxIncludedAmount.toFixed(2)),
+      taxPayableAmount: Number(totals.taxPayableAmount.toFixed(2)),
+      items,
+    };
+  }
+
+  filterPlatformFeeBreakup(value, productIds) {
+    const breakup = this.normalizeJson(value, []);
+    if (!Array.isArray(breakup)) return [];
+    return breakup.filter((item) => productIds.has(String(item.productId || item.product_id || "")));
   }
 
   async cancelOrder(orderId, payload, actor) {
+    const order = await this.orderRepository.findById(orderId);
+    if (!order) {
+      throw new AppError("Order not found", 404);
+    }
+
+    const cancellation = await this.prepareCancellation(orderId, order, payload, actor);
     return this.updateOrderStatus(orderId, ORDER_STATUS.CANCELLED, {
       ...actor,
-      cancellationReason: payload?.reason || null,
+      cancellationReason: cancellation.reason,
+      reason: cancellation.reason,
+      paymentStatus: cancellation.orderPaymentStatus,
+      metadata: cancellation.historyMetadata,
+      orderMetadata: cancellation.orderMetadata,
     });
   }
 
@@ -159,13 +378,52 @@ class OrderService {
       throw new AppError("Order not found", 404);
     }
 
+    if (order.status === nextStatus) {
+      return this.orderRepository.findByIdWithItems(orderId);
+    }
+
     await this.assertOrderTransitionAllowed(orderId, order, nextStatus, actor);
 
-    const updatedOrder = await this.orderRepository.updateStatus(orderId, nextStatus);
+    if ([ORDER_STATUS.PACKED, ORDER_STATUS.SHIPPED, ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED].includes(nextStatus)) {
+      await this.inventoryService.assertCommittedForFulfillment(orderId);
+    }
+
+    const statusMetadata = {
+      actorId: actor.userId,
+      actorRole: actor.role,
+      reason: actor.reason || actor.cancellationReason || null,
+      note: actor.note || null,
+      paymentStatus: actor.paymentStatus || undefined,
+      deliveryStatus: actor.deliveryStatus || undefined,
+      metadata: actor.metadata || {},
+      orderMetadata: actor.orderMetadata || undefined,
+    };
+    const updatedOrder = await this.orderRepository.updateStatus(orderId, nextStatus, statusMetadata);
+
+    if (nextStatus === ORDER_STATUS.CONFIRMED) {
+      await this.inventoryService.commitForOrder(orderId);
+    }
+
+    if (nextStatus === ORDER_STATUS.PAYMENT_FAILED) {
+      await this.inventoryService.releaseForOrder(orderId);
+      await this.walletService.release(order.buyer_id, orderId);
+    }
 
     if (nextStatus === ORDER_STATUS.CANCELLED) {
       await this.inventoryService.releaseForOrder(orderId);
       await this.walletService.release(order.buyer_id, orderId);
+      if (Number(order.wallet_discount_amount || 0) > 0 && [ORDER_STATUS.CONFIRMED, ORDER_STATUS.PACKED].includes(order.status)) {
+        await this.walletService.credit(order.buyer_id, Number(order.wallet_discount_amount), {
+          referenceType: "order_cancellation",
+          referenceId: orderId,
+          metadata: {
+            reason: actor.reason || "order_cancelled",
+            originalReferenceType: "order",
+            originalReferenceId: orderId,
+          },
+        });
+      }
+      await this.applyCancellationPaymentSideEffects(orderId, order, actor);
     }
 
     if (nextStatus === ORDER_STATUS.RETURNED) {
@@ -189,25 +447,83 @@ class OrderService {
       ),
     );
 
-    return updatedOrder;
+    if (nextStatus === ORDER_STATUS.CANCELLED) {
+      await eventPublisher.publish(
+        makeEvent(
+          DOMAIN_EVENTS.ORDER_CANCELLED_V1 || DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
+          {
+            orderId,
+            buyerId: order.buyer_id,
+            previousStatus: order.status,
+            status: nextStatus,
+            reason: actor.cancellationReason || actor.reason || null,
+            updatedBy: actor.userId,
+          },
+          {
+            source: "order-module",
+            aggregateId: orderId,
+          },
+        ),
+      );
+    }
+
+    return this.orderRepository.findByIdWithItems(updatedOrder.id);
   }
 
   async assertOrderTransitionAllowed(orderId, order, nextStatus, actor) {
     const isOwner = order.buyer_id === actor.userId;
-    const isAdmin = ["admin", "super-admin"].includes(actor.role);
-    const isSeller = ["seller", "seller-sub-admin"].includes(actor.role);
+    const isAdmin = ["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin;
+    const isSeller = ["seller", "seller-admin", "seller-sub-admin"].includes(actor.role);
     const sellerId = actor.ownerSellerId || actor.userId;
     const isOrderSeller = isSeller
       ? await this.orderRepository.isSellerInOrder(orderId, sellerId)
       : false;
 
+    const transitionKey = `${order.status}->${nextStatus}`;
+    const allowedTransitions = new Set([
+      `${ORDER_STATUS.PENDING_PAYMENT}->${ORDER_STATUS.CONFIRMED}`,
+      `${ORDER_STATUS.PENDING_PAYMENT}->${ORDER_STATUS.PAYMENT_FAILED}`,
+      `${ORDER_STATUS.PAYMENT_FAILED}->${ORDER_STATUS.PENDING_PAYMENT}`,
+      `${ORDER_STATUS.CONFIRMED}->${ORDER_STATUS.PACKED}`,
+      `${ORDER_STATUS.PACKED}->${ORDER_STATUS.SHIPPED}`,
+      `${ORDER_STATUS.SHIPPED}->${ORDER_STATUS.DELIVERED}`,
+      `${ORDER_STATUS.DELIVERED}->${ORDER_STATUS.FULFILLED}`,
+      `${ORDER_STATUS.CONFIRMED}->${ORDER_STATUS.CANCELLED}`,
+      `${ORDER_STATUS.PENDING_PAYMENT}->${ORDER_STATUS.CANCELLED}`,
+      `${ORDER_STATUS.PAYMENT_FAILED}->${ORDER_STATUS.CANCELLED}`,
+      `${ORDER_STATUS.PACKED}->${ORDER_STATUS.CANCELLED}`,
+      `${ORDER_STATUS.DELIVERED}->${ORDER_STATUS.RETURN_REQUESTED}`,
+      `${ORDER_STATUS.RETURN_REQUESTED}->${ORDER_STATUS.RETURNED}`,
+    ]);
+
+    if (!allowedTransitions.has(transitionKey)) {
+      throw new AppError(`Invalid order status transition from ${order.status} to ${nextStatus}`, 409);
+    }
+
     if (nextStatus === ORDER_STATUS.CANCELLED) {
       if (!isOwner && !isAdmin) {
         throw new AppError("Only the buyer or admin can cancel this order", 403);
       }
+      if (order.status === ORDER_STATUS.PACKED) {
+        const blockedByDeliveryStatus = order.delivery_status && !["initiated", "cancelled", "failed"].includes(order.delivery_status);
+        const blockedByShipment = await this.orderRepository.hasNonCancellableShipment(orderId);
+        if (blockedByDeliveryStatus || blockedByShipment) {
+          throw new AppError("Order cannot be cancelled after shipment handover. Please request a return after delivery.", 409);
+        }
+      }
+      return;
+    }
 
-      if (![ORDER_STATUS.PENDING_PAYMENT, ORDER_STATUS.PAYMENT_FAILED, ORDER_STATUS.CONFIRMED].includes(order.status)) {
-        throw new AppError("Order can no longer be cancelled", 409);
+    if (nextStatus === ORDER_STATUS.PENDING_PAYMENT && order.status === ORDER_STATUS.PAYMENT_FAILED) {
+      if (!isOwner && !isAdmin && actor.source !== "payment-module") {
+        throw new AppError("Only the buyer, admin, or payment flow can retry payment", 403);
+      }
+      return;
+    }
+
+    if ([ORDER_STATUS.CONFIRMED, ORDER_STATUS.PAYMENT_FAILED].includes(nextStatus)) {
+      if (!isAdmin && actor.source !== "payment-module") {
+        throw new AppError("Only admin or payment flow can update payment states", 403);
       }
       return;
     }
@@ -230,6 +546,261 @@ class OrderService {
         throw new AppError("You are not allowed to manage this order", 403);
       }
     }
+  }
+
+  async prepareCancellation(orderId, order, payload = {}, actor = {}) {
+    const reason = payload?.reason || "Requested by customer";
+    const latestPayment = await this.orderRepository.findLatestPaymentByOrderId(orderId);
+    const paymentProvider = latestPayment?.provider || order.payment_provider || this.normalizeJson(order.metadata)?.paymentProvider || null;
+    const paymentStatus = latestPayment?.status || order.payment_status;
+    const isCaptured = paymentStatus === PAYMENT_STATUS.CAPTURED;
+    const isAuthorized = paymentStatus === PAYMENT_STATUS.AUTHORIZED;
+    const isCod = paymentProvider === PAYMENT_PROVIDER.COD;
+    const refundRequired = isCaptured && Number(order.payable_amount || order.total_amount || 0) > 0 && !isCod;
+
+    const cancellation = {
+      reason,
+      cancelledBy: actor.userId || null,
+      cancelledByRole: actor.role || null,
+      cancelledAt: new Date().toISOString(),
+      paymentProvider,
+      paymentId: latestPayment?.id || null,
+      paymentStatus,
+      refundRequired,
+      refundStatus: refundRequired ? "pending" : "not_required",
+    };
+
+    return {
+      reason,
+      orderPaymentStatus: refundRequired
+        ? order.payment_status
+        : isCaptured && isCod
+          ? PAYMENT_STATUS.CANCELLED
+          : isAuthorized || paymentStatus === PAYMENT_STATUS.INITIATED || paymentStatus === PAYMENT_STATUS.FAILED
+            ? PAYMENT_STATUS.CANCELLED
+            : order.payment_status,
+      historyMetadata: { cancellation },
+      orderMetadata: { cancellation },
+    };
+  }
+
+  async applyCancellationPaymentSideEffects(orderId, order, actor = {}) {
+    const cancellation = actor.orderMetadata?.cancellation || {};
+    if (cancellation.refundRequired) {
+      await this.orderRepository.updatePaymentsForOrderCancellation(orderId, {
+        status: PAYMENT_STATUS.CAPTURED,
+        metadata: {
+          ...cancellation,
+          refundStatus: "pending",
+          actionRequired: "refund_payment",
+        },
+      });
+      return;
+    }
+
+    await this.orderRepository.updatePaymentsForOrderCancellation(orderId, {
+      status: PAYMENT_STATUS.CANCELLED,
+      failedReason: cancellation.reason || "order_cancelled",
+      metadata: {
+        ...cancellation,
+        refundStatus: "not_required",
+      },
+    });
+  }
+
+  normalizeJson(value, fallback = {}) {
+    if (!value) return fallback;
+    if (typeof value === "string") {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return fallback;
+      }
+    }
+    return value;
+  }
+
+  async markPaymentCaptured(orderId, actor = {}) {
+    const order = await this.orderRepository.findById(orderId);
+    if (!order) {
+      throw new AppError("Order not found", 404);
+    }
+
+    if (order.status !== ORDER_STATUS.PENDING_PAYMENT) {
+      if (order.payment_status === PAYMENT_STATUS.CAPTURED) {
+        return this.orderRepository.findByIdWithItems(orderId);
+      }
+      if (order.status === ORDER_STATUS.CONFIRMED && order.payment_status === PAYMENT_STATUS.AUTHORIZED) {
+        const updatedOrder = await this.orderRepository.updateStatus(orderId, order.status, {
+          actorId: actor.userId || order.buyer_id,
+          actorRole: actor.role || "system",
+          paymentStatus: PAYMENT_STATUS.CAPTURED,
+          reason: actor.reason || "payment_captured",
+          metadata: actor.metadata || {},
+        });
+        const invoice = await this.taxService.createInvoice(orderId);
+        await eventPublisher.publish(
+          makeEvent(
+            DOMAIN_EVENTS.ORDER_PAID_V1 || DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
+            {
+              orderId,
+              buyerId: order.buyer_id,
+              status: ORDER_STATUS.CONFIRMED,
+              paymentStatus: PAYMENT_STATUS.CAPTURED,
+              invoiceId: invoice?.id || null,
+            },
+            { source: "order-module", aggregateId: orderId },
+          ),
+        );
+        return this.orderRepository.findByIdWithItems(updatedOrder.id);
+      }
+      throw new AppError(`Cannot capture payment for order in ${order.status} status`, 409);
+    }
+
+    await this.walletService.capture(order.buyer_id, orderId);
+    await this.inventoryService.commitForOrder(orderId);
+    const updatedOrder = await this.updateOrderStatus(orderId, ORDER_STATUS.CONFIRMED, {
+      userId: actor.userId || order.buyer_id,
+      role: actor.role || "system",
+      source: "payment-module",
+      paymentStatus: PAYMENT_STATUS.CAPTURED,
+      reason: "payment_captured",
+      metadata: actor.metadata || {},
+    });
+    const invoice = await this.taxService.createInvoice(orderId);
+
+    await eventPublisher.publish(
+      makeEvent(
+        DOMAIN_EVENTS.ORDER_PAID_V1 || DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
+        {
+          orderId,
+          buyerId: order.buyer_id,
+          status: ORDER_STATUS.CONFIRMED,
+          paymentStatus: PAYMENT_STATUS.CAPTURED,
+          invoiceId: invoice?.id || null,
+        },
+        { source: "order-module", aggregateId: orderId },
+      ),
+    );
+
+    return this.orderRepository.findByIdWithItems(updatedOrder.id);
+  }
+
+  async markPaymentAuthorized(orderId, actor = {}) {
+    const order = await this.orderRepository.findById(orderId);
+    if (!order) {
+      throw new AppError("Order not found", 404);
+    }
+
+    if (order.status !== ORDER_STATUS.PENDING_PAYMENT) {
+      if (order.status === ORDER_STATUS.CONFIRMED || order.payment_status === PAYMENT_STATUS.AUTHORIZED) {
+        await this.taxService.createInvoice(orderId);
+        return this.orderRepository.findByIdWithItems(orderId);
+      }
+      throw new AppError(`Cannot authorize payment for order in ${order.status} status`, 409);
+    }
+
+    await this.walletService.capture(order.buyer_id, orderId);
+    await this.inventoryService.commitForOrder(orderId);
+    const updatedOrder = await this.updateOrderStatus(orderId, ORDER_STATUS.CONFIRMED, {
+      userId: actor.userId || order.buyer_id,
+      role: actor.role || "system",
+      source: "payment-module",
+      paymentStatus: PAYMENT_STATUS.AUTHORIZED,
+      reason: actor.reason || "payment_authorized",
+      metadata: actor.metadata || {},
+    });
+    await this.taxService.createInvoice(orderId);
+
+    return updatedOrder;
+  }
+
+  async markPaymentFailed(orderId, actor = {}) {
+    const order = await this.orderRepository.findById(orderId);
+    if (!order) {
+      throw new AppError("Order not found", 404);
+    }
+
+    if (order.status !== ORDER_STATUS.PENDING_PAYMENT) {
+      if (order.status === ORDER_STATUS.PAYMENT_FAILED || order.payment_status === PAYMENT_STATUS.FAILED) {
+        return this.orderRepository.findByIdWithItems(orderId);
+      }
+      throw new AppError(`Cannot fail payment for order in ${order.status} status`, 409);
+    }
+
+    const updatedOrder = await this.updateOrderStatus(orderId, ORDER_STATUS.PAYMENT_FAILED, {
+      userId: actor.userId || order.buyer_id,
+      role: actor.role || "system",
+      source: "payment-module",
+      paymentStatus: PAYMENT_STATUS.FAILED,
+      reason: actor.reason || "payment_failed",
+      metadata: actor.metadata || {},
+    });
+
+    await eventPublisher.publish(
+      makeEvent(
+        DOMAIN_EVENTS.ORDER_PAYMENT_FAILED_V1 || DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
+        {
+          orderId,
+          buyerId: order.buyer_id,
+          status: ORDER_STATUS.PAYMENT_FAILED,
+          paymentStatus: PAYMENT_STATUS.FAILED,
+          reason: actor.reason || "payment_failed",
+        },
+        { source: "order-module", aggregateId: orderId },
+      ),
+    );
+
+    return updatedOrder;
+  }
+
+  async reopenPayment(orderId, actor = {}) {
+    const order = await this.orderRepository.findByIdWithItems(orderId);
+    if (!order) {
+      throw new AppError("Order not found", 404);
+    }
+
+    await this.inventoryService.reserveForOrder(
+      orderId,
+      order.buyer_id,
+      (order.items || []).map((item) => ({
+        productId: item.product_id,
+        variantId: item.variant_id || "",
+        variantSku: item.variant_sku || "",
+        variantTitle: item.variant_title || "",
+        attributes: item.attributes || {},
+        sellerId: item.seller_id,
+        quantity: Number(item.quantity || 0),
+        unitPrice: Number(item.unit_price || 0),
+      })),
+    );
+
+    return this.updateOrderStatus(orderId, ORDER_STATUS.PENDING_PAYMENT, {
+      userId: actor.userId || order.buyer_id,
+      role: actor.role || "buyer",
+      source: actor.source || "order-module",
+      paymentStatus: PAYMENT_STATUS.INITIATED,
+      reason: "payment_retry",
+    });
+  }
+
+  async addNote(orderId, payload, actor) {
+    const order = await this.getOrder(orderId, actor);
+    const isAdmin = ["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin;
+    const isSeller = ["seller", "seller-admin", "seller-sub-admin"].includes(actor.role);
+
+    if (!isAdmin && !isSeller) {
+      throw new AppError("Only admin or seller users can add order notes", 403);
+    }
+
+    const note = await this.orderRepository.addNote(order.id, {
+      actorId: actor.userId,
+      actorRole: actor.role,
+      visibility: payload.visibility || "internal",
+      note: payload.note,
+    });
+
+    return note;
   }
 }
 

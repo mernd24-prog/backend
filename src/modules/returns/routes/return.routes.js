@@ -2,180 +2,179 @@ const express = require("express");
 const router = express.Router();
 
 const { authenticate } = require("../../../shared/middleware/authenticate");
-const { allowRoles } = require("../../../shared/middleware/access");
-
+const { allowPermissions } = require("../../../shared/middleware/access");
+const { catchErrors } = require("../../../shared/middleware/catch-errors");
+const { okResponse } = require("../../../shared/http/reply");
+const { getCurrentUser } = require("../../../shared/auth/current-user");
 const { ReturnService } = require("../services/return.service");
 const { returnValidation } = require("../../validation");
+const { AppError } = require("../../../shared/errors/app-error");
 
-// ==============================
-// Request a return
-// ==============================
-router.post("/", authenticate, async (req, res, next) => {
-  try {
-    const userId = req.auth?.sub;
+function validate(schema, source) {
+  const { error, value } = schema.validate(source, {
+    abortEarly: false,
+    stripUnknown: true,
+  });
+  if (error) throw new AppError("Validation failed", 400, error.details);
+  return value;
+}
 
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized",
-      });
-    }
+router.get(
+  "/",
+  authenticate,
+  allowPermissions("returns:view"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const query = validate(returnValidation.listReturns, req.query);
+    res.json(okResponse(await ReturnService.listReturns(query, actor)));
+  }),
+);
 
-    const { error, value } =
-      returnValidation.requestReturn.validate(req.body);
-
-    if (error) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        details: error.details,
-      });
-    }
-
+router.post(
+  "/",
+  authenticate,
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.requestReturn, req.body);
     const returnReq = await ReturnService.requestReturn(
       value.orderId,
-      userId,
+      actor.userId,
       value.items,
       value.reason,
-      value.description
+      value.description,
+      actor,
+      { photos: value.photos || [] },
     );
+    res.status(201).json(okResponse(returnReq, "Return requested successfully"));
+  }),
+);
 
-    return res.status(201).json({
-      success: true,
-      message: "Return requested successfully",
-      data: returnReq,
-    });
-  } catch (err) {
-    next(err);
-  }
-});
+router.get(
+  "/my-returns",
+  authenticate,
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    res.json(okResponse(await ReturnService.getReturnsByBuyer(actor.userId)));
+  }),
+);
 
-// ==============================
-// Get returns for buyer
-// ==============================
-router.get("/my-returns", authenticate, async (req, res, next) => {
-  try {
-    const userId = req.auth?.sub;
+router.get(
+  "/order/:orderId",
+  authenticate,
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.getReturnByOrder, req.params);
+    res.json(okResponse(await ReturnService.getReturnByOrder(value.orderId, actor)));
+  }),
+);
 
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized",
-      });
-    }
+router.get(
+  "/:returnId",
+  authenticate,
+  allowPermissions("returns:view"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.getReturnById, req.params);
+    res.json(okResponse(await ReturnService.getReturnById(value.returnId, actor)));
+  }),
+);
 
-    const returns = await ReturnService.getReturnsByBuyer(userId);
-
-    return res.status(200).json({
-      success: true,
-      data: returns,
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ==============================
-// Get return by order
-// ==============================
-router.get("/order/:orderId", authenticate, async (req, res, next) => {
-  try {
-    const { error, value } =
-      returnValidation.getReturnByOrder.validate(req.params);
-
-    if (error) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        details: error.details,
-      });
-    }
-
-    const returnReq = await ReturnService.getReturnByOrder(
-      value.orderId
-    );
-
-    return res.status(200).json({
-      success: true,
-      data: returnReq || null,
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ==============================
-// Admin: Approve return
-// ==============================
 router.post(
   "/:returnId/approve",
   authenticate,
-  allowRoles(["admin"]),
-  async (req, res, next) => {
-    try {
-      const { error, value } =
-        returnValidation.approveReturn.validate({
-          ...req.body,
-          returnId: req.params.returnId,
-        });
-
-      if (error) {
-        return res.status(400).json({
-          success: false,
-          message: "Validation error",
-          details: error.details,
-        });
-      }
-
-      const returnReq = await ReturnService.approveReturn(
-        value.returnId,
-        value.refundAmount
-      );
-
-      return res.status(200).json({
-        success: true,
-        message: "Return approved",
-        data: returnReq,
-      });
-    } catch (err) {
-      next(err);
-    }
-  }
+  allowPermissions("returns:approve"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.approveReturn, { ...req.body, returnId: req.params.returnId });
+    res.json(okResponse(await ReturnService.approveReturn(value.returnId, value.refundAmount, actor, value), "Return approved"));
+  }),
 );
 
-// ==============================
-// Admin: Process refund
-// ==============================
+router.post(
+  "/:returnId/reject",
+  authenticate,
+  allowPermissions("returns:reject"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.rejectReturn, { ...req.body, returnId: req.params.returnId });
+    res.json(okResponse(await ReturnService.rejectReturn(value.returnId, value.reason, actor), "Return rejected"));
+  }),
+);
+
+router.post(
+  "/:returnId/schedule",
+  authenticate,
+  allowPermissions("returns:update"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.scheduleReturn, { ...req.body, returnId: req.params.returnId });
+    res.json(okResponse(await ReturnService.scheduleReversePickup(value.returnId, value, actor)));
+  }),
+);
+
+router.post(
+  "/:returnId/ship-back",
+  authenticate,
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.shipReturn, { ...req.body, returnId: req.params.returnId });
+    res.json(okResponse(await ReturnService.shipReturnBack(value.returnId, value.trackingNumber, actor)));
+  }),
+);
+
+router.post(
+  "/:returnId/receive",
+  authenticate,
+  allowPermissions("returns:update"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.receiveReturn, { ...req.body, returnId: req.params.returnId });
+    res.json(okResponse(await ReturnService.receiveReturn(value.returnId, value.notes, actor)));
+  }),
+);
+
+router.post(
+  "/:returnId/qc",
+  authenticate,
+  allowPermissions("returns:update"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.qcReturn, { ...req.body, returnId: req.params.returnId });
+    res.json(okResponse(await ReturnService.qcReturn(value.returnId, value, actor)));
+  }),
+);
+
 router.post(
   "/:returnId/refund",
   authenticate,
-  allowRoles(["admin"]),
-  async (req, res, next) => {
-    try {
-      const { error, value } =
-        returnValidation.processRefund.validate(req.params);
+  allowPermissions("returns:approve"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.processRefund, { ...req.body, returnId: req.params.returnId });
+    res.json(okResponse(await ReturnService.processRefund(value.returnId, actor, value), "Refund processed successfully"));
+  }),
+);
 
-      if (error) {
-        return res.status(400).json({
-          success: false,
-          message: "Validation error",
-          details: error.details,
-        });
-      }
+router.post(
+  "/:returnId/replacement",
+  authenticate,
+  allowPermissions("returns:update"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.replacementReturn, { ...req.body, returnId: req.params.returnId });
+    res.json(okResponse(await ReturnService.createReplacement(value.returnId, value, actor)));
+  }),
+);
 
-      const returnReq = await ReturnService.processRefund(
-        value.returnId
-      );
-
-      return res.status(200).json({
-        success: true,
-        message: "Refund processed successfully",
-        data: returnReq,
-      });
-    } catch (err) {
-      next(err);
-    }
-  }
+router.post(
+  "/:returnId/close",
+  authenticate,
+  allowPermissions("returns:update"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.closeReturn, { ...req.body, returnId: req.params.returnId });
+    res.json(okResponse(await ReturnService.closeReturn(value.returnId, value, actor)));
+  }),
 );
 
 module.exports = router;

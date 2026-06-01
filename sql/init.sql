@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS orders (
   payable_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
   coupon_code VARCHAR(64),
   tax_breakup JSONB NOT NULL DEFAULT '{}'::jsonb,
+  payment_provider VARCHAR(64),
+  cod_charge_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
   shipping_address JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -55,6 +57,22 @@ CREATE TABLE IF NOT EXISTS payments (
 
 CREATE INDEX IF NOT EXISTS idx_payments_buyer_id ON payments (buyer_id);
 CREATE INDEX IF NOT EXISTS idx_payments_order_id ON payments (order_id);
+
+CREATE TABLE IF NOT EXISTS payment_method_configs (
+  method VARCHAR(64) PRIMARY KEY,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  charge_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  min_order_amount NUMERIC(12, 2),
+  max_order_amount NUMERIC(12, 2),
+  currency VARCHAR(8) NOT NULL DEFAULT 'INR',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO payment_method_configs (method, enabled, charge_amount, currency, metadata)
+VALUES ('cod', true, 0, 'INR', '{}'::jsonb)
+ON CONFLICT (method) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS seller_kyc (
   id UUID PRIMARY KEY,
@@ -138,6 +156,8 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS wallet_discount_amount NUMERIC(12, 2
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS payable_amount NUMERIC(12, 2) NOT NULL DEFAULT 0;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS coupon_code VARCHAR(64);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_breakup JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_provider VARCHAR(64);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS cod_charge_amount NUMERIC(12, 2) NOT NULL DEFAULT 0;
 
 ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS aadhaar_number VARCHAR(16);
 ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS business_type VARCHAR(64);

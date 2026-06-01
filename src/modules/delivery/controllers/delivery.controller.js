@@ -14,6 +14,46 @@ class DeliveryController {
     res.json(okResponse(result));
   };
 
+  rate = async (req, res) => {
+    const result = await this.deliveryService.calculateRate(req.query);
+    res.json(okResponse(result));
+  };
+
+  listShipments = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.deliveryService.listShipments(req.query, actor);
+    res.json(okResponse(result));
+  };
+
+  createShipment = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.deliveryService.createShipment(req.body, actor);
+    res.status(201).json(okResponse(result));
+  };
+
+  getShipment = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.deliveryService.getShipment(req.params.shipmentId, actor);
+    res.json(okResponse(result));
+  };
+
+  addTrackingEvent = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.deliveryService.addTrackingEvent(req.params.shipmentId, req.body, actor);
+    res.json(okResponse(result));
+  };
+
+  trackingWebhook = async (req, res) => {
+    const result = await this.deliveryService.handleTrackingWebhook(req.body);
+    res.json(okResponse(result));
+  };
+
+  createManifest = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.deliveryService.createManifest(req.body, actor);
+    res.status(201).json(okResponse(result));
+  };
+
   createEWayBill = async (req, res) => {
     const actor = getCurrentUser(req);
     const result = await this.deliveryService.createEWayBill(req.params.orderId, req.body, actor);

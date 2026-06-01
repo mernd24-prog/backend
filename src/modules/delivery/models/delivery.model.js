@@ -9,8 +9,12 @@ const DELIVERY_STATUS = {
   DELIVERED: "delivered",
   FAILED: "failed",
   CANCELLED: "cancelled",
+  RTO: "rto",
+  LOST: "lost",
+  DAMAGED: "damaged",
 };
 
 const SHIPPING_MODES = ["standard", "express", "same_day", "hyperlocal"];
+const SHIPMENT_STATUS = DELIVERY_STATUS;
 
-module.exports = { DELIVERY_STATUS, SHIPPING_MODES };
+module.exports = { DELIVERY_STATUS, SHIPMENT_STATUS, SHIPPING_MODES };

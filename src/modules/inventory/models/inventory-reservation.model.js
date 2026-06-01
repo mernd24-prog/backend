@@ -18,6 +18,7 @@ const inventoryReservationSchema = new mongoose.Schema(
       },
     ],
     expiresAt: { type: Date, index: true },
+    metadata: { type: Object, default: {} },
   },
   { timestamps: true },
 );

@@ -10,6 +10,14 @@ class TaxRepository {
     return rows[0] || null;
   }
 
+  async findInvoiceById(invoiceId) {
+    const { rows } = await postgresPool.query(
+      "SELECT * FROM tax_invoices WHERE id = $1 LIMIT 1",
+      [invoiceId],
+    );
+    return rows[0] || null;
+  }
+
   async createInvoice(payload) {
     const id = uuidv4();
     const { rows } = await postgresPool.query(
@@ -18,7 +26,7 @@ class TaxRepository {
         cgst_amount, sgst_amount, igst_amount, tcs_amount, total_amount,
         currency, tax_mode, gstin_marketplace, gstin_seller, place_of_supply, issued_at, metadata
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),$18
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),$17::jsonb
       )
       RETURNING *`,
       [
@@ -38,10 +46,162 @@ class TaxRepository {
         payload.gstinMarketplace || null,
         payload.gstinSeller || null,
         payload.placeOfSupply || null,
+        JSON.stringify(payload.metadata || {}),
+      ],
+    );
+    return rows[0];
+  }
+
+  async listInvoices({
+    fromDate = null,
+    toDate = null,
+    sellerId = null,
+    buyerId = null,
+    state = null,
+    hsnCode = null,
+    search = null,
+    limit = 50,
+    offset = 0,
+  } = {}) {
+    const values = [];
+    const clauses = [];
+    let idx = 1;
+
+    if (fromDate) {
+      clauses.push(`ti.issued_at >= $${idx++}`);
+      values.push(fromDate);
+    }
+    if (toDate) {
+      clauses.push(`ti.issued_at <= $${idx++}`);
+      values.push(toDate);
+    }
+    if (buyerId) {
+      clauses.push(`ti.buyer_id = $${idx++}`);
+      values.push(buyerId);
+    }
+    if (sellerId) {
+      clauses.push(`EXISTS (
+        SELECT 1 FROM order_items oi
+        WHERE oi.order_id = ti.order_id AND oi.seller_id = $${idx++}
+      )`);
+      values.push(sellerId);
+    }
+    if (state) {
+      clauses.push(`ti.place_of_supply ILIKE $${idx++}`);
+      values.push(state);
+    }
+    if (hsnCode) {
+      clauses.push(`EXISTS (
+        SELECT 1 FROM order_items oi
+        WHERE oi.order_id = ti.order_id AND oi.hsn_code = $${idx++}
+      )`);
+      values.push(hsnCode);
+    }
+    if (search) {
+      clauses.push(`(ti.invoice_number ILIKE $${idx} OR ti.order_id::text ILIKE $${idx})`);
+      values.push(`%${search}%`);
+      idx += 1;
+    }
+
+    const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const pagingValues = [...values, limit, offset];
+    const [listResult, countResult] = await Promise.all([
+      postgresPool.query(
+        `SELECT ti.*
+         FROM tax_invoices ti
+         ${whereSql}
+         ORDER BY ti.issued_at DESC
+         LIMIT $${idx++} OFFSET $${idx}`,
+        pagingValues,
+      ),
+      postgresPool.query(
+        `SELECT COUNT(*)::INT AS total
+         FROM tax_invoices ti
+         ${whereSql}`,
+        values,
+      ),
+    ]);
+
+    return {
+      list: listResult.rows,
+      total: Number(countResult.rows[0]?.total || 0),
+    };
+  }
+
+  async findCreditNoteByReference(referenceType, referenceId) {
+    const { rows } = await postgresPool.query(
+      `SELECT *
+       FROM tax_credit_notes
+       WHERE reference_type = $1 AND reference_id = $2
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [referenceType, referenceId],
+    );
+    return rows[0] || null;
+  }
+
+  async createCreditNote(payload) {
+    const id = uuidv4();
+    const { rows } = await postgresPool.query(
+      `INSERT INTO tax_credit_notes (
+        id, credit_note_number, invoice_id, order_id, buyer_id, reference_type,
+        reference_id, taxable_amount, tax_amount, cgst_amount, sgst_amount,
+        igst_amount, total_amount, currency, reason, metadata, issued_at
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW()
+      )
+      RETURNING *`,
+      [
+        id,
+        payload.creditNoteNumber,
+        payload.invoiceId,
+        payload.orderId,
+        payload.buyerId,
+        payload.referenceType,
+        payload.referenceId,
+        payload.taxableAmount,
+        payload.taxAmount,
+        payload.cgstAmount,
+        payload.sgstAmount,
+        payload.igstAmount,
+        payload.totalAmount,
+        payload.currency || "INR",
+        payload.reason || null,
         payload.metadata || {},
       ],
     );
     return rows[0];
+  }
+
+  async listCreditNotes({ fromDate = null, toDate = null, orderId = null, limit = 50, offset = 0 } = {}) {
+    const values = [];
+    const clauses = [];
+    let idx = 1;
+
+    if (fromDate) {
+      clauses.push(`issued_at >= $${idx++}`);
+      values.push(fromDate);
+    }
+    if (toDate) {
+      clauses.push(`issued_at <= $${idx++}`);
+      values.push(toDate);
+    }
+    if (orderId) {
+      clauses.push(`order_id = $${idx++}`);
+      values.push(orderId);
+    }
+
+    const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    values.push(limit, offset);
+    const { rows } = await postgresPool.query(
+      `SELECT *
+       FROM tax_credit_notes
+       ${whereSql}
+       ORDER BY issued_at DESC
+       LIMIT $${idx++} OFFSET $${idx}`,
+      values,
+    );
+    return rows;
   }
 
   async insertLedgerEntries(entries) {
@@ -110,11 +270,11 @@ class TaxRepository {
     return rows;
   }
 
-  async nextInvoiceNumber(prefix = "INV") {
+  async nextInvoiceNumber(prefix = "INV", tableName = "tax_invoices", columnName = "invoice_number") {
     const { rows } = await postgresPool.query(
       `SELECT COUNT(*)::INT AS count
-       FROM tax_invoices
-       WHERE invoice_number LIKE $1`,
+       FROM ${tableName}
+       WHERE ${columnName} LIKE $1`,
       [`${prefix}-%`],
     );
     const nextSequence = Number(rows[0]?.count || 0) + 1;
@@ -125,4 +285,3 @@ class TaxRepository {
 }
 
 module.exports = { TaxRepository };
-
