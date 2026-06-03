@@ -278,7 +278,9 @@ class AdminRepository {
   }
 
   async listProductsForModeration({ status = "pending_approval", category = null, limit = 50, page = 1 } = {}) {
-    const filter = { status };
+    const filter = status === "change_pending"
+      ? { revisionStatus: "change_pending" }
+      : { status };
     if (category) {
       filter.category = category;
     }

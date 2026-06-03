@@ -2,6 +2,7 @@ const PRODUCT_STATUS = {
   DRAFT: "draft",
   PENDING_APPROVAL: "pending_approval",
   ACTIVE: "active",
+  CHANGE_PENDING: "change_pending",
   INACTIVE: "inactive",
   REJECTED: "rejected",
   ARCHIVED: "archived",
@@ -21,6 +22,17 @@ const PRODUCT_VISIBILITY = {
   PRIVATE: "private",
   HIDDEN: "hidden",
   SCHEDULED: "scheduled",
+};
+
+const PRODUCT_REVISION_STATUS = {
+  PENDING: "pending",
+  APPROVED: "approved",
+  REJECTED: "rejected",
+};
+
+const PRODUCT_REVISION_WORKFLOW_STATUS = {
+  NONE: "none",
+  CHANGE_PENDING: "change_pending",
 };
 
 const DIGITAL_FILE_TYPE = {
@@ -132,6 +144,8 @@ module.exports = {
   PRODUCT_STATUS,
   PRODUCT_TYPE,
   PRODUCT_VISIBILITY,
+  PRODUCT_REVISION_STATUS,
+  PRODUCT_REVISION_WORKFLOW_STATUS,
   DIGITAL_FILE_TYPE,
   SUBSCRIPTION_BILLING_CYCLE,
   INVENTORY_TRANSACTION_TYPE,

@@ -3,6 +3,7 @@ const {
   PRODUCT_STATUS,
   PRODUCT_TYPE,
   PRODUCT_VISIBILITY,
+  PRODUCT_REVISION_WORKFLOW_STATUS,
   DIGITAL_FILE_TYPE,
   SUBSCRIPTION_BILLING_CYCLE,
 } = require("../../../shared/domain/commerce-constants");
@@ -183,6 +184,36 @@ const analyticsSchema = new mongoose.Schema(
   { _id: false },
 );
 
+const statusHistorySchema = new mongoose.Schema(
+  {
+    fromStatus: { type: String },
+    toStatus: { type: String },
+    fromRevisionStatus: { type: String },
+    toRevisionStatus: { type: String },
+    reason: { type: String },
+    actorId: { type: String },
+    actorRole: { type: String },
+    changedFields: [{ type: String }],
+    revisionId: { type: String },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: true },
+);
+
+const complianceSnapshotSchema = new mongoose.Schema(
+  {
+    hsnCode: { type: String },
+    gstRate: { type: Number },
+    cessRate: { type: Number, default: 0 },
+    taxType: { type: String },
+    exempt: { type: Boolean, default: false },
+    source: { type: String, default: "hsn_master" },
+    validatedAt: { type: Date },
+    validatedBy: { type: String },
+  },
+  { _id: false },
+);
+
 // ─── Main Product Schema ─────────────────────────────────────────────────────
 
 const productSchema = new mongoose.Schema(
@@ -227,6 +258,7 @@ const productSchema = new mongoose.Schema(
     gstRate: { type: Number, required: true, default: 18, min: 0, max: 100 },
     gstInclusive: { type: Boolean, default: false },
     hsnCode: { type: String, index: true },
+    complianceSnapshot: { type: complianceSnapshotSchema, default: null },
 
     // ── Identifiers
     sku: { type: String, index: true },
@@ -342,6 +374,16 @@ const productSchema = new mongoose.Schema(
     approvedBy: { type: String },
     approvedAt: { type: Date },
     rejectionReason: { type: String },
+
+    // ── Revision workflow
+    revisionStatus: {
+      type: String,
+      enum: Object.values(PRODUCT_REVISION_WORKFLOW_STATUS),
+      default: PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+      index: true,
+    },
+    pendingRevisionId: { type: String, index: true },
+    statusHistory: [statusHistorySchema],
 
     // ── Audit
     createdBy: { type: String },

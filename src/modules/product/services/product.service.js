@@ -8,9 +8,35 @@ const {
   PRODUCT_STATUS,
   PRODUCT_TYPE,
   PRODUCT_VISIBILITY,
+  PRODUCT_REVISION_STATUS,
+  PRODUCT_REVISION_WORKFLOW_STATUS,
 } = require("../../../shared/domain/commerce-constants");
+const {
+  applyPublicProductFilter,
+  buildPublicSearchFilters,
+  isPublicProduct,
+} = require("../../../shared/catalog/public-product-filter");
 const { logger } = require("../../../shared/logger/logger");
 const { PlatformRepository } = require("../../platform/repositories/platform.repository");
+
+const SELLER_BLOCKED_COMPLIANCE_FIELDS = [
+  "gstRate",
+  "cessRate",
+  "taxType",
+  "taxClass",
+  "taxClassId",
+  "taxRuleId",
+  "platformFee",
+  "platformFeeAmount",
+  "platformFeeRate",
+  "platformFeeConfigId",
+  "commissionRate",
+  "commissionPercent",
+  "commissionAmount",
+  "commissionRuleId",
+  "settlementRuleId",
+  "sellerTier",
+];
 
 class ProductService {
   constructor({
@@ -241,6 +267,73 @@ class ProductService {
     return normalized;
   }
 
+  // ─── Compliance helpers ──────────────────────────────────────────────────
+
+  stripSellerComplianceFields(payload = {}) {
+    const normalized = { ...payload };
+    for (const field of SELLER_BLOCKED_COMPLIANCE_FIELDS) {
+      delete normalized[field];
+    }
+
+    if (Array.isArray(normalized.variants)) {
+      normalized.variants = normalized.variants.map((variant) => {
+        if (!variant || typeof variant !== "object") return variant;
+        const nextVariant = { ...variant };
+        for (const field of SELLER_BLOCKED_COMPLIANCE_FIELDS) {
+          delete nextVariant[field];
+        }
+        return nextVariant;
+      });
+    }
+
+    return normalized;
+  }
+
+  async normalizeProductCompliance(payload = {}, actor = {}, existingProduct = null) {
+    const isSeller = isSellerRole(actor);
+    let normalized = isSeller ? this.stripSellerComplianceFields(payload) : { ...payload };
+
+    if (!Object.prototype.hasOwnProperty.call(normalized, "hsnCode")) {
+      return normalized;
+    }
+
+    const hsnCode = String(normalized.hsnCode || "").trim();
+    if (!hsnCode) {
+      if (isSeller && existingProduct) {
+        delete normalized.hsnCode;
+        delete normalized.gstRate;
+        delete normalized.complianceSnapshot;
+        return normalized;
+      }
+      normalized.hsnCode = "";
+      normalized.complianceSnapshot = null;
+      if (isSeller) {
+        delete normalized.gstRate;
+      }
+      return normalized;
+    }
+
+    const hsnRule = await this.platformRepository.getHsnCode(hsnCode);
+    if (!hsnRule || hsnRule.active === false) {
+      throw new AppError("HSN code must be an active approved master record", 400);
+    }
+
+    normalized.hsnCode = hsnRule.code;
+    normalized.gstRate = Number(hsnRule.gstRate || 0);
+    normalized.complianceSnapshot = {
+      hsnCode: hsnRule.code,
+      gstRate: Number(hsnRule.gstRate || 0),
+      cessRate: Number(hsnRule.cessRate || 0),
+      taxType: hsnRule.taxType || "gst",
+      exempt: Boolean(hsnRule.exempt),
+      source: "hsn_master",
+      validatedAt: new Date(),
+      validatedBy: actor.userId || existingProduct?.lastUpdatedBy || existingProduct?.createdBy || "system",
+    };
+
+    return normalized;
+  }
+
   // ─── Elasticsearch ────────────────────────────────────────────────────────
 
   _buildSearchDocument(product) {
@@ -279,18 +372,29 @@ class ProductService {
       status: product.status,
       visibility: product.visibility || PRODUCT_VISIBILITY.PUBLIC,
       publishedAt: product.publishedAt || product.createdAt,
+      scheduledAt: product.scheduledAt || null,
+      createdAt: product.createdAt,
+      updatedAt: product.updatedAt,
     };
   }
 
   async _indexProduct(product) {
+    const productId = product?._id || product?.id;
+    if (!productId) return;
+
+    if (!isPublicProduct(product)) {
+      await this._deleteFromIndex(productId);
+      return;
+    }
+
     try {
       await elasticsearchClient.index({
         index: "products",
-        id: String(product._id || product.id),
+        id: String(productId),
         document: this._buildSearchDocument(product),
       });
     } catch (err) {
-      logger.error({ err, productId: product._id }, "Elasticsearch index failed");
+      logger.error({ err, productId }, "Elasticsearch index failed");
     }
   }
 
@@ -335,6 +439,7 @@ class ProductService {
   async createProduct(payload, actor) {
     payload = this.normalizeProductMedia(payload);
     payload = this.normalizeProductVariants(payload);
+    payload = await this.normalizeProductCompliance(payload, actor);
     const productType = payload.productType || PRODUCT_TYPE.SIMPLE;
 
     const categoryKey = payload.categoryId || payload.category;
@@ -350,7 +455,9 @@ class ProductService {
 
     const isSeller = isSellerRole(actor);
     const status = isSeller
-      ? PRODUCT_STATUS.PENDING_APPROVAL
+      ? payload.status === PRODUCT_STATUS.DRAFT
+        ? PRODUCT_STATUS.DRAFT
+        : PRODUCT_STATUS.PENDING_APPROVAL
       : payload.status || PRODUCT_STATUS.DRAFT;
     const sellerId = isSeller
       ? actor.ownerSellerId || actor.userId
@@ -368,7 +475,7 @@ class ProductService {
       slug: slugify(`${payload.title}-${Date.now()}`, { lower: true, strict: true }),
       publishedAt: status === PRODUCT_STATUS.ACTIVE ? new Date() : null,
       moderation: {
-        submittedAt: new Date(),
+        submittedAt: status === PRODUCT_STATUS.DRAFT ? null : new Date(),
         checklist: {
           titleVerified: false,
           categoryVerified: false,
@@ -379,6 +486,15 @@ class ProductService {
         },
       },
       createdBy: actor.userId,
+      revisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+      statusHistory: [
+        this.buildStatusHistoryEntry({
+          fromStatus: null,
+          toStatus: status,
+          actor,
+          reason: "product_created",
+        }),
+      ],
     });
 
     if (product.status === PRODUCT_STATUS.ACTIVE) {
@@ -407,6 +523,7 @@ class ProductService {
 
     payload = this.normalizeProductMedia(payload);
     payload = this.normalizeProductVariants(payload);
+    payload = await this.normalizeProductCompliance(payload, actor, existingProduct);
 
     const categoryKey =
       payload.categoryId || payload.category || existingProduct.categoryId || existingProduct.category;
@@ -437,15 +554,44 @@ class ProductService {
       version: (existingProduct.version || 1) + 1,
     };
 
-    // Re-submit for review if seller edits a rejected product
     if (
-      isSeller(actor) &&
-      existingProduct.status === PRODUCT_STATUS.REJECTED
+      isSellerRole(actor) &&
+      existingProduct.status === PRODUCT_STATUS.ACTIVE
     ) {
-      updatePayload.status = PRODUCT_STATUS.PENDING_APPROVAL;
-      updatePayload["moderation.submittedAt"] = new Date();
-      updatePayload["moderation.revisionCount"] =
-        (existingProduct.moderation?.revisionCount || 0) + 1;
+      return this.createPendingRevision(existingProduct, updatePayload, actor);
+    }
+
+    if (isSellerRole(actor)) {
+      const requestedStatus = payload.status;
+      const shouldSubmitForReview =
+        existingProduct.status === PRODUCT_STATUS.REJECTED ||
+        (
+          requestedStatus !== undefined &&
+          requestedStatus !== PRODUCT_STATUS.DRAFT
+        );
+
+      if (shouldSubmitForReview) {
+        updatePayload.status = PRODUCT_STATUS.PENDING_APPROVAL;
+        updatePayload.rejectionReason = null;
+        updatePayload["moderation.submittedAt"] = new Date();
+        updatePayload["moderation.rejectionReason"] = null;
+        updatePayload["moderation.notes"] = null;
+        if (existingProduct.status === PRODUCT_STATUS.REJECTED) {
+          updatePayload["moderation.revisionCount"] =
+            (existingProduct.moderation?.revisionCount || 0) + 1;
+        }
+      } else if (requestedStatus === PRODUCT_STATUS.DRAFT) {
+        updatePayload.status = PRODUCT_STATUS.DRAFT;
+      }
+    }
+
+    if (updatePayload.status && updatePayload.status !== existingProduct.status) {
+      updatePayload.statusHistory = this.appendStatusHistory(existingProduct, {
+        fromStatus: existingProduct.status,
+        toStatus: updatePayload.status,
+        actor,
+        reason: payload.rejectionReason || payload.reason || "product_status_updated",
+      });
     }
 
     const updatedProduct = await this.productRepository.update(productId, updatePayload);
@@ -460,9 +606,215 @@ class ProductService {
     return updatedProduct;
   }
 
+  // ─── Product revisions ───────────────────────────────────────────────────
+
+  sanitizeRevisionChanges(payload = {}) {
+    const blocked = new Set([
+      "approvedAt",
+      "approvedBy",
+      "createdBy",
+      "lastUpdatedBy",
+      "moderation",
+      "pendingRevisionId",
+      "publishedAt",
+      "rejectionReason",
+      "revisionStatus",
+      "status",
+      "statusHistory",
+      "version",
+    ]);
+    return Object.entries(payload).reduce((acc, [key, value]) => {
+      if (!blocked.has(key)) acc[key] = value;
+      return acc;
+    }, {});
+  }
+
+  getChangedFields(existingProduct, changes = {}) {
+    const existing = this.toPlainObject(existingProduct);
+    return Object.keys(changes).filter((key) => {
+      if (changes[key] === undefined) return false;
+      return JSON.stringify(existing[key] ?? null) !== JSON.stringify(changes[key] ?? null);
+    });
+  }
+
+  async createPendingRevision(existingProduct, updatePayload, actor) {
+    const productId = String(existingProduct._id || existingProduct.id);
+    const draftChanges = this.sanitizeRevisionChanges(updatePayload);
+    const changedFields = this.getChangedFields(existingProduct, draftChanges);
+
+    if (!changedFields.length) {
+      const product = this.toPlainObject(existingProduct);
+      return { ...product, pendingRevision: null };
+    }
+
+    const pendingRevision = await this.productRepository.findPendingRevision(productId);
+    const revisionPayload = {
+      productId,
+      sellerId: existingProduct.sellerId,
+      baseVersion: existingProduct.version || 1,
+      draftChanges,
+      changedFields,
+      status: PRODUCT_REVISION_STATUS.PENDING,
+      submittedBy: actor.userId,
+      submittedByRole: actor.role,
+      submittedAt: new Date(),
+    };
+
+    const revision = pendingRevision
+      ? await this.productRepository.updateRevision(pendingRevision._id, revisionPayload)
+      : await this.productRepository.createRevision(revisionPayload);
+
+    const product = await this.productRepository.update(productId, {
+      pendingRevisionId: String(revision._id),
+      revisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING,
+      lastUpdatedBy: actor.userId,
+      statusHistory: this.appendStatusHistory(existingProduct, {
+        fromStatus: existingProduct.status,
+        toStatus: existingProduct.status,
+        fromRevisionStatus:
+          existingProduct.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+        toRevisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING,
+        actor,
+        reason: "seller_active_product_revision_submitted",
+        changedFields,
+        revisionId: revision._id,
+      }),
+      "moderation.revisionCount": (existingProduct.moderation?.revisionCount || 0) + 1,
+      "moderation.submittedAt": new Date(),
+    });
+
+    this._invalidateProductCache();
+
+    return {
+      ...this.toPlainObject(product),
+      pendingRevision: this.toPlainObject(revision),
+    };
+  }
+
+  async listProductRevisions(productId, query = {}, actor = {}) {
+    const product = await this.productRepository.findById(productId);
+    if (!product) throw new AppError("Product not found", 404);
+    this.assertCanAccessManagementProduct(product, actor);
+    return this.productRepository.listRevisions(productId, query);
+  }
+
+  async reviewProductRevision(productId, revisionId, payload, actor) {
+    const product = await this.productRepository.findById(productId);
+    if (!product) throw new AppError("Product not found", 404);
+
+    const revision = await this.productRepository.findRevisionById(revisionId);
+    if (
+      !revision ||
+      String(revision.productId) !== String(productId) ||
+      revision.status !== PRODUCT_REVISION_STATUS.PENDING
+    ) {
+      throw new AppError("Pending product revision not found", 404);
+    }
+
+    const isApproval = payload.status === PRODUCT_STATUS.ACTIVE;
+    const isRejection = payload.status === PRODUCT_STATUS.REJECTED;
+    if (!isApproval && !isRejection) {
+      throw new AppError("Revision review must approve or reject", 400);
+    }
+    if (isRejection && !payload.rejectionReason) {
+      throw new AppError("Rejection reason is required", 400);
+    }
+
+    if (isRejection) {
+      const updatedRevision = await this.productRepository.updateRevision(revisionId, {
+        status: PRODUCT_REVISION_STATUS.REJECTED,
+        reviewedBy: actor.userId,
+        reviewedByRole: actor.role,
+        reviewedAt: new Date(),
+        rejectionReason: payload.rejectionReason,
+        notes: payload.notes || null,
+        checklist: payload.checklist || {},
+      });
+      const updatedProduct = await this.productRepository.update(productId, {
+        pendingRevisionId: null,
+        revisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+        lastUpdatedBy: actor.userId,
+        rejectionReason: payload.rejectionReason,
+        statusHistory: this.appendStatusHistory(product, {
+          fromStatus: product.status,
+          toStatus: product.status,
+          fromRevisionStatus:
+            product.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING,
+          toRevisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+          actor,
+          reason: payload.rejectionReason,
+          changedFields: revision.changedFields || [],
+          revisionId,
+        }),
+        "moderation.reviewedAt": new Date(),
+        "moderation.reviewedBy": actor.userId,
+        "moderation.rejectionReason": payload.rejectionReason,
+        "moderation.notes": payload.notes || null,
+      });
+      this._invalidateProductCache();
+      return {
+        ...this.toPlainObject(updatedProduct),
+        reviewedRevision: this.toPlainObject(updatedRevision),
+      };
+    }
+
+    const nextVersion = (product.version || 1) + 1;
+    const updatePayload = {
+      ...revision.draftChanges,
+      pendingRevisionId: null,
+      revisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+      lastUpdatedBy: actor.userId,
+      version: nextVersion,
+      status: PRODUCT_STATUS.ACTIVE,
+      publishedAt: product.publishedAt || new Date(),
+      approvedBy: actor.userId,
+      approvedAt: new Date(),
+      rejectionReason: null,
+      statusHistory: this.appendStatusHistory(product, {
+        fromStatus: product.status,
+        toStatus: PRODUCT_STATUS.ACTIVE,
+        fromRevisionStatus:
+          product.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING,
+        toRevisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+        actor,
+        reason: "product_revision_approved",
+        changedFields: revision.changedFields || [],
+        revisionId,
+      }),
+      moderation: {
+        ...(product.moderation?.toObject?.() || product.moderation || {}),
+        reviewedAt: new Date(),
+        reviewedBy: actor.userId,
+        rejectionReason: null,
+        notes: payload.notes || null,
+        checklist: payload.checklist || product.moderation?.checklist || {},
+      },
+    };
+
+    const updatedProduct = await this.productRepository.update(productId, updatePayload);
+    const updatedRevision = await this.productRepository.updateRevision(revisionId, {
+      status: PRODUCT_REVISION_STATUS.APPROVED,
+      reviewedBy: actor.userId,
+      reviewedByRole: actor.role,
+      reviewedAt: new Date(),
+      notes: payload.notes || null,
+      checklist: payload.checklist || {},
+      targetVersion: nextVersion,
+      publishedVersion: nextVersion,
+    });
+
+    await this._indexProduct(updatedProduct);
+    this._invalidateProductCache();
+
+    return {
+      ...this.toPlainObject(updatedProduct),
+      reviewedRevision: this.toPlainObject(updatedRevision),
+    };
+  }
+
   // ─── List ─────────────────────────────────────────────────────────────────
 
-  async listProducts(query) {
+  async listProducts(query, { publicOnly = true } = {}) {
     const pagination = { ...getPage(query), sortBy: query.sortBy || query.sort, sortDir: query.sortDir };
     const filter = {};
 
@@ -479,7 +831,7 @@ class ProductService {
     if (query.brand) filter.brand = new RegExp(`^${escapeRegExp(query.brand)}$`, "i");
     if (query.sellerId) filter.sellerId = query.sellerId;
     if (query.productType) filter.productType = query.productType;
-    if (query.visibility) filter.visibility = query.visibility;
+    if (!publicOnly && query.visibility) filter.visibility = query.visibility;
     if (query.tags) filter.tags = { $in: query.tags.split(",").map((t) => t.trim()) };
     if (query.rating) filter.rating = { $gte: Number(query.rating) };
 
@@ -508,15 +860,23 @@ class ProductService {
     if (query.state) filter["origin.state"] = query.state;
     if (query.city) filter["origin.city"] = query.city;
 
-    if (query.includeAllStatuses === true || query.includeAllStatuses === "true") {
-      if (query.status) filter.status = query.status;
-    } else {
-      filter.status = query.status || PRODUCT_STATUS.ACTIVE;
+    if (!publicOnly) {
+      if (query.includeAllStatuses === true || query.includeAllStatuses === "true") {
+        if (query.status) filter.status = query.status;
+      } else {
+        filter.status = query.status || PRODUCT_STATUS.ACTIVE;
+      }
+
+      const cacheKey = `products:management:${JSON.stringify({ filter, pagination })}`;
+      return remember(cacheKey, 30, () =>
+        this.productRepository.paginate(filter, pagination),
+      );
     }
 
-    const cacheKey = `products:${JSON.stringify({ filter, pagination })}`;
+    const publicFilter = applyPublicProductFilter(filter);
+    const cacheKey = `products:${JSON.stringify({ filter: publicFilter, pagination })}`;
     return remember(cacheKey, 60, () =>
-      this.productRepository.paginate(filter, pagination),
+      this.productRepository.paginate(publicFilter, pagination),
     );
   }
 
@@ -619,6 +979,7 @@ class ProductService {
       "sortBy",
       "sortDir",
       "rating",
+      "minRating",
     ]);
 
     Object.entries(query).forEach(([key, value]) => {
@@ -640,12 +1001,129 @@ class ProductService {
     });
   }
 
+  buildSearchFallbackFilter(query = {}) {
+    const filter = applyPublicProductFilter();
+    const term = String(query.q || "").trim();
+    const addFilter = (condition) => {
+      filter.$and = [
+        ...(filter.$and || []),
+        condition,
+      ];
+    };
+
+    if (term) {
+      const regex = new RegExp(escapeRegExp(term), "i");
+      filter.$or = [
+        { title: regex },
+        { shortDescription: regex },
+        { description: regex },
+        { category: regex },
+        { categoryId: regex },
+        { brand: regex },
+        { sku: regex },
+        { color: regex },
+        { hsnCode: regex },
+        { productFamilyCode: regex },
+        { tags: regex },
+      ];
+    }
+
+    const category = query.category || query.categoryId || query.categorySlug;
+    if (category) {
+      filter.$and = [
+        ...(filter.$and || []),
+        {
+          $or: [
+            { category },
+            { categoryId: category },
+            { "category.categoryKey": category },
+            { "category._id": category },
+          ],
+        },
+      ];
+    }
+
+    if (query.brand) {
+      filter.brand = new RegExp(`^${escapeRegExp(query.brand)}$`, "i");
+    }
+
+    if (query.productType) {
+      filter.productType = query.productType;
+    }
+
+    if (query.productFamilyCode || query.family || query.familyCode) {
+      filter.productFamilyCode = new RegExp(
+        `^${escapeRegExp(query.productFamilyCode || query.family || query.familyCode)}$`,
+        "i",
+      );
+    }
+
+    if (query.hsnCode) {
+      filter.hsnCode = new RegExp(`^${escapeRegExp(query.hsnCode)}$`, "i");
+    }
+
+    if (query.tags) {
+      filter.tags = { $in: splitFilterValues(query.tags).map((tag) => new RegExp(`^${escapeRegExp(tag)}$`, "i")) };
+    }
+
+    [
+      "color",
+      "size",
+      "material",
+      "fit",
+      "storage",
+      "skinType",
+      "shade",
+      "finish",
+      "room",
+      "sport",
+      "concern",
+    ].forEach((key) => {
+      if (!query[key]) return;
+      const regexes = splitFilterValues(query[key]).map((value) => new RegExp(`^${escapeRegExp(value)}$`, "i"));
+      addFilter({
+        $or: [
+          { [key]: { $in: regexes } },
+          { [`attributes.${key}`]: { $in: regexes } },
+        ],
+      });
+    });
+
+    if (query.minPrice !== undefined || query.maxPrice !== undefined) {
+      filter.price = {};
+      if (query.minPrice !== undefined) filter.price.$gte = Number(query.minPrice);
+      if (query.maxPrice !== undefined) filter.price.$lte = Number(query.maxPrice);
+    }
+
+    const rating = query.minRating ?? query.rating;
+    if (rating !== undefined && rating !== null && rating !== "") {
+      filter.rating = { $gte: Number(rating) };
+    }
+
+    this.applyStockFilters(filter, query);
+    this.applyAttributeFilters(filter, query);
+    return filter;
+  }
+
   // ─── Get single ───────────────────────────────────────────────────────────
 
   async getProduct(productId) {
-    const product = await this.productRepository.findById(productId);
+    const product = await this.productRepository.findOne(
+      applyPublicProductFilter({ _id: productId }),
+    );
     if (!product) throw new AppError("Product not found", 404);
     return product;
+  }
+
+  async getProductForManagement(productId, actor = {}) {
+    const product = await this.productRepository.findById(productId);
+    if (!product) throw new AppError("Product not found", 404);
+    this.assertCanAccessManagementProduct(product, actor);
+    const pendingRevision = await this.productRepository.findPendingRevision(productId);
+    return {
+      ...this.toPlainObject(product),
+      pendingRevision: pendingRevision ? this.toPlainObject(pendingRevision) : null,
+    };
   }
 
   async trackView(productId) {
@@ -659,6 +1137,8 @@ class ProductService {
   // ─── Search ───────────────────────────────────────────────────────────────
 
   async searchProducts(query) {
+    const page = Math.max(1, Number(query.page || 1));
+    const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
     try {
       const esQuery = {
         bool: {
@@ -666,45 +1146,127 @@ class ProductService {
             {
               multi_match: {
                 query: query.q,
-                fields: ["title^4", "brand^2", "category^2", "description", "tags^3", "color", "hsnCode"],
+                fields: [
+                  "title^4",
+                  "shortDescription^2",
+                  "brand^2",
+                  "category^2",
+                  "description",
+                  "sku^2",
+                  "tags^3",
+                  "color",
+                  "hsnCode",
+                  "productFamilyCode",
+                ],
                 fuzziness: "AUTO",
                 prefix_length: 2,
               },
             },
           ],
-          filter: [{ term: { status: "active" } }],
+          filter: buildPublicSearchFilters(),
         },
       };
 
-      if (query.category) esQuery.bool.filter.push({ term: { category: query.category } });
-      if (query.brand) esQuery.bool.filter.push({ term: { brand: query.brand } });
+      const category = query.category || query.categoryId || query.categorySlug;
+      if (category) {
+        esQuery.bool.filter.push({
+          bool: {
+            should: [
+              { term: { "category.keyword": category } },
+              { term: { "categoryId.keyword": category } },
+            ],
+            minimum_should_match: 1,
+          },
+        });
+      }
+      if (query.brand) esQuery.bool.filter.push({ term: { "brand.keyword": query.brand } });
       if (query.productType) esQuery.bool.filter.push({ term: { productType: query.productType } });
+      if (query.productFamilyCode || query.family || query.familyCode) {
+        const familyFilter = buildProductSearchExactFilter(
+          ["productFamilyCode.keyword", "productFamilyCode"],
+          query.productFamilyCode || query.family || query.familyCode,
+        );
+        if (familyFilter) esQuery.bool.filter.push(familyFilter);
+      }
+      if (query.hsnCode) {
+        const hsnFilter = buildProductSearchExactFilter(["hsnCode.keyword", "hsnCode"], query.hsnCode);
+        if (hsnFilter) esQuery.bool.filter.push(hsnFilter);
+      }
+      if (query.tags) {
+        const tagsFilter = buildProductSearchExactFilter(["tags.keyword", "tags"], query.tags);
+        if (tagsFilter) esQuery.bool.filter.push(tagsFilter);
+      }
+      [
+        "color",
+        "size",
+        "material",
+        "fit",
+        "storage",
+        "skinType",
+        "shade",
+        "finish",
+        "room",
+        "sport",
+        "concern",
+      ].forEach((key) => {
+        if (!query[key]) return;
+        const attributeFilter = buildProductSearchExactFilter(
+          [
+            `${key}.keyword`,
+            key,
+            `attributes.${key}.keyword`,
+            `attributes.${key}`,
+          ],
+          query[key],
+        );
+        if (attributeFilter) esQuery.bool.filter.push(attributeFilter);
+      });
       if (query.minPrice !== undefined || query.maxPrice !== undefined) {
         const range = {};
         if (query.minPrice !== undefined) range.gte = Number(query.minPrice);
         if (query.maxPrice !== undefined) range.lte = Number(query.maxPrice);
         esQuery.bool.filter.push({ range: { price: range } });
       }
+      const rating = query.minRating ?? query.rating;
+      if (rating !== undefined && rating !== null && rating !== "") {
+        esQuery.bool.filter.push({ range: { rating: { gte: Number(rating) } } });
+      }
+      if (query.inStock === true || query.inStock === "true") {
+        esQuery.bool.filter.push({ range: { availableStock: { gt: 0 } } });
+      }
 
-      const page = Number(query.page || 1);
-      const limit = Number(query.limit || 20);
+      const sortOptions = {
+        price_asc: [{ price: "asc" }],
+        price_desc: [{ price: "desc" }],
+        rating: [{ rating: "desc" }],
+        newest: [{ createdAt: "desc" }],
+        popular: [{ "analytics.purchases": "desc" }],
+        _score: [{ _score: "desc" }, { "analytics.purchases": "desc" }],
+      };
 
       const response = await elasticsearchClient.search({
         index: "products",
         from: (page - 1) * limit,
         size: limit,
         query: esQuery,
-        sort: [{ _score: "desc" }, { "analytics.purchases": "desc" }],
+        sort: sortOptions[query.sort] || sortOptions._score,
       });
 
       return {
         items: response.hits.hits.map((hit) => ({ ...hit._source, _score: hit._score })),
         total: response.hits.total?.value ?? response.hits.hits.length,
+        source: "elasticsearch",
       };
     } catch (error) {
       logger.warn({ err: error, q: query.q }, "Elasticsearch search failed, falling back to Mongo");
-      const items = await this.productRepository.search(query.q, Number(query.limit || 50));
-      return { items, total: items.length };
+      const filter = this.buildSearchFallbackFilter(query);
+      const result = await this.productRepository.paginate(filter, {
+        page,
+        limit,
+        skip: (page - 1) * limit,
+        sortBy: query.sort || "popular",
+      });
+      return { items: result.items, total: result.total, source: "mongo" };
     }
   }
 
@@ -713,6 +1275,15 @@ class ProductService {
   async reviewProduct(productId, payload, actor) {
     const existingProduct = await this.productRepository.findById(productId);
     if (!existingProduct) throw new AppError("Product not found", 404);
+
+    const pendingRevision = await this.productRepository.findPendingRevision(productId);
+    if (
+      pendingRevision &&
+      existingProduct.status === PRODUCT_STATUS.ACTIVE &&
+      [PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.REJECTED].includes(payload.status)
+    ) {
+      return this.reviewProductRevision(productId, pendingRevision._id, payload, actor);
+    }
 
     const nextStatus = payload.status;
     const isApproval = nextStatus === PRODUCT_STATUS.ACTIVE;
@@ -736,6 +1307,15 @@ class ProductService {
         notes: payload.notes || null,
         checklist: payload.checklist || existingProduct.moderation?.checklist || {},
       },
+      statusHistory: this.appendStatusHistory(existingProduct, {
+        fromStatus: existingProduct.status,
+        toStatus: nextStatus,
+        fromRevisionStatus:
+          existingProduct.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+        toRevisionStatus: existingProduct.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+        actor,
+        reason: payload.rejectionReason || payload.notes || "product_review",
+      }),
     });
 
     if (nextStatus === PRODUCT_STATUS.ACTIVE) {
@@ -766,6 +1346,8 @@ class ProductService {
 
   async bulkUpdateVisibility(productIds, visibility) {
     await this.productRepository.bulkUpdateVisibility(productIds, visibility);
+    const products = await this.productRepository.findByIds(productIds);
+    await Promise.allSettled(products.map((product) => this._indexProduct(product)));
     this._invalidateProductCache();
     return { updated: productIds.length, visibility };
   }
@@ -837,6 +1419,93 @@ class ProductService {
   async getTopProducts(limit = 10, metric = "purchases") {
     return this.productRepository.getTopProducts(limit, metric);
   }
+
+  async publishScheduledProducts({ now = new Date(), limit = 100, actor = null } = {}) {
+    const products = await this.productRepository.findScheduledForPublish(now, limit);
+    const results = [];
+
+    for (const product of products) {
+      const updatedProduct = await this.productRepository.update(product._id, {
+        status: PRODUCT_STATUS.ACTIVE,
+        visibility: PRODUCT_VISIBILITY.PUBLIC,
+        publishedAt: product.publishedAt || now,
+        scheduledAt: null,
+        lastUpdatedBy: actor?.userId || "system",
+        statusHistory: this.appendStatusHistory(product, {
+          fromStatus: product.status,
+          toStatus: PRODUCT_STATUS.ACTIVE,
+          fromRevisionStatus: product.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+          toRevisionStatus: product.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+          actor: actor || { userId: "system", role: "system" },
+          reason: "scheduled_publish_job",
+        }),
+      });
+      await this._indexProduct(updatedProduct);
+      results.push(updatedProduct);
+    }
+
+    if (results.length) this._invalidateProductCache();
+    return { published: results.length, items: results };
+  }
+
+  toPlainObject(value = {}) {
+    if (!value) return {};
+    if (typeof value.toObject === "function") {
+      return value.toObject({ depopulate: true, flattenMaps: true });
+    }
+    return { ...value };
+  }
+
+  buildStatusHistoryEntry({
+    fromStatus = null,
+    toStatus = null,
+    fromRevisionStatus = null,
+    toRevisionStatus = null,
+    actor = {},
+    reason = null,
+    changedFields = [],
+    revisionId = null,
+  } = {}) {
+    return {
+      fromStatus,
+      toStatus,
+      fromRevisionStatus,
+      toRevisionStatus,
+      actorId: actor.userId || "system",
+      actorRole: actor.role || "system",
+      reason,
+      changedFields: Array.isArray(changedFields) ? changedFields : [],
+      revisionId: revisionId ? String(revisionId) : null,
+      createdAt: new Date(),
+    };
+  }
+
+  appendStatusHistory(product, entry = {}) {
+    const source = this.toPlainObject(product);
+    return [
+      ...(Array.isArray(source.statusHistory) ? source.statusHistory : []),
+      this.buildStatusHistoryEntry(entry),
+    ].slice(-100);
+  }
+
+  assertCanAccessManagementProduct(product, actor = {}) {
+    if (!actor.userId || actor.isSuperAdmin || ["admin", "super-admin"].includes(actor.role)) {
+      return;
+    }
+    if (
+      isSellerRole(actor) &&
+      String(product.sellerId || "") === String(actor.ownerSellerId || actor.userId)
+    ) {
+      if (
+        isScopedSellerRole(actor) &&
+        String(product.createdBy || "") !== String(actor.userId || "")
+      ) {
+        throw new AppError("Permission denied", 403);
+      }
+      return;
+    }
+    throw new AppError("Permission denied", 403);
+  }
 }
 
 // helper
@@ -854,6 +1523,29 @@ function isScopedSellerRole(actor) {
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function splitFilterValues(value) {
+  const values = Array.isArray(value) ? value : String(value).split(",");
+  return values
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+}
+
+function buildProductSearchExactFilter(fields = [], value) {
+  const values = splitFilterValues(value);
+  if (!values.length) return null;
+
+  return {
+    bool: {
+      should: fields.flatMap((field) => (
+        values.length > 1
+          ? [{ terms: { [field]: values } }]
+          : [{ term: { [field]: values[0] } }]
+      )),
+      minimum_should_match: 1,
+    },
+  };
 }
 
 function parseFilterValue(value) {

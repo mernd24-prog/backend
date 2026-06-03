@@ -16,7 +16,9 @@ class ProductController {
 
   list = async (req, res) => {
     const { page, limit } = getPage(req.query);
-    const result = await this.productService.listProducts(req.query);
+    const result = await this.productService.listProducts(req.query, {
+      publicOnly: !req.auth,
+    });
     res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
   };
 
@@ -28,15 +30,22 @@ class ProductController {
   };
 
   getOne = async (req, res) => {
-    const product = await this.productService.getProduct(req.params.productId);
-    // Track view asynchronously (non-blocking)
-    this.productService.trackView(req.params.productId).catch(() => {});
+    const product = req.auth
+      ? await this.productService.getProductForManagement(
+          req.params.productId,
+          getCurrentUser(req),
+        )
+      : await this.productService.getProduct(req.params.productId);
+    if (!req.auth) {
+      // Track customer views only for public product reads.
+      this.productService.trackView(req.params.productId).catch(() => {});
+    }
     res.json(okResponse(product));
   };
 
   search = async (req, res) => {
     const result = await this.productService.searchProducts(req.query);
-    res.json(okResponse(result.items, { total: result.total }));
+    res.json(okResponse(result.items, { total: result.total, source: result.source }));
   };
 
   update = async (req, res) => {
@@ -48,6 +57,31 @@ class ProductController {
   review = async (req, res) => {
     const actor = getCurrentUser(req);
     const product = await this.productService.reviewProduct(req.params.productId, req.body, actor);
+    res.json(okResponse(product));
+  };
+
+  listRevisions = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.productService.listProductRevisions(
+      req.params.productId,
+      req.query,
+      actor,
+    );
+    res.json(okResponse(result.items, {
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+    }));
+  };
+
+  reviewRevision = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const product = await this.productService.reviewProductRevision(
+      req.params.productId,
+      req.params.revisionId,
+      req.body,
+      actor,
+    );
     res.json(okResponse(product));
   };
 

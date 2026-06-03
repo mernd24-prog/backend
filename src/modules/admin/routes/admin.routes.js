@@ -148,6 +148,8 @@ const {
   listProductSchema,
   reviewProductSchema,
   rejectProductSchema,
+  listProductRevisionsSchema,
+  reviewProductRevisionSchema,
   productParamSchema,
 } = require("../../product/validation/product.validation");
 const { ACTIONS } = require("../../../shared/constants/actions");
@@ -503,6 +505,16 @@ adminRoutes.post(
   "/products",
   checkInput(createProductSchema),
   catchErrors(productController.create),
+);
+adminRoutes.get(
+  "/products/:productId/revisions",
+  checkInput(listProductRevisionsSchema),
+  catchErrors(productController.listRevisions),
+);
+adminRoutes.patch(
+  "/products/:productId/revisions/:revisionId/review",
+  checkInput(reviewProductRevisionSchema),
+  catchErrors(productController.reviewRevision),
 );
 adminRoutes.get(
   "/products/:productId",

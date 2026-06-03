@@ -7,6 +7,43 @@ const { allowRoles } = require("../middleware/access");
 const { AdvancedSearchService } = require("../services/advanced-search.service");
 const { searchValidation } = require("../../modules/validation");
 
+const PRODUCT_ATTRIBUTE_FILTER_KEYS = [
+  "color",
+  "size",
+  "material",
+  "fit",
+  "storage",
+  "skinType",
+  "shade",
+  "finish",
+  "room",
+  "sport",
+  "concern",
+  "hsnCode",
+  "tags",
+];
+
+function buildAttributeFilters(query = {}) {
+  const filters = {};
+
+  PRODUCT_ATTRIBUTE_FILTER_KEYS.forEach((key) => {
+    if (query[key] !== undefined && query[key] !== null && query[key] !== "") {
+      filters[key] = query[key];
+    }
+  });
+
+  Object.entries(query).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    if (key.startsWith("attr_")) {
+      filters[key.replace(/^attr_/, "")] = value;
+    } else if (key.startsWith("attribute.")) {
+      filters[key.replace(/^attribute\./, "")] = value;
+    }
+  });
+
+  return filters;
+}
+
 // ==============================
 // Public: Search products
 // ==============================
@@ -29,12 +66,17 @@ router.get("/", async (req, res, next) => {
     const filters = {
       category,
       priceRange:
-        value.minPrice && value.maxPrice
+        value.minPrice !== undefined || value.maxPrice !== undefined
           ? [value.minPrice, value.maxPrice]
           : undefined,
       minRating: value.minRating,
+      rating: value.rating,
       seller: value.seller,
       inStock: value.inStock,
+      brand: value.brand,
+      productType: value.productType,
+      productFamilyCode: value.productFamilyCode || value.family || value.familyCode,
+      attributeFilters: buildAttributeFilters(value),
     };
 
     const results = await AdvancedSearchService.search({
@@ -52,6 +94,9 @@ router.get("/", async (req, res, next) => {
       meta: {
         page,
         limit,
+        total: results.total,
+        totalPages: Math.max(1, Math.ceil((results.total || 0) / limit)),
+        source: results.source || "elasticsearch",
       },
     });
   } catch (err) {
@@ -126,7 +171,8 @@ router.post(
 
       return res.status(200).json({
         success: true,
-        message: result || "Search index rebuilt successfully",
+        message: "Search index rebuilt successfully",
+        ...result,
       });
     } catch (err) {
       next(err);

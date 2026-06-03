@@ -10,6 +10,8 @@ const {
   listProductSchema,
   searchProductSchema,
   reviewProductSchema,
+  listProductRevisionsSchema,
+  reviewProductRevisionSchema,
   bulkProductSchema,
   updateInventorySchema,
   productParamSchema,
@@ -23,7 +25,6 @@ const productController = new ProductController();
 
 productRoutes.get("/", checkInput(listProductSchema), catchErrors(productController.list));
 productRoutes.get("/search", checkInput(searchProductSchema), catchErrors(productController.search));
-productRoutes.get("/:productId", checkInput(productParamSchema), catchErrors(productController.getOne));
 
 // ── Seller ────────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,20 @@ productRoutes.patch(
   checkInput(reviewProductSchema),
   catchErrors(productController.review),
 );
+productRoutes.get(
+  "/:productId/revisions",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(listProductRevisionsSchema),
+  catchErrors(productController.listRevisions),
+);
+productRoutes.patch(
+  "/:productId/revisions/:revisionId/review",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_REVIEW),
+  checkInput(reviewProductRevisionSchema),
+  catchErrors(productController.reviewRevision),
+);
 
 // ── Bulk ─────────────────────────────────────────────────────────────────────
 
@@ -99,5 +114,7 @@ productRoutes.get(
   allowActions(ACTIONS.CATALOG_REVIEW),
   catchErrors(productController.topProducts),
 );
+
+productRoutes.get("/:productId", checkInput(productParamSchema), catchErrors(productController.getOne));
 
 module.exports = { productRoutes };

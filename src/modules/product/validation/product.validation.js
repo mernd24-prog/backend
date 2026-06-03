@@ -3,6 +3,7 @@ const {
   PRODUCT_STATUS,
   PRODUCT_TYPE,
   PRODUCT_VISIBILITY,
+  PRODUCT_REVISION_STATUS,
   DIGITAL_FILE_TYPE,
   SUBSCRIPTION_BILLING_CYCLE,
 } = require("../../../shared/domain/commerce-constants");
@@ -183,7 +184,7 @@ const productBodyBase = {
   mrp: Joi.number().min(0),
   salePrice: optionalNonNegativeNumber(),
   costPrice: optionalNonNegativeNumber(),
-  gstRate: Joi.number().min(0).max(100).default(18),
+  gstRate: Joi.number().min(0).max(100),
   gstInclusive: Joi.boolean(),
   hsnCode: optionalString(),
   currency: optionalString(),
@@ -335,13 +336,38 @@ const searchProductSchema = Joi.object({
   query: Joi.object({
     q: Joi.string().min(2).required(),
     category: Joi.string(),
+    categoryId: Joi.string(),
+    categorySlug: Joi.string(),
     brand: Joi.string(),
     minPrice: Joi.number().min(0),
     maxPrice: Joi.number().min(0),
+    minRating: Joi.number().min(0).max(5),
+    rating: Joi.number().min(0).max(5),
+    inStock: Joi.boolean(),
     productType: Joi.string(),
+    productFamilyCode: Joi.string().allow("", null),
+    family: Joi.string().allow("", null),
+    familyCode: Joi.string().allow("", null),
+    hsnCode: Joi.string().allow("", null),
+    tags: Joi.string().allow("", null),
+    color: Joi.string().allow("", null),
+    size: Joi.string().allow("", null),
+    material: Joi.string().allow("", null),
+    fit: Joi.string().allow("", null),
+    storage: Joi.string().allow("", null),
+    skinType: Joi.string().allow("", null),
+    shade: Joi.string().allow("", null),
+    finish: Joi.string().allow("", null),
+    room: Joi.string().allow("", null),
+    sport: Joi.string().allow("", null),
+    concern: Joi.string().allow("", null),
+    sort: Joi.string().valid("price_asc", "price_desc", "rating", "newest", "_score", "popular", ""),
     page: Joi.number().integer().min(1),
     limit: Joi.number().integer().min(1).max(100),
-  }).required(),
+  })
+    .pattern(/^attr_[A-Za-z0-9_-]+$/, Joi.string().allow("", null))
+    .pattern(/^attribute\.[A-Za-z0-9_-]+$/, Joi.string().allow("", null))
+    .required(),
   params: Joi.object({}).required(),
 });
 
@@ -357,6 +383,46 @@ const reviewProductSchema = Joi.object({
   query: Joi.object({}).required(),
   params: Joi.object({
     productId: Joi.string().required(),
+  }).required(),
+});
+
+const rejectProductSchema = Joi.object({
+  body: Joi.object({
+    rejectionReason: Joi.string().trim().max(1000).required(),
+    notes: Joi.string().max(500).allow("", null),
+    checklist: moderationChecklistSchema,
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    productId: Joi.string().required(),
+  }).required(),
+});
+
+const listProductRevisionsSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    page: Joi.number().integer().min(1),
+    limit: Joi.number().integer().min(1).max(100),
+    status: Joi.string().valid(...Object.values(PRODUCT_REVISION_STATUS)),
+  }).required(),
+  params: Joi.object({
+    productId: Joi.string().required(),
+  }).required(),
+});
+
+const reviewProductRevisionSchema = Joi.object({
+  body: Joi.object({
+    status: Joi.string()
+      .valid(PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.REJECTED)
+      .required(),
+    rejectionReason: Joi.string().trim().max(1000).allow("", null),
+    notes: Joi.string().max(500).allow("", null),
+    checklist: moderationChecklistSchema,
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    productId: Joi.string().required(),
+    revisionId: Joi.string().required(),
   }).required(),
 });
 
@@ -397,6 +463,9 @@ module.exports = {
   listProductSchema,
   searchProductSchema,
   reviewProductSchema,
+  rejectProductSchema,
+  listProductRevisionsSchema,
+  reviewProductRevisionSchema,
   bulkProductSchema,
   updateInventorySchema,
   productParamSchema,

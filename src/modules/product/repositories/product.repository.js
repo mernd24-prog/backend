@@ -1,4 +1,5 @@
 const { ProductModel } = require("../models/product.model");
+const { ProductRevisionModel } = require("../models/product-revision.model");
 
 class ProductRepository {
   // ─── Create & basic CRUD ──────────────────────────────────────────────────
@@ -11,8 +12,24 @@ class ProductRepository {
     return ProductModel.findById(productId);
   }
 
+  async findOne(filter) {
+    return ProductModel.findOne(filter);
+  }
+
   async findByIds(productIds) {
     return ProductModel.find({ _id: { $in: productIds } });
+  }
+
+  async findScheduledForPublish(now = new Date(), limit = 100) {
+    return ProductModel.find({
+      scheduledAt: { $lte: now },
+      $or: [
+        { status: "scheduled" },
+        { status: "active", visibility: "scheduled" },
+      ],
+    })
+      .sort({ scheduledAt: 1 })
+      .limit(limit);
   }
 
   async findBySku(sku, sellerId = null) {
@@ -71,9 +88,9 @@ class ProductRepository {
 
   // ─── Search ───────────────────────────────────────────────────────────────
 
-  async search(query, limit = 50) {
+  async search(query, limit = 50, baseFilter = {}) {
     return ProductModel.find(
-      { $text: { $search: query }, status: "active" },
+      { ...baseFilter, $text: { $search: query } },
       { score: { $meta: "textScore" } },
     )
       .sort({ score: { $meta: "textScore" } })
@@ -84,6 +101,47 @@ class ProductRepository {
 
   async reviewProduct(productId, payload) {
     return ProductModel.findByIdAndUpdate(productId, { $set: payload }, { new: true });
+  }
+
+  // ─── Product revisions ───────────────────────────────────────────────────
+
+  async createRevision(payload) {
+    return ProductRevisionModel.create(payload);
+  }
+
+  async findRevisionById(revisionId) {
+    return ProductRevisionModel.findById(revisionId);
+  }
+
+  async findPendingRevision(productId) {
+    return ProductRevisionModel.findOne({
+      productId: String(productId),
+      status: "pending",
+    }).sort({ createdAt: -1 });
+  }
+
+  async listRevisions(productId, { page = 1, limit = 20, status = null } = {}) {
+    const safePage = Math.max(1, Number(page) || 1);
+    const safeLimit = Math.min(100, Math.max(1, Number(limit) || 20));
+    const filter = { productId: String(productId) };
+    if (status) filter.status = status;
+
+    const [items, total] = await Promise.all([
+      ProductRevisionModel.find(filter)
+        .sort({ createdAt: -1 })
+        .skip((safePage - 1) * safeLimit)
+        .limit(safeLimit),
+      ProductRevisionModel.countDocuments(filter),
+    ]);
+    return { items, total, page: safePage, limit: safeLimit };
+  }
+
+  async updateRevision(revisionId, payload) {
+    return ProductRevisionModel.findByIdAndUpdate(
+      revisionId,
+      { $set: payload },
+      { new: true },
+    );
   }
 
   // ─── Bulk operations ─────────────────────────────────────────────────────
