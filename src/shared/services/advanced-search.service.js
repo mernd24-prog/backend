@@ -45,7 +45,15 @@ class AdvancedSearchService {
       // Filters
       // ==============================
       if (filters.category) {
-        filter.push({ term: { "category.keyword": filters.category } });
+        filter.push({
+          bool: {
+            should: [
+              { term: { "category.keyword": filters.category } },
+              { term: { "categoryId.keyword": filters.category } },
+            ],
+            minimum_should_match: 1,
+          },
+        });
       }
 
       if (filters.priceRange) {

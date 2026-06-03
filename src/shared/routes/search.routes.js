@@ -25,8 +25,9 @@ router.get("/", async (req, res, next) => {
     const page = Math.max(1, Number(value.page) || 1);
     const limit = Math.min(50, Number(value.limit) || 20); // 🔥 limit cap
 
+    const category = value.category || value.categoryId || value.categorySlug;
     const filters = {
-      category: value.category,
+      category,
       priceRange:
         value.minPrice && value.maxPrice
           ? [value.minPrice, value.maxPrice]

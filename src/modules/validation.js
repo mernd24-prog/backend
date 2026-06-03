@@ -196,6 +196,27 @@ const commissionValidation = {
   }),
 };
 
+const searchValidation = {
+  search: Joi.object({
+    q: Joi.string().trim().min(1).allow("").default(""),
+    category: Joi.string().trim().allow("", null),
+    categoryId: Joi.string().trim().allow("", null),
+    categorySlug: Joi.string().trim().allow("", null),
+    minPrice: Joi.number().min(0),
+    maxPrice: Joi.number().min(0),
+    minRating: Joi.number().min(0).max(5),
+    seller: Joi.string().trim().allow("", null),
+    inStock: Joi.boolean(),
+    sort: Joi.string().valid("price_asc", "price_desc", "rating", "newest", "_score", "").default("_score"),
+    page: Joi.number().integer().min(1).default(1),
+    limit: Joi.number().integer().min(1).max(50).default(20),
+  }),
+  autocomplete: Joi.object({
+    q: Joi.string().trim().min(1).required(),
+    limit: Joi.number().integer().min(1).max(20).default(10),
+  }),
+};
+
 module.exports = {
   loyaltyValidation,
   recommendationValidation,
@@ -204,4 +225,5 @@ module.exports = {
   notificationValidation,
   fraudValidation,
   commissionValidation,
+  searchValidation,
 };
