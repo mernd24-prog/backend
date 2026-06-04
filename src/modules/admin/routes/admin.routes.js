@@ -146,10 +146,15 @@ const {
   createProductSchema,
   updateProductSchema,
   listProductSchema,
+  productPrefillSchema,
   reviewProductSchema,
   rejectProductSchema,
   listProductRevisionsSchema,
   reviewProductRevisionSchema,
+  productStatusSchema,
+  productLifecycleSchema,
+  bulkProductSchema,
+  updateInventorySchema,
   productParamSchema,
 } = require("../../product/validation/product.validation");
 const { ACTIONS } = require("../../../shared/constants/actions");
@@ -494,6 +499,24 @@ adminRoutes.get(
   catchErrors(adminController.moderationQueue),
 );
 adminRoutes.get(
+  "/products/prefill",
+  checkInput(productPrefillSchema),
+  catchErrors(productController.prefill),
+);
+adminRoutes.post(
+  "/products/bulk/update",
+  checkInput(bulkProductSchema),
+  catchErrors(productController.bulkUpdate),
+);
+adminRoutes.get(
+  "/products/inventory/stats",
+  catchErrors(productController.inventoryStats),
+);
+adminRoutes.get(
+  "/products/analytics/top",
+  catchErrors(productController.topProducts),
+);
+adminRoutes.get(
   "/products",
   checkInput(listProductSchema),
   catchErrors((req, res) => {
@@ -533,8 +556,28 @@ adminRoutes.delete(
 );
 adminRoutes.patch(
   "/products/:productId/status",
-  checkInput(reviewProductSchema),
-  catchErrors(productController.review),
+  checkInput(productStatusSchema),
+  catchErrors(productController.status),
+);
+adminRoutes.patch(
+  "/products/:productId/archive",
+  checkInput(productLifecycleSchema),
+  catchErrors(productController.archive),
+);
+adminRoutes.patch(
+  "/products/:productId/restore",
+  checkInput(productLifecycleSchema),
+  catchErrors(productController.restore),
+);
+adminRoutes.post(
+  "/products/:productId/duplicate",
+  checkInput(productLifecycleSchema),
+  catchErrors(productController.duplicate),
+);
+adminRoutes.patch(
+  "/products/:productId/inventory",
+  checkInput(updateInventorySchema),
+  catchErrors(productController.adjustInventory),
 );
 adminRoutes.patch(
   "/products/:productId/approve",

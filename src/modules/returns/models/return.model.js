@@ -9,6 +9,7 @@ const returnSchema = new mongoose.Schema(
     items: [
       {
         productId: String,
+        sellerId: { type: String, index: true },
         variantId: String,
         variantSku: String,
         quantity: Number,

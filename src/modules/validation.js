@@ -193,6 +193,10 @@ const commissionValidation = {
   }),
   processPayouts: Joi.object({
     sellerId: Joi.string().required(),
+    periodStart: Joi.date(),
+    periodEnd: Joi.date(),
+    paymentReference: Joi.string().trim().max(160),
+    paymentMethod: Joi.string().trim().max(64),
   }),
 };
 

@@ -12,6 +12,8 @@ const { ProductModel } = require("../../product/models/product.model");
 const { validateStatusTransition } = require("../../../shared/domain/status-transition");
 const { auditService } = require("../../../shared/logger/audit.service");
 const { TaxService } = require("../../tax/services/tax.service");
+const { CommissionService } = require("../../seller/services/commission.service");
+const { logger } = require("../../../shared/logger/logger");
 
 class OrderService {
   constructor({
@@ -20,12 +22,14 @@ class OrderService {
     inventoryService = new InventoryService(),
     walletService = new WalletService(),
     taxService = new TaxService({ orderRepository }),
+    commissionService = CommissionService,
   } = {}) {
     this.orderRepository = orderRepository;
     this.pricingService = pricingService;
     this.inventoryService = inventoryService;
     this.walletService = walletService;
     this.taxService = taxService;
+    this.commissionService = commissionService;
   }
 
   async createOrder(payload, actor) {
@@ -430,6 +434,17 @@ class OrderService {
 
     if (nextStatus === ORDER_STATUS.RETURNED) {
       await this.inventoryService.restockForOrder(orderId);
+    }
+
+    if ([ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED].includes(nextStatus)) {
+      try {
+        await this.commissionService.calculateCommission(orderId, {
+          actor,
+          sourceStatus: nextStatus,
+        });
+      } catch (error) {
+        logger.error({ orderId, status: nextStatus, error: error.message }, "Seller commission sync failed");
+      }
     }
 
     await eventPublisher.publish(

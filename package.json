@@ -12,6 +12,7 @@
     "check": "node --check src/server.js",
     "db:migrate": "node scripts/db/run-sequelize-migrations.js",
     "db:migrate:undo": "node scripts/db/rollback-sequelize-migration.js",
+    "db:seed:seller-finance": "node scripts/db/seed-seller-finance-demo.js",
     "db:seed:commerce": "node scripts/db/seed-commerce-demo.js --reset",
     "db:seed:commerce:append": "node scripts/db/seed-commerce-demo.js",
     "db:seed:commerce:qa": "node scripts/db/seed-commerce-qa.js --reset",

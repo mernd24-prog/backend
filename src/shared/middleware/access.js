@@ -6,6 +6,10 @@ const {
   getRequestModule,
   cleanModuleName,
 } = require("../auth/module-access");
+const {
+  ACTION_ALIASES,
+  normalizePermissionAction: normalizeRbacPermissionAction,
+} = require("../auth/rbac-permissions");
 
 function getUserRoles(req) {
   const roles = [];
@@ -49,12 +53,14 @@ function getAuthorizedModuleScope(auth = {}) {
   return new Set([...allowedModules, ...permissionModules]);
 }
 
-const PERMISSION_ACTION_ALIASES = {
-  create: ["add"],
-  update: ["edit"],
-  approve: ["approval", "review"],
-  status_change: ["status", "action", "manage"],
-};
+const PERMISSION_ACTION_ALIASES = Object.entries(ACTION_ALIASES).reduce(
+  (lookup, [alias, canonical]) => {
+    if (!lookup[canonical]) lookup[canonical] = [];
+    lookup[canonical].push(alias);
+    return lookup;
+  },
+  {},
+);
 
 const ACTION_CANONICAL = Object.entries(PERMISSION_ACTION_ALIASES).reduce(
   (lookup, [canonical, aliases]) => {
@@ -68,8 +74,7 @@ const ACTION_CANONICAL = Object.entries(PERMISSION_ACTION_ALIASES).reduce(
 );
 
 function normalizePermissionAction(action = "view") {
-  const value = String(action || "view").trim().toLowerCase();
-  return ACTION_CANONICAL[value] || value;
+  return normalizeRbacPermissionAction(ACTION_CANONICAL[String(action || "view").trim().toLowerCase()] || action || "view");
 }
 
 const METHOD_ACTIONS = {
@@ -86,6 +91,7 @@ function inferRequestAction(req) {
 
   if (path.includes("/approve") || path.includes("/approval")) return "approve";
   if (path.includes("/reject")) return "reject";
+  if (path.includes("/restore") || path.includes("/recover")) return "restore";
   if (path.includes("/access/sub-admins") && path.includes("/modules")) {
     return method === "GET" ? "view" : "assign";
   }
@@ -99,9 +105,17 @@ function inferRequestAction(req) {
   if (path.includes("/assign")) {
     return method === "GET" ? "view" : "assign";
   }
-  if (path.includes("/status") || path.includes("/moderate") || path.includes("/review")) {
+  if (
+    path.includes("/status") ||
+    path.includes("/moderate") ||
+    path.includes("/review") ||
+    path.includes("/archive") ||
+    path.includes("/activate") ||
+    path.includes("/deactivate")
+  ) {
     return method === "GET" ? "view" : "status_change";
   }
+  if (path.includes("/inventory")) return method === "GET" ? "view" : "adjust";
   if (path.includes("/bulk")) return method === "GET" ? "view" : "bulk_action";
   if (path.includes("/import")) return "import";
   if (path.includes("/export")) return "export";

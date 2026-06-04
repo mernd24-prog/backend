@@ -12,34 +12,44 @@ const {
 const {
   SIDEBAR_MODULES,
 } = require("../../src/shared/auth/admin-sidebar-catalog");
+const {
+  PERMISSION_ACTIONS,
+  SIDEBAR_PERMISSION_ACTIONS,
+} = require("../../src/shared/auth/rbac-permissions");
 
-const CANONICAL_ACTIONS = [
-  { key: "view", label: "View" },
-  { key: "create", label: "Create" },
-  { key: "update", label: "Update" },
-  { key: "delete", label: "Delete" },
-  { key: "approve", label: "Approve" },
-  { key: "reject", label: "Reject" },
-  { key: "assign", label: "Assign" },
-  { key: "export", label: "Export" },
-  { key: "import", label: "Import" },
-  { key: "status_change", label: "Status Change" },
-  { key: "restore", label: "Restore" },
-  { key: "bulk_action", label: "Bulk Action" },
-];
+const ACTION_LABELS = {
+  view: "View",
+  create: "Create",
+  update: "Update",
+  delete: "Delete",
+  approve: "Approve",
+  reject: "Reject",
+  assign: "Assign",
+  export: "Export",
+  import: "Import",
+  status_change: "Status Change",
+  restore: "Restore",
+  bulk_action: "Bulk Action",
+  adjust: "Adjust",
+};
 
-const SIDEBAR_ACTIONS = [
-  { key: "view", label: "View" },
-  { key: "create", label: "Create" },
-  { key: "update", label: "Update" },
-  { key: "delete", label: "Delete" },
-  { key: "status_change", label: "Status Change" },
-  { key: "approve", label: "Approve" },
-  { key: "reject", label: "Reject" },
-  { key: "assign", label: "Assign" },
-  { key: "export", label: "Export" },
-  { key: "import", label: "Import" },
-];
+function formatActionLabel(action) {
+  return String(action || "")
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function makeActionList(actions) {
+  return actions.map((key) => ({
+    key,
+    label: ACTION_LABELS[key] || formatActionLabel(key),
+  }));
+}
+
+const CANONICAL_ACTIONS = makeActionList(PERMISSION_ACTIONS);
+const SIDEBAR_ACTIONS = makeActionList(SIDEBAR_PERMISSION_ACTIONS);
 
 const LEGACY_ACTION_KEYS = [
   "add",
@@ -114,6 +124,31 @@ function makeSidebarModuleList() {
   }));
 }
 
+function validateSeedCatalog() {
+  const catalogSlugs = new Set(MODULE_CATALOG.map((module) => module.slug));
+  const sidebarKeys = new Set(SIDEBAR_MODULES.map((module) => module.moduleKey));
+  const missingRequiredModules = SIDEBAR_MODULES
+    .filter((module) => module.requiredModule && !catalogSlugs.has(module.requiredModule))
+    .map((module) => `${module.moduleKey}->${module.requiredModule}`);
+  const missingParents = SIDEBAR_MODULES
+    .filter((module) => module.parentModule && !sidebarKeys.has(module.parentModule))
+    .map((module) => `${module.moduleKey}->${module.parentModule}`);
+
+  if (missingRequiredModules.length || missingParents.length) {
+    throw new Error(
+      [
+        "RBAC seed catalog mismatch:",
+        missingRequiredModules.length
+          ? `missing backend modules: ${missingRequiredModules.join(", ")}`
+          : null,
+        missingParents.length
+          ? `missing sidebar parents: ${missingParents.join(", ")}`
+          : null,
+      ].filter(Boolean).join(" "),
+    );
+  }
+}
+
 function serializeModuleForDb(module) {
   return {
     ...module,
@@ -149,13 +184,24 @@ async function upsertModule(module, transaction) {
     `SELECT id FROM modules
      WHERE slug = :slug
         OR module_key = :moduleKey
-        OR name = :name
+        OR (
+          name = :name
+          AND (
+            (:source = 'sidebar-seed' AND metadata->>'source' = 'sidebar-seed')
+            OR (:source != 'sidebar-seed' AND COALESCE(metadata->>'source', '') != 'sidebar-seed')
+          )
+        )
+     ORDER BY CASE
+       WHEN slug = :slug OR module_key = :moduleKey THEN 0
+       ELSE 1
+     END
      LIMIT 1`,
     {
       replacements: {
         slug: module.slug,
         moduleKey: module.moduleKey,
         name: module.name,
+        source: module.metadata?.source || "",
       },
       transaction,
     },
@@ -377,6 +423,7 @@ async function seedRbac() {
   try {
     await sequelize.authenticate();
     console.log("✓ Database connected\n");
+    validateSeedCatalog();
 
     const platformModules = makePlatformModuleList();
     const sidebarModules = makeSidebarModuleList();

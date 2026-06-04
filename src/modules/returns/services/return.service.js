@@ -6,6 +6,7 @@ const { OrderRepository } = require("../../order/repositories/order.repository")
 const { WalletService } = require("../../wallet/services/wallet.service");
 const { InventoryService } = require("../../inventory/services/inventory.service");
 const { TaxService } = require("../../tax/services/tax.service");
+const { CommissionService } = require("../../seller/services/commission.service");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
@@ -30,11 +31,13 @@ class ReturnServiceClass {
     walletService = new WalletService(),
     inventoryService = new InventoryService(),
     taxService = new TaxService({ orderRepository }),
+    commissionService = CommissionService,
   } = {}) {
     this.orderRepository = orderRepository;
     this.walletService = walletService;
     this.inventoryService = inventoryService;
     this.taxService = taxService;
+    this.commissionService = commissionService;
   }
 
   async getReturnOrThrow(returnId) {
@@ -129,6 +132,7 @@ class ReturnServiceClass {
       const lineTotal = Number((unitPrice * Number(item.quantity || 0)).toFixed(2));
       return {
         productId: item.productId,
+        sellerId: orderItem.seller_id || orderItem.sellerId || "",
         variantId: item.variantId || orderItem.variant_id || "",
         variantSku: item.variantSku || orderItem.variant_sku || "",
         quantity: Number(item.quantity),
@@ -303,6 +307,7 @@ class ReturnServiceClass {
     }
 
     await this.createCreditNoteSafely(returnRequest, refundAmount, actor, referenceId);
+    await this.recordSellerRefundAdjustmentSafely(returnRequest, refundAmount, actor);
 
     returnRequest.status = "refunded";
     returnRequest.refundAmount = refundAmount;
@@ -325,6 +330,14 @@ class ReturnServiceClass {
       method: returnRequest.refundMethod,
     });
     return returnRequest;
+  }
+
+  async recordSellerRefundAdjustmentSafely(returnRequest, refundAmount, actor) {
+    try {
+      await this.commissionService.recordRefundAdjustment(returnRequest, refundAmount, actor);
+    } catch (error) {
+      logger.warn({ returnId: returnRequest._id, error: error.message }, "Seller refund adjustment skipped");
+    }
   }
 
   async createCreditNoteSafely(returnRequest, refundAmount, actor, referenceId) {

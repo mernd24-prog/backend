@@ -216,6 +216,26 @@ class PlatformRepository {
     return PlatformBrandModel.findById(brandId);
   }
 
+  async getBrandByValue(value) {
+    const normalized = String(value || "").trim();
+    if (!normalized) return null;
+    if (mongoose.Types.ObjectId.isValid(normalized)) {
+      return PlatformBrandModel.findOne({
+        $or: [
+          { _id: normalized },
+          { name: new RegExp(`^${escapeRegExp(normalized)}$`, "i") },
+          { slug: normalized.toLowerCase() },
+        ],
+      });
+    }
+    return PlatformBrandModel.findOne({
+      $or: [
+        { name: new RegExp(`^${escapeRegExp(normalized)}$`, "i") },
+        { slug: normalized.toLowerCase() },
+      ],
+    });
+  }
+
   async listBrands(filter = {}, pagination = {}) {
     const [items, total] = await Promise.all([
       PlatformBrandModel.find(filter).sort({ sortOrder: 1, name: 1 }).skip(pagination.skip).limit(pagination.limit),
@@ -382,3 +402,7 @@ class PlatformRepository {
 }
 
 module.exports = { PlatformRepository };
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

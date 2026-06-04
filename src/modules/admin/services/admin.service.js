@@ -16,6 +16,7 @@ const { hashText } = require("../../../shared/tools/hash");
 const { ROLES } = require("../../../shared/constants/roles");
 const { AuditLogModel } = require("../../../shared/logger/audit-log.model");
 const { UserModel } = require("../../user/models/user.model");
+const { ReturnModel } = require("../../returns/models/return.model");
 const {
   DEFAULT_PLATFORM_MODULES,
   DEFAULT_SELLER_MODULES,
@@ -1038,7 +1039,59 @@ class AdminService {
   }
 
   async getReturnsAnalytics(query) {
-    return this.adminRepository.getReturnsAnalytics(query);
+    const filter = {};
+    if (query.fromDate || query.toDate) {
+      filter.createdAt = {};
+      if (query.fromDate) filter.createdAt.$gte = new Date(query.fromDate);
+      if (query.toDate) filter.createdAt.$lte = new Date(query.toDate);
+    }
+
+    const [summaryRows, statusRows, reasonRows, recentItems] = await Promise.all([
+      ReturnModel.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: null,
+            totalReturns: { $sum: 1 },
+            approvedReturns: { $sum: { $cond: [{ $eq: ["$status", "approved"] }, 1, 0] } },
+            refundedReturns: { $sum: { $cond: [{ $eq: ["$status", "refunded"] }, 1, 0] } },
+            rejectedReturns: { $sum: { $cond: [{ $eq: ["$status", "rejected"] }, 1, 0] } },
+            totalRefundAmount: { $sum: { $ifNull: ["$refundAmount", 0] } },
+          },
+        },
+      ]),
+      ReturnModel.aggregate([
+        { $match: filter },
+        { $group: { _id: "$status", count: { $sum: 1 }, refundAmount: { $sum: { $ifNull: ["$refundAmount", 0] } } } },
+        { $sort: { count: -1 } },
+      ]),
+      ReturnModel.aggregate([
+        { $match: filter },
+        { $group: { _id: "$reason", count: { $sum: 1 }, refundAmount: { $sum: { $ifNull: ["$refundAmount", 0] } } } },
+        { $sort: { count: -1 } },
+      ]),
+      ReturnModel.find(filter).sort({ createdAt: -1 }).limit(10).lean(),
+    ]);
+
+    const summary = summaryRows[0] || {};
+    return {
+      totalReturns: Number(summary.totalReturns || 0),
+      approvedReturns: Number(summary.approvedReturns || 0),
+      refundedReturns: Number(summary.refundedReturns || 0),
+      rejectedReturns: Number(summary.rejectedReturns || 0),
+      totalRefundAmount: Number(summary.totalRefundAmount || 0),
+      byStatus: statusRows.map((row) => ({
+        status: row._id || "unknown",
+        count: Number(row.count || 0),
+        refundAmount: Number(row.refundAmount || 0),
+      })),
+      byReason: reasonRows.map((row) => ({
+        reason: row._id || "unknown",
+        count: Number(row.count || 0),
+        refundAmount: Number(row.refundAmount || 0),
+      })),
+      recentItems,
+    };
   }
 
   async listChargebacks(query) {

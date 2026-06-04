@@ -3,6 +3,7 @@ const { buildMongoFilter } = require("../../../shared/tools/query-builder");
 const { PlatformRepository } = require("../repositories/platform.repository");
 const { AppError } = require("../../../shared/errors/app-error");
 const { auditService } = require("../../../shared/logger/audit.service");
+const { forget } = require("../../../shared/tools/cache");
 const {
   AdminTaxModel,
   AdminSubTaxModel,
@@ -14,8 +15,15 @@ class PlatformService {
     this.platformRepository = platformRepository;
   }
 
+  invalidateCatalogCaches() {
+    if (typeof forget === "function") {
+      forget(/^products:/);
+    }
+  }
+
   async createCategory(payload, req) {
     const category = await this.platformRepository.createCategory(payload);
+    this.invalidateCatalogCaches();
     auditService.create(req, { module: "categories", entityId: category?._id || category?.categoryKey, entityType: "Category", newData: payload });
     return category;
   }
@@ -24,6 +32,7 @@ class PlatformService {
     const category = await this.platformRepository.getCategory(categoryKey);
     if (!category) throw AppError.notFound("Category");
     const updated = await this.platformRepository.updateCategory(categoryKey, payload);
+    this.invalidateCatalogCaches();
     auditService.update(req, { module: "categories", entityId: categoryKey, entityType: "Category", oldData: category, newData: payload });
     return updated;
   }
@@ -127,12 +136,15 @@ class PlatformService {
     const category = await this.platformRepository.getCategory(categoryKey);
     if (!category) throw AppError.notFound("Category");
     const result = await this.platformRepository.deleteCategory(categoryKey);
+    this.invalidateCatalogCaches();
     auditService.remove(req, { module: "categories", entityId: categoryKey, entityType: "Category", oldData: category });
     return result;
   }
 
   async createProductFamily(payload) {
-    return this.platformRepository.createProductFamily(payload);
+    const item = await this.platformRepository.createProductFamily(payload);
+    this.invalidateCatalogCaches();
+    return item;
   }
 
   async updateProductFamily(familyCode, payload) {
@@ -140,7 +152,9 @@ class PlatformService {
     if (!family) {
       throw AppError.notFound("Product family");
     }
-    return this.platformRepository.updateProductFamily(familyCode, payload);
+    const item = await this.platformRepository.updateProductFamily(familyCode, payload);
+    this.invalidateCatalogCaches();
+    return item;
   }
 
   async getProductFamily(familyCode) {
@@ -172,7 +186,9 @@ class PlatformService {
     if (!family) {
       throw AppError.notFound("Product family");
     }
-    return this.platformRepository.deleteProductFamily(familyCode);
+    const item = await this.platformRepository.deleteProductFamily(familyCode);
+    this.invalidateCatalogCaches();
+    return item;
   }
 
   async createProductVariant(payload) {
@@ -222,7 +238,9 @@ class PlatformService {
   }
 
   async createHsnCode(payload) {
-    return this.platformRepository.createHsnCode(payload);
+    const item = await this.platformRepository.createHsnCode(payload);
+    this.invalidateCatalogCaches();
+    return item;
   }
 
   async updateHsnCode(code, payload) {
@@ -230,7 +248,9 @@ class PlatformService {
     if (!item) {
       throw AppError.notFound("HSN code");
     }
-    return this.platformRepository.updateHsnCode(code, payload);
+    const updated = await this.platformRepository.updateHsnCode(code, payload);
+    this.invalidateCatalogCaches();
+    return updated;
   }
 
   async getHsnCode(code) {
@@ -262,7 +282,9 @@ class PlatformService {
     if (!item) {
       throw AppError.notFound("HSN code");
     }
-    return this.platformRepository.deleteHsnCode(code);
+    const result = await this.platformRepository.deleteHsnCode(code);
+    this.invalidateCatalogCaches();
+    return result;
   }
 
   async createGeography(payload) {
@@ -453,6 +475,7 @@ class PlatformService {
 
   async createBrand(payload, req) {
     const item = await this.platformRepository.createBrand(payload);
+    this.invalidateCatalogCaches();
     auditService.create(req, { module: "brands", entityId: item?._id, entityType: "Brand", newData: payload });
     return item;
   }
@@ -461,6 +484,7 @@ class PlatformService {
     const item = await this.platformRepository.getBrand(brandId);
     if (!item) throw AppError.notFound("Brand");
     const updated = await this.platformRepository.updateBrand(brandId, payload);
+    this.invalidateCatalogCaches();
     auditService.update(req, { module: "brands", entityId: brandId, entityType: "Brand", oldData: item, newData: payload });
     return updated;
   }
@@ -485,12 +509,15 @@ class PlatformService {
     const item = await this.platformRepository.getBrand(brandId);
     if (!item) throw AppError.notFound("Brand");
     const result = await this.platformRepository.deleteBrand(brandId);
+    this.invalidateCatalogCaches();
     auditService.remove(req, { module: "brands", entityId: brandId, entityType: "Brand", oldData: item });
     return result;
   }
 
   async createWarrantyTemplate(payload) {
-    return this.platformRepository.createWarrantyTemplate(payload);
+    const item = await this.platformRepository.createWarrantyTemplate(payload);
+    this.invalidateCatalogCaches();
+    return item;
   }
 
   async updateWarrantyTemplate(templateId, payload) {
@@ -498,7 +525,9 @@ class PlatformService {
     if (!item) {
       throw AppError.notFound("Warranty template");
     }
-    return this.platformRepository.updateWarrantyTemplate(templateId, payload);
+    const result = await this.platformRepository.updateWarrantyTemplate(templateId, payload);
+    this.invalidateCatalogCaches();
+    return result;
   }
 
   async getWarrantyTemplate(templateId) {
@@ -525,7 +554,9 @@ class PlatformService {
     if (!item) {
       throw AppError.notFound("Warranty template");
     }
-    return this.platformRepository.deleteWarrantyTemplate(templateId);
+    const result = await this.platformRepository.deleteWarrantyTemplate(templateId);
+    this.invalidateCatalogCaches();
+    return result;
   }
 
   async createFinish(payload) {
@@ -605,6 +636,7 @@ class PlatformService {
 
   async createProductOption(payload, req) {
     const item = await this.platformRepository.createProductOption(payload);
+    this.invalidateCatalogCaches();
     auditService.create(req, { module: "option_masters", entityId: item?._id, entityType: "ProductOption", newData: payload });
     return item;
   }
@@ -613,6 +645,7 @@ class PlatformService {
     const item = await this.platformRepository.getProductOption(optionId);
     if (!item) throw AppError.notFound("Product option");
     const updated = await this.platformRepository.updateProductOption(optionId, payload);
+    this.invalidateCatalogCaches();
     auditService.update(req, { module: "option_masters", entityId: optionId, entityType: "ProductOption", oldData: item, newData: payload });
     return updated;
   }
@@ -631,20 +664,25 @@ class PlatformService {
     const item = await this.platformRepository.getProductOption(optionId);
     if (!item) throw AppError.notFound("Product option");
     const result = await this.platformRepository.deleteProductOption(optionId);
+    this.invalidateCatalogCaches();
     auditService.remove(req, { module: "option_masters", entityId: optionId, entityType: "ProductOption", oldData: item });
     return result;
   }
 
   async createProductOptionValue(payload) {
     const normalized = await this.normalizeProductOptionValuePayload(payload);
-    return this.platformRepository.createProductOptionValue(normalized);
+    const item = await this.platformRepository.createProductOptionValue(normalized);
+    this.invalidateCatalogCaches();
+    return item;
   }
 
   async updateProductOptionValue(optionValueId, payload) {
     const item = await this.platformRepository.getProductOptionValue(optionValueId);
     if (!item) throw AppError.notFound("Product option value");
     const normalized = await this.normalizeProductOptionValuePayload(payload, { partial: true });
-    return this.platformRepository.updateProductOptionValue(optionValueId, normalized);
+    const result = await this.platformRepository.updateProductOptionValue(optionValueId, normalized);
+    this.invalidateCatalogCaches();
+    return result;
   }
 
   async listProductOptionValues(query) {
@@ -664,7 +702,9 @@ class PlatformService {
   async deleteProductOptionValue(optionValueId) {
     const item = await this.platformRepository.getProductOptionValue(optionValueId);
     if (!item) throw AppError.notFound("Product option value");
-    return this.platformRepository.deleteProductOptionValue(optionValueId);
+    const result = await this.platformRepository.deleteProductOptionValue(optionValueId);
+    this.invalidateCatalogCaches();
+    return result;
   }
 
   async normalizeProductOptionValuePayload(payload = {}, { partial = false } = {}) {
@@ -717,9 +757,11 @@ class PlatformService {
 
   async getCatalogPrefillData(query = {}) {
     const categories = (await this.platformRepository.listCategories({}, { skip: 0, limit: 500 })).items || [];
+    const brands = (await this.platformRepository.listBrands(query.includeInactive ? {} : { active: true }, { skip: 0, limit: 500 })).items || [];
     const families = (await this.platformRepository.listProductFamilies({}, { skip: 0, limit: 500 })).items || [];
     const variants = (await this.platformRepository.listProductVariants({}, { skip: 0, limit: 500 })).items || [];
     const hsnCodes = (await this.platformRepository.listHsnCodes({ active: true }, { skip: 0, limit: 1000 })).items || [];
+    const warrantyTemplates = (await this.platformRepository.listWarrantyTemplates(query.includeInactive ? {} : { active: true }, { skip: 0, limit: 500 })).items || [];
     const options = await this.platformRepository.listAllProductOptions(query.includeInactive ? {} : { active: true });
     const optionValuesRaw = await this.platformRepository.listAllProductOptionValues(query.includeInactive ? {} : { active: true });
     const optionValues = await this.decorateProductOptionValues(optionValuesRaw);
@@ -736,9 +778,11 @@ class PlatformService {
         title: category.title,
         attributeSchema: this.normalizeCategoryAttributes(category),
       })),
+      brands,
       families,
       variants,
       hsnCodes,
+      warrantyTemplates,
       taxes,
       subTaxes,
       taxRules,

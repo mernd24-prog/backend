@@ -143,6 +143,81 @@ class WalletRepository {
   async listTransactions(userId) {
     return knex("wallet_transactions").where("user_id", userId).orderBy("created_at", "desc");
   }
+
+  applyTransactionFilters(query, filters = {}) {
+    const {
+      userId = null,
+      type = null,
+      status = null,
+      referenceType = null,
+      referenceId = null,
+      fromDate = null,
+      toDate = null,
+      search = null,
+    } = filters;
+
+    if (userId) query.where("wallet_transactions.user_id", userId);
+    if (type) query.where("wallet_transactions.type", type);
+    if (status) query.where("wallet_transactions.status", status);
+    if (referenceType) query.where("wallet_transactions.reference_type", referenceType);
+    if (referenceId) query.where("wallet_transactions.reference_id", referenceId);
+    if (fromDate) query.where("wallet_transactions.created_at", ">=", fromDate);
+    if (toDate) query.where("wallet_transactions.created_at", "<=", toDate);
+    if (search) {
+      const term = `%${String(search).trim()}%`;
+      query.where((builder) => {
+        builder
+          .whereILike("wallet_transactions.user_id", term)
+          .orWhereILike("wallet_transactions.reference_type", term)
+          .orWhereILike("wallet_transactions.reference_id", term)
+          .orWhereRaw("wallet_transactions.id::text ILIKE ?", [term])
+          .orWhereRaw("COALESCE(wallet_transactions.metadata, '{}'::jsonb)::text ILIKE ?", [term]);
+      });
+    }
+  }
+
+  async listAllTransactions(filters = {}) {
+    const limit = Math.min(Math.max(Number(filters.limit || 50), 1), 200);
+    const offset = Math.max(Number(filters.offset || 0), 0);
+    const buildBase = () => {
+      const query = knex("wallet_transactions");
+      this.applyTransactionFilters(query, filters);
+      return query;
+    };
+
+    const [items, countRows, summary] = await Promise.all([
+      buildBase()
+        .leftJoin("wallets", "wallets.user_id", "wallet_transactions.user_id")
+        .select(
+          "wallet_transactions.*",
+          "wallets.available_balance",
+          "wallets.locked_balance",
+        )
+        .orderBy("wallet_transactions.created_at", "desc")
+        .limit(limit)
+        .offset(offset),
+      buildBase().count({ total: "*" }),
+      buildBase()
+        .select(
+          knex.raw("COALESCE(SUM(CASE WHEN type = 'credit' THEN amount ELSE 0 END), 0) AS credit_amount"),
+          knex.raw("COALESCE(SUM(CASE WHEN type = 'debit' THEN amount ELSE 0 END), 0) AS debit_amount"),
+          knex.raw("COALESCE(SUM(CASE WHEN status = 'held' THEN amount ELSE 0 END), 0) AS held_amount"),
+        )
+        .first(),
+    ]);
+
+    return {
+      items,
+      total: Number(countRows?.[0]?.total || 0),
+      limit,
+      offset,
+      summary: {
+        creditAmount: Number(summary?.credit_amount || 0),
+        debitAmount: Number(summary?.debit_amount || 0),
+        heldAmount: Number(summary?.held_amount || 0),
+      },
+    };
+  }
 }
 
 module.exports = { WalletRepository };

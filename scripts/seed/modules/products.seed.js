@@ -362,6 +362,7 @@ class ProductsSeed {
           brandSlug: slugify(brandName),
           hsnCode,
           gstRate,
+          gstInclusive: true,
           taxClass: gstRate === 0 ? 'ZERO_RATED' : gstRate === 3 ? 'GST_3' : gstRate === 5 ? 'GST_5' : gstRate === 12 ? 'GST_12' : gstRate === 18 ? 'GST_18' : 'GST_28',
           stock,
           reservedStock: Math.min(Math.floor(stock * 0.1), 20),

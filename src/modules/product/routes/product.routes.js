@@ -9,9 +9,12 @@ const {
   updateProductSchema,
   listProductSchema,
   searchProductSchema,
+  productPrefillSchema,
   reviewProductSchema,
   listProductRevisionsSchema,
   reviewProductRevisionSchema,
+  productStatusSchema,
+  productLifecycleSchema,
   bulkProductSchema,
   updateInventorySchema,
   productParamSchema,
@@ -25,6 +28,13 @@ const productController = new ProductController();
 
 productRoutes.get("/", checkInput(listProductSchema), catchErrors(productController.list));
 productRoutes.get("/search", checkInput(searchProductSchema), catchErrors(productController.search));
+productRoutes.get(
+  "/prefill",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(productPrefillSchema),
+  catchErrors(productController.prefill),
+);
 
 // ── Seller ────────────────────────────────────────────────────────────────────
 
@@ -55,6 +65,34 @@ productRoutes.delete(
   allowActions(ACTIONS.CATALOG_MANAGE),
   checkInput(productParamSchema),
   catchErrors(productController.delete),
+);
+productRoutes.patch(
+  "/:productId/status",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(productStatusSchema),
+  catchErrors(productController.status),
+);
+productRoutes.patch(
+  "/:productId/archive",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(productLifecycleSchema),
+  catchErrors(productController.archive),
+);
+productRoutes.patch(
+  "/:productId/restore",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(productLifecycleSchema),
+  catchErrors(productController.restore),
+);
+productRoutes.post(
+  "/:productId/duplicate",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(productLifecycleSchema),
+  catchErrors(productController.duplicate),
 );
 
 // ── Admin / review ────────────────────────────────────────────────────────────

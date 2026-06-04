@@ -12,6 +12,11 @@ class WalletController {
     const wallet = await this.walletService.getWalletSummary(actor.userId);
     res.json(okResponse(wallet));
   };
+
+  listTransactions = async (req, res) => {
+    const transactions = await this.walletService.listAdminTransactions(req.query);
+    res.json(okResponse(transactions));
+  };
 }
 
 module.exports = { WalletController };

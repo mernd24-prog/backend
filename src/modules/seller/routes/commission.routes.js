@@ -2,10 +2,13 @@ const express = require("express");
 const router = express.Router();
 
 const { authenticate } = require("../../../shared/middleware/authenticate");
-const { allowRoles } = require("../../../shared/middleware/access");
+const { allowPermissions } = require("../../../shared/middleware/access");
 
 const { CommissionService } = require("../services/commission.service");
 const { commissionValidation } = require("../../validation");
+
+const financeView = allowPermissions("sellers/commissions:view");
+const financeManage = allowPermissions("sellers/commissions:update");
 
 // ==============================
 // Seller: View commission breakdown
@@ -21,7 +24,7 @@ router.get("/my-commissions", authenticate, async (req, res, next) => {
       });
     }
 
-    const commissions = await CommissionService.getSellerCommissions(userId);
+    const commissions = await CommissionService.getSellerCommissions(userId, req.query);
 
     return res.status(200).json({
       success: true,
@@ -46,11 +49,96 @@ router.get("/my-payouts", authenticate, async (req, res, next) => {
       });
     }
 
-    const payouts = await CommissionService.getSellerPayouts(userId);
+    const payouts = await CommissionService.getSellerPayouts(userId, req.query);
 
     return res.status(200).json({
       success: true,
       data: payouts,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ==============================
+// Admin: Finance summary
+// ==============================
+router.get("/summary", authenticate, financeView, async (req, res, next) => {
+  try {
+    const summary = await CommissionService.getFinanceSummary(req.query);
+    return res.status(200).json({
+      success: true,
+      data: summary,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ==============================
+// Admin: List seller commissions
+// ==============================
+router.get("/", authenticate, financeView, async (req, res, next) => {
+  try {
+    const commissions = await CommissionService.listSellerCommissions(req.query);
+    return res.status(200).json({
+      success: true,
+      data: commissions,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ==============================
+// Admin: List seller payouts
+// ==============================
+router.get("/payouts", authenticate, financeView, async (req, res, next) => {
+  try {
+    const payouts = await CommissionService.listSellerPayouts(req.query);
+    return res.status(200).json({
+      success: true,
+      data: payouts,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ==============================
+// Admin: Complete payout
+// ==============================
+router.post("/payouts/:payoutId/process", authenticate, financeManage, async (req, res, next) => {
+  try {
+    const result = await CommissionService.processPayout(
+      req.params.payoutId,
+      req.body?.paymentReference || `manual_${Date.now()}`,
+      {
+        paymentMethod: req.body?.paymentMethod,
+        notes: req.body?.notes,
+        actor: req.auth,
+      },
+    );
+    return res.status(200).json({
+      success: true,
+      message: "Payout completed",
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ==============================
+// Admin: Mark payout failed and release commissions
+// ==============================
+router.post("/payouts/:payoutId/fail", authenticate, financeManage, async (req, res, next) => {
+  try {
+    const result = await CommissionService.failPayout(req.params.payoutId, req.body?.reason, req.auth);
+    return res.status(200).json({
+      success: true,
+      message: "Payout marked failed",
+      data: result,
     });
   } catch (err) {
     next(err);
@@ -63,7 +151,7 @@ router.get("/my-payouts", authenticate, async (req, res, next) => {
 router.post(
   "/calculate/:orderId",
   authenticate,
-  allowRoles(["admin"]),
+  financeManage,
   async (req, res, next) => {
     try {
       const { error, value } =
@@ -78,7 +166,8 @@ router.post(
       }
 
       const commission = await CommissionService.calculateCommission(
-        value.orderId
+        value.orderId,
+        { actor: req.auth, sourceStatus: req.body?.sourceStatus },
       );
 
       return res.status(200).json({
@@ -98,7 +187,7 @@ router.post(
 router.post(
   "/process-payouts",
   authenticate,
-  allowRoles(["admin"]),
+  financeManage,
   async (req, res, next) => {
     try {
       const { error, value } =
@@ -113,7 +202,14 @@ router.post(
       }
 
       const result = await CommissionService.processBatchPayouts(
-        value.sellerId
+        value.sellerId,
+        {
+          periodStart: value.periodStart || req.body?.periodStart,
+          periodEnd: value.periodEnd || req.body?.periodEnd,
+          paymentReference: req.body?.paymentReference,
+          paymentMethod: req.body?.paymentMethod,
+          actor: req.auth,
+        },
       );
 
       return res.status(200).json({
@@ -133,10 +229,10 @@ router.post(
 router.get(
   "/settlements",
   authenticate,
-  allowRoles(["admin"]),
+  financeView,
   async (req, res, next) => {
     try {
-      const settlements = await CommissionService.getSettlements();
+      const settlements = await CommissionService.getSettlements(req.query);
 
       return res.status(200).json({
         success: true,

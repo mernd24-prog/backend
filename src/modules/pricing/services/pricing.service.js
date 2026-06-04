@@ -64,7 +64,7 @@ class PricingService {
         const taxData = await this.getProductTaxData(product);
         const unitPrice = Number(variant?.salePrice ?? variant?.price ?? product.salePrice ?? product.price);
         const lineTotal = unitPrice * item.quantity;
-        const gstInclusive = Boolean(product.gstInclusive ?? product.gst_inclusive);
+        const gstInclusive = Boolean(product.gstInclusive ?? product.gst_inclusive ?? true);
 
         return {
           productId: String(product.id),

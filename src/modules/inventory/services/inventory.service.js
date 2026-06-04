@@ -190,6 +190,50 @@ class InventoryService {
   async listTransactions(filter = {}, pagination = {}) {
     return this.inventoryRepository.listTransactions(filter, pagination);
   }
+
+  async adjustProductInventory(productId, payload = {}, actor = {}) {
+    const product = await this.productRepository.findById(productId);
+    if (!product) throw new AppError("Product not found", 404);
+
+    const adjustment = Number(payload.adjustment || 0);
+    const variantSku = payload.variantSku || "";
+    const updatedProduct = variantSku
+      ? await this.productRepository.adjustVariantStock(productId, variantSku, adjustment)
+      : await this.productRepository.adjustStock(productId, adjustment);
+
+    if (!updatedProduct) {
+      throw new AppError("Insufficient stock for negative adjustment", 400);
+    }
+
+    await this.inventoryRepository.recordTransaction(
+      "adjustment",
+      {
+        referenceType: "manual_adjustment",
+        referenceId: payload.reference || `${productId}:${Date.now()}`,
+        actorId: actor.userId || "",
+        actorRole: actor.role || "",
+      },
+      {
+        productId: String(productId),
+        variantSku,
+        sellerId: product.sellerId || "",
+        quantity: adjustment,
+      },
+      {
+        reason: payload.reason || "",
+      },
+    );
+
+    await this.publishLowStockAlerts([
+      {
+        productId: String(productId),
+        variantSku,
+        sellerId: product.sellerId || "",
+      },
+    ]);
+
+    return updatedProduct;
+  }
 }
 
 module.exports = { InventoryService };

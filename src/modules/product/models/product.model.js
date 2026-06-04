@@ -256,7 +256,7 @@ const productSchema = new mongoose.Schema(
     costPrice: { type: Number, min: 0 },
     currency: { type: String, default: "INR" },
     gstRate: { type: Number, required: true, default: 18, min: 0, max: 100 },
-    gstInclusive: { type: Boolean, default: false },
+    gstInclusive: { type: Boolean, default: true },
     hsnCode: { type: String, index: true },
     complianceSnapshot: { type: complianceSnapshotSchema, default: null },
 
@@ -339,6 +339,11 @@ const productSchema = new mongoose.Schema(
     relatedProducts: [{ type: String }],
     crossSellProducts: [{ type: String }],
     upSellProducts: [{ type: String }],
+    frequentlyBoughtTogether: [{ type: String }],
+    featuredProducts: [{ type: String }],
+    trendingProducts: [{ type: String }],
+    bestSellerProducts: [{ type: String }],
+    collectionIds: [{ type: String }],
 
     // ── Analytics
     analytics: { type: analyticsSchema, default: () => ({}) },

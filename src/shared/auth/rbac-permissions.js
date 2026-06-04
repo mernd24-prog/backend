@@ -16,6 +16,7 @@ const PERMISSION_ACTIONS = [
   "status_change",
   "restore",
   "bulk_action",
+  "adjust",
 ];
 
 const SIDEBAR_PERMISSION_ACTIONS = [
@@ -23,12 +24,15 @@ const SIDEBAR_PERMISSION_ACTIONS = [
   "create",
   "update",
   "delete",
-  "status_change",
   "approve",
   "reject",
   "assign",
   "export",
   "import",
+  "status_change",
+  "restore",
+  "bulk_action",
+  "adjust",
 ];
 
 const ACTION_ALIASES = {
@@ -39,6 +43,19 @@ const ACTION_ALIASES = {
   action: "status_change",
   review: "approve",
   manage: "status_change",
+  activate: "status_change",
+  deactivate: "status_change",
+  enable: "status_change",
+  disable: "status_change",
+  archive: "status_change",
+  recover: "restore",
+  bulk: "bulk_action",
+  "bulk-action": "bulk_action",
+  "bulk action": "bulk_action",
+  bulkaction: "bulk_action",
+  adjustment: "adjust",
+  "stock-adjustment": "adjust",
+  stock_adjustment: "adjust",
 };
 
 function normalizePermissionAction(action = "") {

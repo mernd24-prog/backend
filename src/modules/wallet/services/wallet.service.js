@@ -3,6 +3,7 @@ const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { WalletRepository } = require("../repositories/wallet.repository");
+const { UserModel } = require("../../user/models/user.model");
 
 class WalletService {
   constructor({ walletRepository = new WalletRepository() } = {}) {
@@ -69,6 +70,57 @@ class WalletService {
       );
     }
     return transaction;
+  }
+
+  async listAdminTransactions(filters = {}) {
+    const result = await this.walletRepository.listAllTransactions(filters);
+    const userIds = Array.from(new Set(
+      (result.items || [])
+        .map((item) => String(item.user_id || ""))
+        .filter((id) => /^[a-f\d]{24}$/i.test(id)),
+    ));
+    const users = userIds.length && UserModel.db.readyState === 1
+      ? await UserModel.find({ _id: { $in: userIds } })
+        .select("email full_name profile sellerProfile")
+        .lean()
+      : [];
+    const userMap = new Map(users.map((user) => [String(user._id), user]));
+    return {
+      ...result,
+      items: result.items.map((item) => {
+        const user = userMap.get(String(item.user_id));
+        const profileName = [
+          user?.profile?.firstName,
+          user?.profile?.lastName,
+        ].filter(Boolean).join(" ");
+        const userLabel = user?.full_name ||
+          user?.sellerProfile?.displayName ||
+          user?.sellerProfile?.legalBusinessName ||
+          profileName ||
+          user?.email ||
+          item.user_id;
+        return {
+          ...item,
+          metadata: this.parseMetadata(item.metadata),
+          user: user ? {
+            id: String(user._id),
+            email: user.email || "",
+            name: userLabel,
+          } : null,
+          userLabel,
+        };
+      }),
+    };
+  }
+
+  parseMetadata(value) {
+    if (!value) return {};
+    if (typeof value === "object") return value;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return {};
+    }
   }
 }
 

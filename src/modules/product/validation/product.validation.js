@@ -245,6 +245,11 @@ const productBodyBase = {
   relatedProducts: Joi.array().items(Joi.string()).default([]),
   crossSellProducts: Joi.array().items(Joi.string()).default([]),
   upSellProducts: Joi.array().items(Joi.string()).default([]),
+  frequentlyBoughtTogether: Joi.array().items(Joi.string()).default([]),
+  featuredProducts: Joi.array().items(Joi.string()).default([]),
+  trendingProducts: Joi.array().items(Joi.string()).default([]),
+  bestSellerProducts: Joi.array().items(Joi.string()).default([]),
+  collectionIds: Joi.array().items(Joi.string()).default([]),
 
   // Meta
   metadata: Joi.object().default({}),
@@ -262,6 +267,7 @@ const createProductSchema = Joi.object({
     mrp: Joi.number().min(0).required(),
     category: Joi.string().required(),
     stock: Joi.number().integer().min(0).required(),
+    gstInclusive: Joi.boolean().default(true),
     productType: Joi.string().valid(...Object.values(PRODUCT_TYPE)).default(PRODUCT_TYPE.SIMPLE),
     status: Joi.string().valid(...Object.values(PRODUCT_STATUS)).default(PRODUCT_STATUS.DRAFT),
   }).required(),
@@ -436,6 +442,48 @@ const bulkProductSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
+const productPrefillSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    includeInactive: Joi.boolean(),
+    includeProducts: Joi.boolean(),
+    sellerId: Joi.string().allow("", null),
+    limit: Joi.number().integer().min(1).max(200),
+    productLimit: Joi.number().integer().min(1).max(200),
+  }).required(),
+  params: Joi.object({}).required(),
+});
+
+const productStatusSchema = Joi.object({
+  body: Joi.object({
+    status: Joi.string().valid(...Object.values(PRODUCT_STATUS)).required(),
+    reason: Joi.string().trim().max(1000).allow("", null),
+    rejectionReason: Joi.string().trim().max(1000).allow("", null),
+    notes: Joi.string().trim().max(500).allow("", null),
+    scheduledAt: Joi.date().allow(null),
+    visibility: Joi.string().valid(...Object.values(PRODUCT_VISIBILITY)),
+    checklist: moderationChecklistSchema,
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    productId: Joi.string().required(),
+  }).required(),
+});
+
+const productLifecycleSchema = Joi.object({
+  body: Joi.object({
+    status: Joi.string().valid(...Object.values(PRODUCT_STATUS)),
+    visibility: Joi.string().valid(...Object.values(PRODUCT_VISIBILITY)),
+    title: Joi.string().min(3).max(200).trim(),
+    sku: Joi.string().trim().allow("", null),
+    reason: Joi.string().trim().max(1000).allow("", null),
+  }).default({}),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    productId: Joi.string().required(),
+  }).required(),
+});
+
 const updateInventorySchema = Joi.object({
   body: Joi.object({
     adjustment: Joi.number().required(),
@@ -462,10 +510,13 @@ module.exports = {
   updateProductSchema,
   listProductSchema,
   searchProductSchema,
+  productPrefillSchema,
   reviewProductSchema,
   rejectProductSchema,
   listProductRevisionsSchema,
   reviewProductRevisionSchema,
+  productStatusSchema,
+  productLifecycleSchema,
   bulkProductSchema,
   updateInventorySchema,
   productParamSchema,

@@ -4,6 +4,8 @@ const { ProductRepository } = require("../repositories/product.repository");
 const { elasticsearchClient } = require("../../../shared/search/elasticsearch-client");
 const { remember, forget } = require("../../../shared/tools/cache");
 const { AppError } = require("../../../shared/errors/app-error");
+const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
+const { InventoryService } = require("../../inventory/services/inventory.service");
 const {
   PRODUCT_STATUS,
   PRODUCT_TYPE,
@@ -18,6 +20,14 @@ const {
 } = require("../../../shared/catalog/public-product-filter");
 const { logger } = require("../../../shared/logger/logger");
 const { PlatformRepository } = require("../../platform/repositories/platform.repository");
+const { PlatformService } = require("../../platform/services/platform.service");
+const { WarehouseModel } = require("../../inventory/models/warehouse.model");
+const { UserModel } = require("../../user/models/user.model");
+const {
+  AdminCountryModel,
+  AdminStateModel,
+  AdminCityModel,
+} = require("../../admin/models/common-management.model");
 
 const SELLER_BLOCKED_COMPLIANCE_FIELDS = [
   "gstRate",
@@ -42,9 +52,13 @@ class ProductService {
   constructor({
     productRepository = new ProductRepository(),
     platformRepository = new PlatformRepository(),
+    platformService = null,
+    inventoryService = null,
   } = {}) {
     this.productRepository = productRepository;
     this.platformRepository = platformRepository;
+    this.platformService = platformService || new PlatformService({ platformRepository });
+    this.inventoryService = inventoryService || new InventoryService({ productRepository });
   }
 
   // ─── Category & attribute helpers ─────────────────────────────────────────
@@ -414,6 +428,282 @@ class ProductService {
     }
   }
 
+  async listRawMasterCollection(collectionName, filter = {}, { sort = {}, limit = 500 } = {}) {
+    const collection = mongoose.connection.collection(collectionName);
+    return collection
+      .find(filter)
+      .sort(sort)
+      .limit(limit)
+      .toArray();
+  }
+
+  async getProductPrefillData(query = {}, actor = {}) {
+    const includeInactive = query.includeInactive === true || query.includeInactive === "true";
+    const includeProducts = query.includeProducts !== false && query.includeProducts !== "false";
+    const productLimit = Math.min(200, Math.max(1, Number(query.productLimit || query.limit || 100)));
+    const sellerId = isSellerRole(actor)
+      ? actor.ownerSellerId || actor.userId
+      : query.sellerId || null;
+
+    const cacheKey = `products:prefill:${JSON.stringify({
+      includeInactive,
+      includeProducts,
+      sellerId,
+      productLimit,
+    })}`;
+
+    return remember(cacheKey, 300, async () => {
+      const activeFilter = includeInactive ? {} : { active: true };
+      const rawActiveFilter = includeInactive
+        ? {}
+        : { $or: [{ active: true }, { isActive: true }, { active: { $exists: false }, isActive: { $exists: false } }] };
+
+      const [
+        catalog,
+        collections,
+        tags,
+        badges,
+        warehouses,
+        sellers,
+        countries,
+        states,
+        cities,
+      ] = await Promise.all([
+        this.platformService.getCatalogPrefillData({ includeInactive }),
+        this.listRawMasterCollection("collections", rawActiveFilter, { sort: { sortOrder: 1, name: 1 } }),
+        this.listRawMasterCollection("tags", activeFilter, { sort: { group: 1, name: 1 }, limit: 1000 }),
+        this.listRawMasterCollection("badges", activeFilter, { sort: { type: 1, priority: 1, name: 1 } }),
+        WarehouseModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(500).lean(),
+        UserModel.find({
+          role: { $in: ["seller"] },
+          ...(includeInactive ? {} : { accountStatus: "active" }),
+        })
+          .select("email phone profile sellerProfile accountStatus role")
+          .sort({ "sellerProfile.displayName": 1, email: 1 })
+          .limit(500)
+          .lean(),
+        AdminCountryModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(500).lean(),
+        AdminStateModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(2000).lean(),
+        AdminCityModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(5000).lean(),
+      ]);
+
+      const relatedProductFilter = {
+        ...(sellerId ? { sellerId } : {}),
+        ...(includeInactive
+          ? {}
+          : { status: { $in: [PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.INACTIVE, PRODUCT_STATUS.DRAFT, PRODUCT_STATUS.PENDING_APPROVAL] } }),
+      };
+      const relatedProducts = includeProducts
+        ? (await this.productRepository.paginate(relatedProductFilter, {
+            page: 1,
+            limit: productLimit,
+            skip: 0,
+            sortBy: "newest",
+          })).items.map((product) => ({
+            _id: String(product._id || product.id),
+            id: String(product._id || product.id),
+            title: product.title,
+            sku: product.sku || "",
+            sellerId: product.sellerId || "",
+            status: product.status,
+            brand: product.brand || "",
+            category: product.category || "",
+            image: product.images?.[0] || null,
+          }))
+        : [];
+
+      const optionValuesByOptionId = (catalog.optionValues || []).reduce((acc, item) => {
+        const optionId = String(item.optionId || item.option_id || "");
+        if (!optionId) return acc;
+        if (!acc[optionId]) acc[optionId] = [];
+        acc[optionId].push(item);
+        return acc;
+      }, {});
+
+      const categoryTree = this.platformService.buildCategoryTree(
+        (catalog.categories || []).map((category) =>
+          category?.toObject ? category.toObject({ depopulate: true, flattenMaps: true }) : category,
+        ),
+      );
+
+      const shippingClasses = [
+        { value: "light", label: "Light" },
+        { value: "standard", label: "Standard" },
+        { value: "heavy", label: "Heavy" },
+        { value: "fragile", label: "Fragile" },
+        { value: "cold_chain", label: "Cold chain" },
+        { value: "hazmat", label: "Dangerous goods" },
+      ];
+      const returnPolicies = [
+        { value: "standard", label: "Standard return", days: 7 },
+        { value: "replacement_only", label: "Replacement only", days: 7 },
+        { value: "non_returnable", label: "Non-returnable", days: 0 },
+      ];
+
+      return {
+        categories: catalog.categories || [],
+        subCategories: (catalog.categories || []).filter((category) => Number(category.level || 0) === 1),
+        childCategories: (catalog.categories || []).filter((category) => Number(category.level || 0) >= 2),
+        categoryTree,
+        categoryAttributes: catalog.categoryAttributes || [],
+        attributes: catalog.categoryAttributes || [],
+        brands: catalog.brands || [],
+        warrantyTemplates: catalog.warrantyTemplates || [],
+        productFamilies: catalog.families || [],
+        families: catalog.families || [],
+        productVariants: catalog.variants || [],
+        productOptions: catalog.options || [],
+        options: catalog.options || [],
+        optionValues: catalog.optionValues || [],
+        optionValuesByOptionId,
+        hsn: catalog.hsnCodes || [],
+        hsnCodes: catalog.hsnCodes || [],
+        gst: {
+          taxes: catalog.taxes || [],
+          subTaxes: catalog.subTaxes || [],
+          taxRules: catalog.taxRules || [],
+        },
+        taxClasses: catalog.taxes || [],
+        collections,
+        tags,
+        badges,
+        warehouses,
+        sellers: sellers.map((seller) => ({
+          ...seller,
+          _id: String(seller._id || seller.id),
+          id: String(seller._id || seller.id),
+          name:
+            seller.sellerProfile?.displayName ||
+            seller.sellerProfile?.legalBusinessName ||
+            [seller.profile?.firstName, seller.profile?.lastName].filter(Boolean).join(" ") ||
+            seller.email,
+        })),
+        shippingClasses,
+        returnPolicies,
+        countries,
+        states,
+        cities,
+        relatedProducts,
+        crossSellProducts: relatedProducts,
+        upSellProducts: relatedProducts,
+        frequentlyBoughtTogether: relatedProducts,
+        featuredProducts: relatedProducts,
+        trendingProducts: relatedProducts,
+        bestSellerProducts: relatedProducts,
+        meta: {
+          cached: true,
+          generatedAt: new Date().toISOString(),
+          includeInactive,
+          includeProducts,
+        },
+      };
+    });
+  }
+
+  async validateProductReferences(payload = {}, actor = {}, existingProduct = null) {
+    const brand = payload.brand;
+    if (brand) {
+      const brandRecord = await this.platformRepository.getBrandByValue(brand);
+      if (!brandRecord || brandRecord.active === false) {
+        throw new AppError("Brand must be an active approved master record", 400);
+      }
+    }
+
+    if (payload.productFamilyCode) {
+      const family = await this.platformRepository.getProductFamily(payload.productFamilyCode);
+      if (!family || family.status === "inactive" || family.active === false) {
+        throw new AppError("Product family must be an active master record", 400);
+      }
+    }
+
+    await this.validateProductOptionReferences(payload.options || []);
+    await this.validateRelatedProductReferences(payload, existingProduct);
+    await this.validateCollectionReferences(payload.collectionIds || []);
+  }
+
+  async validateProductOptionReferences(options = []) {
+    for (const option of options || []) {
+      if (!option?.platformOptionId) continue;
+      const masterOption = await this.platformRepository.getProductOption(option.platformOptionId);
+      if (!masterOption || masterOption.active === false) {
+        throw new AppError(`Product option '${option.name || option.platformOptionId}' is not active`, 400);
+      }
+
+      const allowedValues = await this.platformRepository.listAllProductOptionValues({
+        optionId: String(masterOption._id),
+        active: true,
+      });
+      const allowedNames = new Set(
+        allowedValues.flatMap((item) => [
+          String(item.name || ""),
+          String(item.valueCode || ""),
+        ]).filter(Boolean),
+      );
+      const badValue = (option.values || []).find((value) => allowedNames.size && !allowedNames.has(String(value)));
+      if (badValue !== undefined) {
+        throw new AppError(`Product option '${masterOption.name}' has invalid value '${badValue}'`, 400);
+      }
+    }
+  }
+
+  async validateRelatedProductReferences(payload = {}, existingProduct = null) {
+    const productId = String(existingProduct?._id || existingProduct?.id || "");
+    const relationFields = [
+      "relatedProducts",
+      "crossSellProducts",
+      "upSellProducts",
+      "frequentlyBoughtTogether",
+      "featuredProducts",
+      "trendingProducts",
+      "bestSellerProducts",
+    ];
+    const ids = Array.from(new Set([
+      ...relationFields.flatMap((field) => Array.isArray(payload[field]) ? payload[field] : []),
+      ...(Array.isArray(payload.bundleItems) ? payload.bundleItems.map((item) => item.productId) : []),
+    ].map((id) => String(id || "").trim()).filter(Boolean)));
+
+    if (!ids.length) return;
+    if (productId && ids.includes(productId)) {
+      throw new AppError("Product cannot reference itself", 400);
+    }
+
+    const found = await this.productRepository.findByIds(ids);
+    const foundIds = new Set(found.map((product) => String(product._id || product.id)));
+    const missing = ids.find((id) => !foundIds.has(id));
+    if (missing) {
+      throw new AppError(`Referenced product not found: ${missing}`, 400);
+    }
+  }
+
+  async validateCollectionReferences(collectionIds = []) {
+    const ids = Array.from(new Set(
+      (Array.isArray(collectionIds) ? collectionIds : [])
+        .map((id) => String(id || "").trim())
+        .filter(Boolean),
+    ));
+    if (!ids.length) return;
+
+    const collection = mongoose.connection.collection("collections");
+    const found = await collection.find({
+      $or: [
+        { _id: { $in: ids.filter((id) => mongoose.Types.ObjectId.isValid(id)).map((id) => new mongoose.Types.ObjectId(id)) } },
+        { slug: { $in: ids } },
+        { name: { $in: ids } },
+      ],
+    }).project({ _id: 1, slug: 1, name: 1 }).toArray();
+    const foundIds = new Set(
+      found.flatMap((item) => [
+        String(item._id || ""),
+        String(item.slug || ""),
+        String(item.name || ""),
+      ]).filter(Boolean),
+    );
+    const missing = ids.find((id) => !foundIds.has(id));
+    if (missing) {
+      throw new AppError(`Referenced collection not found: ${missing}`, 400);
+    }
+  }
+
   // ─── Type-specific validation ─────────────────────────────────────────────
 
   _validateProductType(productType, payload) {
@@ -439,6 +729,10 @@ class ProductService {
   async createProduct(payload, actor) {
     payload = this.normalizeProductMedia(payload);
     payload = this.normalizeProductVariants(payload);
+    payload = {
+      ...payload,
+      gstInclusive: true,
+    };
     payload = await this.normalizeProductCompliance(payload, actor);
     const productType = payload.productType || PRODUCT_TYPE.SIMPLE;
 
@@ -451,6 +745,7 @@ class ProductService {
       payload.attributes || {},
     );
     this.validateVariants(payload.variants || [], payload.options || []);
+    await this.validateProductReferences(payload, actor);
     this._validateProductType(productType, payload);
 
     const isSeller = isSellerRole(actor);
@@ -534,6 +829,11 @@ class ProductService {
     this.validateDynamicAttributes(this.normalizeCategoryAttributes(category), nextAttributes);
     const nextOptions = payload.options || existingProduct.options || [];
     this.validateVariants(payload.variants || existingProduct.variants || [], nextOptions);
+    await this.validateProductReferences(
+      { ...this.toPlainObject(existingProduct), ...payload, options: nextOptions },
+      actor,
+      existingProduct,
+    );
 
     const productType = payload.productType || existingProduct.productType || PRODUCT_TYPE.SIMPLE;
     this._validateProductType(productType, { ...existingProduct.toObject(), ...payload });
@@ -1331,17 +1631,33 @@ class ProductService {
   // ─── Bulk operations ─────────────────────────────────────────────────────
 
   async bulkUpdateStatus(productIds, status, actor) {
-    await this.productRepository.bulkUpdateStatus(productIds, status, actor.userId);
+    const products = await this.productRepository.findByIds(productIds);
+    await Promise.all(products.map((product) =>
+      this.productRepository.update(product._id, {
+        status,
+        lastUpdatedBy: actor.userId,
+        ...(status === PRODUCT_STATUS.ACTIVE ? { publishedAt: product.publishedAt || new Date() } : {}),
+        ...(status === PRODUCT_STATUS.ARCHIVED ? { visibility: PRODUCT_VISIBILITY.HIDDEN } : {}),
+        statusHistory: this.appendStatusHistory(product, {
+          fromStatus: product.status,
+          toStatus: status,
+          fromRevisionStatus: product.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+          toRevisionStatus: product.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+          actor,
+          reason: "bulk_status_update",
+        }),
+      }),
+    ));
 
     if (status === PRODUCT_STATUS.ACTIVE) {
-      const products = await this.productRepository.findByIds(productIds);
-      await Promise.allSettled(products.map((p) => this._indexProduct(p)));
+      const updatedProducts = await this.productRepository.findByIds(productIds);
+      await Promise.allSettled(updatedProducts.map((p) => this._indexProduct(p)));
     } else {
       await Promise.allSettled(productIds.map((id) => this._deleteFromIndex(id)));
     }
     this._invalidateProductCache();
 
-    return { updated: productIds.length, status };
+    return { updated: products.length, status };
   }
 
   async bulkUpdateVisibility(productIds, visibility) {
@@ -1355,26 +1671,7 @@ class ProductService {
   // ─── Inventory management ─────────────────────────────────────────────────
 
   async adjustInventory(productId, payload, actor) {
-    const product = await this.productRepository.findById(productId);
-    if (!product) throw new AppError("Product not found", 404);
-
-    const { adjustment, variantSku } = payload;
-
-    let updatedProduct;
-    if (variantSku) {
-      updatedProduct = await this.productRepository.adjustVariantStock(
-        productId,
-        variantSku,
-        adjustment,
-      );
-    } else {
-      updatedProduct = await this.productRepository.adjustStock(productId, adjustment);
-    }
-
-    if (!updatedProduct) {
-      throw new AppError("Insufficient stock for negative adjustment", 400);
-    }
-
+    const updatedProduct = await this.inventoryService.adjustProductInventory(productId, payload, actor);
     this._invalidateProductCache();
     return updatedProduct;
   }
@@ -1393,6 +1690,10 @@ class ProductService {
   // ─── Delete ───────────────────────────────────────────────────────────────
 
   async deleteProduct(productId, actor) {
+    return this.archiveProduct(productId, { reason: "product_deleted" }, actor);
+  }
+
+  async archiveProduct(productId, payload = {}, actor = {}) {
     const existingProduct = await this.productRepository.findById(productId);
     if (!existingProduct) throw new AppError("Product not found", 404);
 
@@ -1407,11 +1708,157 @@ class ProductService {
       throw new AppError("Permission denied", 403);
     }
 
-    await this.productRepository.delete(productId);
+    const updatedProduct = await this.productRepository.update(productId, {
+      status: PRODUCT_STATUS.ARCHIVED,
+      visibility: PRODUCT_VISIBILITY.HIDDEN,
+      lastUpdatedBy: actor.userId,
+      statusHistory: this.appendStatusHistory(existingProduct, {
+        fromStatus: existingProduct.status,
+        toStatus: PRODUCT_STATUS.ARCHIVED,
+        fromRevisionStatus:
+          existingProduct.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+        toRevisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+        actor,
+        reason: payload.reason || "product_archived",
+      }),
+    });
+
     await this._deleteFromIndex(productId);
     this._invalidateProductCache();
 
-    return { deleted: true, productId };
+    return updatedProduct;
+  }
+
+  async restoreProduct(productId, payload = {}, actor = {}) {
+    const existingProduct = await this.productRepository.findById(productId);
+    if (!existingProduct) throw new AppError("Product not found", 404);
+    this.assertCanAccessManagementProduct(existingProduct, actor);
+
+    const nextStatus = payload.status || PRODUCT_STATUS.DRAFT;
+    if (nextStatus === PRODUCT_STATUS.ARCHIVED) {
+      throw new AppError("Restore status cannot be archived", 400);
+    }
+
+    const updatedProduct = await this.productRepository.update(productId, {
+      status: nextStatus,
+      visibility: payload.visibility || PRODUCT_VISIBILITY.PRIVATE,
+      lastUpdatedBy: actor.userId,
+      statusHistory: this.appendStatusHistory(existingProduct, {
+        fromStatus: existingProduct.status,
+        toStatus: nextStatus,
+        actor,
+        reason: payload.reason || "product_restored",
+      }),
+    });
+
+    if (updatedProduct.status === PRODUCT_STATUS.ACTIVE) {
+      await this._indexProduct(updatedProduct);
+    }
+    this._invalidateProductCache();
+    return updatedProduct;
+  }
+
+  async duplicateProduct(productId, payload = {}, actor = {}) {
+    const existingProduct = await this.productRepository.findById(productId);
+    if (!existingProduct) throw new AppError("Product not found", 404);
+    this.assertCanAccessManagementProduct(existingProduct, actor);
+
+    const source = this.toPlainObject(existingProduct);
+    delete source._id;
+    delete source.id;
+    delete source.createdAt;
+    delete source.updatedAt;
+    delete source.approvedAt;
+    delete source.approvedBy;
+    delete source.pendingRevisionId;
+
+    const title = payload.title || `Copy of ${existingProduct.title}`;
+    const duplicate = await this.productRepository.create({
+      ...source,
+      title,
+      slug: slugify(`${title}-${Date.now()}`, { lower: true, strict: true }),
+      sku: payload.sku || (source.sku ? `${source.sku}-COPY-${Date.now()}` : source.sku),
+      status: PRODUCT_STATUS.DRAFT,
+      visibility: PRODUCT_VISIBILITY.PRIVATE,
+      publishedAt: null,
+      scheduledAt: null,
+      revisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+      rejectionReason: null,
+      version: 1,
+      createdBy: actor.userId,
+      lastUpdatedBy: actor.userId,
+      statusHistory: [
+        this.buildStatusHistoryEntry({
+          fromStatus: existingProduct.status,
+          toStatus: PRODUCT_STATUS.DRAFT,
+          actor,
+          reason: "product_duplicated",
+        }),
+      ],
+      metadata: {
+        ...(source.metadata || {}),
+        duplicatedFromProductId: String(productId),
+      },
+    });
+
+    this._invalidateProductCache();
+    return duplicate;
+  }
+
+  async changeProductStatus(productId, payload = {}, actor = {}) {
+    const existingProduct = await this.productRepository.findById(productId);
+    if (!existingProduct) throw new AppError("Product not found", 404);
+    this.assertCanAccessManagementProduct(existingProduct, actor);
+
+    const nextStatus = payload.status;
+    if (!Object.values(PRODUCT_STATUS).includes(nextStatus)) {
+      throw new AppError("Invalid product status", 400);
+    }
+    if (nextStatus === PRODUCT_STATUS.REJECTED && !payload.rejectionReason) {
+      throw new AppError("Rejection reason is required", 400);
+    }
+
+    if ([PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.INACTIVE, PRODUCT_STATUS.REJECTED].includes(nextStatus)) {
+      return this.reviewProduct(productId, payload, actor);
+    }
+
+    const updatedProduct = await this.productRepository.update(productId, {
+      status: nextStatus,
+      ...(nextStatus === PRODUCT_STATUS.SCHEDULED
+        ? {
+            scheduledAt: payload.scheduledAt || existingProduct.scheduledAt || null,
+            visibility: PRODUCT_VISIBILITY.SCHEDULED,
+          }
+        : {}),
+      ...(nextStatus === PRODUCT_STATUS.PENDING_APPROVAL
+        ? {
+            "moderation.submittedAt": new Date(),
+            rejectionReason: null,
+          }
+        : {}),
+      ...(nextStatus === PRODUCT_STATUS.ARCHIVED ? { visibility: PRODUCT_VISIBILITY.HIDDEN } : {}),
+      lastUpdatedBy: actor.userId,
+      statusHistory: this.appendStatusHistory(existingProduct, {
+        fromStatus: existingProduct.status,
+        toStatus: nextStatus,
+        fromRevisionStatus:
+          existingProduct.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+        toRevisionStatus:
+          nextStatus === PRODUCT_STATUS.CHANGE_PENDING
+            ? PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING
+            : existingProduct.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+        actor,
+        reason: payload.reason || payload.rejectionReason || "product_status_changed",
+      }),
+    });
+
+    if (updatedProduct.status === PRODUCT_STATUS.ACTIVE) {
+      await this._indexProduct(updatedProduct);
+    } else {
+      await this._deleteFromIndex(productId);
+    }
+    this._invalidateProductCache();
+    return updatedProduct;
   }
 
   // ─── Analytics ───────────────────────────────────────────────────────────

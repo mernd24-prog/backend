@@ -2,6 +2,7 @@ const { okResponse, paginationMeta } = require("../../../shared/http/reply");
 const { getPage } = require("../../../shared/tools/page");
 const { ProductService } = require("../services/product.service");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
+const { auditService } = require("../../../shared/logger/audit.service");
 
 class ProductController {
   constructor({ productService = new ProductService() } = {}) {
@@ -11,7 +12,19 @@ class ProductController {
   create = async (req, res) => {
     const actor = getCurrentUser(req);
     const product = await this.productService.createProduct(req.body, actor);
+    await auditService.create(req, {
+      module: "products",
+      entityId: product?._id || product?.id,
+      entityType: "Product",
+      newData: product,
+    });
     res.status(201).json(okResponse(product));
+  };
+
+  prefill = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.productService.getProductPrefillData(req.query, actor);
+    res.json(okResponse(result));
   };
 
   list = async (req, res) => {
@@ -51,12 +64,44 @@ class ProductController {
   update = async (req, res) => {
     const actor = getCurrentUser(req);
     const product = await this.productService.updateProduct(req.params.productId, req.body, actor);
+    await auditService.update(req, {
+      module: "products",
+      entityId: req.params.productId,
+      entityType: "Product",
+      newData: product,
+      reason: req.body.reason,
+    });
     res.json(okResponse(product));
   };
 
   review = async (req, res) => {
     const actor = getCurrentUser(req);
     const product = await this.productService.reviewProduct(req.params.productId, req.body, actor);
+    await auditService.record(req, {
+      module: "products",
+      action: req.body.status === "active"
+        ? "approve"
+        : req.body.status === "rejected"
+          ? "reject"
+          : "status_change",
+      entityId: req.params.productId,
+      entityType: "Product",
+      newData: product,
+      reason: req.body.rejectionReason || req.body.notes,
+    });
+    res.json(okResponse(product));
+  };
+
+  status = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const product = await this.productService.changeProductStatus(req.params.productId, req.body, actor);
+    await auditService.statusChange(req, {
+      module: "products",
+      entityId: req.params.productId,
+      entityType: "Product",
+      newData: product,
+      reason: req.body.reason || req.body.rejectionReason,
+    });
     res.json(okResponse(product));
   };
 
@@ -82,13 +127,67 @@ class ProductController {
       req.body,
       actor,
     );
+    await auditService.record(req, {
+      module: "products",
+      action: req.body.status === "active" ? "approve_revision" : "reject_revision",
+      entityId: req.params.productId,
+      entityType: "ProductRevision",
+      newData: product,
+      reason: req.body.rejectionReason || req.body.notes,
+    });
     res.json(okResponse(product));
   };
 
   delete = async (req, res) => {
     const actor = getCurrentUser(req);
     const result = await this.productService.deleteProduct(req.params.productId, actor);
+    await auditService.remove(req, {
+      module: "products",
+      entityId: req.params.productId,
+      entityType: "Product",
+      newData: result,
+      reason: "soft_archived",
+    });
     res.json(okResponse(result));
+  };
+
+  archive = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.productService.archiveProduct(req.params.productId, req.body, actor);
+    await auditService.statusChange(req, {
+      module: "products",
+      entityId: req.params.productId,
+      entityType: "Product",
+      newData: result,
+      reason: req.body.reason || "product_archived",
+    });
+    res.json(okResponse(result));
+  };
+
+  restore = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.productService.restoreProduct(req.params.productId, req.body, actor);
+    await auditService.statusChange(req, {
+      module: "products",
+      entityId: req.params.productId,
+      entityType: "Product",
+      newData: result,
+      reason: req.body.reason || "product_restored",
+    });
+    res.json(okResponse(result));
+  };
+
+  duplicate = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.productService.duplicateProduct(req.params.productId, req.body, actor);
+    await auditService.create(req, {
+      module: "products",
+      entityId: result?._id || result?.id,
+      entityType: "Product",
+      newData: result,
+      reason: `duplicated_from:${req.params.productId}`,
+    });
+    res.status(201).json(okResponse(result));
   };
 
   // ─── Bulk operations ─────────────────────────────────────────────────────
@@ -102,6 +201,13 @@ class ProductController {
     } else if (visibility) {
       result = await this.productService.bulkUpdateVisibility(productIds, visibility);
     }
+    await auditService.record(req, {
+      module: "products",
+      action: "bulk_action",
+      entityType: "Product",
+      newData: result,
+      reason: status ? `bulk_status:${status}` : visibility ? `bulk_visibility:${visibility}` : "bulk_update",
+    });
     res.json(okResponse(result));
   };
 
@@ -114,6 +220,14 @@ class ProductController {
       req.body,
       actor,
     );
+    await auditService.record(req, {
+      module: "products",
+      action: "inventory_adjust",
+      entityId: req.params.productId,
+      entityType: "Product",
+      newData: product,
+      reason: req.body.reason,
+    });
     res.json(okResponse(product));
   };
 
