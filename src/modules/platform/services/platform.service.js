@@ -756,7 +756,7 @@ class PlatformService {
   }
 
   async getCatalogPrefillData(query = {}) {
-    const categories = (await this.platformRepository.listCategories({}, { skip: 0, limit: 500 })).items || [];
+    const categories = (await this.platformRepository.listCategories({}, { skip: 0, limit: 5000 })).items || [];
     const brands = (await this.platformRepository.listBrands(query.includeInactive ? {} : { active: true }, { skip: 0, limit: 500 })).items || [];
     const families = (await this.platformRepository.listProductFamilies({}, { skip: 0, limit: 500 })).items || [];
     const variants = (await this.platformRepository.listProductVariants({}, { skip: 0, limit: 500 })).items || [];

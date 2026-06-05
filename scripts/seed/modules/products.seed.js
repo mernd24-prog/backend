@@ -674,7 +674,7 @@ class ProductsSeed {
     const SUFFIXES = ['Pro','Plus','Max','Lite','SE','Edition','Special Edition',
                       'Premium','Exclusive','New Arrival','2024','2025','Combo','Value Pack',
                       '(Renewed)','with Warranty','BIS Certified'];
-    const STATUSES = ['ACTIVE','ACTIVE','ACTIVE','ACTIVE','ACTIVE','ACTIVE','ACTIVE','DRAFT','SUBMITTED','INACTIVE'];
+    const STATUSES = ['active','active','active','active','active','active','active','draft','pending_approval','inactive'];
 
     const allDocs = [];
     const TARGET  = 10000;
@@ -715,7 +715,7 @@ class ProductsSeed {
           sku,
           barcode,
           productType: hasVariants ? 'VARIABLE' : 'SIMPLE',
-          visibility:  'PUBLIC',
+          visibility:  'public',
           status,
           price:           mrp,
           mrp,
@@ -767,7 +767,7 @@ class ProductsSeed {
           wishlistCount: randNum(0, 3000),
           viewCount:     randNum(100, 200000),
           salesCount:    randNum(0, 80000),
-          isPublished:   status === 'ACTIVE',
+          isPublished:   status === 'active',
           isFeatured:    Math.random() < 0.04,
           tags:    [],
           badges:  [],

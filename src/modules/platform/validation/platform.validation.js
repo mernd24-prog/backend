@@ -88,11 +88,11 @@ const listCategoriesSchema = Joi.object({
   body: Joi.object({}).required(),
   query: listQuery.concat(
     Joi.object({
-      parentKey: Joi.string(),
-      active: Joi.boolean(),
+      parentKey:  Joi.string(),
+      active:     Joi.boolean(),
       categoryKey: Joi.string(),
-      tree: Joi.boolean(),
-      maxDepth: Joi.number().integer().min(1).max(6),
+      tree:       Joi.boolean(),
+      maxDepth:   Joi.number().integer().min(1).max(6),
     }),
   ),
   params: Joi.object({}).required(),

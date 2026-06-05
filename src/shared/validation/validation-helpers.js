@@ -164,7 +164,7 @@ const pincode = () =>
 const listQuery = () =>
   Joi.object({
     page:      Joi.number().integer().min(1).default(1),
-    limit:     Joi.number().integer().min(1).max(100).default(20),
+    limit:     Joi.number().integer().min(1).max(5000).default(20),
     search:    Joi.string().trim().max(200).optional().allow(""),
     sortBy:    Joi.string().trim().max(50).optional().allow(""),
     sortDir:   Joi.string().valid("asc", "desc").default("desc"),
