@@ -105,10 +105,11 @@ function inferRequestAction(req) {
   if (path.includes("/assign")) {
     return method === "GET" ? "view" : "assign";
   }
+  if (path.includes("/moderate") || path.includes("/review")) {
+    return method === "GET" ? "view" : "approve";
+  }
   if (
     path.includes("/status") ||
-    path.includes("/moderate") ||
-    path.includes("/review") ||
     path.includes("/archive") ||
     path.includes("/activate") ||
     path.includes("/deactivate")

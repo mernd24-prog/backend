@@ -8,7 +8,7 @@ function getFirebaseApp() {
     return firebaseApp;
   }
 
-  if (!env.firebase.projectId || !env.firebase.clientEmail || !env.firebase.privateKey) {
+  if (!env.firebase.configured) {
     return null;
   }
 

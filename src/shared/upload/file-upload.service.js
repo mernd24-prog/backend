@@ -4,6 +4,9 @@ const { v4: uuidv4 } = require("uuid");
 const { env } = require("../../config/env");
 const { AppError } = require("../errors/app-error");
 const { storageService } = require("../storage/storage-service");
+const {
+  SUPPORTED_DOCUMENT_MIME_TYPES,
+} = require("../validation/document-upload");
 
 const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/jpeg",
@@ -18,6 +21,7 @@ const MIME_EXTENSION_MAP = {
   "image/webp": ".webp",
   "image/gif": ".gif",
 };
+const ALLOWED_DOCUMENT_MIME_TYPES = new Set(SUPPORTED_DOCUMENT_MIME_TYPES);
 
 function sanitizeSegment(value, fallback = "default") {
   const sanitized = String(value || fallback)
@@ -32,15 +36,22 @@ function sanitizeSegment(value, fallback = "default") {
 }
 
 function hasCloudinaryConfig() {
-  return Boolean(
-    env.cloudinary.cloudName &&
-      env.cloudinary.apiKey &&
-      env.cloudinary.apiSecret,
-  );
+  return env.cloudinary.enabled;
 }
 
 function getRequestBaseUrl(req) {
   return `${req.protocol}://${req.get("host")}`;
+}
+
+function toAbsoluteUploadUrl(url, req) {
+  if (/^https?:\/\//i.test(String(url || ""))) {
+    return url;
+  }
+  if (!req) {
+    return url;
+  }
+  const pathWithSlash = String(url || "").startsWith("/") ? url : `/${url}`;
+  return `${getRequestBaseUrl(req)}${pathWithSlash}`;
 }
 
 async function moveFile(source, destination) {
@@ -62,6 +73,18 @@ class FileUploadService {
     if (!ALLOWED_IMAGE_MIME_TYPES.has(file.mimetype)) {
       throw new AppError("Unsupported image type", 400, {
         allowedMimeTypes: Array.from(ALLOWED_IMAGE_MIME_TYPES),
+      });
+    }
+  }
+
+  validateDocument(file) {
+    if (!file) {
+      throw new AppError("Document file is required", 400);
+    }
+
+    if (!ALLOWED_DOCUMENT_MIME_TYPES.has(file.mimetype)) {
+      throw new AppError("Unsupported document type", 400, {
+        allowedMimeTypes: Array.from(ALLOWED_DOCUMENT_MIME_TYPES),
       });
     }
   }
@@ -108,6 +131,11 @@ class FileUploadService {
       }
     }
 
+    if (!env.upload.localStorageEnabled) {
+      await fs.unlink(file.path).catch(() => {});
+      throw new AppError("Upload storage is disabled by environment configuration", 503);
+    }
+
     const extension =
       path.extname(file.originalname || "").toLowerCase() ||
       MIME_EXTENSION_MAP[file.mimetype] ||
@@ -131,11 +159,53 @@ class FileUploadService {
       size: file.size,
     };
   }
+
+  async uploadDocument(file, options = {}) {
+    this.validateDocument(file);
+
+    const moduleName = sanitizeSegment(options.moduleName, "default");
+    const documentKey = sanitizeSegment(options.documentKey || options.documentType, "document");
+
+    try {
+      const contentBase64 = await fs.readFile(file.path, { encoding: "base64" });
+      const upload = await storageService.uploadDocument(
+        {
+          contentBase64,
+          mimeType: file.mimetype,
+          fileName: file.originalname,
+        },
+        {
+          folder: `ecommerce/uploads/${moduleName}/documents`,
+          documentKey,
+          ownerType: options.ownerType,
+          ownerId: options.ownerId,
+        },
+      );
+      const url = toAbsoluteUploadUrl(upload.secure_url || upload.url, options.req);
+
+      return {
+        documentURL: url,
+        url,
+        publicId: upload.public_id,
+        assetId: upload.asset_id,
+        storage: upload.storage || "cloudinary",
+        folder: `ecommerce/uploads/${moduleName}/documents`,
+        module: moduleName,
+        documentType: documentKey,
+        originalName: file.originalname,
+        mimeType: file.mimetype,
+        size: file.size,
+      };
+    } finally {
+      await fs.unlink(file.path).catch(() => {});
+    }
+  }
 }
 
 const fileUploadService = new FileUploadService();
 
 module.exports = {
+  ALLOWED_DOCUMENT_MIME_TYPES,
   ALLOWED_IMAGE_MIME_TYPES,
   fileUploadService,
 };

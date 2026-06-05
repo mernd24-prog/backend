@@ -1,7 +1,10 @@
 const slugify = require("slugify");
 const { getPage } = require("../../../shared/tools/page");
 const { ProductRepository } = require("../repositories/product.repository");
-const { elasticsearchClient } = require("../../../shared/search/elasticsearch-client");
+const {
+  elasticsearchClient,
+  isElasticsearchEnabled,
+} = require("../../../shared/search/elasticsearch-client");
 const { remember, forget } = require("../../../shared/tools/cache");
 const { AppError } = require("../../../shared/errors/app-error");
 const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
@@ -393,6 +396,8 @@ class ProductService {
   }
 
   async _indexProduct(product) {
+    if (!isElasticsearchEnabled()) return;
+
     const productId = product?._id || product?.id;
     if (!productId) return;
 
@@ -413,6 +418,8 @@ class ProductService {
   }
 
   async _deleteFromIndex(productId) {
+    if (!isElasticsearchEnabled()) return;
+
     try {
       await elasticsearchClient.delete({ index: "products", id: String(productId) });
     } catch (err) {
@@ -1001,6 +1008,7 @@ class ProductService {
   async reviewProductRevision(productId, revisionId, payload, actor) {
     const product = await this.productRepository.findById(productId);
     if (!product) throw new AppError("Product not found", 404);
+    this.assertCanReviewProductStatus(actor, payload.status);
 
     const revision = await this.productRepository.findRevisionById(revisionId);
     if (
@@ -1439,6 +1447,21 @@ class ProductService {
   async searchProducts(query) {
     const page = Math.max(1, Number(query.page || 1));
     const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
+    const searchMongo = async () => {
+      const filter = this.buildSearchFallbackFilter(query);
+      const result = await this.productRepository.paginate(filter, {
+        page,
+        limit,
+        skip: (page - 1) * limit,
+        sortBy: query.sort || "popular",
+      });
+      return { items: result.items, total: result.total, source: "mongo" };
+    };
+
+    if (!isElasticsearchEnabled()) {
+      return searchMongo();
+    }
+
     try {
       const esQuery = {
         bool: {
@@ -1559,14 +1582,7 @@ class ProductService {
       };
     } catch (error) {
       logger.warn({ err: error, q: query.q }, "Elasticsearch search failed, falling back to Mongo");
-      const filter = this.buildSearchFallbackFilter(query);
-      const result = await this.productRepository.paginate(filter, {
-        page,
-        limit,
-        skip: (page - 1) * limit,
-        sortBy: query.sort || "popular",
-      });
-      return { items: result.items, total: result.total, source: "mongo" };
+      return searchMongo();
     }
   }
 
@@ -1575,6 +1591,7 @@ class ProductService {
   async reviewProduct(productId, payload, actor) {
     const existingProduct = await this.productRepository.findById(productId);
     if (!existingProduct) throw new AppError("Product not found", 404);
+    this.assertCanReviewProductStatus(actor, payload.status);
 
     const pendingRevision = await this.productRepository.findPendingRevision(productId);
     if (
@@ -1632,6 +1649,25 @@ class ProductService {
 
   async bulkUpdateStatus(productIds, status, actor) {
     const products = await this.productRepository.findByIds(productIds);
+    const requestedCount = new Set(productIds.map((id) => String(id))).size;
+    if (!products.length || products.length !== requestedCount) {
+      throw new AppError("One or more products were not found for bulk update", 404);
+    }
+
+    products.forEach((product) => {
+      this.assertCanAccessManagementProduct(product, actor);
+      if (isSellerRole(actor)) {
+        this.assertSellerCanSetStatus(product, status);
+      }
+    });
+
+    if (!isSellerRole(actor) && [
+      PRODUCT_STATUS.ACTIVE,
+      PRODUCT_STATUS.REJECTED,
+    ].includes(status)) {
+      this.assertCanReviewProductStatus(actor, status);
+    }
+
     await Promise.all(products.map((product) =>
       this.productRepository.update(product._id, {
         status,
@@ -1660,10 +1696,17 @@ class ProductService {
     return { updated: products.length, status };
   }
 
-  async bulkUpdateVisibility(productIds, visibility) {
-    await this.productRepository.bulkUpdateVisibility(productIds, visibility);
+  async bulkUpdateVisibility(productIds, visibility, actor = {}) {
     const products = await this.productRepository.findByIds(productIds);
-    await Promise.allSettled(products.map((product) => this._indexProduct(product)));
+    const requestedCount = new Set(productIds.map((id) => String(id))).size;
+    if (!products.length || products.length !== requestedCount) {
+      throw new AppError("One or more products were not found for bulk visibility update", 404);
+    }
+
+    products.forEach((product) => this.assertCanAccessManagementProduct(product, actor));
+    await this.productRepository.bulkUpdateVisibility(productIds, visibility);
+    const updatedProducts = await this.productRepository.findByIds(productIds);
+    await Promise.allSettled(updatedProducts.map((product) => this._indexProduct(product)));
     this._invalidateProductCache();
     return { updated: productIds.length, visibility };
   }
@@ -1738,11 +1781,23 @@ class ProductService {
     if (nextStatus === PRODUCT_STATUS.ARCHIVED) {
       throw new AppError("Restore status cannot be archived", 400);
     }
+    if (isSellerRole(actor) && ![
+      PRODUCT_STATUS.DRAFT,
+      PRODUCT_STATUS.PENDING_APPROVAL,
+    ].includes(nextStatus)) {
+      throw new AppError("Seller restore can only return a product to draft or pending approval", 403);
+    }
 
     const updatedProduct = await this.productRepository.update(productId, {
       status: nextStatus,
       visibility: payload.visibility || PRODUCT_VISIBILITY.PRIVATE,
       lastUpdatedBy: actor.userId,
+      ...(nextStatus === PRODUCT_STATUS.PENDING_APPROVAL
+        ? {
+            "moderation.submittedAt": new Date(),
+            rejectionReason: null,
+          }
+        : {}),
       statusHistory: this.appendStatusHistory(existingProduct, {
         fromStatus: existingProduct.status,
         toStatus: nextStatus,
@@ -1818,7 +1873,12 @@ class ProductService {
       throw new AppError("Rejection reason is required", 400);
     }
 
-    if ([PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.INACTIVE, PRODUCT_STATUS.REJECTED].includes(nextStatus)) {
+    if (isSellerRole(actor)) {
+      if (nextStatus === PRODUCT_STATUS.ARCHIVED) {
+        return this.archiveProduct(productId, payload, actor);
+      }
+      this.assertSellerCanSetStatus(existingProduct, nextStatus);
+    } else if ([PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.INACTIVE, PRODUCT_STATUS.REJECTED].includes(nextStatus)) {
       return this.reviewProduct(productId, payload, actor);
     }
 
@@ -1953,6 +2013,52 @@ class ProductService {
     }
     throw new AppError("Permission denied", 403);
   }
+
+  assertCanReviewProductStatus(actor = {}, status) {
+    if (!actor.userId) {
+      throw new AppError("Authentication required", 401);
+    }
+    if (isSellerRole(actor)) {
+      throw new AppError("Seller product changes require admin review", 403);
+    }
+    const requiredAction =
+      status === PRODUCT_STATUS.REJECTED
+        ? "reject"
+        : status === PRODUCT_STATUS.ACTIVE
+          ? "approve"
+          : "status_change";
+
+    if (hasProductPermission(actor, requiredAction)) {
+      return;
+    }
+
+    throw new AppError(`Permission denied: products:${requiredAction} is required`, 403);
+  }
+
+  assertSellerCanSetStatus(product, nextStatus) {
+    const currentStatus = product.status;
+    const allowedSellerStatuses = new Set([
+      PRODUCT_STATUS.DRAFT,
+      PRODUCT_STATUS.PENDING_APPROVAL,
+      PRODUCT_STATUS.INACTIVE,
+      PRODUCT_STATUS.ARCHIVED,
+    ]);
+
+    if (!allowedSellerStatuses.has(nextStatus)) {
+      throw new AppError("Seller cannot directly approve or reject products", 403);
+    }
+
+    if (currentStatus === PRODUCT_STATUS.ACTIVE && nextStatus !== PRODUCT_STATUS.INACTIVE && nextStatus !== PRODUCT_STATUS.ARCHIVED) {
+      throw new AppError("Active product changes must be submitted as a pending revision", 403);
+    }
+
+    if (nextStatus === PRODUCT_STATUS.INACTIVE && ![
+      PRODUCT_STATUS.ACTIVE,
+      PRODUCT_STATUS.INACTIVE,
+    ].includes(currentStatus)) {
+      throw new AppError("Only active products can be deactivated by seller", 400);
+    }
+  }
 }
 
 // helper
@@ -1966,6 +2072,28 @@ function isSellerRole(actor) {
 
 function isScopedSellerRole(actor) {
   return ["seller-admin", "seller-sub-admin"].includes(actor.role);
+}
+
+function hasProductPermission(actor = {}, action) {
+  if (actor.isSuperAdmin || ["admin", "super-admin"].includes(actor.role)) {
+    return true;
+  }
+
+  if (isSellerRole(actor)) {
+    return false;
+  }
+
+  const actionAliases = {
+    approve: ["approve", "review", "approval"],
+    reject: ["reject"],
+    status_change: ["status_change", "status", "action", "manage"],
+  };
+  const actions = actionAliases[action] || [action];
+  const permissions = new Set(Array.isArray(actor.permissions) ? actor.permissions : []);
+
+  return actions.some((candidate) =>
+    permissions.has(candidate) || permissions.has(`products:${candidate}`),
+  );
 }
 
 function escapeRegExp(value) {

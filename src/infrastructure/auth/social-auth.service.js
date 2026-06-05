@@ -8,8 +8,12 @@ const googleClient = new OAuth2Client();
 class SocialAuthService {
   async verifyIdentityToken(payload) {
     const { provider, idToken } = payload;
-    if (!env.production) {
+    if (env.socialAuth.static) {
       return this.verifyStaticToken(payload);
+    }
+
+    if (!env.socialAuth.live) {
+      throw new AppError("Social login is disabled by environment configuration", 503);
     }
 
     if (provider === "google") {

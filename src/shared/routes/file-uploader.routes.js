@@ -4,16 +4,19 @@ const os = require("os");
 const path = require("path");
 const multer = require("multer");
 const { AppError } = require("../errors/app-error");
+const { env } = require("../../config/env");
 const { okResponse } = require("../http/reply");
 const { authenticate } = require("../middleware/authenticate");
 const { catchErrors } = require("../middleware/catch-errors");
 const {
+  ALLOWED_DOCUMENT_MIME_TYPES,
   ALLOWED_IMAGE_MIME_TYPES,
   fileUploadService,
 } = require("../upload/file-upload.service");
 
 const fileUploaderRoutes = express.Router();
 const maxImageBytes = 10 * 1024 * 1024;
+const maxDocumentBytes = env.upload.maxDocumentBytes;
 const tempUploadDir = path.join(os.tmpdir(), "ecommerce-uploads");
 
 const storage = multer.diskStorage({
@@ -37,6 +40,23 @@ const upload = multer({
     if (!ALLOWED_IMAGE_MIME_TYPES.has(file.mimetype)) {
       return cb(new AppError("Unsupported image type", 400, {
         allowedMimeTypes: Array.from(ALLOWED_IMAGE_MIME_TYPES),
+      }));
+    }
+
+    return cb(null, true);
+  },
+});
+
+const documentUpload = multer({
+  storage,
+  limits: {
+    fileSize: maxDocumentBytes,
+    files: 1,
+  },
+  fileFilter: (req, file, cb) => {
+    if (!ALLOWED_DOCUMENT_MIME_TYPES.has(file.mimetype)) {
+      return cb(new AppError("Unsupported document type", 400, {
+        allowedMimeTypes: Array.from(ALLOWED_DOCUMENT_MIME_TYPES),
       }));
     }
 
@@ -102,6 +122,25 @@ fileUploaderRoutes.post(
     return res.status(201).json(okResponse({
       imageURLs: images.map((image) => image.url),
       images,
+    }));
+  }),
+);
+
+fileUploaderRoutes.post(
+  "/upload-document",
+  authenticate,
+  runUpload(documentUpload.single("file")),
+  catchErrors(async (req, res) => {
+    const document = await fileUploadService.uploadDocument(req.file, {
+      moduleName: req.body.module,
+      documentKey: req.body.documentKey || req.body.type || "catalog-document",
+      req,
+    });
+
+    return res.status(201).json(okResponse({
+      documentURL: document.url,
+      url: document.url,
+      document,
     }));
   }),
 );

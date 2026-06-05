@@ -576,14 +576,22 @@ class CategoriesSeed {
 
         for (let ci = 0; ci < sub.children.length; ci++) {
           const childName = sub.children[ci];
-          const childKey = `${sub.key}-${childName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}`;
+          const childSlug = childName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+          const childKey = `${root.key}-${sub.key}-${childSlug}`;
+          // Merge root + sub attrs so child inherits the complete attribute set; dedupe by key
+          const seenKeys = new Set();
+          const mergedAttrs = [...root.attrs, ...sub.attrs].filter(a => {
+            if (seenKeys.has(a.key)) return false;
+            seenKeys.add(a.key);
+            return true;
+          });
           docs.push({
             _id: new mongoose.Types.ObjectId(),
             categoryKey: childKey,
             title: childName,
             parentKey: sub.key,
             level: 2,
-            attributeSchema: sub.attrs.slice(0, 6),
+            attributeSchema: mergedAttrs,
             attributesSchema: {},
             active: true,
             sortOrder: ci + 1,

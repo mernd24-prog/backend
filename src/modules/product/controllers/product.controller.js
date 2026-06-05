@@ -199,7 +199,7 @@ class ProductController {
     if (status) {
       result = await this.productService.bulkUpdateStatus(productIds, status, actor);
     } else if (visibility) {
-      result = await this.productService.bulkUpdateVisibility(productIds, visibility);
+      result = await this.productService.bulkUpdateVisibility(productIds, visibility, actor);
     }
     await auditService.record(req, {
       module: "products",

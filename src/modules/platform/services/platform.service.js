@@ -109,7 +109,7 @@ class PlatformService {
   async listCategories(query) {
     const isTreeRequested = query.tree === true || query.tree === "true";
     const pagination = isTreeRequested
-      ? { page: 1, limit: 1000, skip: 0 }
+      ? { page: 1, limit: 5000, skip: 0 }
       : getPage(query);
     const filter = buildMongoFilter({
       search:      query.q || query.keyWord || query.search,

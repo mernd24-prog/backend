@@ -8,6 +8,7 @@ const { mapPaymentResponse } = require("../dtos/payment-response");
 const { OrderRepository } = require("../../order/repositories/order.repository");
 const { OrderService } = require("../../order/services/order.service");
 const { PaymentMethodConfigRepository } = require("../repositories/payment-method-config.repository");
+const { env } = require("../../../config/env");
 
 class PaymentService {
   constructor({
@@ -55,7 +56,21 @@ class PaymentService {
 
     return {
       providers: [
-        { provider: PAYMENT_PROVIDER.RAZORPAY, label: "Online Payment", enabled: true, chargeAmount: 0, payableNow: true },
+        {
+          provider: PAYMENT_PROVIDER.RAZORPAY,
+          label: env.razorpay.mock ? "Online Payment (Test)" : "Online Payment",
+          enabled: env.razorpay.enabled,
+          chargeAmount: 0,
+          payableNow: true,
+          mode: env.razorpay.mode,
+          ...(env.razorpay.enabled
+            ? {}
+            : {
+                disabledReason: env.razorpay.liveRequested
+                  ? "Razorpay live credentials are missing"
+                  : "Razorpay is disabled by environment configuration",
+              }),
+        },
         { provider: PAYMENT_PROVIDER.COD, label: "Cash on Delivery", enabled: codAvailable, chargeAmount: cod.chargeAmount, payableNow: false, config: cod },
         { provider: PAYMENT_PROVIDER.MANUAL_UPI, label: "Manual UPI", enabled: true, chargeAmount: 0, payableNow: false },
         { provider: PAYMENT_PROVIDER.MANUAL_BANK_TRANSFER, label: "Bank Transfer", enabled: true, chargeAmount: 0, payableNow: false },
@@ -224,6 +239,55 @@ class PaymentService {
       paymentEvent,
     );
 
+    if (providerOrder.autoCapture) {
+      const paymentVerifiedEvent = makeEvent(
+        DOMAIN_EVENTS.PAYMENT_VERIFIED_V1,
+        {
+          buyerId: actor.userId,
+          orderId: payload.orderId,
+          paymentId: payment.id,
+          provider: payload.provider,
+          providerPaymentId: providerOrder.providerPaymentId,
+          providerOrderId: providerOrder.providerOrderId,
+        },
+        {
+          source: "payment-module",
+        },
+      );
+
+      const updatedPayment = await this.paymentRepository.updatePaymentStatus(
+        payment.id,
+        {
+          status: PAYMENT_STATUS.CAPTURED,
+          providerPaymentId: providerOrder.providerPaymentId,
+          verificationMethod: "mock_auto_capture",
+          metadata: {
+            ...(providerOrder.metadata || {}),
+            autoCaptured: true,
+          },
+          verifiedAt: new Date(),
+        },
+        paymentVerifiedEvent,
+      );
+
+      await this.orderService.markPaymentCaptured(payload.orderId, {
+        userId: actor.userId,
+        role: actor.role,
+        metadata: {
+          paymentId: payment.id,
+          provider: payload.provider,
+          providerPaymentId: providerOrder.providerPaymentId,
+          providerOrderId: providerOrder.providerOrderId,
+          verificationMethod: "mock_auto_capture",
+        },
+      });
+
+      return mapPaymentResponse({
+        ...updatedPayment,
+        checkout: providerOrder.checkout,
+      });
+    }
+
     return mapPaymentResponse({
       ...payment,
       checkout: providerOrder.checkout,
@@ -266,6 +330,10 @@ class PaymentService {
     const payment = await this.paymentRepository.findByOrderId(payload.orderId, actor.userId);
     if (!payment) {
       throw new AppError("Payment record not found for this order", 404);
+    }
+
+    if (payment.provider !== payload.provider) {
+      throw new AppError("Payment provider does not match the existing payment record", 400);
     }
 
     const provider = paymentProviderRegistry.get(payload.provider);
@@ -331,19 +399,40 @@ class PaymentService {
 
   async handleWebhook(signature, rawBody) {
     const { verifyRazorpayWebhookSignature } = require("../../../infrastructure/payments/razorpay-client");
+    if (!env.razorpay.live) {
+      return {
+        acknowledged: true,
+        ignored: true,
+        mode: env.razorpay.mode,
+        reason: "Razorpay webhook ignored because live Razorpay is disabled.",
+      };
+    }
+
     if (!signature || !rawBody) {
       throw new AppError("Invalid Razorpay webhook request", 400);
+    }
+
+    if (!env.razorpay.webhookSecret) {
+      throw new AppError("Razorpay webhook secret is not configured", 503);
     }
 
     if (!verifyRazorpayWebhookSignature(rawBody, signature)) {
       throw new AppError("Invalid Razorpay webhook signature", 401);
     }
 
-    const payload = JSON.parse(rawBody.toString("utf8"));
+    let payload;
+    try {
+      payload = JSON.parse(rawBody.toString("utf8"));
+    } catch (error) {
+      throw new AppError("Invalid Razorpay webhook payload", 400);
+    }
     const eventType = payload.event;
 
     if (eventType === "payment.captured") {
-      const entity = payload.payload.payment.entity;
+      const entity = payload.payload?.payment?.entity;
+      if (!entity?.id || !entity?.order_id) {
+        throw new AppError("Invalid Razorpay payment captured payload", 400);
+      }
       const eventId = payload.id || entity.acquirer_data?.rrn || entity.id;
       if (await this.paymentRepository.findWebhookEvent("razorpay", eventId)) {
         return { acknowledged: true, duplicate: true };
@@ -401,7 +490,10 @@ class PaymentService {
     }
 
     if (eventType === "payment.failed") {
-      const entity = payload.payload.payment.entity;
+      const entity = payload.payload?.payment?.entity;
+      if (!entity?.id || !entity?.order_id) {
+        throw new AppError("Invalid Razorpay payment failed payload", 400);
+      }
       const eventId = payload.id || entity.id;
       if (await this.paymentRepository.findWebhookEvent("razorpay", eventId)) {
         return { acknowledged: true, duplicate: true };
@@ -460,7 +552,10 @@ class PaymentService {
     }
 
     if (eventType === "refund.processed" || eventType === "payment.refunded") {
-      const entity = payload.payload.refund?.entity || payload.payload.payment?.entity;
+      const entity = payload.payload?.refund?.entity || payload.payload?.payment?.entity;
+      if (!entity?.id) {
+        throw new AppError("Invalid Razorpay refund payload", 400);
+      }
       const providerPaymentId = entity.payment_id || entity.id;
       const eventId = payload.id || entity.id;
       if (await this.paymentRepository.findWebhookEvent("razorpay", eventId)) {

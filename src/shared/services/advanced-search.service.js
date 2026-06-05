@@ -2,7 +2,10 @@
  * Advanced Search Service (PRODUCTION READY)
  */
 
-const { elasticsearchClient } = require("../search/elasticsearch-client");
+const {
+  elasticsearchClient,
+  isElasticsearchEnabled,
+} = require("../search/elasticsearch-client");
 const { logger } = require("../logger/logger");
 const { ProductModel } = require("../../modules/product/models/product.model");
 const {
@@ -117,6 +120,16 @@ class AdvancedSearchService {
     limit = 20,
     sort = "_score",
   }) {
+    if (!isElasticsearchEnabled()) {
+      return this.searchMongoFallback({
+        query,
+        filters,
+        page,
+        limit,
+        sort,
+      });
+    }
+
     try {
       // 🔒 safety
       page = Math.max(1, Number(page) || 1);
@@ -490,9 +503,21 @@ class AdvancedSearchService {
   // AUTOCOMPLETE
   // ==============================
   async getAutocompleteSuggestions(query, limit = 10) {
-    try {
-      if (!query) return [];
+    if (!query) return [];
 
+    if (!isElasticsearchEnabled()) {
+      const regex = new RegExp(escapeRegex(query), "i");
+      const products = await ProductModel.find(
+        applyPublicProductFilter({ title: regex }),
+      )
+        .sort({ "analytics.purchases": -1, createdAt: -1 })
+        .limit(Math.min(limit, 20))
+        .select("title")
+        .lean();
+      return products.map((product) => product.title).filter(Boolean);
+    }
+
+    try {
       const response = await elasticsearchClient.search({
         index: "products",
         body: {
@@ -535,6 +560,8 @@ class AdvancedSearchService {
   // INDEX PRODUCT
   // ==============================
   async indexProduct(productId, productData) {
+    if (!isElasticsearchEnabled()) return;
+
     try {
       if (!isPublicProduct(productData)) {
         await this.deleteProduct(productId);
@@ -556,6 +583,8 @@ class AdvancedSearchService {
   // UPDATE PRODUCT
   // ==============================
   async updateProduct(productId, updates) {
+    if (!isElasticsearchEnabled()) return;
+
     try {
       if (
         updates.status ||
@@ -589,6 +618,8 @@ class AdvancedSearchService {
   // DELETE PRODUCT
   // ==============================
   async deleteProduct(productId) {
+    if (!isElasticsearchEnabled()) return;
+
     try {
       await elasticsearchClient.delete({
         index: "products",
@@ -611,6 +642,10 @@ class AdvancedSearchService {
   }
 
   async rebuildIndexes() {
+    if (!isElasticsearchEnabled()) {
+      return { indexedCount: 0, source: "mongo_fallback" };
+    }
+
     try {
       await elasticsearchClient.indices.delete({ index: "products" });
     } catch (error) {

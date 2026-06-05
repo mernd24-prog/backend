@@ -648,7 +648,17 @@ class AuthService {
       }
       await this.assertUserCanAuthenticate(existingUser, { allowSellerOnboarding: true });
     }
-    const otp = env.production ? createOtp() : env.auth.staticOtp;
+    if (env.auth.otpMode === "disabled") {
+      throw new AppError(
+        env.auth.liveOtpRequested
+          ? "OTP email delivery is not configured. Please configure live email or disable live OTP for testing."
+          : "OTP delivery is disabled by environment configuration.",
+        503,
+      );
+    }
+
+    const isStaticOtp = env.auth.otpMode === "static";
+    const otp = isStaticOtp ? env.auth.staticOtp : createOtp();
     const otpKey = this.makeOtpKey(email, purpose);
 
     // Store OTP in Redis with 10 minute expiration
@@ -681,9 +691,10 @@ class AuthService {
     );
 
     return {
-      message: env.production ? "OTP sent successfully" : "Static OTP ready",
-      deliveryMode: env.production ? "third_party_email" : "static",
-      ...(env.production ? {} : { otp, emailDelivery: delivery.response }),
+      message: isStaticOtp ? "Static OTP ready" : "OTP sent successfully",
+      deliveryMode: isStaticOtp ? "static" : "third_party_email",
+      ...(isStaticOtp && env.auth.exposeStaticOtp ? { otp } : {}),
+      ...(isStaticOtp ? { emailDelivery: delivery.response } : {}),
     };
   }
 

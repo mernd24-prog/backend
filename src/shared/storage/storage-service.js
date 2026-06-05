@@ -1,4 +1,6 @@
 const cloudinary = require("cloudinary").v2;
+const fs = require("fs/promises");
+const path = require("path");
 const { v4: uuidv4 } = require("uuid");
 const { env } = require("../../config/env");
 const { AppError } = require("../errors/app-error");
@@ -15,14 +17,22 @@ cloudinary.config({
 const DATA_URI_PATTERN =
   /^data:([a-z0-9.+-]+\/[a-z0-9.+-]+);base64,([\s\S]+)$/i;
 const SUPPORTED_DOCUMENT_MIME_TYPE_SET = new Set(SUPPORTED_DOCUMENT_MIME_TYPES);
+const DOCUMENT_EXTENSION_MAP = {
+  "application/pdf": ".pdf",
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+};
 
 function ensureCloudinaryConfigured() {
-  if (
-    !env.cloudinary.cloudName ||
-    !env.cloudinary.apiKey ||
-    !env.cloudinary.apiSecret
-  ) {
+  if (!env.cloudinary.enabled) {
     throw new AppError("Cloudinary storage is not configured", 500);
+  }
+}
+
+function ensureUploadStorageConfigured() {
+  if (env.upload.storageMode === "disabled") {
+    throw new AppError("Upload storage is disabled by environment configuration", 503);
   }
 }
 
@@ -98,6 +108,18 @@ function sanitizePathSegment(value, fallback = "document") {
 
 function getDocumentStem(documentKey = "document") {
   return String(documentKey).replace(/Url$/, "") || "document";
+}
+
+function getPublicUploadUrl(relativeUrl) {
+  const pathWithSlash = relativeUrl.startsWith("/") ? relativeUrl : `/${relativeUrl}`;
+  return env.publicBaseUrl ? `${env.publicBaseUrl}${pathWithSlash}` : pathWithSlash;
+}
+
+function buildLocalFolderSegments(folder = "ecommerce/documents") {
+  return String(folder)
+    .split(/[\\/]+/)
+    .map((segment) => sanitizePathSegment(segment, "document"))
+    .filter(Boolean);
 }
 
 class StorageService {
@@ -190,7 +212,7 @@ class StorageService {
   }
 
   async uploadDocument(value, options = {}) {
-    ensureCloudinaryConfigured();
+    ensureUploadStorageConfigured();
     const document = this.buildDataUri(value);
     this.validateDocumentPayload(document);
 
@@ -200,6 +222,31 @@ class StorageService {
       uuidv4(),
     ].join("-");
 
+    if (env.upload.localStorageEnabled) {
+      const extension = DOCUMENT_EXTENSION_MAP[document.mimeType] || ".bin";
+      const fileName = `${publicId}${extension}`;
+      const folderSegments = buildLocalFolderSegments(options.folder || "ecommerce/documents");
+      const uploadRoot = path.resolve(__dirname, "../../../uploads");
+      const destination = path.join(uploadRoot, ...folderSegments, fileName);
+
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      await fs.writeFile(destination, Buffer.from(normalizeBase64(document.base64), "base64"));
+
+      const relativeUrl = path.posix.join("/uploads", ...folderSegments, fileName);
+      const url = getPublicUploadUrl(relativeUrl);
+      return {
+        secure_url: url,
+        url,
+        public_id: `local/${folderSegments.join("/")}/${fileName}`,
+        asset_id: publicId,
+        resource_type: "auto",
+        storage: "local",
+        bytes: getBase64Size(document.base64),
+        format: extension.replace(/^\./, ""),
+      };
+    }
+
+    ensureCloudinaryConfigured();
     return cloudinary.uploader.upload(document.dataUri, {
       resource_type: "auto",
       folder: options.folder || "ecommerce/documents",

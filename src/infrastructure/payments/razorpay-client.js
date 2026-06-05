@@ -10,8 +10,14 @@ function getRazorpayClient() {
     return razorpayClient;
   }
 
+  if (!env.razorpay.live) {
+    throw new AppError("Razorpay live mode is disabled by environment configuration", 503);
+  }
+
   if (!env.razorpay.keyId || !env.razorpay.keySecret) {
-    throw new AppError("Razorpay is not configured", 503);
+    throw new AppError("Razorpay live credentials are not configured", 503, {
+      missingKeys: env.razorpay.missingKeys,
+    });
   }
 
   razorpayClient = new Razorpay({
@@ -23,6 +29,10 @@ function getRazorpayClient() {
 }
 
 function verifyRazorpaySignature({ orderId, paymentId, signature }) {
+  if (!env.razorpay.keySecret) {
+    return false;
+  }
+
   const expectedSignature = crypto
     .createHmac("sha256", env.razorpay.keySecret)
     .update(`${orderId}|${paymentId}`)
@@ -32,6 +42,10 @@ function verifyRazorpaySignature({ orderId, paymentId, signature }) {
 }
 
 function verifyRazorpayWebhookSignature(rawBody, signature) {
+  if (!env.razorpay.webhookSecret) {
+    return false;
+  }
+
   const expectedSignature = crypto
     .createHmac("sha256", env.razorpay.webhookSecret)
     .update(rawBody)
