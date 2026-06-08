@@ -133,21 +133,24 @@ metaRoutes.get(
         options = result.items.map((item) => managedOption(item, { label: "name" }));
         break;
       case "states":
-        result = parentId
-          ? await commonManagementService.listStates({ ...query, countryId: parentId })
+        const countryId = parentId || req.query.countryId || "";
+        result = countryId
+          ? await commonManagementService.listStates({ ...query, countryId })
           : { items: [], total: 0 };
         options = result.items.map((item) => managedOption(item, { label: "name" }));
         break;
       case "cities":
-        result = parentId
-          ? await commonManagementService.listCities({ ...query, stateId: parentId })
+        const stateId = parentId || req.query.stateId || "";
+        result = stateId
+          ? await commonManagementService.listCities({ ...query, stateId })
           : { items: [], total: 0 };
         options = result.items.map((item) => managedOption(item, { label: "name" }));
         break;
       case "pincodes":
       case "zip-codes":
-        result = parentId
-          ? await commonManagementService.listZipCodes({ ...query, cityId: parentId })
+        const cityId = parentId || req.query.cityId || "";
+        result = cityId
+          ? await commonManagementService.listZipCodes({ ...query, cityId })
           : { items: [], total: 0 };
         options = result.items.map((item) => ({
           ...managedOption(item, { label: "zipCode" }),

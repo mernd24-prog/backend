@@ -51,6 +51,41 @@ const SELLER_BLOCKED_COMPLIANCE_FIELDS = [
   "sellerTier",
 ];
 
+const PRODUCT_LIST_PROJECTION = {
+  sellerId: 1,
+  title: 1,
+  slug: 1,
+  shortDescription: 1,
+  categoryId: 1,
+  category: 1,
+  brand: 1,
+  productFamilyCode: 1,
+  tags: 1,
+  price: 1,
+  mrp: 1,
+  salePrice: 1,
+  currency: 1,
+  gstRate: 1,
+  hsnCode: 1,
+  sku: 1,
+  color: 1,
+  images: 1,
+  stock: 1,
+  reservedStock: 1,
+  inventorySettings: 1,
+  origin: 1,
+  status: 1,
+  visibility: 1,
+  productType: 1,
+  rating: 1,
+  reviewCount: 1,
+  analytics: 1,
+  revisionStatus: 1,
+  pendingRevisionId: 1,
+  createdAt: 1,
+  updatedAt: 1,
+};
+
 class ProductService {
   constructor({
     productRepository = new ProductRepository(),
@@ -259,12 +294,28 @@ class ProductService {
 
   // ─── Media helpers ────────────────────────────────────────────────────────
 
+  normalizeImageUrl(image) {
+    if (!image) return "";
+    if (typeof image === "string") return image.trim();
+    if (typeof image !== "object") return "";
+    return String(
+      image.url ||
+      image.imageURL ||
+      image.imageUrl ||
+      image.secure_url ||
+      image.src ||
+      image.thumbnail ||
+      image.thumbnailUrl ||
+      "",
+    ).trim();
+  }
+
   normalizeImages(images = []) {
     if (!Array.isArray(images)) return [];
     return Array.from(
       new Set(
         images
-          .map((img) => (typeof img === "string" ? img.trim() : ""))
+          .map((img) => this.normalizeImageUrl(img))
           .filter(Boolean),
       ),
     );
@@ -272,8 +323,18 @@ class ProductService {
 
   normalizeProductMedia(payload = {}) {
     const normalized = { ...payload };
-    if (Object.prototype.hasOwnProperty.call(payload, "images")) {
-      normalized.images = this.normalizeImages(payload.images);
+    const imageSources = [
+      payload.images,
+      payload.imageUrls,
+      payload.product_image_id?.images,
+      payload.media?.images,
+      payload.image,
+      payload.thumbnail,
+      payload.thumbnailUrl,
+    ].filter((source) => source !== undefined);
+
+    if (imageSources.length) {
+      normalized.images = this.normalizeImages(imageSources.flat());
     }
     if (Object.prototype.hasOwnProperty.call(payload, "variants")) {
       normalized.variants = (payload.variants || []).map((v) => ({
@@ -506,6 +567,17 @@ class ProductService {
             limit: productLimit,
             skip: 0,
             sortBy: "newest",
+          }, {
+            projection: {
+              title: 1,
+              sku: 1,
+              sellerId: 1,
+              status: 1,
+              brand: 1,
+              category: 1,
+              images: 1,
+            },
+            lean: true,
           })).items.map((product) => ({
             _id: String(product._id || product.id),
             id: String(product._id || product.id),
@@ -1175,16 +1247,26 @@ class ProductService {
         filter.status = query.status || PRODUCT_STATUS.ACTIVE;
       }
 
-      const cacheKey = `products:management:${JSON.stringify({ filter, pagination })}`;
+      if (!query.status && query.includeArchived !== true && query.includeArchived !== "true") {
+        filter.status = { $ne: PRODUCT_STATUS.ARCHIVED };
+      }
+
+      const cacheKey = `products:management:${JSON.stringify({ filter, pagination, projection: "list" })}`;
       return remember(cacheKey, 30, () =>
-        this.productRepository.paginate(filter, pagination),
+        this.productRepository.paginate(filter, pagination, {
+          projection: PRODUCT_LIST_PROJECTION,
+          lean: true,
+        }),
       );
     }
 
     const publicFilter = applyPublicProductFilter(filter);
-    const cacheKey = `products:${JSON.stringify({ filter: publicFilter, pagination })}`;
+    const cacheKey = `products:${JSON.stringify({ filter: publicFilter, pagination, projection: "list" })}`;
     return remember(cacheKey, 60, () =>
-      this.productRepository.paginate(publicFilter, pagination),
+      this.productRepository.paginate(publicFilter, pagination, {
+        projection: PRODUCT_LIST_PROJECTION,
+        lean: true,
+      }),
     );
   }
 
@@ -1193,7 +1275,11 @@ class ProductService {
     const sellerId = actor.ownerSellerId || actor.userId;
     const filter = {};
     if (isScopedSellerRole(actor)) filter.createdBy = actor.userId;
-    if (query.status) filter.status = query.status;
+    if (query.status) {
+      filter.status = query.status;
+    } else {
+      filter.status = { $ne: PRODUCT_STATUS.ARCHIVED };
+    }
     if (query.category) {
       const categoryKeys = await this.platformRepository.getCategoryDescendantKeys(query.category);
       filter.category = categoryKeys.length ? { $in: categoryKeys } : query.category;
@@ -1206,7 +1292,10 @@ class ProductService {
     if (query.productType) filter.productType = query.productType;
     this.applyStockFilters(filter, query);
     this.applyAttributeFilters(filter, query);
-    return this.productRepository.paginateBySeller(sellerId, filter, pagination);
+    return this.productRepository.paginateBySeller(sellerId, filter, pagination, {
+      projection: PRODUCT_LIST_PROJECTION,
+      lean: true,
+    });
   }
 
   applyStockFilters(filter, query = {}) {
@@ -1661,11 +1750,19 @@ class ProductService {
       }
     });
 
-    if (!isSellerRole(actor) && [
+    const isBulkReactivation =
+      status === PRODUCT_STATUS.ACTIVE &&
+      products.every((product) => product.status === PRODUCT_STATUS.INACTIVE);
+
+    if (!isSellerRole(actor) && isBulkReactivation) {
+      this.assertCanReviewProductStatus(actor, PRODUCT_STATUS.INACTIVE);
+    } else if (!isSellerRole(actor) && [
       PRODUCT_STATUS.ACTIVE,
       PRODUCT_STATUS.REJECTED,
     ].includes(status)) {
       this.assertCanReviewProductStatus(actor, status);
+    } else if (!isSellerRole(actor) && status === PRODUCT_STATUS.INACTIVE) {
+      this.assertCanReviewProductStatus(actor, PRODUCT_STATUS.INACTIVE);
     }
 
     await Promise.all(products.map((product) =>
@@ -1873,12 +1970,19 @@ class ProductService {
       throw new AppError("Rejection reason is required", 400);
     }
 
+    const isAdminReactivation =
+      !isSellerRole(actor) &&
+      existingProduct.status === PRODUCT_STATUS.INACTIVE &&
+      nextStatus === PRODUCT_STATUS.ACTIVE;
+
     if (isSellerRole(actor)) {
       if (nextStatus === PRODUCT_STATUS.ARCHIVED) {
         return this.archiveProduct(productId, payload, actor);
       }
       this.assertSellerCanSetStatus(existingProduct, nextStatus);
-    } else if ([PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.INACTIVE, PRODUCT_STATUS.REJECTED].includes(nextStatus)) {
+    } else if (isAdminReactivation || nextStatus === PRODUCT_STATUS.INACTIVE) {
+      this.assertCanReviewProductStatus(actor, PRODUCT_STATUS.INACTIVE);
+    } else if ([PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.REJECTED].includes(nextStatus)) {
       return this.reviewProduct(productId, payload, actor);
     }
 
@@ -1896,6 +2000,7 @@ class ProductService {
             rejectionReason: null,
           }
         : {}),
+      ...(nextStatus === PRODUCT_STATUS.ACTIVE ? { publishedAt: existingProduct.publishedAt || new Date() } : {}),
       ...(nextStatus === PRODUCT_STATUS.ARCHIVED ? { visibility: PRODUCT_VISIBILITY.HIDDEN } : {}),
       lastUpdatedBy: actor.userId,
       statusHistory: this.appendStatusHistory(existingProduct, {

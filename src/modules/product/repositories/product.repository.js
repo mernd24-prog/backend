@@ -48,20 +48,33 @@ class ProductRepository {
 
   // ─── Pagination & listing ─────────────────────────────────────────────────
 
-  async paginate(filter, pagination) {
+  async paginate(filter, pagination, options = {}) {
     const sort = this._buildSort(pagination.sortBy, pagination.sortDir);
-    const [items, total] = await Promise.all([
-      ProductModel.find(filter)
+    const buildQuery = () => {
+      let query = ProductModel.find(filter)
         .skip(pagination.skip)
         .limit(pagination.limit)
-        .sort(sort),
+        .sort(sort);
+
+      if (options.projection) {
+        query = query.select(options.projection);
+      }
+      if (options.lean) {
+        query = query.lean();
+      }
+
+      return query;
+    };
+
+    const [items, total] = await Promise.all([
+      buildQuery(),
       ProductModel.countDocuments(filter),
     ]);
     return { items, total };
   }
 
-  async paginateBySeller(sellerId, filter, pagination) {
-    return this.paginate({ ...filter, sellerId }, pagination);
+  async paginateBySeller(sellerId, filter, pagination, options = {}) {
+    return this.paginate({ ...filter, sellerId }, pagination, options);
   }
 
   _buildSort(sortBy = "newest", sortDir = "desc") {
