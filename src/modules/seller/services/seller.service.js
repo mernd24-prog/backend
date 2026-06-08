@@ -8,6 +8,10 @@ const { auditService } = require("../../../shared/logger/audit.service");
 const { hashText } = require("../../../shared/tools/hash");
 const { ROLES } = require("../../../shared/constants/roles");
 const { DEFAULT_SELLER_MODULES, cleanModuleName } = require("../../../shared/auth/module-access");
+const {
+  PERMISSION_ACTIONS,
+  normalizePermissionAction: normalizeRbacPermissionAction,
+} = require("../../../shared/auth/rbac-permissions");
 const { RbacService } = require("../../rbac/services/rbac.service");
 const {
   storageService: defaultStorageService,
@@ -649,36 +653,8 @@ class SellerService {
   }
 
   normalizePermissionAction(action) {
-    const aliases = {
-      add: "create",
-      edit: "update",
-      status: "status_change",
-      approval: "approve",
-      action: "status_change",
-      review: "approve",
-      manage: "status_change",
-    };
-    const normalized = aliases[action] || action;
-    const allowed = new Set([
-      "view",
-      "create",
-      "add",
-      "edit",
-      "update",
-      "delete",
-      "approve",
-      "approval",
-      "reject",
-      "assign",
-      "export",
-      "import",
-      "status_change",
-      "status",
-      "restore",
-      "bulk_action",
-      "action",
-    ]);
-    return allowed.has(normalized) ? normalized : null;
+    const normalized = normalizeRbacPermissionAction(action);
+    return PERMISSION_ACTIONS.includes(normalized) ? normalized : null;
   }
 
   normalizeModulePermissions(modulePermissions, allowedModules) {
@@ -730,20 +706,7 @@ class SellerService {
       byAction.set(action, nextPermission);
     });
     const normalizedPermissions = Array.from(byAction.values());
-    const actions = [
-      "view",
-      "create",
-      "update",
-      "delete",
-      "approve",
-      "reject",
-      "assign",
-      "export",
-      "import",
-      "status_change",
-      "restore",
-      "bulk_action",
-    ];
+    const actions = PERMISSION_ACTIONS;
     const permissionsByAction = actions.reduce((lookup, action) => {
       lookup[action] =
         normalizedPermissions.find((permission) => permission.action === action) ||
@@ -1100,9 +1063,34 @@ class SellerService {
     return user;
   }
 
+  async enrichPermissionSummary(items = []) {
+    const list = items.map((item) => this.toPlainObject(item));
+    const summaries = await Promise.all(
+      list.map(async (user) => {
+        const userId = user._id || user.id;
+        if (!userId) return { moduleCount: 0, actionCount: 0, permissions: [] };
+        const permissions = await this.rbacService.getUserEffectivePermissions(String(userId));
+        const slugs = permissions.map((permission) => permission.slug).filter(Boolean);
+        return {
+          moduleCount: new Set(slugs.map((slug) => slug.split(":")[0]).filter(Boolean)).size,
+          actionCount: slugs.length,
+          permissions: slugs,
+        };
+      }),
+    );
+    return list.map((user, index) => ({
+      ...user,
+      permissionSummary: summaries[index],
+      assignedModuleCount: summaries[index].moduleCount || (user.allowedModules || []).length,
+      assignedActionCount: summaries[index].actionCount,
+    }));
+  }
+
   async listSellerSubAdmins(actor) {
     const sellerId = this.assertSellerOwnerActor(actor);
-    return this.sellerRepository.listSellerSubAdmins(sellerId);
+    return this.enrichPermissionSummary(
+      await this.sellerRepository.listSellerSubAdmins(sellerId),
+    );
   }
 
   async updateSellerSubAdminStatus(userId, payload, actor) {

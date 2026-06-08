@@ -13,6 +13,9 @@ const {
   SIDEBAR_MODULES,
 } = require("../../src/shared/auth/admin-sidebar-catalog");
 const {
+  getDefaultPermissionSlugsForRole,
+} = require("./rbac-role-defaults");
+const {
   PERMISSION_ACTIONS,
   SIDEBAR_PERMISSION_ACTIONS,
 } = require("../../src/shared/auth/rbac-permissions");
@@ -572,15 +575,15 @@ async function seedRbac() {
       },
     );
 
-    const superAdminSlugs = slugsForModules(
-      platformModules.map((m) => m.slug),
-      CANONICAL_ACTIONS,
-    );
-
-    const sellerSlugs = slugsForModules(
-      DEFAULT_SELLER_MODULES,
-      CANONICAL_ACTIONS,
-    );
+    const rolePermissionSlugs = {
+      "super-admin": getDefaultPermissionSlugsForRole("super-admin"),
+      admin: getDefaultPermissionSlugsForRole("admin"),
+      "sub-admin": getDefaultPermissionSlugsForRole("sub-admin"),
+      seller: getDefaultPermissionSlugsForRole("seller"),
+      "seller-admin": getDefaultPermissionSlugsForRole("seller-admin"),
+      "seller-sub-admin": getDefaultPermissionSlugsForRole("seller-sub-admin"),
+      buyer: getDefaultPermissionSlugsForRole("buyer"),
+    };
 
     const SYSTEM_ROLES = [
       {
@@ -590,26 +593,26 @@ async function seedRbac() {
         description: "Full platform access; bypasses all permission checks in code",
         type: "system",
         isSuperAdmin: true,
-        permissionSlugs: superAdminSlugs,
+        permissionSlugs: rolePermissionSlugs["super-admin"],
       },
       {
         id: uuidv4(),
         name: "Admin",
         slug: "admin",
         description:
-          "Platform admin; module and action access assigned per user via syncUserModulePermissions",
+          "Platform admin with role-based platform access; permissions remain editable from RBAC",
         type: "system",
         isSuperAdmin: false,
-        permissionSlugs: [],
+        permissionSlugs: rolePermissionSlugs.admin,
       },
       {
         id: uuidv4(),
         name: "Sub Admin",
         slug: "sub-admin",
-        description: "Scoped platform admin; permissions assigned per user",
+        description: "Scoped platform admin with role-based platform access; permissions remain editable from RBAC",
         type: "system",
         isSuperAdmin: false,
-        permissionSlugs: [],
+        permissionSlugs: rolePermissionSlugs["sub-admin"],
       },
       {
         id: uuidv4(),
@@ -619,26 +622,26 @@ async function seedRbac() {
           "Seller owner with full seller-panel access on all seller modules",
         type: "system",
         isSuperAdmin: false,
-        permissionSlugs: sellerSlugs,
+        permissionSlugs: rolePermissionSlugs.seller,
       },
       {
         id: uuidv4(),
         name: "Seller Admin",
         slug: "seller-admin",
         description:
-          "Seller-side admin; permissions assigned per user within seller modules",
+          "Seller-side admin with role-based seller-panel access; permissions remain editable from RBAC",
         type: "system",
         isSuperAdmin: false,
-        permissionSlugs: [],
+        permissionSlugs: rolePermissionSlugs["seller-admin"],
       },
       {
         id: uuidv4(),
         name: "Seller Sub Admin",
         slug: "seller-sub-admin",
-        description: "Scoped seller-panel admin; permissions assigned per user",
+        description: "Scoped seller-panel admin with role-based seller-panel access; permissions remain editable from RBAC",
         type: "system",
         isSuperAdmin: false,
-        permissionSlugs: [],
+        permissionSlugs: rolePermissionSlugs["seller-sub-admin"],
       },
       {
         id: uuidv4(),
@@ -662,11 +665,9 @@ async function seedRbac() {
     }
 
     console.log(`✓ Upserted ${SYSTEM_ROLES.length} system roles`);
-    console.log(`  super-admin → ${superAdminSlugs.length} permissions`);
-    console.log(`  seller      → ${sellerSlugs.length} permissions`);
-    console.log(
-      `  admin / sub-admin / seller-admin / seller-sub-admin / buyer → 0 assigned per user`,
-    );
+    SYSTEM_ROLES.forEach((role) => {
+      console.log(`  ${role.slug.padEnd(16)} → ${role.permissionSlugs.length} permissions`);
+    });
 
     await sequelize.query(
       `UPDATE roles

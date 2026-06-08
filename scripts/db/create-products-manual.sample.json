@@ -1,0 +1,305 @@
+{
+  "usage": "POST each object inside products as one create-product body. Seller users can omit sellerId because backend uses the logged-in seller. Admin users can add a real sellerId only when creating on behalf of a seller.",
+  "products": [
+    {
+      "title": "Apple iPhone 15 128GB Blue",
+      "shortDescription": "Apple iPhone 15 with 128GB storage, 5G support, and blue finish.",
+      "description": "Apple iPhone 15 128GB Blue with Super Retina display, advanced dual camera system, 5G connectivity, and all-day battery life.",
+      "productType": "simple",
+      "status": "draft",
+      "price": 69999,
+      "mrp": 79900,
+      "salePrice": 69999,
+      "costPrice": 62000,
+      "currency": "INR",
+      "gstRate": 18,
+      "gstInclusive": true,
+      "hsnCode": "8517",
+      "category": "smartphones",
+      "categoryId": "smartphones",
+      "brand": "Apple",
+      "sku": "MANUAL-IPHONE15-128-BLUE",
+      "barcode": "8900000001001",
+      "color": "Blue",
+      "stock": 12,
+      "tags": ["smartphone", "apple", "iphone", "5g"],
+      "badges": ["new"],
+      "attributes": {
+        "ram": "6GB",
+        "storage": "128GB",
+        "display_size": "6.1 inch",
+        "network": "5G",
+        "os": "iOS"
+      },
+      "specifications": {
+        "processor": "A16 Bionic chip",
+        "rearCamera": "48MP main camera",
+        "frontCamera": "12MP TrueDepth camera",
+        "battery": "All-day battery life",
+        "included": "USB-C charge cable"
+      },
+      "images": [
+        {
+          "url": "https://images.unsplash.com/photo-1511707171634-5f897ff02aa9",
+          "alt": "Apple iPhone 15 128GB Blue",
+          "isPrimary": true,
+          "position": 0
+        }
+      ],
+      "documents": [],
+      "videos": [],
+      "dimensions": {
+        "length": 14.76,
+        "width": 7.16,
+        "height": 0.78,
+        "unit": "cm"
+      },
+      "weight": 171,
+      "weightUnit": "g",
+      "origin": "India",
+      "warranty": {
+        "type": "manufacturer",
+        "duration": "1 year",
+        "summary": "1 year manufacturer warranty for device."
+      },
+      "hasVariants": false,
+      "variants": [],
+      "options": [],
+      "metadata": {
+        "featured": true,
+        "cod": true,
+        "prescriptionRequired": false
+      },
+      "seo": {
+        "title": "Apple iPhone 15 128GB Blue",
+        "description": "Buy Apple iPhone 15 128GB Blue with 5G and advanced camera.",
+        "keywords": ["iphone 15", "apple mobile", "5g smartphone"]
+      }
+    },
+    {
+      "title": "Samsung Galaxy Book4 15.6 Inch Laptop",
+      "shortDescription": "Samsung Galaxy Book4 laptop with 16GB RAM and 512GB SSD.",
+      "description": "Samsung Galaxy Book4 15.6 inch laptop with fast performance, slim design, 16GB RAM, 512GB SSD, and Windows 11 for daily work and study.",
+      "productType": "simple",
+      "status": "draft",
+      "price": 54999,
+      "mrp": 69990,
+      "salePrice": 54999,
+      "costPrice": 48000,
+      "currency": "INR",
+      "gstRate": 18,
+      "gstInclusive": true,
+      "hsnCode": "8471",
+      "category": "laptops",
+      "categoryId": "laptops",
+      "brand": "Samsung",
+      "sku": "MANUAL-GALAXY-BOOK4-16-512",
+      "barcode": "8900000001002",
+      "color": "Silver",
+      "stock": 8,
+      "tags": ["laptop", "samsung", "work", "student"],
+      "badges": ["deal"],
+      "attributes": {
+        "processor": "Intel Core i5",
+        "ram": "16GB",
+        "storage": "512GB SSD",
+        "display_size": "15.6 inch",
+        "os": "Windows 11"
+      },
+      "specifications": {
+        "display": "15.6 inch Full HD display",
+        "memory": "16GB RAM",
+        "storage": "512GB SSD",
+        "connectivity": "Wi-Fi, Bluetooth, USB-C, HDMI",
+        "included": "Laptop, charger, user manual"
+      },
+      "images": [
+        {
+          "url": "https://images.unsplash.com/photo-1496181133206-80ce9b88a853",
+          "alt": "Samsung Galaxy Book4 laptop",
+          "isPrimary": true,
+          "position": 0
+        }
+      ],
+      "documents": [],
+      "videos": [],
+      "dimensions": {
+        "length": 35.6,
+        "width": 22.9,
+        "height": 1.55,
+        "unit": "cm"
+      },
+      "weight": 1.55,
+      "weightUnit": "kg",
+      "origin": "India",
+      "warranty": {
+        "type": "manufacturer",
+        "duration": "1 year",
+        "summary": "1 year manufacturer warranty for laptop."
+      },
+      "hasVariants": false,
+      "variants": [],
+      "options": [],
+      "metadata": {
+        "featured": false,
+        "cod": true,
+        "prescriptionRequired": false
+      },
+      "seo": {
+        "title": "Samsung Galaxy Book4 Laptop",
+        "description": "Buy Samsung Galaxy Book4 laptop with 16GB RAM and 512GB SSD.",
+        "keywords": ["samsung laptop", "galaxy book4", "windows laptop"]
+      }
+    },
+    {
+      "title": "H&M Men's Regular Fit Cotton T-Shirt Black",
+      "shortDescription": "Regular fit black cotton T-shirt for men.",
+      "description": "H&M men's regular fit cotton T-shirt in black, made for everyday comfort with a soft fabric feel and easy casual styling.",
+      "productType": "simple",
+      "status": "draft",
+      "price": 599,
+      "mrp": 999,
+      "salePrice": 599,
+      "costPrice": 320,
+      "currency": "INR",
+      "gstRate": 12,
+      "gstInclusive": true,
+      "hsnCode": "6109",
+      "category": "mens-tshirts",
+      "categoryId": "mens-tshirts",
+      "brand": "H&M",
+      "sku": "MANUAL-HM-TSHIRT-BLACK-M",
+      "barcode": "8900000001003",
+      "color": "Black",
+      "stock": 50,
+      "tags": ["mens fashion", "tshirt", "cotton", "casual"],
+      "badges": ["bestseller"],
+      "attributes": {
+        "material": "Cotton",
+        "size": "M",
+        "fit": "Regular Fit",
+        "sleeve": "Half Sleeve",
+        "occasion": "Casual"
+      },
+      "specifications": {
+        "fabric": "100% cotton",
+        "neck": "Crew neck",
+        "washCare": "Machine wash cold",
+        "fit": "Regular fit",
+        "packageContents": "1 T-shirt"
+      },
+      "images": [
+        {
+          "url": "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab",
+          "alt": "Black men's cotton T-shirt",
+          "isPrimary": true,
+          "position": 0
+        }
+      ],
+      "documents": [],
+      "videos": [],
+      "dimensions": {
+        "length": 28,
+        "width": 20,
+        "height": 2,
+        "unit": "cm"
+      },
+      "weight": 220,
+      "weightUnit": "g",
+      "origin": "India",
+      "warranty": {
+        "type": "seller",
+        "duration": "7 days",
+        "summary": "Eligible for exchange as per seller policy."
+      },
+      "hasVariants": false,
+      "variants": [],
+      "options": [],
+      "metadata": {
+        "featured": false,
+        "cod": true,
+        "prescriptionRequired": false
+      },
+      "seo": {
+        "title": "H&M Men's Black Cotton T-Shirt",
+        "description": "Buy H&M men's regular fit black cotton T-shirt.",
+        "keywords": ["mens tshirt", "black tshirt", "hm tshirt"]
+      }
+    },
+    {
+      "title": "Mamaearth Ubtan Face Wash 100ml",
+      "shortDescription": "Mamaearth Ubtan face wash for tan removal and daily skin care.",
+      "description": "Mamaearth Ubtan Face Wash 100ml with turmeric and saffron for gentle cleansing, tan removal, and daily skin care.",
+      "productType": "simple",
+      "status": "draft",
+      "price": 249,
+      "mrp": 399,
+      "salePrice": 249,
+      "costPrice": 145,
+      "currency": "INR",
+      "gstRate": 18,
+      "gstInclusive": true,
+      "hsnCode": "3304",
+      "category": "skincare",
+      "categoryId": "skincare",
+      "brand": "Mamaearth",
+      "sku": "MANUAL-MAMAEARTH-UBTAN-FW-100ML",
+      "barcode": "8900000001004",
+      "color": "Yellow",
+      "stock": 40,
+      "tags": ["beauty", "skincare", "face wash", "ubtan"],
+      "badges": ["popular"],
+      "attributes": {
+        "skin_type": "All Skin Types",
+        "concern": "Tan Removal",
+        "volume": "100ml",
+        "ingredient": "Turmeric and Saffron",
+        "gender": "Unisex"
+      },
+      "specifications": {
+        "productForm": "Gel",
+        "keyIngredients": "Turmeric, saffron, walnut beads",
+        "usage": "Apply on wet face, massage gently, and rinse.",
+        "suitableFor": "Men and women",
+        "packageContents": "1 face wash tube"
+      },
+      "images": [
+        {
+          "url": "https://images.unsplash.com/photo-1556228578-8c89e6adf883",
+          "alt": "Mamaearth Ubtan Face Wash 100ml",
+          "isPrimary": true,
+          "position": 0
+        }
+      ],
+      "documents": [],
+      "videos": [],
+      "dimensions": {
+        "length": 6,
+        "width": 4,
+        "height": 15,
+        "unit": "cm"
+      },
+      "weight": 120,
+      "weightUnit": "g",
+      "origin": "India",
+      "warranty": {
+        "type": "seller",
+        "duration": "No warranty",
+        "summary": "Return or replacement as per marketplace policy."
+      },
+      "hasVariants": false,
+      "variants": [],
+      "options": [],
+      "metadata": {
+        "featured": false,
+        "cod": true,
+        "prescriptionRequired": false
+      },
+      "seo": {
+        "title": "Mamaearth Ubtan Face Wash 100ml",
+        "description": "Buy Mamaearth Ubtan Face Wash 100ml for tan removal.",
+        "keywords": ["mamaearth", "ubtan face wash", "skincare"]
+      }
+    }
+  ]
+}

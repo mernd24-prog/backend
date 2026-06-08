@@ -23,6 +23,10 @@ const {
   cleanModuleName,
 } = require("../../../shared/auth/module-access");
 const {
+  PERMISSION_ACTIONS,
+  normalizePermissionAction: normalizeRbacPermissionAction,
+} = require("../../../shared/auth/rbac-permissions");
+const {
   makeSellerOnboardingState,
   SELLER_ONBOARDING_STATUS,
   hasCompleteSellerBankDetails,
@@ -1338,20 +1342,7 @@ class AdminService {
       byAction.set(action, nextPermission);
     });
     const normalizedPermissions = Array.from(byAction.values());
-    const actions = [
-      "view",
-      "create",
-      "update",
-      "delete",
-      "approve",
-      "reject",
-      "assign",
-      "export",
-      "import",
-      "status_change",
-      "restore",
-      "bulk_action",
-    ];
+    const actions = PERMISSION_ACTIONS;
     const permissionsByAction = actions.reduce((lookup, action) => {
       lookup[action] =
         normalizedPermissions.find((permission) => permission.action === action) ||
@@ -1374,36 +1365,8 @@ class AdminService {
   }
 
   normalizePermissionAction(action) {
-    const aliases = {
-      add: "create",
-      edit: "update",
-      status: "status_change",
-      approval: "approve",
-      action: "status_change",
-      review: "approve",
-      manage: "status_change",
-    };
-    const normalized = aliases[action] || action;
-    const allowed = new Set([
-      "view",
-      "create",
-      "add",
-      "edit",
-      "update",
-      "delete",
-      "approve",
-      "approval",
-      "reject",
-      "assign",
-      "export",
-      "import",
-      "status_change",
-      "status",
-      "restore",
-      "bulk_action",
-      "action",
-    ]);
-    return allowed.has(normalized) ? normalized : null;
+    const normalized = normalizeRbacPermissionAction(action);
+    return PERMISSION_ACTIONS.includes(normalized) ? normalized : null;
   }
 
   normalizeModulePermissions(modulePermissions, allowedModules) {

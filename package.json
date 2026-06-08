@@ -19,6 +19,7 @@
     "db:setup": "npm run db:migrate && npm run db:seed:commerce",
     "db:create-super-admin": "node scripts/db/create-super-admin.js",
     "db:seed:rbac": "node scripts/db/seed-rbac.js",
+    "db:sync:role-permissions": "node scripts/db/sync-default-role-permissions.js",
     "postman:sync": "node scripts/postman/sync-postman-collection.js",
     "seed:all": "node scripts/seed/master-seed.js all --reset",
     "seed:all:append": "node scripts/seed/master-seed.js all",
