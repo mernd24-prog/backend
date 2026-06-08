@@ -455,17 +455,26 @@ class AuthService {
     if (isSeller) {
       sellerProfile.businessName =
         sellerProfile.businessName ||
-        sellerProfile.displayName ||
         sellerProfile.legalBusinessName ||
-        kyc?.legal_name ||
         "";
       sellerProfile.legalBusinessName =
         sellerProfile.legalBusinessName ||
         sellerProfile.businessName ||
-        kyc?.legal_name ||
         "";
       sellerProfile.businessType =
         sellerProfile.businessType || kyc?.business_type || "";
+      if (sellerProfile.kycStatus === "rejected") {
+        sellerProfile.businessName = null;
+        sellerProfile.displayName = null;
+        sellerProfile.legalBusinessName = null;
+        sellerProfile.businessType = null;
+        sellerProfile.registrationNumber = null;
+        sellerProfile.gstNumber = null;
+        sellerProfile.businessWebsite = null;
+        sellerProfile.primaryContactName = null;
+        sellerProfile.businessAddress = null;
+        sellerProfile.pickupAddress = null;
+      }
       if (sellerProfile.bankVerificationStatus === "rejected") {
         sellerProfile.bankDetails = null;
         sellerProfile.goLiveStatus = "pending";
