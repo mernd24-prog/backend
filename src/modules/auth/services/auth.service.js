@@ -466,6 +466,12 @@ class AuthService {
         "";
       sellerProfile.businessType =
         sellerProfile.businessType || kyc?.business_type || "";
+      if (sellerProfile.bankVerificationStatus === "rejected") {
+        sellerProfile.bankDetails = null;
+        sellerProfile.goLiveStatus = "pending";
+        sellerProfile.goLiveApprovedBy = null;
+        sellerProfile.goLiveApprovedAt = null;
+      }
     }
     const onboardingState = isSeller
       ? makeSellerOnboardingState({ sellerProfile, user, kyc })

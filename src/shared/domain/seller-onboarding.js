@@ -69,24 +69,25 @@ function getSellerProfileFieldValue(sellerProfile = {}, field, { user = {}, kyc 
 }
 
 function getSellerBankFieldValue(bankDetails = {}, field) {
+  const details = bankDetails || {};
   const fallbackMap = {
     accountHolderName: [
-      bankDetails.accountHolderName,
-      bankDetails.holderName,
-      bankDetails.accountName,
-      bankDetails.beneficiaryName,
+      details.accountHolderName,
+      details.holderName,
+      details.accountName,
+      details.beneficiaryName,
     ],
     accountNumber: [
-      bankDetails.accountNumber,
-      bankDetails.bankAccountNumber,
-      bankDetails.accountNo,
-      bankDetails.bankAccountNo,
+      details.accountNumber,
+      details.bankAccountNumber,
+      details.accountNo,
+      details.bankAccountNo,
     ],
-    ifscCode: [bankDetails.ifscCode, bankDetails.ifsc, bankDetails.ifsc_code],
-    bankName: [bankDetails.bankName, bankDetails.bank],
+    ifscCode: [details.ifscCode, details.ifsc, details.ifsc_code],
+    bankName: [details.bankName, details.bank],
   };
 
-  return firstNonEmpty(...(fallbackMap[field] || [bankDetails?.[field]]));
+  return firstNonEmpty(...(fallbackMap[field] || [details?.[field]]));
 }
 
 function getMissingSellerProfileFields(sellerProfile = {}, context = {}) {

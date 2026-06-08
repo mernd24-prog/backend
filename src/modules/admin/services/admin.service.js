@@ -746,7 +746,7 @@ class AdminService {
             legalBusinessName: null,
             supportEmail: null,
             supportPhone: null,
-            bankDetails: {},
+            bankDetails: null,
             bankVerificationStatus: "not_submitted",
             bankRejectionReason: null,
             goLiveStatus: "pending",
@@ -806,7 +806,7 @@ class AdminService {
         bankRejected ? payload.bankRejectionReason || null : null,
       verifiedBy: payload.bankVerificationStatus === "verified" ? actor.userId || null : currentSellerProfile.verifiedBy || null,
       verifiedAt: payload.bankVerificationStatus === "verified" ? new Date() : currentSellerProfile.verifiedAt || null,
-      ...(bankRejected ? { bankDetails: {} } : {}),
+      ...(bankRejected ? { bankDetails: null } : {}),
     };
     const onboardingState = makeSellerOnboardingState({
       sellerProfile: nextSellerProfileBase,
