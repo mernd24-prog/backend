@@ -452,6 +452,21 @@ class AuthService {
     }
 
     const sellerProfile = isSeller ? this.toPlainObject(user?.sellerProfile || {}) : {};
+    if (isSeller) {
+      sellerProfile.businessName =
+        sellerProfile.businessName ||
+        sellerProfile.displayName ||
+        sellerProfile.legalBusinessName ||
+        kyc?.legal_name ||
+        "";
+      sellerProfile.legalBusinessName =
+        sellerProfile.legalBusinessName ||
+        sellerProfile.businessName ||
+        kyc?.legal_name ||
+        "";
+      sellerProfile.businessType =
+        sellerProfile.businessType || kyc?.business_type || "";
+    }
     const onboardingState = isSeller
       ? makeSellerOnboardingState({ sellerProfile, user, kyc })
       : null;

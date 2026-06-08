@@ -96,6 +96,7 @@ class SellerService {
     const profile = this.toPlainObject(sellerProfile);
     return {
       ...profile,
+      businessName: profile.businessName || profile.displayName || profile.legalBusinessName || kyc.legal_name,
       legalBusinessName: profile.legalBusinessName || kyc.legal_name,
       businessType: profile.businessType || kyc.business_type,
       panNumber: profile.panNumber || kyc.pan_number,

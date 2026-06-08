@@ -732,12 +732,28 @@ class AdminService {
     });
 
     const currentSellerProfile = this.toPlainObject(seller.sellerProfile || {});
+    const kycRejected = payload.kycStatus === "rejected";
     const nextSellerProfileBase = {
       ...currentSellerProfile,
       kycStatus: payload.kycStatus,
-      rejectionReason: payload.kycStatus === "rejected" ? payload.rejectionReason || null : null,
+      rejectionReason: kycRejected ? payload.rejectionReason || null : null,
       verifiedBy: payload.kycStatus === "verified" ? actor.userId || null : null,
       verifiedAt: payload.kycStatus === "verified" ? new Date() : null,
+      ...(kycRejected
+        ? {
+            businessName: null,
+            displayName: null,
+            legalBusinessName: null,
+            supportEmail: null,
+            supportPhone: null,
+            bankDetails: {},
+            bankVerificationStatus: "not_submitted",
+            bankRejectionReason: null,
+            goLiveStatus: "pending",
+            goLiveApprovedBy: null,
+            goLiveApprovedAt: null,
+          }
+        : {}),
     };
     const onboardingState = makeSellerOnboardingState({
       sellerProfile: nextSellerProfileBase,
@@ -752,7 +768,10 @@ class AdminService {
       onboardingChecklist: onboardingState.checklist,
       onboardingStatus: onboardingState.onboardingStatus,
     };
-    await this.adminRepository.updateUserById(sellerId, { sellerProfile: nextSellerProfile });
+    await this.adminRepository.updateUserById(sellerId, {
+      sellerProfile: nextSellerProfile,
+      ...(kycRejected ? { accountStatus: "pending_approval" } : {}),
+    });
     return this.getSeller(sellerId);
   }
 
@@ -779,13 +798,15 @@ class AdminService {
     const kycBySellerId = await this.getSellerKycByIdMap([sellerId]);
     const kyc = kycBySellerId.get(String(sellerId)) || null;
     const currentSellerProfile = this.toPlainObject(seller.sellerProfile || {});
+    const bankRejected = payload.bankVerificationStatus === "rejected";
     const nextSellerProfileBase = {
       ...currentSellerProfile,
       bankVerificationStatus: payload.bankVerificationStatus,
       bankRejectionReason:
-        payload.bankVerificationStatus === "rejected" ? payload.bankRejectionReason || null : null,
+        bankRejected ? payload.bankRejectionReason || null : null,
       verifiedBy: payload.bankVerificationStatus === "verified" ? actor.userId || null : currentSellerProfile.verifiedBy || null,
       verifiedAt: payload.bankVerificationStatus === "verified" ? new Date() : currentSellerProfile.verifiedAt || null,
+      ...(bankRejected ? { bankDetails: {} } : {}),
     };
     const onboardingState = makeSellerOnboardingState({
       sellerProfile: nextSellerProfileBase,
@@ -804,7 +825,7 @@ class AdminService {
         ? SELLER_ONBOARDING_STATUS.READY_FOR_GO_LIVE
         : onboardingState.onboardingStatus,
       goLiveStatus:
-        payload.bankVerificationStatus === "rejected"
+        bankRejected
           ? "pending"
           : currentSellerProfile.goLiveStatus || "pending",
       goLiveApprovedBy: currentSellerProfile.goLiveApprovedBy || null,
@@ -812,7 +833,7 @@ class AdminService {
     };
     await this.adminRepository.updateUserById(sellerId, {
       sellerProfile: nextSellerProfile,
-      ...(payload.bankVerificationStatus === "rejected"
+      ...(bankRejected
         ? { accountStatus: "pending_approval" }
         : {}),
     });
