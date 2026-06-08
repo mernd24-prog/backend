@@ -88,11 +88,20 @@ module.exports = {
       );
     `);
 
-    await q("ALTER TABLE seller_payouts ALTER COLUMN seller_id TYPE VARCHAR(64) USING seller_id::text;").catch(() => {});
-    await q("ALTER TABLE seller_commissions ALTER COLUMN seller_id TYPE VARCHAR(64) USING seller_id::text;").catch(() => {});
-    await q("ALTER TABLE seller_settlements ALTER COLUMN seller_id TYPE VARCHAR(64) USING seller_id::text;").catch(() => {});
-
     const payoutColumns = await describe("seller_payouts");
+    const commissionColumns = await describe("seller_commissions");
+    const settlementColumns = await describe("seller_settlements");
+
+    if (payoutColumns.seller_id) {
+      await q("ALTER TABLE seller_payouts ALTER COLUMN seller_id TYPE VARCHAR(64) USING seller_id::text;");
+    }
+    if (commissionColumns.seller_id) {
+      await q("ALTER TABLE seller_commissions ALTER COLUMN seller_id TYPE VARCHAR(64) USING seller_id::text;");
+    }
+    if (settlementColumns.seller_id) {
+      await q("ALTER TABLE seller_settlements ALTER COLUMN seller_id TYPE VARCHAR(64) USING seller_id::text;");
+    }
+
     await addColumnIfMissing("seller_payouts", payoutColumns, "refund_amount", {
       type: Sequelize.DECIMAL(14, 2),
       allowNull: false,
@@ -126,7 +135,6 @@ module.exports = {
       defaultValue: Sequelize.fn("NOW"),
     });
 
-    const commissionColumns = await describe("seller_commissions");
     await addColumnIfMissing("seller_commissions", commissionColumns, "order_item_ids", {
       type: Sequelize.JSONB,
       allowNull: false,
@@ -157,7 +165,6 @@ module.exports = {
       defaultValue: Sequelize.fn("NOW"),
     });
 
-    const settlementColumns = await describe("seller_settlements");
     await addColumnIfMissing("seller_settlements", settlementColumns, "payout_id", {
       type: Sequelize.UUID,
       allowNull: true,
@@ -210,35 +217,38 @@ module.exports = {
       allowNull: false,
       defaultValue: Sequelize.fn("NOW"),
     });
-    await q("ALTER TABLE seller_settlements ALTER COLUMN amount DROP NOT NULL;").catch(() => {});
-    await q("ALTER TABLE seller_settlements ALTER COLUMN amount SET DEFAULT 0;").catch(() => {});
+    if (settlementColumns.amount) {
+      await q("ALTER TABLE seller_settlements ALTER COLUMN amount DROP NOT NULL;");
+      await q("ALTER TABLE seller_settlements ALTER COLUMN amount SET DEFAULT 0;");
+    }
 
-    await queryInterface.addIndex("seller_commissions", ["seller_id", "order_id"], {
-      name: "uniq_seller_commissions_seller_order",
-      unique: true,
-      transaction,
-    }).catch(() => {});
-    await queryInterface.addIndex("seller_commissions", ["seller_id", "status", "created_at"], {
-      name: "idx_seller_commissions_seller_status_created",
-      transaction,
-    }).catch(() => {});
-    await queryInterface.addIndex("seller_commissions", ["payout_id"], {
-      name: "idx_seller_commissions_payout",
-      transaction,
-    }).catch(() => {});
-    await queryInterface.addIndex("seller_payouts", ["seller_id", "status", "created_at"], {
-      name: "idx_seller_payouts_seller_status_created",
-      transaction,
-    }).catch(() => {});
-    await queryInterface.addIndex("seller_settlements", ["seller_id", "created_at"], {
-      name: "idx_seller_settlements_seller_created",
-      transaction,
-    }).catch(() => {});
+    await q(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_seller_commissions_seller_order
+      ON seller_commissions (seller_id, order_id);
+    `);
+    await q(`
+      CREATE INDEX IF NOT EXISTS idx_seller_commissions_seller_status_created
+      ON seller_commissions (seller_id, status, created_at);
+    `);
+    await q(`
+      CREATE INDEX IF NOT EXISTS idx_seller_commissions_payout
+      ON seller_commissions (payout_id);
+    `);
+    await q(`
+      CREATE INDEX IF NOT EXISTS idx_seller_payouts_seller_status_created
+      ON seller_payouts (seller_id, status, created_at);
+    `);
+    await q(`
+      CREATE INDEX IF NOT EXISTS idx_seller_settlements_seller_created
+      ON seller_settlements (seller_id, created_at);
+    `);
   },
 
   async down({ queryInterface, transaction }) {
-    await queryInterface.dropTable("seller_settlements", { transaction }).catch(() => {});
-    await queryInterface.dropTable("seller_commissions", { transaction }).catch(() => {});
-    await queryInterface.dropTable("seller_payouts", { transaction }).catch(() => {});
+    const q = (sql) => queryInterface.sequelize.query(sql, { transaction });
+
+    await q("DROP TABLE IF EXISTS seller_settlements;");
+    await q("DROP TABLE IF EXISTS seller_commissions;");
+    await q("DROP TABLE IF EXISTS seller_payouts;");
   },
 };

@@ -59,8 +59,35 @@ async function applyMigration(migration) {
     process.stdout.write(`Applied migration: ${migration.id}\n`);
   } catch (error) {
     await transaction.rollback();
+    error.migrationId = migration.id;
     throw error;
   }
+}
+
+function formatMigrationError(error) {
+  const details = [
+    `Migration failed${error.migrationId ? ` (${error.migrationId})` : ""}: ${error.message || error.name || "Unknown error"}`,
+  ];
+
+  const source = error.parent || error.original;
+  if (source) {
+    for (const key of ["code", "severity", "detail", "hint", "table", "column", "constraint"]) {
+      if (source[key]) {
+        details.push(`${key}: ${source[key]}`);
+      }
+    }
+  }
+
+  const sql = error.sql || source?.sql;
+  if (sql) {
+    details.push(`sql: ${String(sql).replace(/\s+/g, " ").trim()}`);
+  }
+
+  if (error.stack) {
+    details.push(error.stack);
+  }
+
+  return details.join("\n");
 }
 
 async function main() {
@@ -80,7 +107,7 @@ async function main() {
 
 main()
   .catch((error) => {
-    process.stderr.write(`Migration failed: ${error.stack || error.message}\n`);
+    process.stderr.write(`${formatMigrationError(error)}\n`);
     process.exitCode = 1;
   })
   .finally(async () => {

@@ -41,13 +41,17 @@ module.exports = {
       { transaction },
     );
 
-    await queryInterface.addIndex("orders", ["payment_provider", "created_at"], {
-      name: "idx_orders_payment_provider_created",
-      transaction,
-    }).catch(() => {});
+    await queryInterface.sequelize.query(
+      `CREATE INDEX IF NOT EXISTS idx_orders_payment_provider_created
+       ON orders (payment_provider, created_at);`,
+      { transaction },
+    );
   },
 
   async down({ queryInterface, transaction }) {
-    await queryInterface.dropTable("payment_method_configs", { transaction }).catch(() => {});
+    await queryInterface.sequelize.query(
+      "DROP TABLE IF EXISTS payment_method_configs;",
+      { transaction },
+    );
   },
 };

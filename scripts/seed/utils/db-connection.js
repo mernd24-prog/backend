@@ -3,10 +3,17 @@
  * Handles connections to both PostgreSQL (Sequelize) and MongoDB
  */
 
-require('dotenv').config({ path: '../../../.env' });
+const path = require('path');
+
+require('dotenv').config({ path: path.resolve(__dirname, '../../../.env') });
 const mongoose = require('mongoose');
 const { sequelize } = require('../../../src/infrastructure/sequelize/sequelize-client');
+const { env } = require('../../../src/config/env');
 const logger = require('pino')();
+
+function redactUri(uri) {
+  return String(uri || '').replace(/:\/\/([^:@/]+):([^@/]+)@/, '://$1:***@');
+}
 
 class DBConnectionManager {
   constructor() {
@@ -23,11 +30,12 @@ class DBConnectionManager {
       await this.sequelize.authenticate();
       logger.info('✓ PostgreSQL connected');
 
-      // Connect to MongoDB
-      await this.mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/ecommerce', {
+      // Connect to MongoDB using the same env contract as the application.
+      const mongoUri = process.env.MONGODB_URI || env.mongoUri || process.env.MONGO_URI || 'mongodb://localhost:27017/ecommerce';
+      await this.mongoose.connect(mongoUri, {
         maxPoolSize: 10,
       });
-      logger.info('✓ MongoDB connected');
+      logger.info(`✓ MongoDB connected: ${redactUri(mongoUri)}`);
 
       this.isConnected = true;
       return true;

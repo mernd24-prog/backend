@@ -11,10 +11,11 @@
  *   npm run seed:append                 # Append to existing data
  */
 
-require('dotenv').config({ path: '../../.env' });
 const path = require('path');
 const pino = require('pino');
 const fs = require('fs');
+
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const dbConnection = require('./utils/db-connection');
 const SeedLogger = require('./utils/seed-logger');

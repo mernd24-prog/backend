@@ -261,55 +261,77 @@ async function upsertModule(module, transaction) {
   }
 }
 
-async function upsertPermission(perm, transaction) {
-  const [existing] = await sequelize.query(
-    `SELECT id FROM permissions WHERE slug = :slug LIMIT 1`,
+async function upsertPermissions(permissions, transaction) {
+  const payload = JSON.stringify(
+    permissions.map((perm) => ({
+      module_id: perm.moduleId,
+      name: perm.name,
+      slug: perm.slug,
+      action: perm.action,
+    })),
+  );
+
+  const [updatedRows] = await sequelize.query(
+    `WITH input AS (
+       SELECT *
+       FROM jsonb_to_recordset(CAST(:payload AS jsonb))
+         AS item(module_id uuid, name text, slug text, action text)
+     )
+     UPDATE permissions p
+     SET module_id = input.module_id,
+         name = input.name,
+         action = input.action,
+         active = true,
+         updated_at = NOW()
+     FROM input
+     WHERE p.slug = input.slug
+     RETURNING p.slug, p.id`,
     {
-      replacements: { slug: perm.slug },
+      replacements: { payload },
       transaction,
     },
   );
 
-  if (existing.length > 0) {
-    const id = existing[0].id;
+  const permissionBySlug = {};
+  for (const row of updatedRows) {
+    permissionBySlug[row.slug] = row.id;
+  }
 
-    await sequelize.query(
-      `UPDATE permissions
-       SET module_id = :moduleId,
-           name = :name,
-           action = :action,
-           active = true,
-           updated_at = NOW()
-       WHERE id = :id`,
+  const existingSlugs = new Set(updatedRows.map((row) => row.slug));
+  const inserts = permissions
+    .filter((perm) => !existingSlugs.has(perm.slug))
+    .map((perm) => ({
+      id: uuidv4(),
+      module_id: perm.moduleId,
+      name: perm.name,
+      slug: perm.slug,
+      action: perm.action,
+    }));
+
+  if (inserts.length > 0) {
+    const [insertedRows] = await sequelize.query(
+      `WITH input AS (
+         SELECT *
+         FROM jsonb_to_recordset(CAST(:payload AS jsonb))
+           AS item(id uuid, module_id uuid, name text, slug text, action text)
+       )
+       INSERT INTO permissions
+         (id, module_id, name, slug, action, active, created_at, updated_at)
+       SELECT id, module_id, name, slug, action, true, NOW(), NOW()
+       FROM input
+       RETURNING slug, id`,
       {
-        replacements: {
-          id,
-          ...perm,
-        },
+        replacements: { payload: JSON.stringify(inserts) },
         transaction,
       },
     );
 
-    return { id, ...perm };
+    for (const row of insertedRows) {
+      permissionBySlug[row.slug] = row.id;
+    }
   }
 
-  const id = uuidv4();
-
-  await sequelize.query(
-    `INSERT INTO permissions
-       (id, module_id, name, slug, action, active, created_at, updated_at)
-     VALUES
-       (:id, :moduleId, :name, :slug, :action, true, NOW(), NOW())`,
-    {
-      replacements: {
-        id,
-        ...perm,
-      },
-      transaction,
-    },
-  );
-
-  return { id, ...perm };
+  return permissionBySlug;
 }
 
 async function upsertRole(role, transaction) {
@@ -374,38 +396,30 @@ async function syncRolePermissions(roleId, desiredPermissionIds, transaction) {
       },
     );
 
-    for (const permId of desiredPermissionIds) {
-      const [existing] = await sequelize.query(
-        `SELECT id FROM role_permissions
-         WHERE role_id = :roleId
-           AND permission_id = :permId
-         LIMIT 1`,
-        {
-          replacements: {
-            roleId,
-            permId,
-          },
-          transaction,
-        },
-      );
-
-      if (existing.length === 0) {
-        await sequelize.query(
-          `INSERT INTO role_permissions
-             (id, role_id, permission_id, created_at)
-           VALUES
-             (:id, :roleId, :permId, NOW())`,
-          {
-            replacements: {
-              id: uuidv4(),
-              roleId,
-              permId,
-            },
-            transaction,
-          },
-        );
-      }
-    }
+    await sequelize.query(
+      `WITH desired AS (
+         SELECT *
+         FROM unnest($2::uuid[], $3::uuid[]) AS item(id, permission_id)
+       )
+       INSERT INTO role_permissions
+         (id, role_id, permission_id, created_at)
+       SELECT desired.id, $1::uuid, desired.permission_id, NOW()
+       FROM desired
+       WHERE NOT EXISTS (
+         SELECT 1
+         FROM role_permissions rp
+         WHERE rp.role_id = $1::uuid
+           AND rp.permission_id = desired.permission_id
+       )`,
+      {
+        bind: [
+          roleId,
+          desiredPermissionIds.map(() => uuidv4()),
+          desiredPermissionIds,
+        ],
+        transaction,
+      },
+    );
   } else {
     await sequelize.query(
       `DELETE FROM role_permissions WHERE role_id = :roleId`,
@@ -507,12 +521,7 @@ async function seedRbac() {
     );
 
     const permissions = makePermissionList(allModules);
-    const permissionBySlug = {};
-
-    for (const perm of permissions) {
-      const inserted = await upsertPermission(perm, transaction);
-      permissionBySlug[perm.slug] = inserted.id;
-    }
+    const permissionBySlug = await upsertPermissions(permissions, transaction);
 
     console.log(`✓ Upserted ${permissions.length} permissions`);
 
