@@ -33,23 +33,6 @@ const {
   getSellerOnboardingStatus,
 } = require("../../../shared/domain/seller-onboarding");
 
-const composeProfileName = (firstName = "", lastName = "") => {
-  const first = String(firstName || "").trim();
-  const last = String(lastName || "").trim();
-  if (!last) return first;
-  if (!first) return last;
-
-  const firstParts = first.toLowerCase().split(/\s+/);
-  const lastParts = last.toLowerCase().split(/\s+/);
-  const alreadyIncludesLast =
-    lastParts.length <= firstParts.length &&
-    lastParts.every(
-      (part, index) =>
-        firstParts[firstParts.length - lastParts.length + index] === part,
-    );
-
-  return alreadyIncludesLast ? first : `${first} ${last}`;
-};
 const {
   AUTH_ERROR_CODES,
   authError,
@@ -104,13 +87,7 @@ class AuthService {
   }
 
   makeInitialSellerProfile(payload = {}) {
-    const profileName = composeProfileName(
-      payload.profile?.firstName,
-      payload.profile?.lastName,
-    );
-
     return {
-      displayName: profileName,
       supportEmail: payload.email,
       supportPhone: payload.phone,
       onboardingStatus: SELLER_ONBOARDING_STATUS.INITIATED,
