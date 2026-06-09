@@ -26,6 +26,7 @@ function resetSchemaAndSeed() {
   execSync("node scripts/db/run-sequelize-migrations.js", { stdio: "inherit" });
   execSync("node scripts/db/seed-rbac.js", { stdio: "inherit" });
   execSync("node scripts/seed/master-seed.js all --reset", { stdio: "inherit" });
+  execSync("node scripts/db/repair-rbac-role-assignments.js", { stdio: "inherit" });
 }
 
 async function main() {

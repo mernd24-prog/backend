@@ -35,6 +35,7 @@ npm run check
 npm run db:migrate
 npm run db:seed:rbac
 npm run db:create-super-admin
+npm run db:repair:rbac-role-assignments
 PM2_LOG_DIR=/var/www/logs pm2 start ecosystem.config.js --env production
 pm2 save
 curl http://127.0.0.1:4000/health
@@ -55,6 +56,13 @@ Run this after RBAC/module/sidebar changes:
 
 ```bash
 npm run db:seed:rbac
+PM2_LOG_DIR=/var/www/logs pm2 restart ecommerce-backend
+```
+
+Run this after importing or seeding users outside the normal app flow:
+
+```bash
+npm run db:repair:rbac-role-assignments
 PM2_LOG_DIR=/var/www/logs pm2 restart ecommerce-backend
 ```
 

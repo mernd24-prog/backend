@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 /**
- * RBAC seed script — idempotent, safe to re-run at any time.
+ * Canonical RBAC seed script — idempotent, safe to re-run at any time.
+ *
+ * This is the only script that seeds roles and role_permissions. Use
+ * repair-rbac-role-assignments.js only to backfill user_roles rows for users
+ * created outside the normal RBAC-aware creation flow.
  */
 
 const { v4: uuidv4 } = require("uuid");

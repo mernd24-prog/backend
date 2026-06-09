@@ -6,6 +6,9 @@ const {
   PERMISSION_ACTIONS,
 } = require("../../src/shared/auth/rbac-permissions");
 
+// Shared default policy only. Role/role_permission rows are seeded by
+// scripts/db/seed-rbac.js; user role links are repaired by
+// scripts/db/repair-rbac-role-assignments.js.
 const FULL_PLATFORM_ROLES = ["super-admin", "admin", "sub-admin"];
 const FULL_SELLER_ROLES = ["seller", "seller-admin", "seller-sub-admin"];
 

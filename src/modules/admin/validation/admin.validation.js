@@ -297,6 +297,18 @@ const moderationQueueSchema = Joi.object({
     category: Joi.string(),
     page: Joi.number().integer().min(1),
     limit: Joi.number().integer().min(1).max(100),
+    sortBy: Joi.string().valid(
+      "price_asc",
+      "price_desc",
+      "newest",
+      "oldest",
+      "title",
+      "sku",
+      "stock",
+      "createdAt",
+      "updatedAt",
+    ),
+    sortDir: Joi.string().valid("asc", "desc"),
   }).required(),
   params: Joi.object({}).required(),
 });
