@@ -45,6 +45,7 @@ npm run db:migrate:undo
 npm run db:seed:commerce
 npm run db:seed:commerce:append
 npm run db:seed:rbac
+npm run db:repair:rbac-role-assignments
 npm run db:create-super-admin
 npm run postman:sync
 ```
@@ -52,6 +53,10 @@ npm run postman:sync
 `db:seed:commerce` runs the new commerce fixture seed with reset enabled. It refreshes product, order, and marketing fixtures only.
 
 `db:seed:commerce:append` adds another set of demo orders while upserting users/products and preserving existing commerce data.
+
+`db:seed:rbac` is the only role/permission seed. It creates RBAC modules, permissions, system roles, default role permissions, sidebar modules, and permission templates.
+
+`db:repair:rbac-role-assignments` is not a seed. Use it after importing or seeding users to backfill missing `user_roles` rows from Mongo `users.role` values and refresh affected sessions.
 
 ## Environment
 
@@ -276,6 +281,7 @@ scripts/db/run-sequelize-migrations.js
 scripts/db/rollback-sequelize-migration.js
 scripts/db/create-super-admin.js
 scripts/db/seed-rbac.js
+scripts/db/repair-rbac-role-assignments.js
 scripts/db/seed-commerce-demo.js
 scripts/postman/sync-postman-collection.js
 ```
@@ -775,6 +781,7 @@ npm run db:migrate
 npm run db:seed:rbac
 npm run db:create-super-admin
 npm run db:seed:commerce
+npm run db:repair:rbac-role-assignments
 npm run dev
 ```
 
@@ -830,4 +837,6 @@ For seed behavior, trust:
 
 ```txt
 scripts/db/seed-commerce-demo.js
+scripts/db/seed-rbac.js
+scripts/db/repair-rbac-role-assignments.js
 ```

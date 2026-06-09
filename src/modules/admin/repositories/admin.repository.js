@@ -277,16 +277,36 @@ class AdminRepository {
     return rows[0] || null;
   }
 
-  async listProductsForModeration({ status = "pending_approval", category = null, limit = 50, page = 1 } = {}) {
+  async listProductsForModeration({
+    status = "pending_approval",
+    category = null,
+    limit = 50,
+    page = 1,
+    sortBy = "createdAt",
+    sortDir = "desc",
+  } = {}) {
     const filter = status === "change_pending"
       ? { revisionStatus: "change_pending" }
       : { status };
     if (category) {
       filter.category = category;
     }
+    const direction = sortDir === "asc" ? 1 : -1;
+    const sortMap = {
+      price_asc: { price: 1 },
+      price_desc: { price: -1 },
+      newest: { createdAt: -1 },
+      oldest: { createdAt: 1 },
+      title: { title: direction },
+      sku: { sku: direction },
+      stock: { stock: direction },
+      createdAt: { createdAt: direction },
+      updatedAt: { updatedAt: direction },
+    };
+    const sort = sortMap[sortBy] || { createdAt: -1 };
     const skip = (Number(page) - 1) * Number(limit);
     const [items, total] = await Promise.all([
-      ProductModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(Number(limit)),
+      ProductModel.find(filter).sort(sort).skip(skip).limit(Number(limit)),
       ProductModel.countDocuments(filter),
     ]);
     return { items, total };
