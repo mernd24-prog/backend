@@ -9,6 +9,9 @@ const {
   AdminSubTaxModel,
   AdminTaxRuleModel,
 } = require("../../admin/models/common-management.model");
+const {
+  buildWarrantyTemplateSeedDocuments,
+} = require("../constants/default-warranty-templates");
 
 class PlatformService {
   constructor({ platformRepository = new PlatformRepository() } = {}) {
@@ -19,6 +22,22 @@ class PlatformService {
     if (typeof forget === "function") {
       forget(/^products:/);
     }
+  }
+
+  async ensureDefaultWarrantyTemplates() {
+    const existing = await this.platformRepository.listWarrantyTemplates({}, { skip: 0, limit: 1 });
+    if ((existing.total || 0) > 0) return false;
+
+    const templates = buildWarrantyTemplateSeedDocuments();
+    for (const template of templates) {
+      try {
+        await this.platformRepository.createWarrantyTemplate(template);
+      } catch (error) {
+        if (error?.code !== 11000) throw error;
+      }
+    }
+    this.invalidateCatalogCaches();
+    return true;
   }
 
   async createCategory(payload, req) {
@@ -539,6 +558,7 @@ class PlatformService {
   }
 
   async listWarrantyTemplates(query) {
+    await this.ensureDefaultWarrantyTemplates();
     const pagination = getPage(query);
     const filter = {};
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
@@ -756,6 +776,7 @@ class PlatformService {
   }
 
   async getCatalogPrefillData(query = {}) {
+    await this.ensureDefaultWarrantyTemplates();
     const categories = (await this.platformRepository.listCategories({}, { skip: 0, limit: 5000 })).items || [];
     const brands = (await this.platformRepository.listBrands(query.includeInactive ? {} : { active: true }, { skip: 0, limit: 500 })).items || [];
     const families = (await this.platformRepository.listProductFamilies({}, { skip: 0, limit: 500 })).items || [];

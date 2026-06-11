@@ -217,8 +217,18 @@ class InventoryRepository {
     ["type", "status", "productId", "sellerId", "orderId", "returnId", "shipmentId", "referenceType", "referenceId"].forEach((key) => {
       if (filter[key]) query[key] = filter[key];
     });
+    const sortMap = {
+      createdAt: "createdAt",
+      type: "type",
+      status: "status",
+      quantity: "quantity",
+      productId: "productId",
+      sellerId: "sellerId",
+    };
+    const sortField = sortMap[filter.sortBy] || "createdAt";
+    const sortDir = filter.sortDir === "asc" ? 1 : -1;
     const [items, total] = await Promise.all([
-      InventoryTransactionModel.find(query).sort({ createdAt: -1 }).skip(offset).limit(limit).lean(),
+      InventoryTransactionModel.find(query).sort({ [sortField]: sortDir }).skip(offset).limit(limit).lean(),
       InventoryTransactionModel.countDocuments(query),
     ]);
     return { items, total, limit, offset };
