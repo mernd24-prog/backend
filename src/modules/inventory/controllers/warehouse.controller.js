@@ -1,16 +1,20 @@
 const { okResponse } = require("../../../shared/http/reply");
 const { InventoryService } = require("../services/inventory.service");
 const { WarehouseService } = require("../services/warehouse.service");
+const { ProductService } = require("../../product/services/product.service");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
 const { auditService } = require("../../../shared/logger/audit.service");
+const { getPage } = require("../../../shared/tools/page");
 
 class WarehouseController {
   constructor({
     warehouseService = new WarehouseService(),
     inventoryService = new InventoryService(),
+    productService = new ProductService(),
   } = {}) {
     this.warehouseService = warehouseService;
     this.inventoryService = inventoryService;
+    this.productService = productService;
   }
 
   sendList(res, result) {
@@ -76,6 +80,29 @@ class WarehouseController {
       reason: "warehouse_deleted",
     });
     res.json(okResponse(result));
+  };
+
+  getStats = async (req, res) => {
+    const sellerId = req.query.sellerId || null;
+    const stats = await this.productService.getInventoryStats(sellerId);
+    res.json(okResponse(stats));
+  };
+
+  getLowStock = async (req, res) => {
+    const pagination = getPage(req.query);
+    const sellerId = req.query.sellerId || null;
+    const result = await this.productService.listProducts(
+      {
+        ...req.query,
+        stockStatus: "low_stock",
+        includeAllStatuses: true,
+        ...(sellerId ? { sellerId } : {}),
+        page: pagination.page,
+        limit: pagination.limit,
+      },
+      { publicOnly: false },
+    );
+    res.json(okResponse(result.items, { total: result.total }));
   };
 }
 

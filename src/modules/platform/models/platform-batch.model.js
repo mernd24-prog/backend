@@ -6,6 +6,8 @@ const platformBatchSchema = new mongoose.Schema(
     manufactureDate: { type: Number, required: true },
     expiryDate: { type: Number, required: true },
     active: { type: Boolean, default: true, index: true },
+    createdBy: { type: String, default: null, index: true },
+    updatedBy: { type: String, default: null, index: true },
   },
   { timestamps: true },
 );
@@ -13,4 +15,3 @@ const platformBatchSchema = new mongoose.Schema(
 const PlatformBatchModel = mongoose.model("PlatformBatch", platformBatchSchema);
 
 module.exports = { PlatformBatchModel };
-

@@ -13,6 +13,23 @@ const {
   buildWarrantyTemplateSeedDocuments,
 } = require("../constants/default-warranty-templates");
 
+function actorIdFromRequest(req) {
+  const auth = req?.auth || {};
+  return auth.sub || auth.id || auth.userId || null;
+}
+
+function withCreateActor(payload, req) {
+  const actorId = actorIdFromRequest(req);
+  if (!actorId) return payload;
+  return { ...payload, createdBy: String(actorId), updatedBy: String(actorId) };
+}
+
+function withUpdateActor(payload, req) {
+  const actorId = actorIdFromRequest(req);
+  if (!actorId) return payload;
+  return { ...payload, updatedBy: String(actorId) };
+}
+
 class PlatformService {
   constructor({ platformRepository = new PlatformRepository() } = {}) {
     this.platformRepository = platformRepository;
@@ -160,19 +177,32 @@ class PlatformService {
     return result;
   }
 
-  async createProductFamily(payload) {
+  async createProductFamily(payload, req) {
     const item = await this.platformRepository.createProductFamily(payload);
     this.invalidateCatalogCaches();
+    auditService.create(req, {
+      module: "product_families",
+      entityId: item?.familyCode || item?._id,
+      entityType: "ProductFamily",
+      newData: payload,
+    });
     return item;
   }
 
-  async updateProductFamily(familyCode, payload) {
+  async updateProductFamily(familyCode, payload, req) {
     const family = await this.platformRepository.getProductFamily(familyCode);
     if (!family) {
       throw AppError.notFound("Product family");
     }
     const item = await this.platformRepository.updateProductFamily(familyCode, payload);
     this.invalidateCatalogCaches();
+    auditService.update(req, {
+      module: "product_families",
+      entityId: familyCode,
+      entityType: "ProductFamily",
+      oldData: family,
+      newData: payload,
+    });
     return item;
   }
 
@@ -185,7 +215,7 @@ class PlatformService {
   }
 
   async listProductFamilies(query) {
-    const pagination = getPage(query);
+    const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir };
     const filter = {};
     if (query.category) filter.category = query.category;
     if (query.sellerId) filter.sellerId = query.sellerId;
@@ -200,26 +230,47 @@ class PlatformService {
     return this.platformRepository.listProductFamilies(filter, pagination);
   }
 
-  async deleteProductFamily(familyCode) {
+  async deleteProductFamily(familyCode, req) {
     const family = await this.platformRepository.getProductFamily(familyCode);
     if (!family) {
       throw AppError.notFound("Product family");
     }
     const item = await this.platformRepository.deleteProductFamily(familyCode);
     this.invalidateCatalogCaches();
+    auditService.remove(req, {
+      module: "product_families",
+      entityId: familyCode,
+      entityType: "ProductFamily",
+      oldData: family,
+    });
     return item;
   }
 
-  async createProductVariant(payload) {
-    return this.platformRepository.createProductVariant(payload);
+  async createProductVariant(payload, req) {
+    const item = await this.platformRepository.createProductVariant(payload);
+    auditService.create(req, {
+      module: "product_variants",
+      entityId: item?._id,
+      entityType: "ProductVariant",
+      newData: payload,
+    });
+    return item;
   }
 
-  async updateProductVariant(variantId, payload) {
+  async updateProductVariant(variantId, payload, req) {
     const variant = await this.platformRepository.getProductVariant(variantId);
     if (!variant) {
       throw AppError.notFound("Product variant");
     }
-    return this.platformRepository.updateProductVariant(variantId, payload);
+    const item = await this.platformRepository.updateProductVariant(variantId, payload);
+    auditService.update(req, {
+      module: "product_variants",
+      entityId: variantId,
+      entityType: "ProductVariant",
+      oldData: variant,
+      newData: payload,
+    });
+    return item;
   }
 
   async getProductVariant(variantId) {
@@ -231,7 +282,7 @@ class PlatformService {
   }
 
   async listProductVariants(query) {
-    const pagination = getPage(query);
+    const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir };
     const filter = {};
     if (query.productId) filter.productId = query.productId;
     if (query.familyCode) filter.familyCode = query.familyCode;
@@ -248,12 +299,19 @@ class PlatformService {
     return this.platformRepository.listProductVariants(filter, pagination);
   }
 
-  async deleteProductVariant(variantId) {
+  async deleteProductVariant(variantId, req) {
     const variant = await this.platformRepository.getProductVariant(variantId);
     if (!variant) {
       throw AppError.notFound("Product variant");
     }
-    return this.platformRepository.deleteProductVariant(variantId);
+    const item = await this.platformRepository.deleteProductVariant(variantId);
+    auditService.remove(req, {
+      module: "product_variants",
+      entityId: variantId,
+      entityType: "ProductVariant",
+      oldData: variant,
+    });
+    return item;
   }
 
   async createHsnCode(payload) {
@@ -515,7 +573,7 @@ class PlatformService {
   }
 
   async listBrands(query) {
-    const pagination = getPage(query);
+    const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir || query.sortOrder };
     const filter = buildMongoFilter({
       search:      query.q || query.keyWord || query.search,
       searchFields:["name"],
@@ -533,19 +591,23 @@ class PlatformService {
     return result;
   }
 
-  async createWarrantyTemplate(payload) {
-    const item = await this.platformRepository.createWarrantyTemplate(payload);
+  async createWarrantyTemplate(payload, req) {
+    const createPayload = withCreateActor(payload, req);
+    const item = await this.platformRepository.createWarrantyTemplate(createPayload);
     this.invalidateCatalogCaches();
+    auditService.create(req, { module: "warranty", entityId: item?._id, entityType: "WarrantyTemplate", newData: createPayload });
     return item;
   }
 
-  async updateWarrantyTemplate(templateId, payload) {
+  async updateWarrantyTemplate(templateId, payload, req) {
     const item = await this.platformRepository.getWarrantyTemplate(templateId);
     if (!item) {
       throw AppError.notFound("Warranty template");
     }
-    const result = await this.platformRepository.updateWarrantyTemplate(templateId, payload);
+    const updatePayload = withUpdateActor(payload, req);
+    const result = await this.platformRepository.updateWarrantyTemplate(templateId, updatePayload);
     this.invalidateCatalogCaches();
+    auditService.update(req, { module: "warranty", entityId: templateId, entityType: "WarrantyTemplate", oldData: item, newData: updatePayload });
     return result;
   }
 
@@ -559,7 +621,7 @@ class PlatformService {
 
   async listWarrantyTemplates(query) {
     await this.ensureDefaultWarrantyTemplates();
-    const pagination = getPage(query);
+    const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir || query.sortOrder };
     const filter = {};
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
     const q = query.q || query.keyWord || query.search;
@@ -569,28 +631,37 @@ class PlatformService {
     return this.platformRepository.listWarrantyTemplates(filter, pagination);
   }
 
-  async deleteWarrantyTemplate(templateId) {
+  async deleteWarrantyTemplate(templateId, req) {
     const item = await this.platformRepository.getWarrantyTemplate(templateId);
     if (!item) {
       throw AppError.notFound("Warranty template");
     }
     const result = await this.platformRepository.deleteWarrantyTemplate(templateId);
     this.invalidateCatalogCaches();
+    auditService.remove(req, { module: "warranty", entityId: templateId, entityType: "WarrantyTemplate", oldData: item });
     return result;
   }
 
-  async createFinish(payload) {
-    return this.platformRepository.createFinish(payload);
+  async createFinish(payload, req) {
+    const createPayload = withCreateActor(payload, req);
+    const item = await this.platformRepository.createFinish(createPayload);
+    this.invalidateCatalogCaches();
+    auditService.create(req, { module: "platform", entityId: item?._id, entityType: "Finish", newData: createPayload });
+    return item;
   }
 
-  async updateFinish(finishId, payload) {
+  async updateFinish(finishId, payload, req) {
     const item = await this.platformRepository.getFinish(finishId);
     if (!item) throw AppError.notFound("Finish");
-    return this.platformRepository.updateFinish(finishId, payload);
+    const updatePayload = withUpdateActor(payload, req);
+    const result = await this.platformRepository.updateFinish(finishId, updatePayload);
+    this.invalidateCatalogCaches();
+    auditService.update(req, { module: "platform", entityId: finishId, entityType: "Finish", oldData: item, newData: updatePayload });
+    return result;
   }
 
   async listFinishes(query) {
-    const pagination = getPage(query);
+    const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir || query.sortOrder };
     const filter = {};
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
     const q = query.q || query.keyWord || query.search;
@@ -598,24 +669,35 @@ class PlatformService {
     return this.platformRepository.listFinishes(filter, pagination);
   }
 
-  async deleteFinish(finishId) {
+  async deleteFinish(finishId, req) {
     const item = await this.platformRepository.getFinish(finishId);
     if (!item) throw AppError.notFound("Finish");
-    return this.platformRepository.deleteFinish(finishId);
+    const result = await this.platformRepository.deleteFinish(finishId);
+    this.invalidateCatalogCaches();
+    auditService.remove(req, { module: "platform", entityId: finishId, entityType: "Finish", oldData: item });
+    return result;
   }
 
-  async createDimension(payload) {
-    return this.platformRepository.createDimension(payload);
+  async createDimension(payload, req) {
+    const createPayload = withCreateActor(payload, req);
+    const item = await this.platformRepository.createDimension(createPayload);
+    this.invalidateCatalogCaches();
+    auditService.create(req, { module: "platform", entityId: item?._id, entityType: "Dimension", newData: createPayload });
+    return item;
   }
 
-  async updateDimension(dimensionId, payload) {
+  async updateDimension(dimensionId, payload, req) {
     const item = await this.platformRepository.getDimension(dimensionId);
     if (!item) throw AppError.notFound("Dimension");
-    return this.platformRepository.updateDimension(dimensionId, payload);
+    const updatePayload = withUpdateActor(payload, req);
+    const result = await this.platformRepository.updateDimension(dimensionId, updatePayload);
+    this.invalidateCatalogCaches();
+    auditService.update(req, { module: "platform", entityId: dimensionId, entityType: "Dimension", oldData: item, newData: updatePayload });
+    return result;
   }
 
   async listDimensions(query) {
-    const pagination = getPage(query);
+    const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir || query.sortOrder };
     const filter = {};
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
     const q = query.q || query.keyWord || query.search;
@@ -623,24 +705,35 @@ class PlatformService {
     return this.platformRepository.listDimensions(filter, pagination);
   }
 
-  async deleteDimension(dimensionId) {
+  async deleteDimension(dimensionId, req) {
     const item = await this.platformRepository.getDimension(dimensionId);
     if (!item) throw AppError.notFound("Dimension");
-    return this.platformRepository.deleteDimension(dimensionId);
+    const result = await this.platformRepository.deleteDimension(dimensionId);
+    this.invalidateCatalogCaches();
+    auditService.remove(req, { module: "platform", entityId: dimensionId, entityType: "Dimension", oldData: item });
+    return result;
   }
 
-  async createBatch(payload) {
-    return this.platformRepository.createBatch(payload);
+  async createBatch(payload, req) {
+    const createPayload = withCreateActor(payload, req);
+    const item = await this.platformRepository.createBatch(createPayload);
+    this.invalidateCatalogCaches();
+    auditService.create(req, { module: "platform", entityId: item?._id, entityType: "Batch", newData: createPayload });
+    return item;
   }
 
-  async updateBatch(batchId, payload) {
+  async updateBatch(batchId, payload, req) {
     const item = await this.platformRepository.getBatch(batchId);
     if (!item) throw AppError.notFound("Batch");
-    return this.platformRepository.updateBatch(batchId, payload);
+    const updatePayload = withUpdateActor(payload, req);
+    const result = await this.platformRepository.updateBatch(batchId, updatePayload);
+    this.invalidateCatalogCaches();
+    auditService.update(req, { module: "platform", entityId: batchId, entityType: "Batch", oldData: item, newData: updatePayload });
+    return result;
   }
 
   async listBatches(query) {
-    const pagination = getPage(query);
+    const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir || query.sortOrder };
     const filter = {};
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
     const q = query.q || query.keyWord || query.search;
@@ -648,10 +741,13 @@ class PlatformService {
     return this.platformRepository.listBatches(filter, pagination);
   }
 
-  async deleteBatch(batchId) {
+  async deleteBatch(batchId, req) {
     const item = await this.platformRepository.getBatch(batchId);
     if (!item) throw AppError.notFound("Batch");
-    return this.platformRepository.deleteBatch(batchId);
+    const result = await this.platformRepository.deleteBatch(batchId);
+    this.invalidateCatalogCaches();
+    auditService.remove(req, { module: "platform", entityId: batchId, entityType: "Batch", oldData: item });
+    return result;
   }
 
   async createProductOption(payload, req) {
@@ -671,7 +767,7 @@ class PlatformService {
   }
 
   async listProductOptions(query) {
-    const pagination = getPage(query);
+    const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir };
     const filter = buildMongoFilter({
       search:      query.q || query.keyWord || query.search,
       searchFields:["name"],
@@ -689,24 +785,37 @@ class PlatformService {
     return result;
   }
 
-  async createProductOptionValue(payload) {
+  async createProductOptionValue(payload, req) {
     const normalized = await this.normalizeProductOptionValuePayload(payload);
     const item = await this.platformRepository.createProductOptionValue(normalized);
     this.invalidateCatalogCaches();
+    auditService.create(req, {
+      module: "option_values",
+      entityId: item?._id,
+      entityType: "ProductOptionValue",
+      newData: normalized,
+    });
     return item;
   }
 
-  async updateProductOptionValue(optionValueId, payload) {
+  async updateProductOptionValue(optionValueId, payload, req) {
     const item = await this.platformRepository.getProductOptionValue(optionValueId);
     if (!item) throw AppError.notFound("Product option value");
     const normalized = await this.normalizeProductOptionValuePayload(payload, { partial: true });
     const result = await this.platformRepository.updateProductOptionValue(optionValueId, normalized);
     this.invalidateCatalogCaches();
+    auditService.update(req, {
+      module: "option_values",
+      entityId: optionValueId,
+      entityType: "ProductOptionValue",
+      oldData: item,
+      newData: normalized,
+    });
     return result;
   }
 
   async listProductOptionValues(query) {
-    const pagination = getPage(query);
+    const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir };
     const filter = {};
     if (query.option_id || query.optionId) filter.optionId = query.option_id || query.optionId;
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
@@ -719,11 +828,17 @@ class PlatformService {
     };
   }
 
-  async deleteProductOptionValue(optionValueId) {
+  async deleteProductOptionValue(optionValueId, req) {
     const item = await this.platformRepository.getProductOptionValue(optionValueId);
     if (!item) throw AppError.notFound("Product option value");
     const result = await this.platformRepository.deleteProductOptionValue(optionValueId);
     this.invalidateCatalogCaches();
+    auditService.remove(req, {
+      module: "option_values",
+      entityId: optionValueId,
+      entityType: "ProductOptionValue",
+      oldData: item,
+    });
     return result;
   }
 

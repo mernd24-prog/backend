@@ -89,6 +89,7 @@ class ProductRepository {
     };
     const fieldMap = {
       title: "title",
+      productTitle: "title",
       sku: "sku",
       stock: "stock",
       reservedStock: "reservedStock",
@@ -225,7 +226,11 @@ class ProductRepository {
 
     const quantity = Math.abs(adjustment);
     return ProductModel.findOneAndUpdate(
-      { _id: productId, stock: { $gte: quantity } },
+      {
+        _id: productId,
+        stock: { $gte: quantity },
+        $expr: { $gte: [{ $subtract: ["$stock", "$reservedStock"] }, quantity] },
+      },
       { $inc: { stock: -quantity } },
       { new: true },
     );
@@ -248,7 +253,20 @@ class ProductRepository {
 
     const quantity = Math.abs(adjustment);
     return ProductModel.findOneAndUpdate(
-      { ...variantFilter, "variants.stock": { $gte: quantity } },
+      {
+        ...variantFilter,
+        $expr: {
+          $gte: [
+            {
+              $subtract: [
+                { $arrayElemAt: ["$variants.stock", { $indexOfArray: ["$variants.sku", variantSku] }] },
+                { $arrayElemAt: ["$variants.reservedStock", { $indexOfArray: ["$variants.sku", variantSku] }] },
+              ],
+            },
+            quantity,
+          ],
+        },
+      },
       { $inc: { "variants.$.stock": -quantity } },
       { new: true },
     );
