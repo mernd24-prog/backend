@@ -18,6 +18,20 @@ const toPage = ({ page = 1, limit = 20, size } = {}) => {
 
 const regex = (value = "") => ({ $regex: String(value || ""), $options: "i" });
 
+const buildSort = (sortBy = "createdAt", sortDir = "desc") => {
+  const direction = sortDir === "asc" ? 1 : -1;
+  const map = {
+    createdAt: { createdAt: direction },
+    updatedAt: { updatedAt: direction },
+    name: { name: direction },
+    code: { code: direction },
+    skuCount: { skuCount: direction },
+    capacity: { capacity: direction },
+    active: { active: direction, name: 1 },
+  };
+  return map[sortBy] || { createdAt: -1 };
+};
+
 class WarehouseService {
   toResponse(record = {}) {
     const item = typeof record.toObject === "function" ? record.toObject() : record;
@@ -56,9 +70,10 @@ class WarehouseService {
       { path: "zipCodeId", select: "zipCode areaName" },
     ];
 
+    const sort = buildSort(query.sortBy, query.sortDir);
     const [items, total] = await Promise.all([
       WarehouseModel.find(filter)
-        .sort({ createdAt: -1 })
+        .sort(sort)
         .skip(page.skip)
         .limit(page.limit)
         .populate(populate),
@@ -91,7 +106,7 @@ class WarehouseService {
     return {};
   }
 
-  async create(payload) {
+  async create(payload, actor = {}) {
     const derived = await this.assertLocation(payload);
     const warehouse = await WarehouseModel.create({
       name: payload.name,
@@ -110,6 +125,8 @@ class WarehouseService {
       skuCount: Number(payload.skuCount || 0),
       active: payload.active ?? payload.isDisable !== true,
       metadata: payload.metadata || {},
+      createdBy: actor.userId || payload.createdBy || null,
+      updatedBy: actor.userId || payload.updatedBy || null,
     });
     return this.getById(warehouse._id);
   }
@@ -125,7 +142,7 @@ class WarehouseService {
     return this.toResponse(warehouse);
   }
 
-  async update(id, payload) {
+  async update(id, payload, actor = {}) {
     const existing = await WarehouseModel.findById(id);
     if (!existing) throw new AppError("Warehouse not found", 404);
 
@@ -159,16 +176,22 @@ class WarehouseService {
     if (payload.code !== undefined) updates.code = String(payload.code).toUpperCase();
     if (payload.isDisable !== undefined) updates.active = !payload.isDisable;
     if (!updates.pincode && payload.zipCodeId) updates.pincode = derived.pincode;
+    updates.updatedBy = actor.userId || payload.updatedBy || existing.updatedBy || null;
 
     await WarehouseModel.findByIdAndUpdate(id, updates, { new: true, runValidators: true });
     return this.getById(id);
   }
 
-  async setStatus(ids = [], isDisable = false) {
+  async setStatus(ids = [], isDisable = false, actor = {}) {
     const normalizedIds = Array.isArray(ids) ? ids : [ids];
     await WarehouseModel.updateMany(
       { _id: { $in: normalizedIds.filter(Boolean) } },
-      { $set: { active: !isDisable } },
+      {
+        $set: {
+          active: !isDisable,
+          updatedBy: actor.userId || null,
+        },
+      },
     );
     return { updated: normalizedIds.length, active: !isDisable };
   }

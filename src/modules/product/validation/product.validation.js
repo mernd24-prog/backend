@@ -310,6 +310,10 @@ const listProductSchema = Joi.object({
     sellerId: Joi.string(),
     minPrice: Joi.number().min(0),
     maxPrice: Joi.number().min(0),
+    dateFrom: Joi.date().allow("", null),
+    dateTo: Joi.date().allow("", null),
+    createdFrom: Joi.date().allow("", null),
+    createdTo: Joi.date().allow("", null),
     inStock: Joi.boolean(),
     rating: Joi.number().min(0).max(5),
     includeAllStatuses: Joi.boolean(),
@@ -486,11 +490,14 @@ const productLifecycleSchema = Joi.object({
 
 const updateInventorySchema = Joi.object({
   body: Joi.object({
-    adjustment: Joi.number().required(),
+    adjustment: Joi.number(),
+    adjustmentType: Joi.string().valid("add", "remove", "set").allow("", null),
+    quantity: Joi.number().integer().min(0),
     reason: Joi.string().trim().max(200).allow("", null),
+    note: Joi.string().trim().max(1000).allow("", null),
     reference: Joi.string().trim().allow("", null),
     variantSku: optionalString(),
-  }).required(),
+  }).or("adjustment", "quantity").required(),
   query: Joi.object({}).required(),
   params: Joi.object({
     productId: Joi.string().required(),

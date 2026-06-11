@@ -34,6 +34,33 @@ function invalidationReasonForUserPayload(payload = {}) {
   return null;
 }
 
+function escapeRegExp(value = "") {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildCreatedAtRange({ dateFrom, dateTo, createdFrom, createdTo } = {}) {
+  const from = dateFrom || createdFrom;
+  const to = dateTo || createdTo;
+  const createdAt = {};
+
+  if (from) {
+    const start = new Date(from);
+    if (!Number.isNaN(start.getTime())) {
+      start.setHours(0, 0, 0, 0);
+      createdAt.$gte = start;
+    }
+  }
+  if (to) {
+    const end = new Date(to);
+    if (!Number.isNaN(end.getTime())) {
+      end.setHours(23, 59, 59, 999);
+      createdAt.$lte = end;
+    }
+  }
+
+  return Object.keys(createdAt).length ? createdAt : null;
+}
+
 class AdminRepository {
   async getOverviewStats() {
     const [totalUsers, totalSellers, totalProducts, pendingProducts] = await Promise.all([
@@ -280,6 +307,15 @@ class AdminRepository {
   async listProductsForModeration({
     status = "pending_approval",
     category = null,
+    q = "",
+    keyWord = "",
+    search = "",
+    sellerId = null,
+    productType = null,
+    dateFrom = null,
+    dateTo = null,
+    createdFrom = null,
+    createdTo = null,
     limit = 50,
     page = 1,
     sortBy = "createdAt",
@@ -291,6 +327,24 @@ class AdminRepository {
     if (category) {
       filter.category = category;
     }
+    if (sellerId) filter.sellerId = sellerId;
+    if (productType) filter.productType = productType;
+
+    const searchTerm = q || keyWord || search;
+    if (searchTerm) {
+      const regex = new RegExp(escapeRegExp(searchTerm), "i");
+      filter.$or = [
+        { title: regex },
+        { description: regex },
+        { sku: regex },
+        { brand: regex },
+        { tags: regex },
+      ];
+    }
+
+    const createdAt = buildCreatedAtRange({ dateFrom, dateTo, createdFrom, createdTo });
+    if (createdAt) filter.createdAt = createdAt;
+
     const direction = sortDir === "asc" ? 1 : -1;
     const sortMap = {
       price_asc: { price: 1 },

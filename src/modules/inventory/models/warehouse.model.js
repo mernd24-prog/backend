@@ -18,6 +18,8 @@ const warehouseSchema = new mongoose.Schema(
     skuCount: { type: Number, default: 0, min: 0 },
     active: { type: Boolean, default: true, index: true },
     metadata: { type: Object, default: {} },
+    createdBy: { type: String, index: true },
+    updatedBy: { type: String, index: true },
   },
   { timestamps: true },
 );

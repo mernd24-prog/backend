@@ -191,11 +191,46 @@ class InventoryService {
     return this.inventoryRepository.listTransactions(filter, pagination);
   }
 
+  resolveManualAdjustment(product, payload = {}) {
+    if (payload.adjustment !== undefined && payload.adjustment !== null && payload.adjustment !== "") {
+      const adjustment = Number(payload.adjustment);
+      if (!Number.isFinite(adjustment)) {
+        throw new AppError("Inventory adjustment must be a valid number", 400);
+      }
+      return adjustment;
+    }
+
+    const quantity = Number(payload.quantity || 0);
+    if (!Number.isFinite(quantity) || quantity < 0) {
+      throw new AppError("Inventory quantity must be a non-negative number", 400);
+    }
+
+    const adjustmentType = payload.adjustmentType || "add";
+    if (adjustmentType === "add") return quantity;
+    if (adjustmentType === "remove") return -quantity;
+    if (adjustmentType === "set") {
+      const variantSku = payload.variantSku || "";
+      if (variantSku && !(product.variants || []).some((variant) => variant.sku === variantSku)) {
+        throw new AppError("Variant SKU not found for this product", 404);
+      }
+      const currentStock = variantSku
+        ? Number((product.variants || []).find((variant) => variant.sku === variantSku)?.stock || 0)
+        : Number(product.stock || 0);
+      return quantity - currentStock;
+    }
+
+    throw new AppError("Invalid inventory adjustment type", 400);
+  }
+
   async adjustProductInventory(productId, payload = {}, actor = {}) {
     const product = await this.productRepository.findById(productId);
     if (!product) throw new AppError("Product not found", 404);
 
-    const adjustment = Number(payload.adjustment || 0);
+    const adjustment = this.resolveManualAdjustment(product, payload);
+    if (adjustment === 0) {
+      throw new AppError("Inventory adjustment does not change stock", 400);
+    }
+
     const variantSku = payload.variantSku || "";
     const updatedProduct = variantSku
       ? await this.productRepository.adjustVariantStock(productId, variantSku, adjustment)
@@ -221,6 +256,9 @@ class InventoryService {
       },
       {
         reason: payload.reason || "",
+        note: payload.note || "",
+        adjustmentType: payload.adjustmentType || (adjustment > 0 ? "add" : "remove"),
+        requestedQuantity: payload.quantity !== undefined ? Number(payload.quantity || 0) : null,
       },
     );
 

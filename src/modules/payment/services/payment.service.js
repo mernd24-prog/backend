@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const { PaymentRepository } = require("../repositories/payment.repository");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
@@ -9,6 +10,37 @@ const { OrderRepository } = require("../../order/repositories/order.repository")
 const { OrderService } = require("../../order/services/order.service");
 const { PaymentMethodConfigRepository } = require("../repositories/payment-method-config.repository");
 const { env } = require("../../../config/env");
+
+const PROVIDER_RECEIPT_MAX_LENGTH = 40;
+
+const buildProviderReceipt = (orderId) => {
+  const timestamp = Date.now().toString(36);
+  const nonce = crypto.randomBytes(4).toString("hex");
+  const cleanOrderId = String(orderId || "").replace(/[^a-zA-Z0-9]/g, "");
+  const prefix = `ord_${timestamp}_`;
+  const suffixBudget = Math.max(
+    PROVIDER_RECEIPT_MAX_LENGTH - prefix.length - nonce.length - 1,
+    0,
+  );
+  const orderSuffix = cleanOrderId.slice(-Math.min(12, suffixBudget));
+  const receipt = orderSuffix
+    ? `${prefix}${orderSuffix}_${nonce}`
+    : `${prefix}${nonce}`;
+
+  return receipt.slice(0, PROVIDER_RECEIPT_MAX_LENGTH);
+};
+
+const buildRazorpayCheckout = (payment = {}) => {
+  const providerOrderId = payment.providerOrderId || payment.provider_order_id;
+  if (!providerOrderId) return null;
+
+  return {
+    keyId: env.razorpay.configured ? env.razorpay.keyId : "rzp_mock_key",
+    amount: Math.round(Number(payment.amount || 0) * 100),
+    currency: payment.currency || "INR",
+    orderId: providerOrderId,
+  };
+};
 
 class PaymentService {
   constructor({
@@ -112,7 +144,14 @@ class PaymentService {
       existingPayment.status !== PAYMENT_STATUS.FAILED &&
       existingPayment.provider === payload.provider
     ) {
-      return mapPaymentResponse(existingPayment);
+      const response = mapPaymentResponse(existingPayment);
+      if (
+        response.provider === PAYMENT_PROVIDER.RAZORPAY &&
+        response.status === PAYMENT_STATUS.INITIATED
+      ) {
+        response.checkout = buildRazorpayCheckout(response);
+      }
+      return response;
     }
 
     const payableAmount = Number(order.payable_amount ?? order.total_amount);
@@ -202,7 +241,7 @@ class PaymentService {
     const providerOrder = await provider.createOrder({
       amount: payableAmount,
       currency: payload.currency || order.currency,
-      receipt: `order_${payload.orderId}_${Date.now()}`,
+      receipt: buildProviderReceipt(payload.orderId),
       notes: {
         orderId: payload.orderId,
         buyerId: actor.userId,
@@ -672,4 +711,4 @@ class PaymentService {
   }
 }
 
-module.exports = { PaymentService };
+module.exports = { PaymentService, buildProviderReceipt, buildRazorpayCheckout };

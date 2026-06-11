@@ -8,88 +8,11 @@ const {
 const {
   WarrantyTemplateModel,
 } = require("../../src/modules/platform/models/warranty-template.model");
-
-const SEED_SOURCE = "seed-warranty-templates";
-
-const WARRANTY_TEMPLATES = [
-  {
-    period: "No Warranty",
-    type: "none",
-    durationValue: 0,
-    durationUnit: "none",
-    durationMonths: 0,
-  },
-  {
-    period: "7 Days",
-    type: "limited",
-    durationValue: 7,
-    durationUnit: "days",
-    durationMonths: 0,
-  },
-  {
-    period: "15 Days",
-    type: "limited",
-    durationValue: 15,
-    durationUnit: "days",
-    durationMonths: 0,
-  },
-  {
-    period: "30 Days",
-    type: "limited",
-    durationValue: 30,
-    durationUnit: "days",
-    durationMonths: 1,
-  },
-  {
-    period: "3 Months",
-    type: "limited",
-    durationValue: 3,
-    durationUnit: "months",
-    durationMonths: 3,
-  },
-  {
-    period: "6 Months",
-    type: "limited",
-    durationValue: 6,
-    durationUnit: "months",
-    durationMonths: 6,
-  },
-  {
-    period: "1 Year",
-    type: "limited",
-    durationValue: 1,
-    durationUnit: "years",
-    durationMonths: 12,
-  },
-  {
-    period: "2 Years",
-    type: "limited",
-    durationValue: 2,
-    durationUnit: "years",
-    durationMonths: 24,
-  },
-  {
-    period: "3 Years",
-    type: "limited",
-    durationValue: 3,
-    durationUnit: "years",
-    durationMonths: 36,
-  },
-  {
-    period: "5 Years",
-    type: "limited",
-    durationValue: 5,
-    durationUnit: "years",
-    durationMonths: 60,
-  },
-  {
-    period: "Lifetime",
-    type: "lifetime",
-    durationValue: null,
-    durationUnit: "lifetime",
-    durationMonths: null,
-  },
-];
+const {
+  SEED_SOURCE,
+  WARRANTY_TEMPLATES,
+  buildWarrantyTemplateSeedDocuments,
+} = require("../../src/modules/platform/constants/default-warranty-templates");
 
 function parseArgs(argv) {
   const flags = new Set(argv);
@@ -99,21 +22,8 @@ function parseArgs(argv) {
   };
 }
 
-function buildTemplate(template, index) {
-  const { period, ...metadata } = template;
-  return {
-    period,
-    active: true,
-    metadata: {
-      ...metadata,
-      sortOrder: index + 1,
-      source: SEED_SOURCE,
-    },
-  };
-}
-
 async function seedWarrantyTemplates({ dryRun = false, shouldReset = false } = {}) {
-  const templates = WARRANTY_TEMPLATES.map(buildTemplate);
+  const templates = buildWarrantyTemplateSeedDocuments();
 
   if (dryRun) {
     console.log("Warranty templates dry run:");

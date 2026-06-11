@@ -1223,6 +1223,7 @@ class ProductService {
       if (query.maxPrice !== undefined) filter.price.$lte = Number(query.maxPrice);
     }
 
+    this.applyDateFilters(filter, query);
     this.applyStockFilters(filter, query);
 
     const searchTerm = query.q || query.keyWord || query.search;
@@ -1290,6 +1291,7 @@ class ProductService {
       filter.productFamilyCode = query.productFamilyCode || query.family || query.familyCode;
     }
     if (query.productType) filter.productType = query.productType;
+    this.applyDateFilters(filter, query);
     this.applyStockFilters(filter, query);
     this.applyAttributeFilters(filter, query);
     return this.productRepository.paginateBySeller(sellerId, filter, pagination, {
@@ -1326,6 +1328,32 @@ class ProductService {
 
     if (query.inStock === true || query.inStock === "true") {
       this.appendExpressionFilter(filter, { $gt: [availableStock, 0] });
+    }
+  }
+
+  applyDateFilters(filter, query = {}) {
+    const from = query.dateFrom || query.createdFrom;
+    const to = query.dateTo || query.createdTo;
+    if (!from && !to) return;
+
+    const createdAt = {};
+    if (from) {
+      const start = new Date(from);
+      if (!Number.isNaN(start.getTime())) {
+        start.setHours(0, 0, 0, 0);
+        createdAt.$gte = start;
+      }
+    }
+    if (to) {
+      const end = new Date(to);
+      if (!Number.isNaN(end.getTime())) {
+        end.setHours(23, 59, 59, 999);
+        createdAt.$lte = end;
+      }
+    }
+
+    if (Object.keys(createdAt).length) {
+      filter.createdAt = createdAt;
     }
   }
 
@@ -1368,6 +1396,10 @@ class ProductService {
       "sellerId",
       "minPrice",
       "maxPrice",
+      "dateFrom",
+      "dateTo",
+      "createdFrom",
+      "createdTo",
       "inStock",
       "stockStatus",
       "inventoryStatus",

@@ -1,6 +1,7 @@
 const Joi = require("joi");
 const {
   PRODUCT_STATUS,
+  PRODUCT_TYPE,
   ORDER_STATUS,
   PAYMENT_STATUS,
 } = require("../../../shared/domain/commerce-constants");
@@ -295,6 +296,15 @@ const moderationQueueSchema = Joi.object({
       PRODUCT_STATUS.INACTIVE,
     ),
     category: Joi.string(),
+    q: Joi.string().allow(""),
+    keyWord: Joi.string().allow(""),
+    search: Joi.string().allow(""),
+    sellerId: Joi.string().allow("", null),
+    productType: Joi.string().valid(...Object.values(PRODUCT_TYPE)),
+    dateFrom: Joi.date().allow("", null),
+    dateTo: Joi.date().allow("", null),
+    createdFrom: Joi.date().allow("", null),
+    createdTo: Joi.date().allow("", null),
     page: Joi.number().integer().min(1),
     limit: Joi.number().integer().min(1).max(100),
     sortBy: Joi.string().valid(

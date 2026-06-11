@@ -18,6 +18,8 @@ const listWarehousesSchema = Joi.object({
     stateId: Joi.string(),
     cityId: Joi.string(),
     active: Joi.boolean(),
+    sortBy: Joi.string().valid("createdAt", "updatedAt", "name", "code", "skuCount", "capacity", "active"),
+    sortDir: Joi.string().valid("asc", "desc"),
   }).required(),
   params: Joi.object({}).required(),
 });
@@ -34,6 +36,8 @@ const listInventoryTransactionsSchema = Joi.object({
     shipmentId: Joi.string(),
     referenceType: Joi.string(),
     referenceId: Joi.string(),
+    sortBy: Joi.string().valid("createdAt", "type", "status", "quantity", "productId", "sellerId"),
+    sortDir: Joi.string().valid("asc", "desc"),
     limit: Joi.number().integer().min(1).max(200),
     offset: Joi.number().integer().min(0),
   }).required(),
@@ -42,7 +46,7 @@ const listInventoryTransactionsSchema = Joi.object({
 
 const warehouseBody = {
   name: Joi.string().trim().required(),
-  code: Joi.string().trim().required(),
+  code: Joi.string().trim().pattern(/^[A-Za-z0-9_-]+$/).required(),
   managerName: Joi.string().trim().allow("", null),
   managerPhone: Joi.string().trim().allow("", null),
   managerEmail: Joi.string().email().allow("", null),
@@ -63,7 +67,7 @@ const warehouseBody = {
 const warehouseUpdateBody = {
   ...warehouseBody,
   name: Joi.string().trim(),
-  code: Joi.string().trim(),
+  code: Joi.string().trim().pattern(/^[A-Za-z0-9_-]+$/),
   addressLine1: Joi.string().trim(),
   countryId: Joi.string(),
   stateId: Joi.string(),
