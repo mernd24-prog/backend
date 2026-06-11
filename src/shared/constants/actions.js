@@ -7,6 +7,8 @@ const ACTIONS = {
   WALLET_SELF: "wallet:self",
   CATALOG_MANAGE: "catalog:manage",
   CATALOG_REVIEW: "catalog:review",
+  INVENTORY_VIEW: "inventory:view",
+  INVENTORY_MANAGE: "inventory:manage",
   SELLER_KYC_SUBMIT: "seller-kyc:submit",
   SELLER_DASHBOARD_VIEW: "seller:dashboard:view",
   SELLER_PROFILE_MANAGE: "seller:profile:manage",
@@ -16,6 +18,9 @@ const ACTIONS = {
   ANALYTICS_VIEW: "analytics:view",
   ADMIN_CONTROL: "admin:control",
   TAX_MANAGE: "tax:manage",
+  COMMISSION_VIEW: "commission:view",
+  COMMISSION_MANAGE: "commission:manage",
+  PLATFORM_FEE_MANAGE: "platform-fee:manage",
 };
 
 module.exports = { ACTIONS };

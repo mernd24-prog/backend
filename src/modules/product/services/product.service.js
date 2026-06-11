@@ -86,6 +86,18 @@ const PRODUCT_LIST_PROJECTION = {
   updatedAt: 1,
 };
 
+const buildProductListProjection = (query = {}) => ({
+  ...PRODUCT_LIST_PROJECTION,
+  ...(
+    query.includeVariants === true ||
+    query.includeVariants === "true" ||
+    query.hasVariants === true ||
+    query.hasVariants === "true"
+      ? { variants: 1, hasVariants: 1, variantAxes: 1 }
+      : {}
+  ),
+});
+
 class ProductService {
   constructor({
     productRepository = new ProductRepository(),
@@ -1211,6 +1223,9 @@ class ProductService {
     if (query.brand) filter.brand = new RegExp(`^${escapeRegExp(query.brand)}$`, "i");
     if (query.sellerId) filter.sellerId = query.sellerId;
     if (query.productType) filter.productType = query.productType;
+    if (query.hasVariants !== undefined) {
+      filter.hasVariants = query.hasVariants === true || query.hasVariants === "true";
+    }
     if (!publicOnly && query.visibility) filter.visibility = query.visibility;
     if (query.tags) filter.tags = { $in: query.tags.split(",").map((t) => t.trim()) };
     if (query.rating) filter.rating = { $gte: Number(query.rating) };
@@ -1252,20 +1267,22 @@ class ProductService {
         filter.status = { $ne: PRODUCT_STATUS.ARCHIVED };
       }
 
-      const cacheKey = `products:management:${JSON.stringify({ filter, pagination, projection: "list" })}`;
+      const projection = buildProductListProjection(query);
+      const cacheKey = `products:management:${JSON.stringify({ filter, pagination, projection })}`;
       return remember(cacheKey, 30, () =>
         this.productRepository.paginate(filter, pagination, {
-          projection: PRODUCT_LIST_PROJECTION,
+          projection,
           lean: true,
         }),
       );
     }
 
     const publicFilter = applyPublicProductFilter(filter);
-    const cacheKey = `products:${JSON.stringify({ filter: publicFilter, pagination, projection: "list" })}`;
+    const projection = buildProductListProjection(query);
+    const cacheKey = `products:${JSON.stringify({ filter: publicFilter, pagination, projection })}`;
     return remember(cacheKey, 60, () =>
       this.productRepository.paginate(publicFilter, pagination, {
-        projection: PRODUCT_LIST_PROJECTION,
+        projection,
         lean: true,
       }),
     );
@@ -1291,11 +1308,14 @@ class ProductService {
       filter.productFamilyCode = query.productFamilyCode || query.family || query.familyCode;
     }
     if (query.productType) filter.productType = query.productType;
+    if (query.hasVariants !== undefined) {
+      filter.hasVariants = query.hasVariants === true || query.hasVariants === "true";
+    }
     this.applyDateFilters(filter, query);
     this.applyStockFilters(filter, query);
     this.applyAttributeFilters(filter, query);
     return this.productRepository.paginateBySeller(sellerId, filter, pagination, {
-      projection: PRODUCT_LIST_PROJECTION,
+      projection: buildProductListProjection(query),
       lean: true,
     });
   }
@@ -1381,6 +1401,8 @@ class ProductService {
       "category",
       "status",
       "productType",
+      "hasVariants",
+      "includeVariants",
       "visibility",
       "hsnCode",
       "color",

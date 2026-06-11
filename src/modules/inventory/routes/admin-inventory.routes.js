@@ -17,6 +17,16 @@ const adminInventoryRoutes = express.Router();
 const warehouseController = new WarehouseController();
 
 adminInventoryRoutes.get(
+  "/stats",
+  allowPermissions("inventory:view"),
+  catchErrors(warehouseController.getStats),
+);
+adminInventoryRoutes.get(
+  "/low-stock",
+  allowPermissions("inventory:view"),
+  catchErrors(warehouseController.getLowStock),
+);
+adminInventoryRoutes.get(
   "/transactions",
   allowPermissions("inventory:view"),
   checkInput(listInventoryTransactionsSchema),

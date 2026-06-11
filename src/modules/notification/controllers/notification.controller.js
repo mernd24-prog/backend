@@ -17,6 +17,14 @@ class NotificationController {
     const notifications = await this.notificationService.listMyNotifications(actor);
     res.json(okResponse(notifications));
   };
+
+  listAdmin = async (req, res) => {
+    const { page, limit, type, userId, search } = req.query;
+    const result = await this.notificationService.notificationRepository.listAll({
+      page, limit, type, userId, search,
+    });
+    res.json(okResponse(result.items, { total: result.total }));
+  };
 }
 
 module.exports = { NotificationController };

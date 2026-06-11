@@ -20,6 +20,12 @@ function makeCodeOrIdFilter(value, codeField = "code") {
   return { [codeField]: value };
 }
 
+function buildSort(sortBy, sortDir, allowed = {}, fallback = { createdAt: -1 }) {
+  const field = allowed[sortBy];
+  if (!field) return fallback;
+  return { [field]: sortDir === "asc" ? 1 : -1 };
+}
+
 class PlatformRepository {
   async createCategory(payload) {
     return CategoryTreeModel.create(payload);
@@ -101,8 +107,22 @@ class PlatformRepository {
   }
 
   async listProductFamilies(filter = {}, pagination = {}) {
+    const sort = buildSort(
+      pagination.sortBy,
+      pagination.sortDir,
+      {
+        familyCode: "familyCode",
+        title: "title",
+        category: "category",
+        sellerId: "sellerId",
+        status: "status",
+        createdAt: "createdAt",
+        updatedAt: "updatedAt",
+      },
+      { createdAt: -1 },
+    );
     const [items, total] = await Promise.all([
-      ProductFamilyModel.find(filter).sort({ createdAt: -1 }).skip(pagination.skip).limit(pagination.limit),
+      ProductFamilyModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
       ProductFamilyModel.countDocuments(filter),
     ]);
     return { items, total };
@@ -125,8 +145,24 @@ class PlatformRepository {
   }
 
   async listProductVariants(filter = {}, pagination = {}) {
+    const sort = buildSort(
+      pagination.sortBy,
+      pagination.sortDir,
+      {
+        sku: "sku",
+        familyCode: "familyCode",
+        productId: "productId",
+        sellerId: "sellerId",
+        stock: "stock",
+        reservedStock: "reservedStock",
+        status: "status",
+        createdAt: "createdAt",
+        updatedAt: "updatedAt",
+      },
+      { createdAt: -1 },
+    );
     const [items, total] = await Promise.all([
-      ProductVariantModel.find(filter).sort({ createdAt: -1 }).skip(pagination.skip).limit(pagination.limit),
+      ProductVariantModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
       ProductVariantModel.countDocuments(filter),
     ]);
     return { items, total };
@@ -237,8 +273,20 @@ class PlatformRepository {
   }
 
   async listBrands(filter = {}, pagination = {}) {
+    const sort = buildSort(
+      pagination.sortBy,
+      pagination.sortDir,
+      {
+        name: "name",
+        active: "active",
+        sortOrder: "sortOrder",
+        createdAt: "createdAt",
+        updatedAt: "updatedAt",
+      },
+      { sortOrder: 1, name: 1 },
+    );
     const [items, total] = await Promise.all([
-      PlatformBrandModel.find(filter).sort({ sortOrder: 1, name: 1 }).skip(pagination.skip).limit(pagination.limit),
+      PlatformBrandModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
       PlatformBrandModel.countDocuments(filter),
     ]);
     return { items, total };
@@ -261,8 +309,19 @@ class PlatformRepository {
   }
 
   async listWarrantyTemplates(filter = {}, pagination = {}) {
+    const sort = buildSort(
+      pagination.sortBy,
+      pagination.sortDir,
+      {
+        period: "period",
+        active: "active",
+        createdAt: "createdAt",
+        updatedAt: "updatedAt",
+      },
+      { createdAt: -1 },
+    );
     const [items, total] = await Promise.all([
-      WarrantyTemplateModel.find(filter).sort({ createdAt: -1 }).skip(pagination.skip).limit(pagination.limit),
+      WarrantyTemplateModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
       WarrantyTemplateModel.countDocuments(filter),
     ]);
     return { items, total };
@@ -285,8 +344,19 @@ class PlatformRepository {
   }
 
   async listFinishes(filter = {}, pagination = {}) {
+    const sort = buildSort(
+      pagination.sortBy,
+      pagination.sortDir,
+      {
+        name: "name",
+        active: "active",
+        createdAt: "createdAt",
+        updatedAt: "updatedAt",
+      },
+      { createdAt: -1 },
+    );
     const [items, total] = await Promise.all([
-      PlatformFinishModel.find(filter).sort({ createdAt: -1 }).skip(pagination.skip).limit(pagination.limit),
+      PlatformFinishModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
       PlatformFinishModel.countDocuments(filter),
     ]);
     return { items, total };
@@ -309,8 +379,19 @@ class PlatformRepository {
   }
 
   async listDimensions(filter = {}, pagination = {}) {
+    const sort = buildSort(
+      pagination.sortBy,
+      pagination.sortDir,
+      {
+        dimensions_value: "dimensions_value",
+        active: "active",
+        createdAt: "createdAt",
+        updatedAt: "updatedAt",
+      },
+      { createdAt: -1 },
+    );
     const [items, total] = await Promise.all([
-      PlatformDimensionModel.find(filter).sort({ createdAt: -1 }).skip(pagination.skip).limit(pagination.limit),
+      PlatformDimensionModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
       PlatformDimensionModel.countDocuments(filter),
     ]);
     return { items, total };
@@ -333,8 +414,21 @@ class PlatformRepository {
   }
 
   async listBatches(filter = {}, pagination = {}) {
+    const sort = buildSort(
+      pagination.sortBy,
+      pagination.sortDir,
+      {
+        batchCode: "batchCode",
+        manufactureDate: "manufactureDate",
+        expiryDate: "expiryDate",
+        active: "active",
+        createdAt: "createdAt",
+        updatedAt: "updatedAt",
+      },
+      { createdAt: -1 },
+    );
     const [items, total] = await Promise.all([
-      PlatformBatchModel.find(filter).sort({ createdAt: -1 }).skip(pagination.skip).limit(pagination.limit),
+      PlatformBatchModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
       PlatformBatchModel.countDocuments(filter),
     ]);
     return { items, total };
@@ -357,8 +451,21 @@ class PlatformRepository {
   }
 
   async listProductOptions(filter = {}, pagination = {}) {
+    const sort = buildSort(
+      pagination.sortBy,
+      pagination.sortDir,
+      {
+        name: "name",
+        slug: "slug",
+        displayType: "displayType",
+        active: "active",
+        createdAt: "createdAt",
+        updatedAt: "updatedAt",
+      },
+      { name: 1, createdAt: -1 },
+    );
     const [items, total] = await Promise.all([
-      PlatformProductOptionModel.find(filter).sort({ name: 1, createdAt: -1 }).skip(pagination.skip).limit(pagination.limit),
+      PlatformProductOptionModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
       PlatformProductOptionModel.countDocuments(filter),
     ]);
     return { items, total };
@@ -381,8 +488,21 @@ class PlatformRepository {
   }
 
   async listProductOptionValues(filter = {}, pagination = {}) {
+    const sort = buildSort(
+      pagination.sortBy,
+      pagination.sortDir,
+      {
+        name: "name",
+        valueCode: "valueCode",
+        sortOrder: "sortOrder",
+        active: "active",
+        createdAt: "createdAt",
+        updatedAt: "updatedAt",
+      },
+      { sortOrder: 1, name: 1 },
+    );
     const [items, total] = await Promise.all([
-      PlatformProductOptionValueModel.find(filter).sort({ sortOrder: 1, name: 1 }).skip(pagination.skip).limit(pagination.limit),
+      PlatformProductOptionValueModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
       PlatformProductOptionValueModel.countDocuments(filter),
     ]);
     return { items, total };

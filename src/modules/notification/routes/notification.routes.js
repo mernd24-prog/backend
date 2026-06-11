@@ -11,6 +11,12 @@ const notificationRoutes = express.Router();
 const notificationController = new NotificationController();
 
 notificationRoutes.get("/me", authenticate, catchErrors(notificationController.listMine));
+notificationRoutes.get(
+  "/admin",
+  authenticate,
+  allowActions(ACTIONS.NOTIFICATION_MANAGE),
+  catchErrors(notificationController.listAdmin),
+);
 notificationRoutes.post(
   "/",
   authenticate,

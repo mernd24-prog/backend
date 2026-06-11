@@ -44,13 +44,13 @@ class PlatformController {
   // ── Product Families ────────────────────────────────────────────────────────
 
   createProductFamily = async (req, res) => {
-    const family = await this.platformService.createProductFamily(req.body);
-    res.status(201).json(okResponse(family));
+    const family = await this.platformService.createProductFamily(req.body, req);
+    res.status(201).json(okResponse(family, { message: "Product family created successfully." }));
   };
 
   updateProductFamily = async (req, res) => {
-    const family = await this.platformService.updateProductFamily(req.params.familyCode, req.body);
-    res.json(okResponse(family));
+    const family = await this.platformService.updateProductFamily(req.params.familyCode, req.body, req);
+    res.json(okResponse(family, { message: "Product family updated successfully." }));
   };
 
   getProductFamily = async (req, res) => {
@@ -65,20 +65,20 @@ class PlatformController {
   };
 
   deleteProductFamily = async (req, res) => {
-    const family = await this.platformService.deleteProductFamily(req.params.familyCode);
-    res.json(okResponse(family));
+    const family = await this.platformService.deleteProductFamily(req.params.familyCode, req);
+    res.json(okResponse(family, { message: "Product family deleted successfully." }));
   };
 
   // ── Product Variants ────────────────────────────────────────────────────────
 
   createProductVariant = async (req, res) => {
-    const variant = await this.platformService.createProductVariant(req.body);
-    res.status(201).json(okResponse(variant));
+    const variant = await this.platformService.createProductVariant(req.body, req);
+    res.status(201).json(okResponse(variant, { message: "Product variant created successfully." }));
   };
 
   updateProductVariant = async (req, res) => {
-    const variant = await this.platformService.updateProductVariant(req.params.variantId, req.body);
-    res.json(okResponse(variant));
+    const variant = await this.platformService.updateProductVariant(req.params.variantId, req.body, req);
+    res.json(okResponse(variant, { message: "Product variant updated successfully." }));
   };
 
   getProductVariant = async (req, res) => {
@@ -93,8 +93,8 @@ class PlatformController {
   };
 
   deleteProductVariant = async (req, res) => {
-    const variant = await this.platformService.deleteProductVariant(req.params.variantId);
-    res.json(okResponse(variant));
+    const variant = await this.platformService.deleteProductVariant(req.params.variantId, req);
+    res.json(okResponse(variant, { message: "Product variant deleted successfully." }));
   };
 
   // ── HSN Codes ───────────────────────────────────────────────────────────────
@@ -202,12 +202,12 @@ class PlatformController {
   // ── Warranty Templates ──────────────────────────────────────────────────────
 
   createWarrantyTemplate = async (req, res) => {
-    const item = await this.platformService.createWarrantyTemplate(req.body);
+    const item = await this.platformService.createWarrantyTemplate(req.body, req);
     res.status(201).json(okResponse(item));
   };
 
   updateWarrantyTemplate = async (req, res) => {
-    const item = await this.platformService.updateWarrantyTemplate(req.params.templateId, req.body);
+    const item = await this.platformService.updateWarrantyTemplate(req.params.templateId, req.body, req);
     res.json(okResponse(item));
   };
 
@@ -223,19 +223,19 @@ class PlatformController {
   };
 
   deleteWarrantyTemplate = async (req, res) => {
-    const item = await this.platformService.deleteWarrantyTemplate(req.params.templateId);
+    const item = await this.platformService.deleteWarrantyTemplate(req.params.templateId, req);
     res.json(okResponse(item));
   };
 
   // ── Finishes ────────────────────────────────────────────────────────────────
 
   createFinish = async (req, res) => {
-    const item = await this.platformService.createFinish(req.body);
+    const item = await this.platformService.createFinish(req.body, req);
     res.status(201).json(okResponse(item));
   };
 
   updateFinish = async (req, res) => {
-    const item = await this.platformService.updateFinish(req.params.finishId, req.body);
+    const item = await this.platformService.updateFinish(req.params.finishId, req.body, req);
     res.json(okResponse(item));
   };
 
@@ -246,19 +246,19 @@ class PlatformController {
   };
 
   deleteFinish = async (req, res) => {
-    const item = await this.platformService.deleteFinish(req.params.finishId);
+    const item = await this.platformService.deleteFinish(req.params.finishId, req);
     res.json(okResponse(item));
   };
 
   // ── Dimensions ──────────────────────────────────────────────────────────────
 
   createDimension = async (req, res) => {
-    const item = await this.platformService.createDimension(req.body);
+    const item = await this.platformService.createDimension(req.body, req);
     res.status(201).json(okResponse(item));
   };
 
   updateDimension = async (req, res) => {
-    const item = await this.platformService.updateDimension(req.params.dimensionId, req.body);
+    const item = await this.platformService.updateDimension(req.params.dimensionId, req.body, req);
     res.json(okResponse(item));
   };
 
@@ -269,19 +269,19 @@ class PlatformController {
   };
 
   deleteDimension = async (req, res) => {
-    const item = await this.platformService.deleteDimension(req.params.dimensionId);
+    const item = await this.platformService.deleteDimension(req.params.dimensionId, req);
     res.json(okResponse(item));
   };
 
   // ── Batches ─────────────────────────────────────────────────────────────────
 
   createBatch = async (req, res) => {
-    const item = await this.platformService.createBatch(req.body);
+    const item = await this.platformService.createBatch(req.body, req);
     res.status(201).json(okResponse(item));
   };
 
   updateBatch = async (req, res) => {
-    const item = await this.platformService.updateBatch(req.params.batchId, req.body);
+    const item = await this.platformService.updateBatch(req.params.batchId, req.body, req);
     res.json(okResponse(item));
   };
 
@@ -292,7 +292,7 @@ class PlatformController {
   };
 
   deleteBatch = async (req, res) => {
-    const item = await this.platformService.deleteBatch(req.params.batchId);
+    const item = await this.platformService.deleteBatch(req.params.batchId, req);
     res.json(okResponse(item));
   };
 
@@ -322,13 +322,13 @@ class PlatformController {
   // ── Product Option Values ───────────────────────────────────────────────────
 
   createProductOptionValue = async (req, res) => {
-    const item = await this.platformService.createProductOptionValue(req.body);
-    res.status(201).json(okResponse(item));
+    const item = await this.platformService.createProductOptionValue(req.body, req);
+    res.status(201).json(okResponse(item, { message: "Product option value created successfully." }));
   };
 
   updateProductOptionValue = async (req, res) => {
-    const item = await this.platformService.updateProductOptionValue(req.params.optionValueId, req.body);
-    res.json(okResponse(item));
+    const item = await this.platformService.updateProductOptionValue(req.params.optionValueId, req.body, req);
+    res.json(okResponse(item, { message: "Product option value updated successfully." }));
   };
 
   listProductOptionValues = async (req, res) => {
@@ -338,8 +338,8 @@ class PlatformController {
   };
 
   deleteProductOptionValue = async (req, res) => {
-    const item = await this.platformService.deleteProductOptionValue(req.params.optionValueId);
-    res.json(okResponse(item));
+    const item = await this.platformService.deleteProductOptionValue(req.params.optionValueId, req);
+    res.json(okResponse(item, { message: "Product option value deleted successfully." }));
   };
 
   // ── Catalog Prefill ─────────────────────────────────────────────────────────
