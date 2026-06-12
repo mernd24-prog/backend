@@ -54,6 +54,9 @@ const {
   updateProductOptionValueSchema,
   listProductOptionValuesSchema,
   productOptionValueIdSchema,
+  listProductReviewsSchema,
+  updateProductReviewSchema,
+  productReviewIdSchema,
 } = require("../validation/platform.validation");
 
 const platformRoutes = express.Router();
@@ -267,5 +270,29 @@ platformRoutes.get("/product-option-values", checkInput(listProductOptionValuesS
 platformRoutes.post("/product-option-values", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(createProductOptionValueSchema), catchErrors(platformController.createProductOptionValue));
 platformRoutes.patch("/product-option-values/:optionValueId", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(updateProductOptionValueSchema), catchErrors(platformController.updateProductOptionValue));
 platformRoutes.delete("/product-option-values/:optionValueId", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(productOptionValueIdSchema), catchErrors(platformController.deleteProductOptionValue));
+
+// ── Product Reviews (Admin) ───────────────────────────────────────────────────
+
+platformRoutes.get(
+  "/product-reviews",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_REVIEW),
+  checkInput(listProductReviewsSchema),
+  catchErrors(platformController.listProductReviews),
+);
+platformRoutes.patch(
+  "/product-reviews/:reviewId",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_REVIEW),
+  checkInput(updateProductReviewSchema),
+  catchErrors(platformController.updateProductReview),
+);
+platformRoutes.delete(
+  "/product-reviews/:reviewId",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_REVIEW),
+  checkInput(productReviewIdSchema),
+  catchErrors(platformController.deleteProductReview),
+);
 
 module.exports = { platformRoutes, cmsRoutes };

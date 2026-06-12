@@ -26,6 +26,14 @@ class OrderController {
     res.json(orderResponse(quote, "Order quote calculated successfully"));
   };
 
+  adminQuote = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const quote = await this.orderService.quoteOrder(req.body, actor, {
+      buyerId: req.body.buyerId || actor.userId,
+    });
+    res.json(orderResponse(quote, "Checkout quote calculated successfully"));
+  };
+
   listMine = async (req, res) => {
     const actor = getCurrentUser(req);
     const orders = await this.orderService.listMyOrders(actor, req.query);
@@ -62,6 +70,9 @@ class OrderController {
       ...actor,
       reason: req.body.reason || null,
       note: req.body.note || null,
+      trackingNumber: req.body.trackingNumber || null,
+      carrierName: req.body.carrierName || null,
+      carrierUrl: req.body.carrierUrl || null,
     });
     res.json(orderResponse(order, "Order status updated successfully"));
   };

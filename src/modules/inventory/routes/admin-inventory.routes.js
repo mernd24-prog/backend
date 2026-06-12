@@ -11,6 +11,7 @@ const {
   warehouseParamSchema,
   warehouseStatusSchema,
   warehouseDeleteSchema,
+  releaseExpiredReservationsSchema,
 } = require("../validation/warehouse.validation");
 
 const adminInventoryRoutes = express.Router();
@@ -31,6 +32,12 @@ adminInventoryRoutes.get(
   allowPermissions("inventory:view"),
   checkInput(listInventoryTransactionsSchema),
   catchErrors(warehouseController.listTransactions),
+);
+adminInventoryRoutes.post(
+  "/reservations/release-expired",
+  allowPermissions("inventory:adjust"),
+  checkInput(releaseExpiredReservationsSchema),
+  catchErrors(warehouseController.releaseExpiredReservations),
 );
 adminInventoryRoutes.get(
   "/warehouses",

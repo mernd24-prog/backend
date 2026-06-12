@@ -30,6 +30,21 @@ class PricingRepository {
     return CouponModel.findOneAndDelete({ _id: couponId, ...filter });
   }
 
+  async countCouponUsageByCustomer(couponCode, buyerId) {
+    try {
+      const { rows } = await postgresPool.query(
+        `SELECT COUNT(*) AS cnt FROM orders
+         WHERE UPPER(coupon_code) = UPPER($1)
+           AND buyer_id = $2
+           AND status NOT IN ('cancelled', 'payment_failed')`,
+        [couponCode, buyerId],
+      );
+      return Number(rows[0]?.cnt || 0);
+    } catch {
+      return 0;
+    }
+  }
+
   async listActivePlatformFeeRules(categories = []) {
     try {
       const normalized = Array.from(

@@ -515,6 +515,44 @@ const productParamSchema = Joi.object({
   }).required(),
 });
 
+// ─── Customer review schemas ─────────────────────────────────────────────────
+
+const submitReviewSchema = Joi.object({
+  body: Joi.object({
+    orderId:    Joi.string().trim().required(),
+    rating:     Joi.number().integer().min(1).max(5).required(),
+    title:      Joi.string().trim().max(200).allow("", null),
+    reviewText: Joi.string().trim().max(2000).allow("", null),
+    media:      Joi.array().items(Joi.string().uri()).max(5).default([]),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    productId: Joi.string().required(),
+  }).required(),
+});
+
+const listReviewsSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    page:   Joi.number().integer().min(1),
+    limit:  Joi.number().integer().min(1).max(50),
+    rating: Joi.number().integer().min(1).max(5),
+    sort:   Joi.string().valid("newest", "oldest", "highest", "lowest", "helpful"),
+  }).required(),
+  params: Joi.object({
+    productId: Joi.string().required(),
+  }).required(),
+});
+
+const reviewParamSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    productId: Joi.string().required(),
+    reviewId:  Joi.string().required(),
+  }).required(),
+});
+
 module.exports = {
   createProductSchema,
   updateProductSchema,
@@ -530,4 +568,7 @@ module.exports = {
   bulkProductSchema,
   updateInventorySchema,
   productParamSchema,
+  submitReviewSchema,
+  listReviewsSchema,
+  reviewParamSchema,
 };

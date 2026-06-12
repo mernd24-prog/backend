@@ -64,13 +64,23 @@ class InventoryService {
     }
   }
 
-  async releaseForOrder(orderId) {
-    const reservation = await this.inventoryRepository.releaseReservation(orderId);
+  async releaseForOrder(orderId, options = {}) {
+    const reservation = await this.inventoryRepository.releaseReservation(orderId, {
+      actorId: options.actor?.userId || options.actorId || "",
+      actorRole: options.actor?.role || options.actorRole || "",
+      reason: options.reason || "order_inventory_release",
+      metadata: options.metadata || {},
+    });
     if (reservation?.$locals?.inventoryChanged) {
       await eventPublisher.publish(
         makeEvent(
           DOMAIN_EVENTS.INVENTORY_RELEASED_V1,
-          { orderId, buyerId: reservation.buyerId, itemCount: reservation.items.length },
+          {
+            orderId,
+            buyerId: reservation.buyerId,
+            itemCount: reservation.items.length,
+            reason: options.reason || "order_inventory_release",
+          },
           { source: "inventory-module", aggregateId: orderId },
         ),
       );
@@ -79,8 +89,13 @@ class InventoryService {
     return reservation;
   }
 
-  async commitForOrder(orderId) {
-    const reservation = await this.inventoryRepository.commitReservation(orderId);
+  async commitForOrder(orderId, options = {}) {
+    const reservation = await this.inventoryRepository.commitReservation(orderId, {
+      actorId: options.actor?.userId || options.actorId || "",
+      actorRole: options.actor?.role || options.actorRole || "",
+      reason: options.reason || "order_inventory_commit",
+      metadata: options.metadata || {},
+    });
     if (reservation?.$locals?.inventoryChanged) {
       await eventPublisher.publish(
         makeEvent(
@@ -95,8 +110,13 @@ class InventoryService {
     return reservation;
   }
 
-  async restockForOrder(orderId) {
-    const reservation = await this.inventoryRepository.restockReservation(orderId);
+  async restockForOrder(orderId, options = {}) {
+    const reservation = await this.inventoryRepository.restockReservation(orderId, {
+      actorId: options.actor?.userId || options.actorId || "",
+      actorRole: options.actor?.role || options.actorRole || "",
+      reason: options.reason || "order_inventory_restock",
+      metadata: options.metadata || {},
+    });
     if (reservation?.$locals?.inventoryChanged) {
       await eventPublisher.publish(
         makeEvent(
@@ -107,6 +127,47 @@ class InventoryService {
       );
     }
     return reservation;
+  }
+
+  async releaseExpiredReservations(payload = {}, actor = {}) {
+    const limit = Math.min(Math.max(Number(payload.limit || 100), 1), 500);
+    const now = payload.now ? new Date(payload.now) : new Date();
+    if (Number.isNaN(now.getTime())) {
+      throw new AppError("Invalid reservation cleanup date", 400);
+    }
+
+    const reservations = await this.inventoryRepository.findExpiredReservations({ now, limit });
+    const summary = {
+      scanned: reservations.length,
+      released: 0,
+      skipped: 0,
+      failed: 0,
+      errors: [],
+    };
+
+    for (const reservation of reservations) {
+      try {
+        const released = await this.releaseForOrder(reservation.orderId, {
+          actor,
+          reason: payload.reason || "expired_reservation_cleanup",
+          metadata: {
+            source: "expired_reservation_cleanup",
+            expiresAt: reservation.expiresAt,
+          },
+        });
+
+        if (released?.$locals?.inventoryChanged) summary.released += 1;
+        else summary.skipped += 1;
+      } catch (error) {
+        summary.failed += 1;
+        summary.errors.push({
+          orderId: reservation.orderId,
+          message: error.message || "Unable to release reservation",
+        });
+      }
+    }
+
+    return summary;
   }
 
   normalizeReturnItems(returnRequest) {

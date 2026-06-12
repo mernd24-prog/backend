@@ -251,12 +251,46 @@ class OrderRepository {
     return rows.length > 0;
   }
 
+  async hasBuyerPurchasedProduct(buyerId, productId, orderId) {
+    const { rows } = await postgresPool.query(
+      `SELECT 1
+       FROM orders o
+       JOIN order_items oi ON oi.order_id = o.id
+       WHERE o.buyer_id = $1
+         AND oi.product_id = $2
+         AND o.id = $3
+         AND o.status IN ('delivered', 'completed')
+       LIMIT 1`,
+      [buyerId, productId, orderId],
+    );
+    return rows.length > 0;
+  }
+
   async hasNonCancellableShipment(orderId) {
     const rows = await this.optionalTableRows("shipments", (query) => query
       .where("order_id", orderId)
       .whereNotIn("status", ["initiated", "cancelled", "failed"])
       .limit(1));
     return rows.length > 0;
+  }
+
+  async createShipment(payload = {}) {
+    const [row] = await knex("shipments")
+      .insert({
+        order_id: payload.orderId,
+        seller_id: payload.sellerId || null,
+        awb_number: payload.trackingNumber || null,
+        tracking_number: payload.trackingNumber || null,
+        provider: payload.carrierName || null,
+        courier_name: payload.carrierName || null,
+        tracking_url: payload.carrierUrl || null,
+        status: "shipped",
+        created_at: new Date(),
+        updated_at: new Date(),
+      })
+      .returning("*")
+      .catch(() => [null]);
+    return row || null;
   }
 
   async findLatestPaymentByOrderId(orderId) {
@@ -381,8 +415,65 @@ class OrderRepository {
   }
 
   async listOrdersForAdmin(filters = {}) {
-    const orders = await this.listOrders(filters);
-    return this.attachOrderRelations(orders);
+    const values = [];
+    const clauses = [];
+    let index = 1;
+
+    if (filters.sellerId) {
+      clauses.push(`EXISTS (
+        SELECT 1
+        FROM order_items oi
+        WHERE oi.order_id = o.id
+          AND oi.seller_id = $${index++}
+      )`);
+      values.push(filters.sellerId);
+    }
+    this.applyOrderFilters(clauses, values, filters, () => index++);
+
+    const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const sortMap = {
+      createdAt: "o.created_at",
+      created_at: "o.created_at",
+      order_number: "o.order_number",
+      orderNumber: "o.order_number",
+      total_amount: "o.total_amount",
+      totalAmount: "o.total_amount",
+      status: "o.status",
+      payment_status: "o.payment_status",
+      paymentStatus: "o.payment_status",
+      delivery_status: "o.delivery_status",
+      deliveryStatus: "o.delivery_status",
+    };
+    const sortColumn = sortMap[filters.sortBy] || "o.created_at";
+    const sortDirection = filters.sortDir === "asc" || filters.sortOrder === "asc" ? "ASC" : "DESC";
+    const limit = Number(filters.limit || 50);
+    const offset = Number(filters.offset || 0);
+
+    const [countResult, rowsResult] = await Promise.all([
+      postgresPool.query(
+        `SELECT COUNT(*)::int AS total
+         FROM orders o
+         ${whereSql}`,
+        values,
+      ),
+      postgresPool.query(
+        `SELECT o.*
+         FROM orders o
+         ${whereSql}
+         ORDER BY ${sortColumn} ${sortDirection}
+         LIMIT $${index++}
+         OFFSET $${index}`,
+        [...values, limit, offset],
+      ),
+    ]);
+
+    const orders = await this.attachOrderRelations(rowsResult.rows);
+    return {
+      items: orders,
+      total: Number(countResult.rows?.[0]?.total || 0),
+      limit,
+      offset,
+    };
   }
 
   async attachOrderRelations(orders, options = {}) {

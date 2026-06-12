@@ -112,6 +112,16 @@ const warehouseDeleteSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
+const releaseExpiredReservationsSchema = Joi.object({
+  body: Joi.object({
+    limit: Joi.number().integer().min(1).max(500),
+    now: Joi.date().iso(),
+    reason: Joi.string().trim().max(500).allow("", null),
+  }).default({}),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
 module.exports = {
   listWarehousesSchema,
   listInventoryTransactionsSchema,
@@ -120,4 +130,5 @@ module.exports = {
   warehouseParamSchema,
   warehouseStatusSchema,
   warehouseDeleteSchema,
+  releaseExpiredReservationsSchema,
 };

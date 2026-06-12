@@ -10,6 +10,7 @@ const { CommissionService } = require("../../seller/services/commission.service"
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
+const { RazorpayProvider } = require("../../../infrastructure/payments/providers/razorpay.provider");
 
 const VALID_TRANSITIONS = {
   requested: ["approved", "rejected", "closed"],
@@ -287,6 +288,31 @@ class ReturnServiceClass {
     if (refundAmount <= 0) throw new AppError("Invalid refund amount", 400);
 
     const referenceId = payload.referenceId || `return_${returnRequest._id}`;
+    let refundMethod = payload.method || "wallet_credit";
+    let providerRefundId = null;
+
+    // Attempt Razorpay refund when original payment was via Razorpay
+    const originalPayment = await this.orderRepository.findLatestPaymentByOrderId(returnRequest.orderId);
+    const isRazorpayPayment = originalPayment && originalPayment.provider === "razorpay" && originalPayment.provider_payment_id;
+
+    if (isRazorpayPayment && !payload.skipProviderRefund) {
+      try {
+        const razorpay = new RazorpayProvider();
+        const refundResult = await razorpay.createRefund({
+          providerPaymentId: originalPayment.provider_payment_id,
+          amount: refundAmount,
+          returnId: String(returnRequest._id),
+          notes: { orderId: returnRequest.orderId, returnId: String(returnRequest._id) },
+        });
+        providerRefundId = refundResult.refundId;
+        refundMethod = refundResult.mock ? "razorpay_mock" : "razorpay";
+        logger.info({ returnId, providerRefundId, refundAmount }, "Razorpay refund initiated successfully");
+      } catch (error) {
+        logger.warn({ returnId, error: error.message }, "Razorpay refund failed, falling back to wallet credit");
+      }
+    }
+
+    // Credit wallet as the customer-facing refund (primary for non-Razorpay, fallback for Razorpay failures)
     try {
       await this.walletService.credit(returnRequest.buyerId, refundAmount, {
         referenceType: "return_refund",
@@ -294,7 +320,8 @@ class ReturnServiceClass {
         metadata: {
           returnId: String(returnRequest._id),
           orderId: returnRequest.orderId,
-          method: payload.method || "wallet_fallback",
+          method: refundMethod,
+          providerRefundId,
         },
       });
     } catch (error) {
@@ -312,11 +339,12 @@ class ReturnServiceClass {
     returnRequest.status = "refunded";
     returnRequest.refundAmount = refundAmount;
     returnRequest.refundReferenceId = referenceId;
-    returnRequest.refundMethod = payload.method || "wallet_fallback";
+    returnRequest.refundMethod = refundMethod;
     returnRequest.refundedAt = new Date();
+    if (providerRefundId) returnRequest.providerRefundId = providerRefundId;
     this.appendTimeline(returnRequest, "refunded", actor, {
       note: payload.note,
-      metadata: { refundAmount, referenceId },
+      metadata: { refundAmount, referenceId, refundMethod, providerRefundId },
     });
     await returnRequest.save();
     await this.publishReturnEvent(DOMAIN_EVENTS.RETURN_REFUNDED_V1, returnRequest, actor, {
