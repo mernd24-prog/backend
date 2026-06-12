@@ -489,7 +489,10 @@ const updateProductReviewSchema = Joi.object({
     reviewText: Joi.string().allow(""),
     media: Joi.array().items(Joi.string()),
     helpfulVotes: Joi.number().integer().min(0),
-    status: Joi.string(),
+    status: Joi.string().valid("pending", "published", "hidden", "rejected"),
+    adminReply: Joi.object({
+      text: Joi.string().allow("", null),
+    }),
   }).min(1).required(),
   query: Joi.object({}).required(),
   params: Joi.object({

@@ -151,13 +151,14 @@ class OrderService {
     }
   }
 
-  async quoteOrder(payload, actor) {
+  async quoteOrder(payload, actor, options = {}) {
+    const quoteUserId = options.buyerId || actor.userId;
     const pricedOrder = await this.pricingService.priceOrder({
       items: payload.items,
       couponCode: payload.couponCode,
       walletAmount: payload.walletAmount,
       shippingAddress: payload.shippingAddress,
-      userId: actor.userId,
+      userId: quoteUserId,
       paymentProvider: payload.paymentProvider,
     });
     const pricing = pricedOrder.pricing;
@@ -182,6 +183,11 @@ class OrderService {
       taxBreakup: pricing.taxBreakup,
       platformFeeBreakup: pricing.platformFeeBreakup,
       sellerSettlements: pricing.sellerSettlementBreakup,
+      context: {
+        buyerId: quoteUserId,
+        quotedBy: actor.userId,
+        quotedByRole: actor.role,
+      },
       summary: {
         itemAmount: pricing.subtotalAmount,
         customerItemsAmount: pricing.customerItemsAmount,
@@ -394,6 +400,10 @@ class OrderService {
       await this.inventoryService.assertCommittedForFulfillment(orderId);
     }
 
+    const trackingInfo = nextStatus === ORDER_STATUS.SHIPPED && actor.trackingNumber
+      ? { trackingNumber: actor.trackingNumber, carrierName: actor.carrierName, carrierUrl: actor.carrierUrl }
+      : null;
+
     const statusMetadata = {
       actorId: actor.userId,
       actorRole: actor.role,
@@ -402,9 +412,20 @@ class OrderService {
       paymentStatus: actor.paymentStatus || undefined,
       deliveryStatus: actor.deliveryStatus || undefined,
       metadata: actor.metadata || {},
-      orderMetadata: actor.orderMetadata || undefined,
+      orderMetadata: trackingInfo
+        ? { ...(actor.orderMetadata || {}), tracking: trackingInfo }
+        : actor.orderMetadata || undefined,
     };
     const updatedOrder = await this.orderRepository.updateStatus(orderId, nextStatus, statusMetadata);
+
+    if (nextStatus === ORDER_STATUS.SHIPPED && trackingInfo) {
+      await this.orderRepository.createShipment({
+        orderId,
+        trackingNumber: trackingInfo.trackingNumber,
+        carrierName: trackingInfo.carrierName,
+        carrierUrl: trackingInfo.carrierUrl,
+      }).catch((error) => logger.warn({ orderId, error: error.message }, "Shipment record creation failed - non-fatal"));
+    }
 
     if (nextStatus === ORDER_STATUS.CONFIRMED) {
       await this.inventoryService.commitForOrder(orderId);

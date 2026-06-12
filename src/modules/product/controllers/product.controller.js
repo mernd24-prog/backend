@@ -247,6 +247,74 @@ class ProductController {
     const products = await this.productService.getTopProducts(limit, metric);
     res.json(okResponse(products));
   };
+
+  // ─── Customer Reviews ────────────────────────────────────────────────────────
+
+  listReviews = async (req, res) => {
+    const { page, limit } = getPage(req.query);
+    const result = await this.productService.listReviews(req.params.productId, req.query);
+    res.json(okResponse(result.items, {
+      pagination: paginationMeta(page, limit, result.total),
+      stats: result.stats,
+    }));
+  };
+
+  submitReview = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const review = await this.productService.submitReview(req.params.productId, req.body, actor);
+    res.status(201).json(okResponse(review));
+  };
+
+  markHelpful = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.productService.markReviewHelpful(
+      req.params.productId,
+      req.params.reviewId,
+      actor,
+    );
+    res.json(okResponse(result));
+  };
+
+  deleteMyReview = async (req, res) => {
+    const actor = getCurrentUser(req);
+    await this.productService.deleteOwnReview(
+      req.params.productId,
+      req.params.reviewId,
+      actor,
+    );
+    res.json(okResponse({ deleted: true }));
+  };
+
+  myReview = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const review = await this.productService.getMyReviewForProduct(req.params.productId, actor);
+    res.json(okResponse(review));
+  };
+
+  relatedProducts = async (req, res) => {
+    const limit = Math.min(Number(req.query.limit || 8), 20);
+    const products = await this.productService.getRelatedProducts(req.params.productId, { limit });
+    res.json(okResponse({ items: products, total: products.length }));
+  };
+
+  crossSellProducts = async (req, res) => {
+    const limit = Math.min(Number(req.query.limit || 6), 12);
+    const products = await this.productService.getCrossSellProducts(req.params.productId, { limit });
+    res.json(okResponse({ items: products, total: products.length }));
+  };
+
+  upSellProducts = async (req, res) => {
+    const limit = Math.min(Number(req.query.limit || 4), 8);
+    const products = await this.productService.getUpSellProducts(req.params.productId, { limit });
+    res.json(okResponse({ items: products, total: products.length }));
+  };
+
+  completenessScore = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const product = await this.productService.getProductForManagement(req.params.productId, actor);
+    const score = this.productService.computeCompletenessScore(product);
+    res.json(okResponse({ productId: req.params.productId, ...score }));
+  };
 }
 
 module.exports = { ProductController };

@@ -224,20 +224,75 @@ class PlatformRepository {
     return ProductReviewModel.findById(reviewId);
   }
 
+  async getProductReviewByBuyerAndOrder(productId, buyerId, orderId) {
+    return ProductReviewModel.findOne({ productId, buyerId, orderId });
+  }
+
+  async createProductReview(payload) {
+    return ProductReviewModel.create(payload);
+  }
+
   async listProductReviews(filter = {}, pagination = {}) {
+    const sort = {};
+    if (pagination.sortBy === "rating") sort.rating = pagination.sortDir === "asc" ? 1 : -1;
+    else sort.createdAt = -1;
+
     const [items, total] = await Promise.all([
-      ProductReviewModel.find(filter).sort({ createdAt: -1 }).skip(pagination.skip).limit(pagination.limit),
+      ProductReviewModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
       ProductReviewModel.countDocuments(filter),
     ]);
     return { items, total };
   }
 
   async updateProductReview(reviewId, payload) {
-    return ProductReviewModel.findByIdAndUpdate(reviewId, payload, { new: true });
+    const update = { ...payload };
+    if (payload.adminReply?.text !== undefined) {
+      update["adminReply.text"] = payload.adminReply.text;
+      update["adminReply.repliedAt"] = new Date();
+      delete update.adminReply;
+    }
+    return ProductReviewModel.findByIdAndUpdate(reviewId, update, { new: true });
   }
 
   async deleteProductReview(reviewId) {
     return ProductReviewModel.findByIdAndDelete(reviewId);
+  }
+
+  async addHelpfulVote(reviewId, userId) {
+    return ProductReviewModel.findByIdAndUpdate(
+      reviewId,
+      { $addToSet: { helpfulVotedBy: userId }, $inc: { helpfulVotes: 1 } },
+      { new: true },
+    );
+  }
+
+  async removeHelpfulVote(reviewId, userId) {
+    return ProductReviewModel.findByIdAndUpdate(
+      reviewId,
+      { $pull: { helpfulVotedBy: userId }, $inc: { helpfulVotes: -1 } },
+      { new: true },
+    );
+  }
+
+  async getProductRatingStats(productId) {
+    const result = await ProductReviewModel.aggregate([
+      { $match: { productId, status: "published" } },
+      {
+        $group: {
+          _id: null,
+          avgRating: { $avg: "$rating" },
+          count: { $sum: 1 },
+          dist: {
+            $push: "$rating",
+          },
+        },
+      },
+    ]);
+    if (!result.length) return { avgRating: 0, count: 0, distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 } };
+    const { avgRating, count, dist } = result[0];
+    const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    dist.forEach((r) => { if (distribution[r] !== undefined) distribution[r]++; });
+    return { avgRating: Math.round(avgRating * 10) / 10, count, distribution };
   }
 
   async createBrand(payload) {

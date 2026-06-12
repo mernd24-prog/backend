@@ -31,6 +31,22 @@ class WarehouseController {
     const offset = Number(req.query.offset || 0);
     res.json(okResponse(await this.inventoryService.listTransactions(req.query, { limit, offset })));
   };
+
+  releaseExpiredReservations = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.inventoryService.releaseExpiredReservations(req.body || {}, actor);
+    await auditService.record(req, {
+      module: "inventory",
+      action: "adjust",
+      entityType: "InventoryReservation",
+      entityId: "expired-reservations",
+      newData: result,
+      reason: req.body?.reason || "expired_reservation_cleanup",
+      description: "Released expired inventory reservations",
+    });
+    res.json(okResponse(result));
+  };
+
   create = async (req, res) => {
     const actor = getCurrentUser(req);
     const warehouse = await this.warehouseService.create(req.body, actor);

@@ -4,6 +4,7 @@ const { PlatformRepository } = require("../repositories/platform.repository");
 const { AppError } = require("../../../shared/errors/app-error");
 const { auditService } = require("../../../shared/logger/audit.service");
 const { forget } = require("../../../shared/tools/cache");
+const { ProductModel } = require("../../product/models/product.model");
 const {
   AdminTaxModel,
   AdminSubTaxModel,
@@ -515,6 +516,31 @@ class PlatformService {
     return this.platformRepository.deleteContentPage(slug);
   }
 
+  async createProductReview(productId, payload, actor) {
+    const buyerId = actor.userId || actor.sub || actor.id;
+
+    const existing = await this.platformRepository.getProductReviewByBuyerAndOrder(
+      productId,
+      buyerId,
+      payload.orderId,
+    );
+    if (existing) throw AppError.duplicate("Review", "already reviewed this product for this order");
+
+    const review = await this.platformRepository.createProductReview({
+      productId,
+      buyerId,
+      orderId: payload.orderId,
+      rating: payload.rating,
+      title: payload.title || "",
+      reviewText: payload.reviewText || "",
+      media: payload.media || [],
+      status: "pending",
+    });
+
+    this._syncProductRating(productId).catch(() => {});
+    return review;
+  }
+
   async listProductReviews(query = {}) {
     const pagination = getPage(query);
     const filter = {};
@@ -522,6 +548,7 @@ class PlatformService {
     if (query.buyerId) filter.buyerId = query.buyerId;
     if (query.orderId) filter.orderId = query.orderId;
     if (query.status) filter.status = query.status;
+    if (query.rating) filter.rating = Number(query.rating);
     const q = query.q || query.keyWord || query.search;
     if (q) {
       filter.$or = [
@@ -534,20 +561,58 @@ class PlatformService {
     return this.platformRepository.listProductReviews(filter, pagination);
   }
 
+  async listPublicProductReviews(productId, query = {}) {
+    const pagination = getPage(query);
+    const filter = { productId, status: "published" };
+    if (query.rating) filter.rating = Number(query.rating);
+    const reviews = await this.platformRepository.listProductReviews(filter, pagination);
+    const stats = await this.platformRepository.getProductRatingStats(productId);
+    return { ...reviews, stats };
+  }
+
   async updateProductReview(reviewId, payload) {
     const item = await this.platformRepository.getProductReview(reviewId);
-    if (!item) {
-      throw AppError.notFound("Product review");
+    if (!item) throw AppError.notFound("Product review");
+    const updated = await this.platformRepository.updateProductReview(reviewId, payload);
+    if (payload.status) {
+      this._syncProductRating(item.productId).catch(() => {});
     }
-    return this.platformRepository.updateProductReview(reviewId, payload);
+    return updated;
   }
 
   async deleteProductReview(reviewId) {
     const item = await this.platformRepository.getProductReview(reviewId);
-    if (!item) {
-      throw AppError.notFound("Product review");
+    if (!item) throw AppError.notFound("Product review");
+    await this.platformRepository.deleteProductReview(reviewId);
+    this._syncProductRating(item.productId).catch(() => {});
+    return { deleted: true };
+  }
+
+  async deleteOwnReview(reviewId, buyerId) {
+    const item = await this.platformRepository.getProductReview(reviewId);
+    if (!item) throw AppError.notFound("Review");
+    if (String(item.buyerId) !== String(buyerId)) throw AppError.ownershipDenied();
+    await this.platformRepository.deleteProductReview(reviewId);
+    this._syncProductRating(item.productId).catch(() => {});
+    return { deleted: true };
+  }
+
+  async toggleHelpfulVote(reviewId, userId) {
+    const item = await this.platformRepository.getProductReview(reviewId);
+    if (!item) throw AppError.notFound("Review");
+    const alreadyVoted = (item.helpfulVotedBy || []).includes(String(userId));
+    if (alreadyVoted) {
+      return this.platformRepository.removeHelpfulVote(reviewId, userId);
     }
-    return this.platformRepository.deleteProductReview(reviewId);
+    return this.platformRepository.addHelpfulVote(reviewId, userId);
+  }
+
+  async _syncProductRating(productId) {
+    const stats = await this.platformRepository.getProductRatingStats(productId);
+    await ProductModel.findByIdAndUpdate(productId, {
+      rating: stats.avgRating,
+      reviewCount: stats.count,
+    });
   }
 
   async createBrand(payload, req) {

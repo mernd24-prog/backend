@@ -108,64 +108,199 @@ class InventoryRepository {
     return InventoryReservationModel.findOne({ orderId });
   }
 
-  async releaseReservation(orderId) {
-    const reservation = await InventoryReservationModel.findOne({ orderId });
-    if (!reservation || reservation.status !== "reserved") {
-      return this.markChanged(reservation, false);
-    }
-
-    await Promise.all(
-      reservation.items.map((item) =>
-        item.variantSku
-          ? this.productRepository.releaseReservedVariantStock(item.productId, item.variantSku, item.quantity)
-          : this.productRepository.releaseReservedStock(item.productId, item.quantity),
-      ),
-    );
-
-    reservation.status = "released";
-    await reservation.save();
-    await this.recordTransactions("release", { orderId, referenceType: "order", referenceId: orderId }, reservation.items);
-    return this.markChanged(reservation, true);
+  async findExpiredReservations({ now = new Date(), limit = 100 } = {}) {
+    return InventoryReservationModel.find({
+      status: "reserved",
+      expiresAt: { $lte: now },
+    })
+      .sort({ expiresAt: 1, createdAt: 1 })
+      .limit(limit);
   }
 
-  async commitReservation(orderId) {
-    const reservation = await InventoryReservationModel.findOne({ orderId });
-    if (!reservation || reservation.status !== "reserved") {
-      return this.markChanged(reservation, false);
-    }
-
-    await Promise.all(
-      reservation.items.map((item) =>
-        item.variantSku
-          ? this.productRepository.commitReservedVariantStock(item.productId, item.variantSku, item.quantity)
-          : this.productRepository.commitReservedStock(item.productId, item.quantity),
-      ),
+  async releaseReservation(orderId, options = {}) {
+    const reservation = await InventoryReservationModel.findOneAndUpdate(
+      { orderId, status: "reserved" },
+      {
+        $set: {
+          status: "release_processing",
+          "metadata.releaseStartedAt": new Date(),
+          "metadata.releaseReason": options.reason || "inventory_release",
+        },
+      },
+      { new: true },
     );
 
-    reservation.status = "committed";
-    await reservation.save();
-    await this.recordTransactions("sale", { orderId, referenceType: "order", referenceId: orderId }, reservation.items);
-    return this.markChanged(reservation, true);
+    if (!reservation) {
+      return this.markChanged(await InventoryReservationModel.findOne({ orderId }), false);
+    }
+
+    try {
+      await Promise.all(
+        reservation.items.map((item) =>
+          item.variantSku
+            ? this.productRepository.releaseReservedVariantStock(item.productId, item.variantSku, item.quantity)
+            : this.productRepository.releaseReservedStock(item.productId, item.quantity),
+        ),
+      );
+
+      reservation.status = "released";
+      reservation.metadata = {
+        ...(reservation.metadata || {}),
+        ...(options.metadata || {}),
+        releasedAt: new Date(),
+        releaseReason: options.reason || "inventory_release",
+      };
+      await reservation.save();
+      await this.recordTransactions(
+        "release",
+        {
+          orderId,
+          referenceType: "order",
+          referenceId: orderId,
+          actorId: options.actorId || "",
+          actorRole: options.actorRole || "",
+        },
+        reservation.items,
+        {
+          ...(options.metadata || {}),
+          reason: options.reason || "inventory_release",
+        },
+      );
+      return this.markChanged(reservation, true);
+    } catch (error) {
+      reservation.status = "release_failed";
+      reservation.metadata = {
+        ...(reservation.metadata || {}),
+        releaseFailedAt: new Date(),
+        releaseError: error.message,
+      };
+      await reservation.save();
+      throw error;
+    }
   }
 
-  async restockReservation(orderId) {
-    const reservation = await InventoryReservationModel.findOne({ orderId });
-    if (!reservation || reservation.status !== "committed") {
-      return this.markChanged(reservation, false);
-    }
-
-    await Promise.all(
-      reservation.items.map((item) =>
-        item.variantSku
-          ? this.productRepository.adjustVariantStock(item.productId, item.variantSku, item.quantity)
-          : this.productRepository.addStock(item.productId, item.quantity),
-      ),
+  async commitReservation(orderId, options = {}) {
+    const reservation = await InventoryReservationModel.findOneAndUpdate(
+      { orderId, status: "reserved" },
+      {
+        $set: {
+          status: "commit_processing",
+          "metadata.commitStartedAt": new Date(),
+          "metadata.commitReason": options.reason || "inventory_commit",
+        },
+      },
+      { new: true },
     );
 
-    reservation.status = "restocked";
-    await reservation.save();
-    await this.recordTransactions("return", { orderId, referenceType: "order", referenceId: orderId }, reservation.items);
-    return this.markChanged(reservation, true);
+    if (!reservation) {
+      return this.markChanged(await InventoryReservationModel.findOne({ orderId }), false);
+    }
+
+    try {
+      await Promise.all(
+        reservation.items.map((item) =>
+          item.variantSku
+            ? this.productRepository.commitReservedVariantStock(item.productId, item.variantSku, item.quantity)
+            : this.productRepository.commitReservedStock(item.productId, item.quantity),
+        ),
+      );
+
+      reservation.status = "committed";
+      reservation.metadata = {
+        ...(reservation.metadata || {}),
+        ...(options.metadata || {}),
+        committedAt: new Date(),
+        commitReason: options.reason || "inventory_commit",
+      };
+      await reservation.save();
+      await this.recordTransactions(
+        "sale",
+        {
+          orderId,
+          referenceType: "order",
+          referenceId: orderId,
+          actorId: options.actorId || "",
+          actorRole: options.actorRole || "",
+        },
+        reservation.items,
+        {
+          ...(options.metadata || {}),
+          reason: options.reason || "inventory_commit",
+        },
+      );
+      return this.markChanged(reservation, true);
+    } catch (error) {
+      reservation.status = "commit_failed";
+      reservation.metadata = {
+        ...(reservation.metadata || {}),
+        commitFailedAt: new Date(),
+        commitError: error.message,
+      };
+      await reservation.save();
+      throw error;
+    }
+  }
+
+  async restockReservation(orderId, options = {}) {
+    const reservation = await InventoryReservationModel.findOneAndUpdate(
+      { orderId, status: "committed" },
+      {
+        $set: {
+          status: "restock_processing",
+          "metadata.restockStartedAt": new Date(),
+          "metadata.restockReason": options.reason || "inventory_restock",
+        },
+      },
+      { new: true },
+    );
+
+    if (!reservation) {
+      return this.markChanged(await InventoryReservationModel.findOne({ orderId }), false);
+    }
+
+    try {
+      await Promise.all(
+        reservation.items.map((item) =>
+          item.variantSku
+            ? this.productRepository.adjustVariantStock(item.productId, item.variantSku, item.quantity)
+            : this.productRepository.addStock(item.productId, item.quantity),
+        ),
+      );
+
+      reservation.status = "restocked";
+      reservation.metadata = {
+        ...(reservation.metadata || {}),
+        ...(options.metadata || {}),
+        restockedAt: new Date(),
+        restockReason: options.reason || "inventory_restock",
+      };
+      await reservation.save();
+      await this.recordTransactions(
+        "return",
+        {
+          orderId,
+          referenceType: "order",
+          referenceId: orderId,
+          actorId: options.actorId || "",
+          actorRole: options.actorRole || "",
+        },
+        reservation.items,
+        {
+          ...(options.metadata || {}),
+          reason: options.reason || "inventory_restock",
+        },
+      );
+      return this.markChanged(reservation, true);
+    } catch (error) {
+      reservation.status = "restock_failed";
+      reservation.metadata = {
+        ...(reservation.metadata || {}),
+        restockFailedAt: new Date(),
+        restockError: error.message,
+      };
+      await reservation.save();
+      throw error;
+    }
   }
 
   async restockItems(reference, items) {

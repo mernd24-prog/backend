@@ -1,6 +1,8 @@
 const Joi = require("joi");
 const { PAYMENT_PROVIDER } = require("../../../shared/domain/commerce-constants");
 
+const objectId = Joi.string().hex().length(24);
+
 const orderFilterQuerySchema = Joi.object({
   status: Joi.string().valid(
     "pending_payment",
@@ -21,6 +23,21 @@ const orderFilterQuerySchema = Joi.object({
   fromDate: Joi.date().iso(),
   toDate: Joi.date().iso(),
   search: Joi.string().trim().max(128),
+  sortBy: Joi.string().valid(
+    "createdAt",
+    "created_at",
+    "order_number",
+    "orderNumber",
+    "total_amount",
+    "totalAmount",
+    "status",
+    "payment_status",
+    "paymentStatus",
+    "delivery_status",
+    "deliveryStatus",
+  ),
+  sortDir: Joi.string().valid("asc", "desc"),
+  sortOrder: Joi.string().valid("asc", "desc"),
   limit: Joi.number().integer().min(1).max(200).default(50),
   offset: Joi.number().integer().min(0).default(0),
 }).default({});
@@ -51,8 +68,8 @@ const createOrderSchema = Joi.object({
     items: Joi.array()
       .items(
         Joi.object({
-          productId: Joi.string().required(),
-          variantId: Joi.string().allow("", null),
+          productId: objectId.required(),
+          variantId: objectId.allow("", null),
           variantSku: Joi.string().allow("", null),
           variantTitle: Joi.string().allow("", null),
           attributes: Joi.object().default({}),
@@ -67,6 +84,14 @@ const createOrderSchema = Joi.object({
 });
 
 const quoteOrderSchema = createOrderSchema;
+
+const adminQuoteOrderSchema = Joi.object({
+  body: createOrderSchema.extract("body").append({
+    buyerId: Joi.string().trim().max(128).allow("", null),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
 
 const updateOrderStatusSchema = Joi.object({
   body: Joi.object({
@@ -86,6 +111,9 @@ const updateOrderStatusSchema = Joi.object({
       .required(),
     reason: Joi.string().max(500).allow("", null),
     note: Joi.string().max(1000).allow("", null),
+    trackingNumber: Joi.string().trim().max(200).allow("", null),
+    carrierName: Joi.string().trim().max(100).allow("", null),
+    carrierUrl: Joi.string().uri().max(500).allow("", null),
   }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({
@@ -125,6 +153,7 @@ const addOrderNoteSchema = Joi.object({
 module.exports = {
   createOrderSchema,
   quoteOrderSchema,
+  adminQuoteOrderSchema,
   updateOrderStatusSchema,
   orderParamSchema,
   cancelOrderSchema,

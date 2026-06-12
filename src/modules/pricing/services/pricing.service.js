@@ -8,6 +8,8 @@ const { PaymentMethodConfigRepository } = require("../../payment/repositories/pa
 const { PAYMENT_PROVIDER } = require("../../../shared/domain/commerce-constants");
 const { redis } = require("../../../infrastructure/redis/redis-client");
 const { env } = require("../../../config/env");
+const { isPublicProduct } = require("../../../shared/catalog/public-product-filter");
+const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
 
 class PricingService {
   constructor({
@@ -27,7 +29,12 @@ class PricingService {
   }
 
   async priceOrder({ items, couponCode = null, walletAmount = 0, shippingAddress, userId, paymentProvider = PAYMENT_PROVIDER.RAZORPAY }) {
-    const productIds = items.map((item) => item.productId);
+    const productIds = [...new Set(items.map((item) => String(item.productId || "")).filter(Boolean))];
+    productIds.forEach((productId) => {
+      if (!mongoose.Types.ObjectId.isValid(productId)) {
+        throw new AppError("Invalid product id in checkout", 400);
+      }
+    });
     const products = await this.productRepository.findByIds(productIds);
     const productMap = new Map(products.map((product) => [String(product.id), product]));
 
@@ -38,8 +45,8 @@ class PricingService {
           throw new AppError(`Product ${item.productId} not found`, 404);
         }
 
-        if (product.status !== "active") {
-          throw new AppError(`Product ${item.productId} is not active`, 400);
+        if (!isPublicProduct(product)) {
+          throw new AppError(`Product ${item.productId} is not available for checkout`, 400);
         }
 
         const variant = item.variantSku || item.variantId
@@ -54,10 +61,16 @@ class PricingService {
           throw new AppError(`Select a valid variant for ${product.title}`, 400);
         }
 
+        if (variant?.status && variant.status !== "active") {
+          throw new AppError(`Selected variant for ${product.title} is not active`, 400);
+        }
+
         const availableStock = variant
           ? (Number(variant.stock) || 0) - (Number(variant.reservedStock) || 0)
           : product.stock - product.reservedStock;
-        if (availableStock < item.quantity) {
+        const trackInventory = product.inventorySettings?.trackInventory !== false;
+        const allowBackorder = product.inventorySettings?.allowBackorder === true;
+        if (trackInventory && !allowBackorder && availableStock < item.quantity) {
           throw new AppError(`Insufficient stock for product ${product.title}`, 409);
         }
 
@@ -106,7 +119,7 @@ class PricingService {
     );
 
     const subtotalAmount = pricedItems.reduce((sum, item) => sum + item.lineTotal, 0);
-    const discount = await this.calculateDiscount(couponCode, subtotalAmount);
+    const discount = await this.calculateDiscount(couponCode, subtotalAmount, userId);
     const taxBreakup = await this.calculateTaxBreakup(
       pricedItems,
       subtotalAmount,
@@ -558,7 +571,7 @@ class PricingService {
     return taxData;
   }
 
-  async calculateDiscount(couponCode, subtotalAmount) {
+  async calculateDiscount(couponCode, subtotalAmount, userId = null) {
     if (!couponCode) {
       return { discountAmount: 0, appliedCouponCode: null, couponToConsume: null };
     }
@@ -579,6 +592,13 @@ class PricingService {
 
     if (coupon.usageLimit && coupon.usedCount >= coupon.usageLimit) {
       throw new AppError("Coupon usage limit reached", 400);
+    }
+
+    if (coupon.usesPerCustomer && userId) {
+      const customerUsageCount = await this.pricingRepository.countCouponUsageByCustomer(coupon.code, userId);
+      if (customerUsageCount >= coupon.usesPerCustomer) {
+        throw new AppError(`This coupon can only be used ${coupon.usesPerCustomer} time(s) per customer`, 400);
+      }
     }
 
     if (subtotalAmount < coupon.minOrderAmount) {

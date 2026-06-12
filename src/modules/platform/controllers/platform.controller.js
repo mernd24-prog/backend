@@ -167,8 +167,8 @@ class PlatformController {
   };
 
   deleteProductReview = async (req, res) => {
-    const item = await this.platformService.deleteProductReview(req.params.reviewId);
-    res.json(okResponse(item));
+    await this.platformService.deleteProductReview(req.params.reviewId);
+    res.json(okResponse({ deleted: true }));
   };
 
   // ── Brands ──────────────────────────────────────────────────────────────────

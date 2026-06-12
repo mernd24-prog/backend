@@ -8,6 +8,7 @@ const { checkInput } = require("../../../shared/middleware/check-input");
 const {
   createOrderSchema,
   quoteOrderSchema,
+  adminQuoteOrderSchema,
   updateOrderStatusSchema,
   orderParamSchema,
   cancelOrderSchema,
@@ -27,6 +28,13 @@ orderRoutes.get(
 );
 orderRoutes.get("/me", authenticate, checkInput(listOrdersSchema), catchErrors(orderController.listMine));
 orderRoutes.post("/quote", authenticate, checkInput(quoteOrderSchema), catchErrors(orderController.quote));
+orderRoutes.post(
+  "/checkout/admin-quote",
+  authenticate,
+  allowPermissions("orders:view"),
+  checkInput(adminQuoteOrderSchema),
+  catchErrors(orderController.adminQuote),
+);
 orderRoutes.get(
   "/seller/me",
   authenticate,

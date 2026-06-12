@@ -71,6 +71,38 @@ class RazorpayProvider {
     };
   }
 
+  async createRefund(payload) {
+    const { providerPaymentId, amount, notes = {}, returnId } = payload;
+    if (!providerPaymentId) {
+      throw new AppError("Provider payment ID is required to initiate refund", 400);
+    }
+
+    if (env.razorpay.mock || !env.razorpay.live || String(providerPaymentId).startsWith("rzp_mock")) {
+      const mockRefundId = `rfnd_mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      return {
+        refundId: mockRefundId,
+        amount: Number(amount || 0),
+        status: "processed",
+        mock: true,
+        metadata: { provider: "razorpay", mode: "mock", returnId },
+      };
+    }
+
+    const client = getRazorpayClient();
+    const refundBody = { speed: "normal", notes: { ...notes, returnId: String(returnId || "") } };
+    if (amount) refundBody.amount = Math.round(Number(amount) * 100);
+
+    const refund = await client.payments.refund(providerPaymentId, refundBody);
+
+    return {
+      refundId: refund.id,
+      amount: Number(refund.amount) / 100,
+      status: refund.status,
+      mock: false,
+      metadata: refund,
+    };
+  }
+
   async verifyPayment(payload) {
     if (env.razorpay.mock) {
       return {

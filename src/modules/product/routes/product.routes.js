@@ -18,6 +18,9 @@ const {
   bulkProductSchema,
   updateInventorySchema,
   productParamSchema,
+  submitReviewSchema,
+  listReviewsSchema,
+  reviewParamSchema,
 } = require("../validation/product.validation");
 const { ACTIONS } = require("../../../shared/constants/actions");
 
@@ -153,6 +156,42 @@ productRoutes.get(
   catchErrors(productController.topProducts),
 );
 
+// ── Customer Reviews ──────────────────────────────────────────────────────────
+
+productRoutes.get(
+  "/:productId/reviews",
+  checkInput(listReviewsSchema),
+  catchErrors(productController.listReviews),
+);
+productRoutes.post(
+  "/:productId/reviews",
+  authenticate,
+  checkInput(submitReviewSchema),
+  catchErrors(productController.submitReview),
+);
+productRoutes.patch(
+  "/:productId/reviews/:reviewId/helpful",
+  authenticate,
+  checkInput(reviewParamSchema),
+  catchErrors(productController.markHelpful),
+);
+productRoutes.delete(
+  "/:productId/reviews/:reviewId",
+  authenticate,
+  checkInput(reviewParamSchema),
+  catchErrors(productController.deleteMyReview),
+);
+productRoutes.get(
+  "/:productId/my-review",
+  authenticate,
+  checkInput(productParamSchema),
+  catchErrors(productController.myReview),
+);
+
+productRoutes.get("/:productId/related", checkInput(productParamSchema), catchErrors(productController.relatedProducts));
+productRoutes.get("/:productId/cross-sell", checkInput(productParamSchema), catchErrors(productController.crossSellProducts));
+productRoutes.get("/:productId/up-sell", checkInput(productParamSchema), catchErrors(productController.upSellProducts));
+productRoutes.get("/:productId/completeness", authenticate, checkInput(productParamSchema), catchErrors(productController.completenessScore));
 productRoutes.get("/:productId", checkInput(productParamSchema), catchErrors(productController.getOne));
 
 module.exports = { productRoutes };

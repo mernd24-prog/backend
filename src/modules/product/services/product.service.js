@@ -24,6 +24,7 @@ const {
 const { logger } = require("../../../shared/logger/logger");
 const { PlatformRepository } = require("../../platform/repositories/platform.repository");
 const { PlatformService } = require("../../platform/services/platform.service");
+const { OrderRepository } = require("../../order/repositories/order.repository");
 const { WarehouseModel } = require("../../inventory/models/warehouse.model");
 const { UserModel } = require("../../user/models/user.model");
 const {
@@ -2217,6 +2218,146 @@ class ProductService {
     ].includes(currentStatus)) {
       throw new AppError("Only active products can be deactivated by seller", 400);
     }
+  }
+
+  // ─── Customer Reviews ────────────────────────────────────────────────────────
+
+  async submitReview(productId, payload, actor) {
+    const buyerId = actor.userId || actor.sub || actor.id;
+    const orderRepo = new OrderRepository();
+    const purchased = await orderRepo.hasBuyerPurchasedProduct(buyerId, productId, payload.orderId);
+    if (!purchased) {
+      throw AppError.validation("You can only review a product from a delivered order.");
+    }
+    const platformService = new PlatformService();
+    return platformService.createProductReview(productId, payload, actor);
+  }
+
+  async listReviews(productId, query = {}) {
+    const platformService = new PlatformService();
+    return platformService.listPublicProductReviews(productId, query);
+  }
+
+  async markReviewHelpful(productId, reviewId, actor) {
+    const userId = actor.userId || actor.sub || actor.id;
+    const platformService = new PlatformService();
+    return platformService.toggleHelpfulVote(reviewId, userId);
+  }
+
+  async deleteOwnReview(productId, reviewId, actor) {
+    const buyerId = actor.userId || actor.sub || actor.id;
+    const platformService = new PlatformService();
+    return platformService.deleteOwnReview(reviewId, buyerId);
+  }
+
+  async getMyReviewForProduct(productId, actor) {
+    const buyerId = actor.userId || actor.sub || actor.id;
+    const platformRepo = new PlatformRepository();
+    const reviews = await platformRepo.listProductReviews({ productId, buyerId }, { skip: 0, limit: 1 });
+    return reviews.items[0] || null;
+  }
+
+  async getRelatedProducts(productId, { limit = 8 } = {}) {
+    const product = await this.productRepository.findById(productId);
+    if (!product) return [];
+
+    const publicFilter = applyPublicProductFilter({
+      _id: { $ne: product._id },
+      $or: [
+        { category: product.category },
+        { brand: product.brand },
+        { tags: { $in: Array.isArray(product.tags) ? product.tags : [] } },
+      ].filter((clause) => {
+        if (clause.category) return !!product.category;
+        if (clause.brand) return !!product.brand;
+        if (clause.tags) return (product.tags || []).length > 0;
+        return false;
+      }),
+    });
+
+    // Fall back to same category only if brand+tags are empty
+    const categoryFilter = applyPublicProductFilter({
+      _id: { $ne: product._id },
+      category: product.category,
+    });
+
+    const activeFilter = publicFilter.$or?.length ? publicFilter : categoryFilter;
+
+    const results = await this.productRepository.paginate(activeFilter, { page: 1, limit, skip: 0, sortBy: "rating" }, {
+      projection: { title: 1, slug: 1, images: 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1, tags: 1 },
+      lean: true,
+    });
+
+    return results.items || [];
+  }
+
+  async getCrossSellProducts(productId, { limit = 6 } = {}) {
+    const product = await this.productRepository.findById(productId);
+    if (!product) return [];
+
+    // Cross-sell: same tags or complementary categories (different from main category)
+    const tags = Array.isArray(product.tags) ? product.tags.slice(0, 5) : [];
+    const baseFilter = tags.length
+      ? applyPublicProductFilter({ _id: { $ne: product._id }, tags: { $in: tags }, category: { $ne: product.category } })
+      : applyPublicProductFilter({ _id: { $ne: product._id }, category: { $ne: product.category } });
+
+    const results = await this.productRepository.paginate(baseFilter, { page: 1, limit, skip: 0, sortBy: "newest" }, {
+      projection: { title: 1, slug: 1, images: 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1 },
+      lean: true,
+    });
+
+    return results.items || [];
+  }
+
+  async getUpSellProducts(productId, { limit = 4 } = {}) {
+    const product = await this.productRepository.findById(productId);
+    if (!product) return [];
+
+    const basePrice = Number(product.salePrice || product.price || 0);
+    const minPrice = basePrice * 1.1; // 10% more expensive
+    const maxPrice = basePrice * 3;   // Cap at 3x the current price
+
+    const filter = applyPublicProductFilter({
+      _id: { $ne: product._id },
+      category: product.category,
+      $or: [
+        { salePrice: { $gte: minPrice, $lte: maxPrice } },
+        { price: { $gte: minPrice, $lte: maxPrice } },
+      ],
+    });
+
+    const results = await this.productRepository.paginate(filter, { page: 1, limit, skip: 0, sortBy: "rating" }, {
+      projection: { title: 1, slug: 1, images: 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1 },
+      lean: true,
+    });
+
+    return results.items || [];
+  }
+
+  computeCompletenessScore(product) {
+    const checks = [
+      { field: "title", weight: 10, pass: () => !!(product.title || "").trim() },
+      { field: "description", weight: 10, pass: () => !!(product.description || "").trim() },
+      { field: "category", weight: 10, pass: () => !!product.category },
+      { field: "brand", weight: 5, pass: () => !!product.brand },
+      { field: "price", weight: 10, pass: () => Number(product.price || product.salePrice || 0) > 0 },
+      { field: "images", weight: 15, pass: () => (product.images || []).length >= 2 },
+      { field: "sku", weight: 5, pass: () => !!(product.sku || "").trim() },
+      { field: "stock", weight: 10, pass: () => Number(product.stock ?? product.availableStock ?? 0) >= 0 },
+      { field: "hsnCode", weight: 5, pass: () => !!product.hsnCode },
+      { field: "gstRate", weight: 5, pass: () => product.gstRate !== undefined && product.gstRate !== null },
+      { field: "productType", weight: 5, pass: () => !!product.productType },
+      { field: "tags", weight: 5, pass: () => (product.tags || []).length > 0 },
+      { field: "metaTitle", weight: 5, pass: () => !!(product.metaTitle || product.seoTitle || "").trim() },
+    ];
+
+    const total = checks.reduce((sum, check) => sum + check.weight, 0);
+    const earned = checks.filter((check) => check.pass()).reduce((sum, check) => sum + check.weight, 0);
+    const score = Math.round((earned / total) * 100);
+
+    const missing = checks.filter((check) => !check.pass()).map((check) => check.field);
+
+    return { score, missing, total, earned };
   }
 }
 
