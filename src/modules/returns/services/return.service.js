@@ -83,6 +83,7 @@ class ReturnServiceClass {
   }
 
   appendTimeline(returnRequest, status, actor = {}, payload = {}) {
+    returnRequest.updatedBy = actor.userId || returnRequest.updatedBy || null;
     returnRequest.timeline.push({
       status,
       actorId: actor.userId || null,
@@ -156,6 +157,8 @@ class ReturnServiceClass {
       status: "requested",
       refundAmount: refundBreakup.totalRefundAmount,
       refundBreakup,
+      createdBy: actor.userId || buyerId,
+      updatedBy: actor.userId || buyerId,
       timeline: [{
         status: "requested",
         actorId: actor.userId || buyerId,
@@ -382,7 +385,7 @@ class ReturnServiceClass {
           returnId: String(returnRequest._id),
           actorId: actor.userId || null,
         },
-      });
+      }, actor);
     } catch (error) {
       logger.warn({ returnId: returnRequest._id, error: error.message }, "Credit note creation skipped");
     }
@@ -443,15 +446,27 @@ class ReturnServiceClass {
       const search = new RegExp(String(query.search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
       filter.$or = [{ orderId: search }, { buyerId: search }, { reason: search }, { trackingNumber: search }];
     }
-    if (!this.isAdmin(actor) && this.isSeller(actor)) {
-      // Seller scoping is enforced on detail/actions; list is narrowed only when sellerId is passed.
+    if (this.isAdmin(actor)) {
       if (query.sellerId) filter["items.sellerId"] = query.sellerId;
+    } else if (this.isSeller(actor)) {
+      filter["items.sellerId"] = actor.ownerSellerId || actor.userId;
     }
     if (!this.isAdmin(actor) && !this.isSeller(actor)) filter.buyerId = actor.userId;
     const limit = Math.min(Number(query.limit || 50), 200);
     const offset = Number(query.offset || 0);
+    const sortMap = {
+      createdAt: "createdAt",
+      requestedAt: "requestedAt",
+      refundAmount: "refundAmount",
+      status: "status",
+      reason: "reason",
+      orderId: "orderId",
+      buyerId: "buyerId",
+    };
+    const sortKey = sortMap[query.sortBy] || "createdAt";
+    const sortDir = query.sortDir === "asc" ? 1 : -1;
     const [items, total] = await Promise.all([
-      ReturnModel.find(filter).sort({ createdAt: -1 }).skip(offset).limit(limit).lean(),
+      ReturnModel.find(filter).sort({ [sortKey]: sortDir }).skip(offset).limit(limit).lean(),
       ReturnModel.countDocuments(filter),
     ]);
     return { items, total, limit, offset };

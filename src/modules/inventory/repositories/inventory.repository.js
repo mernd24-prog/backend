@@ -276,7 +276,7 @@ class InventoryRepository {
       };
       await reservation.save();
       await this.recordTransactions(
-        "return",
+        "restock",
         {
           orderId,
           referenceType: "order",

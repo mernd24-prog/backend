@@ -15,7 +15,7 @@ class TaxService {
     this.orderRepository = orderRepository;
   }
 
-  async createInvoice(orderId) {
+  async createInvoice(orderId, actor = {}) {
     const order = await this.orderRepository.findByIdWithItems(orderId);
     if (!order) {
       throw new AppError("Order not found", 404);
@@ -65,8 +65,11 @@ class TaxService {
           taxAmount: Number(item.tax_amount || 0),
           taxBreakup: this.normalizeJson(item.tax_breakup, {}),
         })),
-        generatedBy: "tax-service",
+        generatedBy: actor.userId || "tax-service",
+        generatedByRole: actor.role || "system",
       },
+      createdBy: actor.userId || null,
+      updatedBy: actor.userId || null,
     });
 
     const ledgerEntries = [];
@@ -123,7 +126,7 @@ class TaxService {
     return invoice;
   }
 
-  async createCreditNote(payload = {}) {
+  async createCreditNote(payload = {}, actor = {}) {
     const referenceType = payload.referenceType || "manual";
     const referenceId = payload.referenceId || payload.orderId;
     const existing = await this.taxRepository.findCreditNoteByReference(referenceType, referenceId);
@@ -165,7 +168,13 @@ class TaxService {
       totalAmount,
       currency: invoice.currency || "INR",
       reason: payload.reason || "tax_reversal",
-      metadata: payload.metadata || {},
+      metadata: {
+        ...(payload.metadata || {}),
+        createdBy: actor.userId || null,
+        createdByRole: actor.role || null,
+      },
+      createdBy: actor.userId || null,
+      updatedBy: actor.userId || null,
     });
 
     const ledgerEntries = [];

@@ -1,5 +1,6 @@
 "use strict";
 
+const crypto = require("crypto");
 const { AppError } = require("../../../shared/errors/app-error");
 const { DeliveryRepository } = require("../repositories/delivery.repository");
 const { OrderRepository } = require("../../order/repositories/order.repository");
@@ -9,6 +10,21 @@ const { DELIVERY_STATUS } = require("../models/delivery.model");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
+const { env } = require("../../../config/env");
+
+const SHIPMENT_TRANSITIONS = {
+  initiated: ["manifested", "picked_up", "in_transit", "cancelled", "failed"],
+  manifested: ["picked_up", "in_transit", "cancelled", "failed"],
+  picked_up: ["in_transit", "failed", "rto", "lost", "damaged"],
+  in_transit: ["out_for_delivery", "failed", "rto", "lost", "damaged"],
+  out_for_delivery: ["delivered", "failed", "rto", "lost", "damaged"],
+  failed: ["in_transit", "out_for_delivery", "rto", "cancelled"],
+  delivered: [],
+  cancelled: [],
+  rto: [],
+  lost: [],
+  damaged: [],
+};
 
 class DeliveryService {
   constructor({
@@ -58,7 +74,22 @@ class DeliveryService {
       throw new AppError("Shipment can be created only after order is confirmed", 409);
     }
 
-    const sellerId = payload.sellerId || actor.ownerSellerId || actor.userId;
+    const orderSellerIds = Array.from(new Set(
+      (order.items || []).map((item) => String(item.seller_id || item.sellerId || "")).filter(Boolean),
+    ));
+    const actorSellerId = actor.ownerSellerId || actor.userId;
+    const isAdmin = ["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin;
+    let sellerId = payload.sellerId || (isAdmin ? null : actorSellerId);
+    if (!sellerId && orderSellerIds.length === 1) sellerId = orderSellerIds[0];
+    if (!sellerId) {
+      throw new AppError("Seller ID is required for a multi-seller order shipment", 400);
+    }
+    if (!orderSellerIds.includes(String(sellerId))) {
+      throw new AppError("Selected seller does not own items in this order", 400);
+    }
+    if (!isAdmin && String(sellerId) !== String(actorSellerId)) {
+      throw new AppError("You can create shipments only for your seller account", 403);
+    }
     const provider = shippingProviderRegistry.get(payload.provider || "manual");
     const providerResult = await provider.createShipment(payload);
     const shipment = await this.deliveryRepository.createShipment({
@@ -126,6 +157,7 @@ class DeliveryService {
     }
 
     await this.assertCanManageOrder(shipment.order_id, actor);
+    this.assertTrackingTransition(shipment.status, payload.status, payload);
     const result = await this.deliveryRepository.addTrackingEvent(shipmentId, {
       ...payload,
       actorId: actor.userId,
@@ -137,31 +169,66 @@ class DeliveryService {
     return result;
   }
 
-  async handleTrackingWebhook(payload = {}) {
+  async handleTrackingWebhook(payload = {}, context = {}) {
+    this.verifyTrackingWebhook(context.signature, context.rawBody);
     const shipment = payload.shipmentId
       ? await this.deliveryRepository.findShipmentById(payload.shipmentId)
       : null;
     if (!shipment) {
       return { acknowledged: true, ignored: true };
     }
-
-    const result = await this.deliveryRepository.addTrackingEvent(shipment.id, {
-      status: payload.status,
-      eventTime: payload.eventTime,
-      location: payload.location,
-      note: payload.note,
-      source: payload.provider || "webhook",
-      rawPayload: payload,
-      actorId: "webhook",
+    this.assertTrackingTransition(shipment.status, payload.status, payload);
+    const provider = payload.provider || "manual";
+    const providerEventId = payload.eventId || payload.providerEventId || crypto
+      .createHash("sha256")
+      .update(context.rawBody || JSON.stringify(payload))
+      .digest("hex");
+    const claimed = await this.deliveryRepository.claimWebhookEvent({
+      provider,
+      providerEventId,
+      shipmentId: shipment.id,
+      payload,
     });
-    await this.syncOrderForTracking(result.shipment, { userId: "webhook", role: "system" });
-    await this.publishShipmentTrackingEvent(result.shipment, { userId: "webhook", role: "system" });
-    return { acknowledged: true, shipment: result.shipment };
+    if (!claimed) return { acknowledged: true, duplicate: true };
+
+    try {
+      const result = await this.deliveryRepository.addTrackingEvent(shipment.id, {
+        status: payload.status,
+        eventTime: payload.eventTime,
+        location: payload.location,
+        note: payload.note,
+        deliveryException: payload.deliveryException,
+        source: provider,
+        rawPayload: payload,
+        actorId: "webhook",
+      });
+      await this.syncOrderForTracking(result.shipment, { userId: "webhook", role: "system" });
+      await this.publishShipmentTrackingEvent(result.shipment, { userId: "webhook", role: "system" });
+      await this.deliveryRepository.completeWebhookEvent(provider, providerEventId, "processed");
+      return { acknowledged: true, shipment: result.shipment };
+    } catch (error) {
+      await this.deliveryRepository.completeWebhookEvent(
+        provider,
+        providerEventId,
+        "failed",
+        error?.message || "delivery_webhook_processing_failed",
+      );
+      throw error;
+    }
   }
 
   async createManifest(payload, actor) {
     if (!["admin", "sub-admin", "super-admin"].includes(actor.role) && !actor.isSuperAdmin) {
       throw new AppError("Only admin users can create manifests", 403);
+    }
+    const shipments = await this.deliveryRepository.findShipmentsByIds(payload.shipmentIds);
+    if (shipments.length !== payload.shipmentIds.length) {
+      throw new AppError("One or more selected shipments were not found", 404);
+    }
+    const invalid = shipments.find((shipment) =>
+      shipment.manifest_id || shipment.status !== DELIVERY_STATUS.INITIATED);
+    if (invalid) {
+      throw new AppError(`Shipment ${invalid.id} cannot be added to a manifest`, 409);
     }
     return this.deliveryRepository.createManifest({
       ...payload,
@@ -239,9 +306,19 @@ class DeliveryService {
 
     await this.assertCanManageOrder(orderId, actor);
 
+    const existing = await this.deliveryRepository.findEWayBillByOrderId(orderId);
+    if (existing) {
+      if (!payload.eWayBillNumber || payload.eWayBillNumber === existing.e_way_bill_number) {
+        return existing;
+      }
+      throw new AppError("An e-way bill already exists for this order", 409);
+    }
+
     return this.deliveryRepository.createEWayBill({
       ...payload,
       orderId,
+      createdBy: actor.userId,
+      updatedBy: actor.userId,
     });
   }
 
@@ -263,7 +340,10 @@ class DeliveryService {
 
     await this.assertCanManageOrder(existing.order_id, actor);
 
-    const record = await this.deliveryRepository.updateEWayBillStatus(ewayBillId, payload);
+    const record = await this.deliveryRepository.updateEWayBillStatus(ewayBillId, {
+      ...payload,
+      updatedBy: actor.userId,
+    });
     if (!record) {
       throw new AppError("Delivery record not found", 404);
     }
@@ -271,7 +351,7 @@ class DeliveryService {
   }
 
   async assertCanViewOrder(order, orderId, actor) {
-    if (["admin", "super-admin"].includes(actor.role) || order.buyer_id === actor.userId) {
+    if (["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin || order.buyer_id === actor.userId) {
       return;
     }
 
@@ -279,11 +359,11 @@ class DeliveryService {
   }
 
   async assertCanManageOrder(orderId, actor) {
-    if (["admin", "super-admin"].includes(actor.role)) {
+    if (["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin) {
       return;
     }
 
-    if (!["seller", "seller-sub-admin"].includes(actor.role)) {
+    if (!["seller", "seller-admin", "seller-sub-admin"].includes(actor.role)) {
       throw new AppError("You are not allowed to manage delivery for this order", 403);
     }
 
@@ -291,6 +371,29 @@ class DeliveryService {
     const isSellerInOrder = await this.orderRepository.isSellerInOrder(orderId, sellerId);
     if (!isSellerInOrder) {
       throw new AppError("You are not allowed to manage delivery for this order", 403);
+    }
+  }
+
+  assertTrackingTransition(currentStatus, nextStatus, payload = {}) {
+    if (currentStatus === nextStatus) return;
+    const allowed = SHIPMENT_TRANSITIONS[currentStatus] || [];
+    if (!allowed.includes(nextStatus)) {
+      throw new AppError(`Shipment cannot move from '${currentStatus}' to '${nextStatus}'`, 409);
+    }
+    if (["failed", "cancelled", "rto", "lost", "damaged"].includes(nextStatus) && !String(payload.note || payload.deliveryException || "").trim()) {
+      throw new AppError(`A note or exception reason is required for '${nextStatus}'`, 400);
+    }
+  }
+
+  verifyTrackingWebhook(signature, rawBody) {
+    const secret = env.delivery.webhookSecret;
+    if (!secret && !env.delivery.requireWebhookSignature) return;
+    if (!secret) throw new AppError("Delivery webhook secret is not configured", 503);
+    if (!signature || !rawBody) throw new AppError("Invalid delivery webhook request", 400);
+    const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+    const provided = String(signature);
+    if (expected.length !== provided.length || !crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(provided))) {
+      throw new AppError("Invalid delivery webhook signature", 401);
     }
   }
 }

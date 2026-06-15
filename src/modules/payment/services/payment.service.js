@@ -79,6 +79,29 @@ class PaymentService {
     };
   }
 
+  async processWebhookEvent(event, handler) {
+    const claimed = await this.paymentRepository.claimWebhookEvent(event);
+    if (!claimed) return { acknowledged: true, duplicate: true };
+
+    try {
+      await handler();
+      await this.paymentRepository.completeWebhookEvent(
+        event.provider,
+        event.providerEventId,
+        "processed",
+      );
+      return null;
+    } catch (error) {
+      await this.paymentRepository.completeWebhookEvent(
+        event.provider,
+        event.providerEventId,
+        "failed",
+        error?.message || "webhook_processing_failed",
+      );
+      throw error;
+    }
+  }
+
   async getPaymentOptions(query = {}) {
     const cod = this.mapCodConfig(await this.paymentMethodConfigRepository.getCodConfig());
     const orderAmount = Number(query.orderAmount || 0);
@@ -124,7 +147,15 @@ class PaymentService {
     if (payload.maxOrderAmount !== null && payload.maxOrderAmount !== undefined && payload.minOrderAmount !== null && payload.minOrderAmount !== undefined && Number(payload.maxOrderAmount) < Number(payload.minOrderAmount)) {
       throw new AppError("Maximum COD order amount cannot be lower than minimum amount", 400);
     }
-    return this.mapCodConfig(await this.paymentMethodConfigRepository.upsertCodConfig(payload));
+    return this.mapCodConfig(await this.paymentMethodConfigRepository.upsertCodConfig({
+      ...payload,
+      metadata: {
+        ...(payload.metadata || {}),
+        updatedBy: actor.userId,
+        updatedByRole: actor.role,
+        updatedAt: new Date().toISOString(),
+      },
+    }));
   }
 
   async initiatePayment(payload, actor) {
@@ -473,59 +504,54 @@ class PaymentService {
         throw new AppError("Invalid Razorpay payment captured payload", 400);
       }
       const eventId = payload.id || entity.acquirer_data?.rrn || entity.id;
-      if (await this.paymentRepository.findWebhookEvent("razorpay", eventId)) {
-        return { acknowledged: true, duplicate: true };
-      }
       const payment = await this.paymentRepository.findByProviderOrderId(entity.order_id);
       if (!payment) {
         return { acknowledged: true, ignored: true };
       }
-
-      const paymentEvent = makeEvent(
-        DOMAIN_EVENTS.PAYMENT_VERIFIED_V1,
-        {
-          buyerId: payment.buyer_id,
-          orderId: payment.order_id,
-          paymentId: payment.id,
-          provider: payment.provider,
-          providerPaymentId: entity.id,
-          providerOrderId: entity.order_id,
-        },
-        {
-          source: "payment-webhook",
-        },
-      );
-
-      await this.paymentRepository.updatePaymentStatus(
-        payment.id,
-        {
-          status: PAYMENT_STATUS.CAPTURED,
-          providerPaymentId: entity.id,
-          verificationMethod: "webhook",
-          metadata: entity,
-          verifiedAt: new Date(),
-        },
-        paymentEvent,
-      );
-      await this.paymentRepository.recordWebhookEvent({
+      const duplicate = await this.processWebhookEvent({
         provider: "razorpay",
         providerEventId: eventId,
         eventType,
         paymentId: payment.id,
         orderId: payment.order_id,
         payload,
+      }, async () => {
+        const paymentEvent = makeEvent(
+          DOMAIN_EVENTS.PAYMENT_VERIFIED_V1,
+          {
+            buyerId: payment.buyer_id,
+            orderId: payment.order_id,
+            paymentId: payment.id,
+            provider: payment.provider,
+            providerPaymentId: entity.id,
+            providerOrderId: entity.order_id,
+          },
+          { source: "payment-webhook" },
+        );
+        await this.paymentRepository.updatePaymentStatus(
+          payment.id,
+          {
+            status: PAYMENT_STATUS.CAPTURED,
+            providerPaymentId: entity.id,
+            verificationMethod: "webhook",
+            metadata: entity,
+            verifiedAt: new Date(),
+          },
+          paymentEvent,
+        );
+        await this.orderService.markPaymentCaptured(payment.order_id, {
+          userId: payment.buyer_id,
+          role: "system",
+          metadata: {
+            paymentId: payment.id,
+            provider: payment.provider,
+            providerPaymentId: entity.id,
+            providerOrderId: entity.order_id,
+            verificationMethod: "webhook",
+          },
+        });
       });
-      await this.orderService.markPaymentCaptured(payment.order_id, {
-        userId: payment.buyer_id,
-        role: "system",
-        metadata: {
-          paymentId: payment.id,
-          provider: payment.provider,
-          providerPaymentId: entity.id,
-          providerOrderId: entity.order_id,
-          verificationMethod: "webhook",
-        },
-      });
+      if (duplicate) return duplicate;
     }
 
     if (eventType === "payment.failed") {
@@ -534,60 +560,56 @@ class PaymentService {
         throw new AppError("Invalid Razorpay payment failed payload", 400);
       }
       const eventId = payload.id || entity.id;
-      if (await this.paymentRepository.findWebhookEvent("razorpay", eventId)) {
-        return { acknowledged: true, duplicate: true };
-      }
       const payment = await this.paymentRepository.findByProviderOrderId(entity.order_id);
       if (!payment) {
         return { acknowledged: true, ignored: true };
       }
 
-      const paymentEvent = makeEvent(
-        DOMAIN_EVENTS.PAYMENT_FAILED_V1,
-        {
-          buyerId: payment.buyer_id,
-          orderId: payment.order_id,
-          paymentId: payment.id,
-          provider: payment.provider,
-          providerPaymentId: entity.id,
-          reason: entity.error_description || entity.error_reason || "payment_failed",
-        },
-        {
-          source: "payment-webhook",
-        },
-      );
-
-      await this.paymentRepository.updatePaymentStatus(
-        payment.id,
-        {
-          status: PAYMENT_STATUS.FAILED,
-          providerPaymentId: entity.id,
-          verificationMethod: "webhook",
-          metadata: entity,
-          failedReason: entity.error_description || entity.error_reason || "payment_failed",
-        },
-        paymentEvent,
-      );
-      await this.paymentRepository.recordWebhookEvent({
+      const duplicate = await this.processWebhookEvent({
         provider: "razorpay",
         providerEventId: eventId,
         eventType,
         paymentId: payment.id,
         orderId: payment.order_id,
         payload,
+      }, async () => {
+        const paymentEvent = makeEvent(
+          DOMAIN_EVENTS.PAYMENT_FAILED_V1,
+          {
+            buyerId: payment.buyer_id,
+            orderId: payment.order_id,
+            paymentId: payment.id,
+            provider: payment.provider,
+            providerPaymentId: entity.id,
+            reason: entity.error_description || entity.error_reason || "payment_failed",
+          },
+          { source: "payment-webhook" },
+        );
+        await this.paymentRepository.updatePaymentStatus(
+          payment.id,
+          {
+            status: PAYMENT_STATUS.FAILED,
+            providerPaymentId: entity.id,
+            verificationMethod: "webhook",
+            metadata: entity,
+            failedReason: entity.error_description || entity.error_reason || "payment_failed",
+          },
+          paymentEvent,
+        );
+        await this.orderService.markPaymentFailed(payment.order_id, {
+          userId: payment.buyer_id,
+          role: "system",
+          reason: entity.error_description || entity.error_reason || "payment_failed",
+          metadata: {
+            paymentId: payment.id,
+            provider: payment.provider,
+            providerPaymentId: entity.id,
+            providerOrderId: entity.order_id,
+            verificationMethod: "webhook",
+          },
+        });
       });
-      await this.orderService.markPaymentFailed(payment.order_id, {
-        userId: payment.buyer_id,
-        role: "system",
-        reason: entity.error_description || entity.error_reason || "payment_failed",
-        metadata: {
-          paymentId: payment.id,
-          provider: payment.provider,
-          providerPaymentId: entity.id,
-          providerOrderId: entity.order_id,
-          verificationMethod: "webhook",
-        },
-      });
+      if (duplicate) return duplicate;
     }
 
     if (eventType === "refund.processed" || eventType === "payment.refunded") {
@@ -597,43 +619,42 @@ class PaymentService {
       }
       const providerPaymentId = entity.payment_id || entity.id;
       const eventId = payload.id || entity.id;
-      if (await this.paymentRepository.findWebhookEvent("razorpay", eventId)) {
-        return { acknowledged: true, duplicate: true };
-      }
       const payment = await this.paymentRepository.findByProviderPaymentId(providerPaymentId);
       if (!payment) {
         return { acknowledged: true, ignored: true };
       }
-      await this.paymentRepository.updatePaymentStatus(payment.id, {
-        status: PAYMENT_STATUS.REFUNDED,
-        providerPaymentId,
-        verificationMethod: "webhook",
-        metadata: entity,
-        verifiedAt: new Date(),
-      });
-      await this.paymentRepository.recordWebhookEvent({
+      const duplicate = await this.processWebhookEvent({
         provider: "razorpay",
         providerEventId: eventId,
         eventType,
         paymentId: payment.id,
         orderId: payment.order_id,
         payload,
-      });
-      const refundEvent = makeEvent(
-        DOMAIN_EVENTS.PAYMENT_REFUNDED_V1,
-        {
-          buyerId: payment.buyer_id,
-          orderId: payment.order_id,
-          paymentId: payment.id,
-          provider: payment.provider,
+      }, async () => {
+        await this.paymentRepository.updatePaymentStatus(payment.id, {
+          status: PAYMENT_STATUS.REFUNDED,
           providerPaymentId,
-          refundId: entity.id,
-          amount: Number(entity.amount || payment.amount || 0),
-        },
-        { source: "payment-webhook" },
-      );
-      const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
-      await eventPublisher.publish(refundEvent);
+          verificationMethod: "webhook",
+          metadata: entity,
+          verifiedAt: new Date(),
+        });
+        const refundEvent = makeEvent(
+          DOMAIN_EVENTS.PAYMENT_REFUNDED_V1,
+          {
+            buyerId: payment.buyer_id,
+            orderId: payment.order_id,
+            paymentId: payment.id,
+            provider: payment.provider,
+            providerPaymentId,
+            refundId: entity.id,
+            amount: Number(entity.amount || payment.amount || 0),
+          },
+          { source: "payment-webhook" },
+        );
+        const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
+        await eventPublisher.publish(refundEvent);
+      });
+      if (duplicate) return duplicate;
     }
 
     return { acknowledged: true };
@@ -655,6 +676,15 @@ class PaymentService {
     });
   }
 
+  async getPaymentForAdmin(paymentId, actor) {
+    if (!["admin", "sub-admin", "super-admin"].includes(actor.role) && !actor.isSuperAdmin) {
+      throw new AppError("Only admin users can view payment details", 403);
+    }
+    const payment = await this.paymentRepository.findById(paymentId);
+    if (!payment) throw new AppError("Payment not found", 404);
+    return payment;
+  }
+
   async approveManualPayment(paymentId, payload, actor) {
     if (!["admin", "sub-admin", "super-admin"].includes(actor.role) && !actor.isSuperAdmin) {
       throw new AppError("Only admin users can approve manual payments", 403);
@@ -666,12 +696,20 @@ class PaymentService {
       throw new AppError("Only manual/COD payments can be approved here", 400);
     }
     if (payment.status === PAYMENT_STATUS.CAPTURED) return mapPaymentResponse(payment);
+    if (![PAYMENT_STATUS.INITIATED, PAYMENT_STATUS.AUTHORIZED].includes(payment.status)) {
+      throw new AppError(`Payment in '${payment.status}' status cannot be approved`, 409);
+    }
 
     const updatedPayment = await this.paymentRepository.updatePaymentStatus(paymentId, {
       status: PAYMENT_STATUS.CAPTURED,
       providerPaymentId: payload.referenceId || payment.provider_payment_id,
       verificationMethod: "admin_approval",
-      metadata: { approvalReason: payload.reason || null, referenceId: payload.referenceId || null },
+      metadata: {
+        approvalReason: payload.reason || null,
+        referenceId: payload.referenceId,
+        approvedBy: actor.userId,
+        approvedByRole: actor.role,
+      },
       verifiedAt: new Date(),
       approvedBy: actor.userId,
       approvedAt: new Date(),
@@ -692,11 +730,22 @@ class PaymentService {
     }
     const payment = await this.paymentRepository.findById(paymentId);
     if (!payment) throw new AppError("Payment not found", 404);
+    if (![PAYMENT_PROVIDER.MANUAL_BANK_TRANSFER, PAYMENT_PROVIDER.MANUAL_UPI, PAYMENT_PROVIDER.COD].includes(payment.provider)) {
+      throw new AppError("Only manual/COD payments can be rejected here", 400);
+    }
+    if (payment.status === PAYMENT_STATUS.FAILED) return mapPaymentResponse(payment);
+    if (![PAYMENT_STATUS.INITIATED, PAYMENT_STATUS.AUTHORIZED].includes(payment.status)) {
+      throw new AppError(`Payment in '${payment.status}' status cannot be rejected`, 409);
+    }
 
     const updatedPayment = await this.paymentRepository.updatePaymentStatus(paymentId, {
       status: PAYMENT_STATUS.FAILED,
       verificationMethod: "admin_rejection",
-      metadata: { rejectionReason: payload.reason || null },
+      metadata: {
+        rejectionReason: payload.reason,
+        rejectedBy: actor.userId,
+        rejectedByRole: actor.role,
+      },
       failedReason: payload.reason || "manual_payment_rejected",
     });
 

@@ -1,9 +1,11 @@
 const Joi = require("joi");
 const { PAYMENT_PROVIDER } = require("../../../shared/domain/commerce-constants");
 
+const uuid = Joi.string().guid({ version: ["uuidv4", "uuidv5"] });
+
 const createPaymentSchema = Joi.object({
   body: Joi.object({
-    orderId: Joi.string().required(),
+    orderId: uuid.required(),
     provider: Joi.string()
       .valid(...Object.values(PAYMENT_PROVIDER))
       .required(),
@@ -23,7 +25,7 @@ const verifyPaymentSchema = Joi.object({
     provider: Joi.string()
       .valid(PAYMENT_PROVIDER.RAZORPAY)
       .required(),
-    orderId: Joi.string().required(),
+    orderId: uuid.required(),
     razorpayOrderId: Joi.string().required(),
     razorpayPaymentId: Joi.string().required(),
     razorpaySignature: Joi.string().required(),
@@ -37,11 +39,25 @@ const listPaymentsSchema = Joi.object({
   query: Joi.object({
     status: Joi.string(),
     provider: Joi.string().valid(...Object.values(PAYMENT_PROVIDER)),
-    buyerId: Joi.string(),
-    orderId: Joi.string(),
+    buyerId: Joi.string().max(64),
+    orderId: uuid,
     search: Joi.string().max(128),
     fromDate: Joi.date().iso(),
     toDate: Joi.date().iso(),
+    sortBy: Joi.string().valid(
+      "createdAt",
+      "created_at",
+      "amount",
+      "status",
+      "provider",
+      "buyerId",
+      "buyer_id",
+      "orderId",
+      "order_id",
+      "transactionReference",
+      "transaction_reference",
+    ).default("created_at"),
+    sortDir: Joi.string().valid("asc", "desc").default("desc"),
     limit: Joi.number().integer().min(1).max(500).default(50),
     offset: Joi.number().integer().min(0).default(0),
   }).required(),
@@ -73,18 +89,29 @@ const paymentParamSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({}).required(),
   params: Joi.object({
-    paymentId: Joi.string().required(),
+    paymentId: uuid.required(),
   }).required(),
 });
 
-const manualPaymentDecisionSchema = Joi.object({
+const manualPaymentApprovalSchema = Joi.object({
   body: Joi.object({
-    referenceId: Joi.string().max(180).allow("", null),
+    referenceId: Joi.string().trim().min(3).max(180).required(),
     reason: Joi.string().max(500).allow("", null),
   }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({
-    paymentId: Joi.string().required(),
+    paymentId: uuid.required(),
+  }).required(),
+});
+
+const manualPaymentRejectionSchema = Joi.object({
+  body: Joi.object({
+    referenceId: Joi.string().max(180).allow("", null),
+    reason: Joi.string().trim().min(3).max(500).required(),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    paymentId: uuid.required(),
   }).required(),
 });
 
@@ -95,5 +122,6 @@ module.exports = {
   paymentOptionsSchema,
   codConfigSchema,
   paymentParamSchema,
-  manualPaymentDecisionSchema,
+  manualPaymentApprovalSchema,
+  manualPaymentRejectionSchema,
 };

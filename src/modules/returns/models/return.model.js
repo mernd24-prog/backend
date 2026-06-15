@@ -67,6 +67,8 @@ const returnSchema = new mongoose.Schema(
     refundedAt: Date,
     closedAt: Date,
     notes: String,
+    createdBy: { type: String, index: true },
+    updatedBy: { type: String, index: true },
   },
   { timestamps: true },
 );

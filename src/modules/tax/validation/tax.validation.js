@@ -1,10 +1,11 @@
 const Joi = require("joi");
+const uuid = Joi.string().guid({ version: ["uuidv4", "uuidv5"] });
 
 const createOrderInvoiceSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({}).required(),
   params: Joi.object({
-    orderId: Joi.string().required(),
+    orderId: uuid.required(),
   }).required(),
 });
 
@@ -30,16 +31,18 @@ const listInvoicesSchema = Joi.object({
     state: Joi.string(),
     hsnCode: Joi.string(),
     search: Joi.string().trim().max(128),
-    limit: Joi.number().integer().min(1).max(500),
-    offset: Joi.number().integer().min(0),
+    sortBy: Joi.string().valid("issuedAt", "issued_at", "invoiceNumber", "invoice_number", "taxableAmount", "taxable_amount", "taxAmount", "tax_amount", "totalAmount", "total_amount").default("issued_at"),
+    sortDir: Joi.string().valid("asc", "desc").default("desc"),
+    limit: Joi.number().integer().min(1).max(500).default(50),
+    offset: Joi.number().integer().min(0).default(0),
   }).required(),
   params: Joi.object({}).required(),
 });
 
 const createCreditNoteSchema = Joi.object({
   body: Joi.object({
-    orderId: Joi.string().required(),
-    invoiceId: Joi.string(),
+    orderId: uuid.required(),
+    invoiceId: uuid,
     referenceType: Joi.string().valid("cancellation", "return", "refund", "manual").default("manual"),
     referenceId: Joi.string(),
     taxableAmount: Joi.number().min(0).required(),
@@ -60,9 +63,14 @@ const listCreditNotesSchema = Joi.object({
   query: Joi.object({
     fromDate: Joi.date().iso(),
     toDate: Joi.date().iso(),
-    orderId: Joi.string(),
-    limit: Joi.number().integer().min(1).max(500),
-    offset: Joi.number().integer().min(0),
+    orderId: uuid,
+    buyerId: Joi.string().max(64),
+    referenceType: Joi.string().valid("cancellation", "return", "refund", "manual"),
+    search: Joi.string().trim().max(128),
+    sortBy: Joi.string().valid("issuedAt", "issued_at", "creditNoteNumber", "credit_note_number", "taxableAmount", "taxable_amount", "taxAmount", "tax_amount", "totalAmount", "total_amount").default("issued_at"),
+    sortDir: Joi.string().valid("asc", "desc").default("desc"),
+    limit: Joi.number().integer().min(1).max(500).default(50),
+    offset: Joi.number().integer().min(0).default(0),
   }).required(),
   params: Joi.object({}).required(),
 });
