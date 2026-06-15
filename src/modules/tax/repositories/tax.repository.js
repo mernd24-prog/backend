@@ -24,9 +24,10 @@ class TaxRepository {
       `INSERT INTO tax_invoices (
         id, invoice_number, order_id, buyer_id, taxable_amount, tax_amount,
         cgst_amount, sgst_amount, igst_amount, tcs_amount, total_amount,
-        currency, tax_mode, gstin_marketplace, gstin_seller, place_of_supply, issued_at, metadata
+        currency, tax_mode, gstin_marketplace, gstin_seller, place_of_supply,
+        issued_at, metadata, created_by, updated_by
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),$17::jsonb
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),$17::jsonb,$18,$19
       )
       RETURNING *`,
       [
@@ -47,6 +48,8 @@ class TaxRepository {
         payload.gstinSeller || null,
         payload.placeOfSupply || null,
         JSON.stringify(payload.metadata || {}),
+        payload.createdBy || null,
+        payload.updatedBy || payload.createdBy || null,
       ],
     );
     return rows[0];
@@ -60,6 +63,8 @@ class TaxRepository {
     state = null,
     hsnCode = null,
     search = null,
+    sortBy = "issued_at",
+    sortDir = "desc",
     limit = 50,
     offset = 0,
   } = {}) {
@@ -104,13 +109,27 @@ class TaxRepository {
     }
 
     const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const sortColumns = {
+      issuedAt: "ti.issued_at",
+      issued_at: "ti.issued_at",
+      invoiceNumber: "ti.invoice_number",
+      invoice_number: "ti.invoice_number",
+      taxableAmount: "ti.taxable_amount",
+      taxable_amount: "ti.taxable_amount",
+      taxAmount: "ti.tax_amount",
+      tax_amount: "ti.tax_amount",
+      totalAmount: "ti.total_amount",
+      total_amount: "ti.total_amount",
+    };
+    const orderColumn = sortColumns[sortBy] || "ti.issued_at";
+    const orderDirection = String(sortDir).toLowerCase() === "asc" ? "ASC" : "DESC";
     const pagingValues = [...values, limit, offset];
     const [listResult, countResult] = await Promise.all([
       postgresPool.query(
         `SELECT ti.*
          FROM tax_invoices ti
          ${whereSql}
-         ORDER BY ti.issued_at DESC
+         ORDER BY ${orderColumn} ${orderDirection}, ti.issued_at DESC
          LIMIT $${idx++} OFFSET $${idx}`,
         pagingValues,
       ),
@@ -146,9 +165,9 @@ class TaxRepository {
       `INSERT INTO tax_credit_notes (
         id, credit_note_number, invoice_id, order_id, buyer_id, reference_type,
         reference_id, taxable_amount, tax_amount, cgst_amount, sgst_amount,
-        igst_amount, total_amount, currency, reason, metadata, issued_at
+        igst_amount, total_amount, currency, reason, metadata, issued_at, created_by, updated_by
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW()
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),$17,$18
       )
       RETURNING *`,
       [
@@ -168,12 +187,25 @@ class TaxRepository {
         payload.currency || "INR",
         payload.reason || null,
         payload.metadata || {},
+        payload.createdBy || null,
+        payload.updatedBy || payload.createdBy || null,
       ],
     );
     return rows[0];
   }
 
-  async listCreditNotes({ fromDate = null, toDate = null, orderId = null, limit = 50, offset = 0 } = {}) {
+  async listCreditNotes({
+    fromDate = null,
+    toDate = null,
+    orderId = null,
+    buyerId = null,
+    referenceType = null,
+    search = null,
+    sortBy = "issued_at",
+    sortDir = "desc",
+    limit = 50,
+    offset = 0,
+  } = {}) {
     const values = [];
     const clauses = [];
     let idx = 1;
@@ -190,18 +222,56 @@ class TaxRepository {
       clauses.push(`order_id = $${idx++}`);
       values.push(orderId);
     }
+    if (buyerId) {
+      clauses.push(`buyer_id = $${idx++}`);
+      values.push(buyerId);
+    }
+    if (referenceType) {
+      clauses.push(`reference_type = $${idx++}`);
+      values.push(referenceType);
+    }
+    if (search) {
+      clauses.push(`(credit_note_number ILIKE $${idx} OR order_id::text ILIKE $${idx} OR reference_id ILIKE $${idx})`);
+      values.push(`%${search}%`);
+      idx += 1;
+    }
 
     const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-    values.push(limit, offset);
-    const { rows } = await postgresPool.query(
-      `SELECT *
-       FROM tax_credit_notes
-       ${whereSql}
-       ORDER BY issued_at DESC
-       LIMIT $${idx++} OFFSET $${idx}`,
-      values,
-    );
-    return rows;
+    const sortColumns = {
+      issuedAt: "issued_at",
+      issued_at: "issued_at",
+      creditNoteNumber: "credit_note_number",
+      credit_note_number: "credit_note_number",
+      taxableAmount: "taxable_amount",
+      taxable_amount: "taxable_amount",
+      taxAmount: "tax_amount",
+      tax_amount: "tax_amount",
+      totalAmount: "total_amount",
+      total_amount: "total_amount",
+    };
+    const orderColumn = sortColumns[sortBy] || "issued_at";
+    const orderDirection = String(sortDir).toLowerCase() === "asc" ? "ASC" : "DESC";
+    const pagingValues = [...values, limit, offset];
+    const [listResult, countResult] = await Promise.all([
+      postgresPool.query(
+        `SELECT *
+         FROM tax_credit_notes
+         ${whereSql}
+         ORDER BY ${orderColumn} ${orderDirection}, issued_at DESC
+         LIMIT $${idx++} OFFSET $${idx}`,
+        pagingValues,
+      ),
+      postgresPool.query(
+        `SELECT COUNT(*)::INT AS total
+         FROM tax_credit_notes
+         ${whereSql}`,
+        values,
+      ),
+    ]);
+    return {
+      list: listResult.rows,
+      total: Number(countResult.rows[0]?.total || 0),
+    };
   }
 
   async insertLedgerEntries(entries) {

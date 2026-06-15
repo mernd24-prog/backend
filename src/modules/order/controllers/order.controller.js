@@ -1,6 +1,7 @@
 const { okResponse } = require("../../../shared/http/reply");
 const { OrderService } = require("../services/order.service");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
+const { auditService } = require("../../../shared/logger/audit.service");
 
 function orderResponse(data, message, meta = {}) {
   return {
@@ -61,6 +62,14 @@ class OrderController {
   cancel = async (req, res) => {
     const actor = getCurrentUser(req);
     const order = await this.orderService.cancelOrder(req.params.orderId, req.body, actor);
+    await auditService.statusChange(req, {
+      module: "orders",
+      entityId: req.params.orderId,
+      entityType: "Order",
+      newData: order,
+      reason: req.body.reason,
+      description: "Order cancelled",
+    });
     res.json(orderResponse(order, "Order cancelled successfully"));
   };
 
@@ -73,6 +82,14 @@ class OrderController {
       trackingNumber: req.body.trackingNumber || null,
       carrierName: req.body.carrierName || null,
       carrierUrl: req.body.carrierUrl || null,
+    });
+    await auditService.statusChange(req, {
+      module: "orders",
+      entityId: req.params.orderId,
+      entityType: "Order",
+      newData: order,
+      reason: req.body.reason,
+      description: `Order status changed to ${req.body.status}`,
     });
     res.json(orderResponse(order, "Order status updated successfully"));
   };

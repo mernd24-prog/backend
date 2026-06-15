@@ -1,6 +1,7 @@
 const { okResponse } = require("../../../shared/http/reply");
 const { TaxService } = require("../services/tax.service");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
+const { auditService } = require("../../../shared/logger/audit.service");
 
 class TaxController {
   constructor({ taxService = new TaxService() } = {}) {
@@ -8,7 +9,15 @@ class TaxController {
   }
 
   createOrderInvoice = async (req, res) => {
-    const invoice = await this.taxService.createInvoice(req.params.orderId);
+    const actor = getCurrentUser(req);
+    const invoice = await this.taxService.createInvoice(req.params.orderId, actor);
+    await auditService.create(req, {
+      module: "tax",
+      entityId: invoice?.id,
+      entityType: "TaxInvoice",
+      newData: invoice,
+      description: "Generated tax invoice",
+    });
     res.status(201).json(okResponse(invoice));
   };
 
@@ -24,7 +33,16 @@ class TaxController {
   };
 
   createCreditNote = async (req, res) => {
-    const creditNote = await this.taxService.createCreditNote(req.body);
+    const actor = getCurrentUser(req);
+    const creditNote = await this.taxService.createCreditNote(req.body, actor);
+    await auditService.create(req, {
+      module: "tax",
+      entityId: creditNote?.id,
+      entityType: "TaxCreditNote",
+      newData: creditNote,
+      reason: req.body.reason || "credit_note_generated",
+      description: "Generated tax credit note",
+    });
     res.status(201).json(okResponse(creditNote));
   };
 

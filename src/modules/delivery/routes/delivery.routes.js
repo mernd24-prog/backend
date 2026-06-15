@@ -3,8 +3,7 @@
 const express = require("express");
 const { DeliveryController } = require("../controllers/delivery.controller");
 const { authenticate } = require("../../../shared/middleware/authenticate");
-const { allowActions } = require("../../../shared/middleware/access");
-const { ACTIONS } = require("../../../shared/constants/actions");
+const { allowPermissions } = require("../../../shared/middleware/access");
 const { checkInput } = require("../../../shared/middleware/check-input");
 const { catchErrors } = require("../../../shared/middleware/catch-errors");
 const {
@@ -39,6 +38,7 @@ deliveryRoutes.get(
 deliveryRoutes.get(
   "/shipments",
   authenticate,
+  allowPermissions("delivery:view"),
   checkInput(listShipmentsSchema),
   catchErrors(deliveryController.listShipments),
 );
@@ -46,7 +46,7 @@ deliveryRoutes.get(
 deliveryRoutes.post(
   "/shipments",
   authenticate,
-  allowActions(ACTIONS.ORDER_MANAGE),
+  allowPermissions("delivery:create"),
   checkInput(createShipmentSchema),
   catchErrors(deliveryController.createShipment),
 );
@@ -54,6 +54,7 @@ deliveryRoutes.post(
 deliveryRoutes.get(
   "/shipments/:shipmentId",
   authenticate,
+  allowPermissions("delivery:view"),
   checkInput(shipmentParamSchema),
   catchErrors(deliveryController.getShipment),
 );
@@ -61,7 +62,7 @@ deliveryRoutes.get(
 deliveryRoutes.post(
   "/shipments/:shipmentId/tracking",
   authenticate,
-  allowActions(ACTIONS.ORDER_MANAGE),
+  allowPermissions("delivery:status_change"),
   checkInput(trackingEventSchema),
   catchErrors(deliveryController.addTrackingEvent),
 );
@@ -75,7 +76,7 @@ deliveryRoutes.post(
 deliveryRoutes.post(
   "/manifests",
   authenticate,
-  allowActions(ACTIONS.ORDER_MANAGE),
+  allowPermissions("delivery:create"),
   checkInput(createManifestSchema),
   catchErrors(deliveryController.createManifest),
 );
@@ -83,6 +84,7 @@ deliveryRoutes.post(
 deliveryRoutes.get(
   "/orders/:orderId/eway-bill",
   authenticate,
+  allowPermissions("delivery:view"),
   checkInput(orderDeliveryParamSchema),
   catchErrors(deliveryController.getEWayBill),
 );
@@ -90,7 +92,7 @@ deliveryRoutes.get(
 deliveryRoutes.post(
   "/orders/:orderId/eway-bill",
   authenticate,
-  allowActions(ACTIONS.ORDER_MANAGE),
+  allowPermissions("delivery:create"),
   checkInput(createEWayBillSchema),
   catchErrors(deliveryController.createEWayBill),
 );
@@ -98,7 +100,7 @@ deliveryRoutes.post(
 deliveryRoutes.patch(
   "/eway-bills/:ewayBillId/status",
   authenticate,
-  allowActions(ACTIONS.ORDER_MANAGE),
+  allowPermissions("delivery:status_change"),
   checkInput(updateEWayBillStatusSchema),
   catchErrors(deliveryController.updateEWayBillStatus),
 );

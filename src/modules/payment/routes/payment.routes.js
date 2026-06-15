@@ -10,7 +10,9 @@ const {
   listPaymentsSchema,
   paymentOptionsSchema,
   codConfigSchema,
-  manualPaymentDecisionSchema,
+  paymentParamSchema,
+  manualPaymentApprovalSchema,
+  manualPaymentRejectionSchema,
 } = require("../validation/payment.validation");
 
 const paymentRoutes = express.Router();
@@ -42,6 +44,13 @@ paymentRoutes.put(
   checkInput(codConfigSchema),
   catchErrors(paymentController.updateCodConfig),
 );
+paymentRoutes.get(
+  "/admin/:paymentId",
+  authenticate,
+  allowPermissions("payments:view"),
+  checkInput(paymentParamSchema),
+  catchErrors(paymentController.getAdminPayment),
+);
 paymentRoutes.post(
   "/initiate",
   authenticate,
@@ -58,14 +67,14 @@ paymentRoutes.post(
   "/:paymentId/approve",
   authenticate,
   allowPermissions("payments:approve"),
-  checkInput(manualPaymentDecisionSchema),
+  checkInput(manualPaymentApprovalSchema),
   catchErrors(paymentController.approveManual),
 );
 paymentRoutes.post(
   "/:paymentId/reject",
   authenticate,
   allowPermissions("payments:approve"),
-  checkInput(manualPaymentDecisionSchema),
+  checkInput(manualPaymentRejectionSchema),
   catchErrors(paymentController.rejectManual),
 );
 

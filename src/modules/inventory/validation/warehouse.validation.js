@@ -27,7 +27,7 @@ const listWarehousesSchema = Joi.object({
 const listInventoryTransactionsSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
-    type: Joi.string().valid("reservation", "release", "sale", "return", "adjustment", "damage"),
+    type: Joi.string().valid("reservation", "release", "sale", "restock", "return", "adjustment", "damage"),
     status: Joi.string(),
     productId: Joi.string(),
     sellerId: Joi.string(),

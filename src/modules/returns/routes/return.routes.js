@@ -9,6 +9,7 @@ const { getCurrentUser } = require("../../../shared/auth/current-user");
 const { ReturnService } = require("../services/return.service");
 const { returnValidation } = require("../../validation");
 const { AppError } = require("../../../shared/errors/app-error");
+const { auditService } = require("../../../shared/logger/audit.service");
 
 function validate(schema, source) {
   const { error, value } = schema.validate(source, {
@@ -45,6 +46,14 @@ router.post(
       actor,
       { photos: value.photos || [] },
     );
+    await auditService.create(req, {
+      module: "returns",
+      entityId: returnReq._id,
+      entityType: "Return",
+      newData: returnReq,
+      reason: value.reason,
+      description: "Return requested",
+    });
     res.status(201).json(okResponse(returnReq, "Return requested successfully"));
   }),
 );
@@ -86,7 +95,15 @@ router.post(
   catchErrors(async (req, res) => {
     const actor = getCurrentUser(req);
     const value = validate(returnValidation.approveReturn, { ...req.body, returnId: req.params.returnId });
-    res.json(okResponse(await ReturnService.approveReturn(value.returnId, value.refundAmount, actor, value), "Return approved"));
+    const updated = await ReturnService.approveReturn(value.returnId, value.refundAmount, actor, value);
+    await auditService.approve(req, {
+      module: "returns",
+      entityId: value.returnId,
+      entityType: "Return",
+      newData: updated,
+      description: "Return approved",
+    });
+    res.json(okResponse(updated, "Return approved"));
   }),
 );
 
@@ -97,7 +114,16 @@ router.post(
   catchErrors(async (req, res) => {
     const actor = getCurrentUser(req);
     const value = validate(returnValidation.rejectReturn, { ...req.body, returnId: req.params.returnId });
-    res.json(okResponse(await ReturnService.rejectReturn(value.returnId, value.reason, actor), "Return rejected"));
+    const updated = await ReturnService.rejectReturn(value.returnId, value.reason, actor);
+    await auditService.reject(req, {
+      module: "returns",
+      entityId: value.returnId,
+      entityType: "Return",
+      newData: updated,
+      reason: value.reason,
+      description: "Return rejected",
+    });
+    res.json(okResponse(updated, "Return rejected"));
   }),
 );
 
@@ -108,7 +134,15 @@ router.post(
   catchErrors(async (req, res) => {
     const actor = getCurrentUser(req);
     const value = validate(returnValidation.scheduleReturn, { ...req.body, returnId: req.params.returnId });
-    res.json(okResponse(await ReturnService.scheduleReversePickup(value.returnId, value, actor)));
+    const updated = await ReturnService.scheduleReversePickup(value.returnId, value, actor);
+    await auditService.statusChange(req, {
+      module: "returns",
+      entityId: value.returnId,
+      entityType: "Return",
+      newData: updated,
+      description: "Return pickup scheduled",
+    });
+    res.json(okResponse(updated));
   }),
 );
 
@@ -118,7 +152,15 @@ router.post(
   catchErrors(async (req, res) => {
     const actor = getCurrentUser(req);
     const value = validate(returnValidation.shipReturn, { ...req.body, returnId: req.params.returnId });
-    res.json(okResponse(await ReturnService.shipReturnBack(value.returnId, value.trackingNumber, actor)));
+    const updated = await ReturnService.shipReturnBack(value.returnId, value.trackingNumber, actor);
+    await auditService.statusChange(req, {
+      module: "returns",
+      entityId: value.returnId,
+      entityType: "Return",
+      newData: updated,
+      description: "Return shipped back",
+    });
+    res.json(okResponse(updated));
   }),
 );
 
@@ -129,7 +171,15 @@ router.post(
   catchErrors(async (req, res) => {
     const actor = getCurrentUser(req);
     const value = validate(returnValidation.receiveReturn, { ...req.body, returnId: req.params.returnId });
-    res.json(okResponse(await ReturnService.receiveReturn(value.returnId, value.notes, actor)));
+    const updated = await ReturnService.receiveReturn(value.returnId, value.notes, actor);
+    await auditService.statusChange(req, {
+      module: "returns",
+      entityId: value.returnId,
+      entityType: "Return",
+      newData: updated,
+      description: "Return received",
+    });
+    res.json(okResponse(updated));
   }),
 );
 
@@ -140,7 +190,16 @@ router.post(
   catchErrors(async (req, res) => {
     const actor = getCurrentUser(req);
     const value = validate(returnValidation.qcReturn, { ...req.body, returnId: req.params.returnId });
-    res.json(okResponse(await ReturnService.qcReturn(value.returnId, value, actor)));
+    const updated = await ReturnService.qcReturn(value.returnId, value, actor);
+    await auditService.statusChange(req, {
+      module: "returns",
+      entityId: value.returnId,
+      entityType: "Return",
+      newData: updated,
+      reason: value.notes,
+      description: value.passed ? "Return QC passed" : "Return QC failed",
+    });
+    res.json(okResponse(updated));
   }),
 );
 
@@ -151,7 +210,16 @@ router.post(
   catchErrors(async (req, res) => {
     const actor = getCurrentUser(req);
     const value = validate(returnValidation.processRefund, { ...req.body, returnId: req.params.returnId });
-    res.json(okResponse(await ReturnService.processRefund(value.returnId, actor, value), "Refund processed successfully"));
+    const updated = await ReturnService.processRefund(value.returnId, actor, value);
+    await auditService.approve(req, {
+      module: "returns",
+      entityId: value.returnId,
+      entityType: "Return",
+      newData: updated,
+      reason: value.note,
+      description: "Return refund processed",
+    });
+    res.json(okResponse(updated, "Refund processed successfully"));
   }),
 );
 
@@ -162,7 +230,15 @@ router.post(
   catchErrors(async (req, res) => {
     const actor = getCurrentUser(req);
     const value = validate(returnValidation.replacementReturn, { ...req.body, returnId: req.params.returnId });
-    res.json(okResponse(await ReturnService.createReplacement(value.returnId, value, actor)));
+    const updated = await ReturnService.createReplacement(value.returnId, value, actor);
+    await auditService.statusChange(req, {
+      module: "returns",
+      entityId: value.returnId,
+      entityType: "Return",
+      newData: updated,
+      description: "Return replacement created",
+    });
+    res.json(okResponse(updated));
   }),
 );
 
@@ -173,7 +249,16 @@ router.post(
   catchErrors(async (req, res) => {
     const actor = getCurrentUser(req);
     const value = validate(returnValidation.closeReturn, { ...req.body, returnId: req.params.returnId });
-    res.json(okResponse(await ReturnService.closeReturn(value.returnId, value, actor)));
+    const updated = await ReturnService.closeReturn(value.returnId, value, actor);
+    await auditService.statusChange(req, {
+      module: "returns",
+      entityId: value.returnId,
+      entityType: "Return",
+      newData: updated,
+      reason: value.reason || value.note,
+      description: "Return closed",
+    });
+    res.json(okResponse(updated));
   }),
 );
 

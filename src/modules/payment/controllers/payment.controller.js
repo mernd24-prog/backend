@@ -1,6 +1,7 @@
 const { okResponse } = require("../../../shared/http/reply");
 const { PaymentService } = require("../services/payment.service");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
+const { auditService } = require("../../../shared/logger/audit.service");
 
 class PaymentController {
   constructor({ paymentService = new PaymentService() } = {}) {
@@ -27,6 +28,13 @@ class PaymentController {
   updateCodConfig = async (req, res) => {
     const actor = getCurrentUser(req);
     const config = await this.paymentService.updateCodConfig(req.body, actor);
+    await auditService.update(req, {
+      module: "payments",
+      entityId: "cod",
+      entityType: "PaymentMethodConfig",
+      newData: config,
+      description: "Updated Cash on Delivery payment settings",
+    });
     res.json(okResponse(config));
   };
 
@@ -48,15 +56,35 @@ class PaymentController {
     res.json(okResponse(payments));
   };
 
+  getAdminPayment = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const payment = await this.paymentService.getPaymentForAdmin(req.params.paymentId, actor);
+    res.json(okResponse(payment));
+  };
+
   approveManual = async (req, res) => {
     const actor = getCurrentUser(req);
     const payment = await this.paymentService.approveManualPayment(req.params.paymentId, req.body, actor);
+    await auditService.approve(req, {
+      module: "payments",
+      entityId: req.params.paymentId,
+      entityType: "Payment",
+      newData: payment,
+      reason: req.body.reason || "manual_payment_approved",
+    });
     res.json(okResponse(payment));
   };
 
   rejectManual = async (req, res) => {
     const actor = getCurrentUser(req);
     const payment = await this.paymentService.rejectManualPayment(req.params.paymentId, req.body, actor);
+    await auditService.reject(req, {
+      module: "payments",
+      entityId: req.params.paymentId,
+      entityType: "Payment",
+      newData: payment,
+      reason: req.body.reason,
+    });
     res.json(okResponse(payment));
   };
 

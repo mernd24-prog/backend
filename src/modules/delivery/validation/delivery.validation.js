@@ -2,6 +2,7 @@
 
 const Joi = require("joi");
 const { DELIVERY_STATUS, SHIPPING_MODES } = require("../models/delivery.model");
+const uuid = Joi.string().guid({ version: ["uuidv4", "uuidv5"] });
 
 const serviceabilitySchema = Joi.object({
   body: Joi.object({}).required(),
@@ -26,14 +27,20 @@ const rateSchema = Joi.object({
 const listShipmentsSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
-    orderId: Joi.string(),
-    sellerId: Joi.string(),
+    orderId: uuid,
+    sellerId: Joi.string().max(64),
     status: Joi.string().valid(...Object.values(DELIVERY_STATUS)),
     courierName: Joi.string(),
     awbNumber: Joi.string(),
+    search: Joi.string().trim().max(160),
     cod: Joi.boolean(),
     fromDate: Joi.date().iso(),
     toDate: Joi.date().iso(),
+    sortBy: Joi.string().valid(
+      "createdAt", "created_at", "status", "sellerId", "seller_id",
+      "courierName", "courier_name", "expectedDeliveryAt", "expected_delivery_at", "cod",
+    ).default("created_at"),
+    sortDir: Joi.string().valid("asc", "desc").default("desc"),
     limit: Joi.number().integer().min(1).max(200).default(50),
     offset: Joi.number().integer().min(0).default(0),
   }).required(),
@@ -51,8 +58,8 @@ const packageSnapshotSchema = Joi.object({
 
 const createShipmentSchema = Joi.object({
   body: Joi.object({
-    orderId: Joi.string().required(),
-    sellerId: Joi.string().allow("", null),
+    orderId: uuid.required(),
+    sellerId: Joi.string().max(64).allow("", null),
     provider: Joi.string().default("manual"),
     courierName: Joi.string().allow("", null),
     awbNumber: Joi.string().allow("", null),
@@ -77,7 +84,7 @@ const shipmentParamSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({}).required(),
   params: Joi.object({
-    shipmentId: Joi.string().required(),
+    shipmentId: uuid.required(),
   }).required(),
 });
 
@@ -88,19 +95,20 @@ const trackingEventBody = {
   note: Joi.string().max(1000).allow("", null),
   deliveryException: Joi.string().allow("", null),
   rawPayload: Joi.object().default({}),
+  eventId: Joi.string().trim().max(180).allow("", null),
 };
 
 const trackingEventSchema = Joi.object({
   body: Joi.object(trackingEventBody).required(),
   query: Joi.object({}).required(),
   params: Joi.object({
-    shipmentId: Joi.string().required(),
+    shipmentId: uuid.required(),
   }).required(),
 });
 
 const trackingWebhookSchema = Joi.object({
   body: Joi.object({
-    shipmentId: Joi.string().required(),
+    shipmentId: uuid.required(),
     provider: Joi.string().default("manual"),
     ...trackingEventBody,
   }).required(),
@@ -110,7 +118,7 @@ const trackingWebhookSchema = Joi.object({
 
 const createManifestSchema = Joi.object({
   body: Joi.object({
-    shipmentIds: Joi.array().items(Joi.string()).min(1).required(),
+    shipmentIds: Joi.array().items(uuid).min(1).unique().required(),
     manifestNumber: Joi.string().allow("", null),
     courierName: Joi.string().allow("", null),
     status: Joi.string().default("created"),
@@ -124,17 +132,17 @@ const orderDeliveryParamSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({}).required(),
   params: Joi.object({
-    orderId: Joi.string().required(),
+    orderId: uuid.required(),
   }).required(),
 });
 
 const createEWayBillSchema = Joi.object({
   body: Joi.object({
-    invoiceId: Joi.string().allow("", null),
+    invoiceId: uuid.allow("", null),
     eWayBillNumber: Joi.string().allow("", null),
     status: Joi.string().valid(...Object.values(DELIVERY_STATUS), "initiated").default("initiated"),
     validFrom: Joi.date().iso().allow(null),
-    validUntil: Joi.date().iso().allow(null),
+    validUntil: Joi.date().iso().min(Joi.ref("validFrom")).allow(null),
     transporterName: Joi.string().allow("", null),
     vehicleNumber: Joi.string().allow("", null),
     distanceKm: Joi.number().integer().min(0).allow(null),
@@ -142,7 +150,7 @@ const createEWayBillSchema = Joi.object({
   }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({
-    orderId: Joi.string().required(),
+    orderId: uuid.required(),
   }).required(),
 });
 
@@ -154,7 +162,7 @@ const updateEWayBillStatusSchema = Joi.object({
   }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({
-    ewayBillId: Joi.string().required(),
+    ewayBillId: uuid.required(),
   }).required(),
 });
 

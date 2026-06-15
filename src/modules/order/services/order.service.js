@@ -437,7 +437,7 @@ class OrderService {
     }
 
     if (nextStatus === ORDER_STATUS.CANCELLED) {
-      await this.inventoryService.releaseForOrder(orderId);
+      await this.applyCancellationInventorySideEffects(orderId, order, actor);
       await this.walletService.release(order.buyer_id, orderId);
       if (Number(order.wallet_discount_amount || 0) > 0 && [ORDER_STATUS.CONFIRMED, ORDER_STATUS.PACKED].includes(order.status)) {
         await this.walletService.credit(order.buyer_id, Number(order.wallet_discount_amount), {
@@ -603,6 +603,7 @@ class OrderService {
       cancelledBy: actor.userId || null,
       cancelledByRole: actor.role || null,
       cancelledAt: new Date().toISOString(),
+      sourceOrderStatus: order.status,
       paymentProvider,
       paymentId: latestPayment?.id || null,
       paymentStatus,
@@ -622,6 +623,29 @@ class OrderService {
       historyMetadata: { cancellation },
       orderMetadata: { cancellation },
     };
+  }
+
+  async applyCancellationInventorySideEffects(orderId, order, actor = {}) {
+    const reason = actor.reason || actor.cancellationReason || "order_cancelled";
+    const options = {
+      actor,
+      reason: "order_cancelled",
+      metadata: {
+        source: "order_cancellation",
+        orderStatus: order.status,
+        cancellationReason: reason,
+      },
+    };
+
+    if ([ORDER_STATUS.PENDING_PAYMENT, ORDER_STATUS.PAYMENT_FAILED].includes(order.status)) {
+      return this.inventoryService.releaseForOrder(orderId, options);
+    }
+
+    if ([ORDER_STATUS.CONFIRMED, ORDER_STATUS.PACKED].includes(order.status)) {
+      return this.inventoryService.restockForOrder(orderId, options);
+    }
+
+    return null;
   }
 
   async applyCancellationPaymentSideEffects(orderId, order, actor = {}) {

@@ -3,6 +3,7 @@
 const { okResponse } = require("../../../shared/http/reply");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
 const { DeliveryService } = require("../services/delivery.service");
+const { auditService } = require("../../../shared/logger/audit.service");
 
 class DeliveryController {
   constructor({ deliveryService = new DeliveryService() } = {}) {
@@ -28,6 +29,12 @@ class DeliveryController {
   createShipment = async (req, res) => {
     const actor = getCurrentUser(req);
     const result = await this.deliveryService.createShipment(req.body, actor);
+    await auditService.create(req, {
+      module: "delivery",
+      entityId: result?.id,
+      entityType: "Shipment",
+      newData: result,
+    });
     res.status(201).json(okResponse(result));
   };
 
@@ -40,23 +47,45 @@ class DeliveryController {
   addTrackingEvent = async (req, res) => {
     const actor = getCurrentUser(req);
     const result = await this.deliveryService.addTrackingEvent(req.params.shipmentId, req.body, actor);
+    await auditService.statusChange(req, {
+      module: "delivery",
+      entityId: req.params.shipmentId,
+      entityType: "Shipment",
+      newData: result,
+      reason: req.body.note || req.body.deliveryException || `tracking_${req.body.status}`,
+    });
     res.json(okResponse(result));
   };
 
   trackingWebhook = async (req, res) => {
-    const result = await this.deliveryService.handleTrackingWebhook(req.body);
+    const result = await this.deliveryService.handleTrackingWebhook(req.body, {
+      signature: req.headers["x-delivery-signature"],
+      rawBody: req.rawBody,
+    });
     res.json(okResponse(result));
   };
 
   createManifest = async (req, res) => {
     const actor = getCurrentUser(req);
     const result = await this.deliveryService.createManifest(req.body, actor);
+    await auditService.create(req, {
+      module: "delivery",
+      entityId: result?.id,
+      entityType: "ShipmentManifest",
+      newData: result,
+    });
     res.status(201).json(okResponse(result));
   };
 
   createEWayBill = async (req, res) => {
     const actor = getCurrentUser(req);
     const result = await this.deliveryService.createEWayBill(req.params.orderId, req.body, actor);
+    await auditService.create(req, {
+      module: "delivery",
+      entityId: result?.id,
+      entityType: "EWayBill",
+      newData: result,
+    });
     res.status(201).json(okResponse(result));
   };
 
@@ -69,6 +98,13 @@ class DeliveryController {
   updateEWayBillStatus = async (req, res) => {
     const actor = getCurrentUser(req);
     const result = await this.deliveryService.updateEWayBillStatus(req.params.ewayBillId, req.body, actor);
+    await auditService.statusChange(req, {
+      module: "delivery",
+      entityId: req.params.ewayBillId,
+      entityType: "EWayBill",
+      newData: result,
+      reason: `eway_bill_${req.body.status}`,
+    });
     res.json(okResponse(result));
   };
 }

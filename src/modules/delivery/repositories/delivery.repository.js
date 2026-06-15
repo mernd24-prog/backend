@@ -29,6 +29,8 @@ class DeliveryRepository {
         vehicle_number: payload.vehicleNumber || null,
         distance_km: payload.distanceKm || null,
         payload_snapshot: payload.payloadSnapshot || {},
+        created_by: payload.createdBy || null,
+        updated_by: payload.updatedBy || payload.createdBy || null,
       })
       .returning("*");
 
@@ -153,22 +155,59 @@ class DeliveryRepository {
     status = null,
     courierName = null,
     awbNumber = null,
+    search = null,
     cod = null,
     fromDate = null,
     toDate = null,
+    sortBy = "created_at",
+    sortDir = "desc",
     limit = 50,
     offset = 0,
   } = {}) {
-    const query = knex("shipments").orderBy("created_at", "desc").limit(limit).offset(offset);
+    const query = knex("shipments");
     if (orderId) query.where("order_id", orderId);
     if (sellerId) query.where("seller_id", sellerId);
     if (status) query.where("status", status);
     if (courierName) query.whereILike("courier_name", `%${courierName}%`);
     if (awbNumber) query.where((builder) => builder.whereILike("awb_number", `%${awbNumber}%`).orWhereILike("tracking_number", `%${awbNumber}%`));
+    if (search) {
+      query.where((builder) => builder
+        .whereILike("awb_number", `%${search}%`)
+        .orWhereILike("tracking_number", `%${search}%`)
+        .orWhereILike("courier_name", `%${search}%`)
+        .orWhereRaw("order_id::text ILIKE ?", [`%${search}%`])
+        .orWhereRaw("id::text ILIKE ?", [`%${search}%`]));
+    }
     if (cod !== null && cod !== undefined) query.where("cod", cod === true || cod === "true");
     if (fromDate) query.where("created_at", ">=", fromDate);
     if (toDate) query.where("created_at", "<=", toDate);
-    return query;
+
+    const sortColumns = {
+      createdAt: "created_at",
+      created_at: "created_at",
+      status: "status",
+      sellerId: "seller_id",
+      seller_id: "seller_id",
+      courierName: "courier_name",
+      courier_name: "courier_name",
+      expectedDeliveryAt: "expected_delivery_at",
+      expected_delivery_at: "expected_delivery_at",
+      cod: "cod",
+    };
+    const orderColumn = sortColumns[sortBy] || "created_at";
+    const direction = String(sortDir).toLowerCase() === "asc" ? "asc" : "desc";
+    const [{ count }] = await query.clone().clearSelect().clearOrder().count({ count: "*" });
+    const items = await query.clone()
+      .orderBy(orderColumn, direction)
+      .orderBy("created_at", "desc")
+      .limit(limit)
+      .offset(offset);
+    return { items, total: Number(count || 0), limit: Number(limit), offset: Number(offset) };
+  }
+
+  async findShipmentsByIds(shipmentIds = []) {
+    if (!shipmentIds.length) return [];
+    return knex("shipments").whereIn("id", shipmentIds);
   }
 
   async findShipmentById(shipmentId) {
@@ -248,12 +287,69 @@ class DeliveryRepository {
           updated_at: knex.fn.now(),
         });
 
+      if (payload.shipmentIds?.length) {
+        const shipments = await trx("shipments")
+          .select("id", "order_id")
+          .whereIn("id", payload.shipmentIds);
+        await trx("shipment_tracking_events").insert(shipments.map((shipment) => ({
+          id: uuidv4(),
+          shipment_id: shipment.id,
+          order_id: shipment.order_id,
+          status: "manifested",
+          event_time: new Date(),
+          note: `Added to manifest ${manifest.manifest_number}`,
+          source: "manual",
+          raw_payload: { manifestId: manifest.id, manifestNumber: manifest.manifest_number },
+          actor_id: payload.createdBy || null,
+        })));
+      }
+
       await trx.commit();
       return manifest;
     } catch (error) {
       await trx.rollback();
       throw error;
     }
+  }
+
+  async claimWebhookEvent(payload) {
+    const id = uuidv4();
+    const result = await knex.raw(
+      `INSERT INTO delivery_webhook_events
+        (id, provider, provider_event_id, shipment_id, status, payload)
+       VALUES (?, ?, ?, ?, 'processing', ?::jsonb)
+       ON CONFLICT (provider, provider_event_id)
+       DO UPDATE SET
+         status = 'processing',
+         shipment_id = EXCLUDED.shipment_id,
+         payload = EXCLUDED.payload,
+         updated_at = NOW()
+       WHERE delivery_webhook_events.status = 'failed'
+       RETURNING *`,
+      [
+        id,
+        payload.provider,
+        payload.providerEventId,
+        payload.shipmentId || null,
+        JSON.stringify(payload.payload || {}),
+      ],
+    );
+    return result.rows?.[0] || null;
+  }
+
+  async completeWebhookEvent(provider, providerEventId, status, errorMessage = null) {
+    const [event] = await knex("delivery_webhook_events")
+      .where({ provider, provider_event_id: providerEventId })
+      .update({
+        status,
+        payload: knex.raw(
+          "COALESCE(payload, '{}'::jsonb) || ?::jsonb",
+          [JSON.stringify(errorMessage ? { processingError: errorMessage } : {})],
+        ),
+        updated_at: knex.fn.now(),
+      })
+      .returning("*");
+    return event || null;
   }
 
   async findEWayBillByOrderId(orderId) {
@@ -278,6 +374,7 @@ class DeliveryRepository {
         status: payload.status,
         transporter_name: payload.transporterName,
         vehicle_number: payload.vehicleNumber,
+        updated_by: payload.updatedBy || null,
         updated_at: knex.fn.now(),
       })
       .returning("*");

@@ -193,6 +193,13 @@ const env = {
     missingKeys: razorpayMissingKeys,
     mockAutoCapture: readBooleanFlag(["RAZORPAY_MOCK_AUTO_CAPTURE"], true),
   },
+  delivery: {
+    webhookSecret: process.env.DELIVERY_WEBHOOK_SECRET || "",
+    requireWebhookSignature: readBooleanFlag(
+      ["REQUIRE_DELIVERY_WEBHOOK_SIGNATURE"],
+      isProductionMode,
+    ),
+  },
   commerce: {
     businessState: process.env.BUSINESS_STATE || "KARNATAKA",
     gstinMarketplace: process.env.GSTIN_MARKETPLACE || "",

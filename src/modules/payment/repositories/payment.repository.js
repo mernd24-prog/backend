@@ -43,6 +43,10 @@ class PaymentRepository {
       await trx.commit();
     } catch (error) {
       await trx.rollback();
+      if (error?.code === "23505" && payload.idempotencyKey) {
+        const existing = await this.findByIdempotencyKey(payload.idempotencyKey);
+        if (existing) return existing;
+      }
       throw error;
     }
 
@@ -128,6 +132,47 @@ class PaymentRepository {
     return event || null;
   }
 
+  async claimWebhookEvent(payload) {
+    const id = uuidv4();
+    const { rows } = await postgresPool.query(
+      `INSERT INTO payment_webhook_events
+        (id, provider, provider_event_id, event_type, payment_id, order_id, status, payload)
+       VALUES ($1, $2, $3, $4, $5, $6, 'processing', $7::jsonb)
+       ON CONFLICT (provider, provider_event_id)
+       DO UPDATE SET
+         status = 'processing',
+         payment_id = EXCLUDED.payment_id,
+         order_id = EXCLUDED.order_id,
+         payload = EXCLUDED.payload
+       WHERE payment_webhook_events.status = 'failed'
+       RETURNING *`,
+      [
+        id,
+        payload.provider,
+        payload.providerEventId,
+        payload.eventType,
+        payload.paymentId || null,
+        payload.orderId || null,
+        JSON.stringify(payload.payload || {}),
+      ],
+    );
+    return rows[0] || null;
+  }
+
+  async completeWebhookEvent(provider, providerEventId, status, errorMessage = null) {
+    const [event] = await knex("payment_webhook_events")
+      .where({ provider, provider_event_id: providerEventId })
+      .update({
+        status,
+        payload: knex.raw(
+          "COALESCE(payload, '{}'::jsonb) || ?::jsonb",
+          [JSON.stringify(errorMessage ? { processingError: errorMessage } : {})],
+        ),
+      })
+      .returning("*");
+    return event || null;
+  }
+
   async updatePaymentStatus(paymentId, payload, event = null) {
     const trx = await knex.transaction();
 
@@ -169,6 +214,8 @@ class PaymentRepository {
     search = null,
     fromDate = null,
     toDate = null,
+    sortBy = "created_at",
+    sortDir = "desc",
     limit = 50,
     offset = 0,
   } = {}) {
@@ -207,18 +254,43 @@ class PaymentRepository {
     }
 
     const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-    values.push(limit, offset);
+    const sortColumns = {
+      createdAt: "created_at",
+      created_at: "created_at",
+      amount: "amount",
+      status: "status",
+      provider: "provider",
+      buyerId: "buyer_id",
+      buyer_id: "buyer_id",
+      orderId: "order_id",
+      order_id: "order_id",
+      transactionReference: "transaction_reference",
+      transaction_reference: "transaction_reference",
+    };
+    const orderColumn = sortColumns[sortBy] || "created_at";
+    const orderDirection = String(sortDir).toLowerCase() === "asc" ? "ASC" : "DESC";
 
+    const countResult = await postgresPool.query(
+      `SELECT COUNT(*)::int AS total FROM payments ${whereSql}`,
+      values,
+    );
+
+    const rowValues = [...values, limit, offset];
     const { rows } = await postgresPool.query(
       `SELECT *
        FROM payments
        ${whereSql}
-       ORDER BY created_at DESC
+       ORDER BY ${orderColumn} ${orderDirection}, created_at DESC
        LIMIT $${index++}
        OFFSET $${index}`,
-      values,
+      rowValues,
     );
-    return rows;
+    return {
+      items: rows,
+      total: Number(countResult.rows[0]?.total || 0),
+      limit: Number(limit),
+      offset: Number(offset),
+    };
   }
 }
 
