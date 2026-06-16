@@ -12,6 +12,7 @@ const orderTable = {
     "discount_amount",
     "tax_amount",
     "total_amount",
+    "shipping_fee_amount",
     "shipping_address",
     "metadata",
     "created_by",

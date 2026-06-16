@@ -2,6 +2,7 @@ const { knex } = require("../../../infrastructure/postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
 const { logger } = require("../../../shared/logger/logger");
 const { AppError } = require("../../../shared/errors/app-error");
+const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
 
 class SellerCommissionService {
   constructor() {
@@ -96,11 +97,16 @@ class SellerCommissionService {
       throw new AppError("Invalid commission input", 400);
     }
 
+    const commerceSettings = await commerceSettingsService.getSettings();
+    const commissionTaxRate = commerceSettings.finance.chargePlatformFeeTaxToSeller
+      ? Number(commerceSettings.finance.platformFeeTaxRate || 0) / 100
+      : 0;
+
     if (sellerId && Number(orderAmount || 0) > 0) {
       const rate = this.getCommissionRate(sellerTier);
       const amount = this.round(orderAmount);
       const commissionAmount = this.round(amount * rate);
-      const taxAmount = this.round(commissionAmount * this.commissionTaxRate);
+      const taxAmount = this.round(commissionAmount * commissionTaxRate);
       return [{
         sellerId,
         orderId,
@@ -113,7 +119,12 @@ class SellerCommissionService {
         netAmount: this.round(amount - commissionAmount - taxAmount),
         currency: "INR",
         sourceStatus: "manual",
-        metadata: { source: "manual_commission_input" },
+        metadata: {
+          source: "manual_commission_input",
+          sellerPayoutBase: commerceSettings.finance.sellerPayoutBase,
+          platformFeeTaxRate: Number(commerceSettings.finance.platformFeeTaxRate || 0),
+          chargePlatformFeeTaxToSeller: Boolean(commerceSettings.finance.chargePlatformFeeTaxToSeller),
+        },
       }];
     }
 
@@ -129,6 +140,7 @@ class SellerCommissionService {
         "oi.product_id",
         "oi.variant_id",
         "oi.variant_sku",
+        "oi.tax_breakup",
         "oi.pricing_snapshot",
         "o.status as order_status",
         "o.currency",
@@ -159,7 +171,17 @@ class SellerCommissionService {
       };
       const lineTotal = Number(row.line_total || 0);
       const discountAmount = Number(row.discount_amount || 0);
-      const itemGross = Math.max(lineTotal - discountAmount, 0);
+      const grossAfterDiscount = Math.max(lineTotal - discountAmount, 0);
+      const taxBreakup = this.parseJson(row.tax_breakup, {});
+      const pricing = this.parseJson(row.pricing_snapshot, {});
+      const itemGross = Number(
+        (
+          pricing.sellerPayoutBaseAmount ??
+          (commerceSettings.finance.sellerPayoutBase === "taxable_ex_gst"
+            ? taxBreakup.taxableAmount
+            : grossAfterDiscount)
+        ) || 0,
+      );
       current.orderItemIds.push(row.id);
       current.amount += itemGross;
       current.platformFeeAmount += Number(row.platform_fee_amount || 0);
@@ -169,7 +191,11 @@ class SellerCommissionService {
         variantId: row.variant_id,
         variantSku: row.variant_sku,
         amount: this.round(itemGross),
+        grossAfterDiscount: this.round(grossAfterDiscount),
+        taxableAmount: this.round(taxBreakup.taxableAmount ?? grossAfterDiscount),
+        sellerPayoutBase: pricing.sellerPayoutBase || commerceSettings.finance.sellerPayoutBase,
         platformFeeAmount: this.round(row.platform_fee_amount || 0),
+        platformFeeTaxAmount: this.round(pricing.platformFeeTaxAmount || 0),
       });
       grouped.set(key, current);
     });
@@ -180,7 +206,7 @@ class SellerCommissionService {
       const platformFeeAmount = this.round(group.platformFeeAmount);
       const commissionAmount = platformFeeAmount > 0 ? platformFeeAmount : this.round(amount * rate);
       const effectiveRate = amount > 0 ? this.round(commissionAmount / amount) : rate;
-      const taxAmount = this.round(commissionAmount * this.commissionTaxRate);
+      const taxAmount = this.round(commissionAmount * commissionTaxRate);
       return {
         sellerId: group.sellerId,
         orderId,
@@ -198,6 +224,9 @@ class SellerCommissionService {
           itemCount: group.orderItemIds.length,
           quantity: group.quantity,
           platformFeeAmount,
+          sellerPayoutBase: commerceSettings.finance.sellerPayoutBase,
+          platformFeeTaxRate: Number(commerceSettings.finance.platformFeeTaxRate || 0),
+          chargePlatformFeeTaxToSeller: Boolean(commerceSettings.finance.chargePlatformFeeTaxToSeller),
           products: group.products,
         },
       };

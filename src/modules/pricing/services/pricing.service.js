@@ -11,6 +11,8 @@ const { redis } = require("../../../infrastructure/redis/redis-client");
 const { env } = require("../../../config/env");
 const { isPublicProduct } = require("../../../shared/catalog/public-product-filter");
 const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
+const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
+const { sellerChargeSettingsService } = require("../../seller/services/seller-charge-settings.service");
 
 class PricingService {
   constructor({
@@ -144,6 +146,7 @@ class PricingService {
 
     const subtotalAmount = pricedItems.reduce((sum, item) => sum + item.lineTotal, 0);
     const discount = await this.calculateDiscount(couponCode, subtotalAmount, userId);
+    const commerceSettings = await commerceSettingsService.getSettings();
     const taxBreakup = await this.calculateTaxBreakup(
       pricedItems,
       subtotalAmount,
@@ -153,28 +156,62 @@ class PricingService {
     const platformFee = await this.calculatePlatformFee(pricedItems);
     for (const item of pricedItems) {
       const fee = platformFee.breakup.find((entry) => entry.productId === item.productId);
-      if (fee) {
-        item.platformFeeAmount = fee.totalFee;
-        item.settlementAmount = Number(
-          Math.max(0, Number(item.taxableAmount || item.lineTotal || 0) - Number(fee.totalFee || 0)).toFixed(2),
-        );
-        item.pricingSnapshot = {
-          commissionPercent: fee.commissionPercent,
-          commissionFee: fee.commissionFee,
-          fixedFee: fee.fixedFee,
-          closingFee: fee.closingFee,
-          platformFeeAmount: fee.totalFee,
-        };
-      }
+      const platformFeeAmount = Number(fee?.totalFee || 0);
+      const platformFeeTaxAmount = commerceSettings.finance.chargePlatformFeeTaxToSeller
+        ? Number(((platformFeeAmount * Number(commerceSettings.finance.platformFeeTaxRate || 0)) / 100).toFixed(2))
+        : 0;
+      const discountedLineTotal = Number(item.discountedLineTotal ?? item.lineTotal ?? 0);
+      const sellerPayoutBaseAmount = commerceSettings.finance.sellerPayoutBase === "taxable_ex_gst"
+        ? Number(item.taxableAmount || 0)
+        : discountedLineTotal;
+      item.platformFeeAmount = platformFeeAmount;
+      item.platformFeeTaxAmount = platformFeeTaxAmount;
+      item.sellerPayoutBaseAmount = Number(sellerPayoutBaseAmount.toFixed(2));
+      item.productTaxLiabilityAmount = Number(item.taxAmount || 0);
+      item.settlementAmount = Number(
+        Math.max(0, sellerPayoutBaseAmount - platformFeeAmount - platformFeeTaxAmount).toFixed(2),
+      );
+      item.pricingSnapshot = {
+        commissionPercent: fee?.commissionPercent || 0,
+        commissionFee: fee?.commissionFee || 0,
+        fixedFee: fee?.fixedFee || 0,
+        closingFee: fee?.closingFee || 0,
+        platformFeeAmount,
+        platformFeeTaxAmount,
+        platformFeeTaxRate: Number(commerceSettings.finance.platformFeeTaxRate || 0),
+        chargePlatformFeeTaxToSeller: Boolean(commerceSettings.finance.chargePlatformFeeTaxToSeller),
+        sellerPayoutBase: commerceSettings.finance.sellerPayoutBase,
+        sellerPayoutBaseAmount: item.sellerPayoutBaseAmount,
+        productTaxLiabilityAmount: item.productTaxLiabilityAmount,
+      };
     }
-    const codCharge = await this.calculateCodCharge(paymentProvider, subtotalAmount - discount.discountAmount);
-    const walletBreakup = await this.calculateWalletUsage(userId, walletAmount, subtotalAmount);
     const customerItemsAmount = Number((subtotalAmount - discount.discountAmount).toFixed(2));
+    const deliveryCharge = await sellerChargeSettingsService.calculateDeliveryCharges(
+      pricedItems,
+      shippingAddress,
+    );
+    const codCharge = await this.calculateCodCharge(
+      paymentProvider,
+      customerItemsAmount,
+      commerceSettings,
+      shippingAddress,
+      pricedItems,
+    );
     const totalAmount = Number(
-      (customerItemsAmount + taxBreakup.taxPayableAmount + codCharge.amount).toFixed(2),
+      (customerItemsAmount + taxBreakup.taxPayableAmount + deliveryCharge.amount + codCharge.amount).toFixed(2),
+    );
+    const walletBreakup = await this.calculateWalletUsage(
+      userId,
+      walletAmount,
+      totalAmount,
+      commerceSettings.wallet,
     );
     const payableAmount = Number((totalAmount - walletBreakup.walletAppliedAmount).toFixed(2));
-    const settlement = this.calculateSellerSettlement(pricedItems);
+    const settlement = this.calculateSellerSettlement(
+      pricedItems,
+      commerceSettings.finance,
+      deliveryCharge,
+    );
 
     return {
       items: pricedItems,
@@ -194,43 +231,82 @@ class PricingService {
         paymentProvider,
         codChargeAmount: codCharge.amount,
         codChargeBreakup: codCharge.breakup,
+        deliveryChargeAmount: deliveryCharge.amount,
+        shippingFeeAmount: deliveryCharge.amount,
+        deliveryChargeBreakup: deliveryCharge.breakup,
         totalAmount,
         payableAmount,
         appliedCouponCode: discount.appliedCouponCode,
+        commerceSettingsSnapshot: {
+          finance: commerceSettings.finance,
+          wallet: commerceSettings.wallet,
+          cod: commerceSettings.cod,
+          checkout: commerceSettings.checkout,
+        },
       },
       couponToConsume: discount.couponToConsume,
       walletToReserveAmount: walletBreakup.walletAppliedAmount,
     };
   }
 
-  calculateSellerSettlement(pricedItems) {
+  calculateSellerSettlement(pricedItems, financeSettings = {}, deliveryCharge = null) {
     const sellers = new Map();
     for (const item of pricedItems) {
       const sellerId = item.sellerId || "platform";
       const current = sellers.get(sellerId) || {
         sellerId,
         grossSalesAmount: 0,
+        sellerPayoutBaseAmount: 0,
         taxableAmount: 0,
         taxAmount: 0,
         platformFeeAmount: 0,
+        platformFeeTaxAmount: 0,
+        productTaxLiabilityAmount: 0,
         sellerPayoutAmount: 0,
       };
       current.grossSalesAmount += Number(item.lineTotal || 0);
+      current.sellerPayoutBaseAmount += Number(item.sellerPayoutBaseAmount || 0);
       current.taxableAmount += Number(item.taxableAmount || 0);
       current.taxAmount += Number(item.taxAmount || 0);
       current.platformFeeAmount += Number(item.platformFeeAmount || 0);
+      current.platformFeeTaxAmount += Number(item.platformFeeTaxAmount || 0);
+      current.productTaxLiabilityAmount += Number(item.productTaxLiabilityAmount || 0);
       current.sellerPayoutAmount += Number(item.settlementAmount || 0);
       sellers.set(sellerId, current);
     }
 
-    const normalized = [...sellers.values()].map((seller) => ({
-      ...seller,
-      grossSalesAmount: Number(seller.grossSalesAmount.toFixed(2)),
-      taxableAmount: Number(seller.taxableAmount.toFixed(2)),
-      taxAmount: Number(seller.taxAmount.toFixed(2)),
-      platformFeeAmount: Number(seller.platformFeeAmount.toFixed(2)),
-      sellerPayoutAmount: Number(seller.sellerPayoutAmount.toFixed(2)),
-    }));
+    const shippingBySeller = new Map(
+      (deliveryCharge?.breakup?.sellers || []).map((seller) => [
+        String(seller.sellerId),
+        Number(seller.chargeAmount || 0),
+      ]),
+    );
+    const shippingPolicy = financeSettings.shippingPolicy || "not_in_seller_payout";
+
+    const normalized = [...sellers.values()].map((seller) => {
+      const sellerDeliveryChargeAmount = Number(shippingBySeller.get(String(seller.sellerId)) || 0);
+      const shippingReimbursementAmount = shippingPolicy === "reimburse_seller" ? sellerDeliveryChargeAmount : 0;
+      const shippingDeductionAmount = shippingPolicy === "deduct_from_seller" ? sellerDeliveryChargeAmount : 0;
+      const sellerPayoutAmount = Math.max(
+        0,
+        seller.sellerPayoutAmount + shippingReimbursementAmount - shippingDeductionAmount,
+      );
+      return {
+        ...seller,
+        grossSalesAmount: Number(seller.grossSalesAmount.toFixed(2)),
+        sellerPayoutBaseAmount: Number(seller.sellerPayoutBaseAmount.toFixed(2)),
+        taxableAmount: Number(seller.taxableAmount.toFixed(2)),
+        taxAmount: Number(seller.taxAmount.toFixed(2)),
+        platformFeeAmount: Number(seller.platformFeeAmount.toFixed(2)),
+        platformFeeTaxAmount: Number(seller.platformFeeTaxAmount.toFixed(2)),
+        productTaxLiabilityAmount: Number(seller.productTaxLiabilityAmount.toFixed(2)),
+        sellerDeliveryChargeAmount: Number(sellerDeliveryChargeAmount.toFixed(2)),
+        shippingReimbursementAmount: Number(shippingReimbursementAmount.toFixed(2)),
+        shippingDeductionAmount: Number(shippingDeductionAmount.toFixed(2)),
+        shippingPolicy,
+        sellerPayoutAmount: Number(sellerPayoutAmount.toFixed(2)),
+      };
+    });
 
     return {
       sellers: normalized,
@@ -238,14 +314,28 @@ class PricingService {
     };
   }
 
-  async calculateCodCharge(paymentProvider, orderAmount) {
+  async calculateCodCharge(paymentProvider, orderAmount, commerceSettings = null, shippingAddress = {}, pricedItems = []) {
     if (paymentProvider !== PAYMENT_PROVIDER.COD) {
       return { amount: 0, breakup: null };
+    }
+
+    const settings = commerceSettings || await commerceSettingsService.getSettings();
+    if (!commerceSettingsService.isCodAllowedForAddress(settings, shippingAddress)) {
+      throw new AppError("Cash on Delivery is not available for this delivery pincode", 400);
     }
 
     const config = await this.paymentMethodConfigRepository.getCodConfig();
     if (!config.enabled) {
       throw new AppError("Cash on Delivery is currently disabled", 400);
+    }
+
+    const sellerCod = await sellerChargeSettingsService.evaluateCodForItems(
+      pricedItems,
+      shippingAddress,
+    );
+    if (!sellerCod.allowed) {
+      const sellerId = sellerCod.blockers[0]?.sellerId || "seller";
+      throw new AppError(`Cash on Delivery is not available for seller ${sellerId}`, 400);
     }
 
     const amount = Number(orderAmount || 0);
@@ -258,16 +348,24 @@ class PricingService {
       throw new AppError(`Cash on Delivery is available for orders up to ${max}`, 400);
     }
 
-    const charge = Number(Number(config.charge_amount || 0).toFixed(2));
+    const platformCharge = Number(Number(config.charge_amount || 0).toFixed(2));
+    const sellerCharge = Number(Number(sellerCod.sellerChargeAmount || 0).toFixed(2));
+    const charge = Number((platformCharge + sellerCharge).toFixed(2));
     return {
       amount: charge,
       breakup: {
         method: PAYMENT_PROVIDER.COD,
         enabled: Boolean(config.enabled),
         chargeAmount: charge,
+        platformChargeAmount: platformCharge,
+        sellerChargeAmount: sellerCharge,
         minOrderAmount: min,
         maxOrderAmount: max,
         currency: config.currency || "INR",
+        availabilityMode: settings.cod?.availabilityMode || "all_pincodes",
+        collectionPolicy: settings.cod?.collectionPolicy || "platform_or_courier",
+        payoutRequiresCapture: settings.cod?.payoutRequiresCapture !== false,
+        sellerRules: sellerCod.sellers,
       },
     };
   }
@@ -324,7 +422,8 @@ class PricingService {
           ? Number(dealRule.capAmount)
           : null;
 
-      const commissionFee = Number(((item.lineTotal * commissionPercent) / 100).toFixed(2));
+      const feeBaseAmount = Number(item.discountedLineTotal ?? item.lineTotal ?? 0);
+      const commissionFee = Number(((feeBaseAmount * commissionPercent) / 100).toFixed(2));
       const fixedFee = Number((fixedFeeAmount * item.quantity).toFixed(2));
       const closingFee = Number((closingFeeAmount * item.quantity).toFixed(2));
       const rawItemFeeTotal = Number((commissionFee + fixedFee + closingFee).toFixed(2));
@@ -337,6 +436,7 @@ class PricingService {
         dealId: item.dealId || null,
         category: item.category,
         quantity: item.quantity,
+        feeBaseAmount,
         commissionPercent,
         commissionFee,
         fixedFee,
@@ -451,6 +551,8 @@ class PricingService {
       const itemDiscount = Number((discountAmount * proportion).toFixed(2));
       const discountedLineTotal = Number((item.lineTotal - itemDiscount).toFixed(2));
       let taxableAmount = discountedLineTotal;
+      item.discountAmount = itemDiscount;
+      item.discountedLineTotal = discountedLineTotal;
 
       let itemTax = 0;
       let itemCess = 0;
@@ -552,8 +654,8 @@ class PricingService {
     return result;
   }
 
-  async calculateWalletUsage(userId, requestedAmount, subtotalAmount) {
-    if (!userId || !requestedAmount || requestedAmount <= 0) {
+  async calculateWalletUsage(userId, requestedAmount, eligibleAmount, walletPolicy = {}) {
+    if (!userId || walletPolicy.partialPaymentMode === "disabled") {
       return { walletAppliedAmount: 0 };
     }
 
@@ -562,12 +664,24 @@ class PricingService {
       return { walletAppliedAmount: 0 };
     }
 
-    const maxWalletByPolicy = (subtotalAmount * env.commerce.maxWalletUsagePerOrderPercent) / 100;
+    const requested = Number(requestedAmount || 0);
+    const shouldAutoApply = walletPolicy.partialPaymentMode === "auto_apply" && requested <= 0;
+    const desiredAmount = shouldAutoApply ? Number(wallet.available_balance || 0) : requested;
+    if (!desiredAmount || desiredAmount <= 0) {
+      return { walletAppliedAmount: 0 };
+    }
+
+    const maxPercent = Number(walletPolicy.autoApplyMaxPercent ?? env.commerce.maxWalletUsagePerOrderPercent);
+    const maxWalletByPolicy = (Number(eligibleAmount || 0) * maxPercent) / 100;
     const walletAppliedAmount = Number(
-      Math.min(Number(requestedAmount), Number(wallet.available_balance), maxWalletByPolicy).toFixed(2),
+      Math.min(desiredAmount, Number(wallet.available_balance), maxWalletByPolicy).toFixed(2),
     );
 
-    return { walletAppliedAmount };
+    return {
+      walletAppliedAmount,
+      autoApplied: shouldAutoApply && walletAppliedAmount > 0,
+      walletPolicy: walletPolicy.partialPaymentMode || "user_opt_in",
+    };
   }
 
   async getProductTaxData(product) {

@@ -12,6 +12,8 @@ const { PaymentMethodConfigRepository } = require("../repositories/payment-metho
 const { env } = require("../../../config/env");
 const { ReturnService } = require("../../returns/services/return.service");
 const { CancellationService } = require("../../cancellation/services/cancellation.service");
+const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
+const { sellerChargeSettingsService } = require("../../seller/services/seller-charge-settings.service");
 
 const PROVIDER_RECEIPT_MAX_LENGTH = 40;
 
@@ -110,12 +112,57 @@ class PaymentService {
 
   async getPaymentOptions(query = {}) {
     const cod = this.mapCodConfig(await this.paymentMethodConfigRepository.getCodConfig());
+    const commerceSettings = await commerceSettingsService.getSettings();
     const orderAmount = Number(query.orderAmount || 0);
+    const shippingAddress = {
+      postalCode: query.postalCode || query.pincode || query.zip || "",
+      country: query.country || "",
+    };
+    const codAllowedByZone = commerceSettingsService.isCodAllowedForAddress(
+      commerceSettings,
+      shippingAddress,
+    );
+    const sellerIds = Array.isArray(query.sellerIds)
+      ? query.sellerIds
+      : String(query.sellerIds || "").split(",");
+    let sellerOrderAmounts = query.sellerOrderAmounts || {};
+    if (typeof sellerOrderAmounts === "string") {
+      try {
+        sellerOrderAmounts = JSON.parse(sellerOrderAmounts);
+      } catch {
+        sellerOrderAmounts = {};
+      }
+    }
+    const normalizedSellerIds = sellerIds
+      .map((id) => String(id || "").trim())
+      .filter(Boolean);
+    const sellerCod = normalizedSellerIds.length
+      ? await sellerChargeSettingsService.evaluateCodForItems(
+          normalizedSellerIds.map((sellerId) => ({
+            sellerId,
+            discountedLineTotal: Number(sellerOrderAmounts[sellerId] || orderAmount / normalizedSellerIds.length || 0),
+            quantity: 1,
+          })),
+          shippingAddress,
+        )
+      : { allowed: true, sellerChargeAmount: 0, sellers: [] };
     const codAvailable = cod.enabled &&
+      codAllowedByZone &&
+      sellerCod.allowed &&
       (cod.minOrderAmount === null || orderAmount >= cod.minOrderAmount) &&
       (cod.maxOrderAmount === null || orderAmount <= cod.maxOrderAmount);
+    const codDisabledReason = !codAllowedByZone
+      ? "COD is not available for this delivery pincode"
+      : !sellerCod.allowed
+        ? "COD is not available for one or more sellers in this cart"
+        : null;
 
     return {
+      settings: {
+        wallet: commerceSettings.wallet,
+        checkout: commerceSettings.checkout,
+        cod: commerceSettings.cod,
+      },
       providers: [
         {
           provider: PAYMENT_PROVIDER.RAZORPAY,
@@ -132,7 +179,22 @@ class PaymentService {
                   : "Razorpay is disabled by environment configuration",
               }),
         },
-        { provider: PAYMENT_PROVIDER.COD, label: "Cash on Delivery", enabled: codAvailable, chargeAmount: cod.chargeAmount, payableNow: false, config: cod },
+        {
+          provider: PAYMENT_PROVIDER.COD,
+          label: "Cash on Delivery",
+          enabled: codAvailable,
+          chargeAmount: Number((cod.chargeAmount + Number(sellerCod.sellerChargeAmount || 0)).toFixed(2)),
+          payableNow: false,
+          config: {
+            ...cod,
+            availabilityMode: commerceSettings.cod.availabilityMode,
+            collectionPolicy: commerceSettings.cod.collectionPolicy,
+            payoutRequiresCapture: commerceSettings.cod.payoutRequiresCapture,
+            sellerChargeAmount: Number(sellerCod.sellerChargeAmount || 0),
+            sellerRules: sellerCod.sellers,
+          },
+          ...(codDisabledReason ? { disabledReason: codDisabledReason } : {}),
+        },
         { provider: PAYMENT_PROVIDER.MANUAL_UPI, label: "Manual UPI", enabled: true, chargeAmount: 0, payableNow: false },
         { provider: PAYMENT_PROVIDER.MANUAL_BANK_TRANSFER, label: "Bank Transfer", enabled: true, chargeAmount: 0, payableNow: false },
       ],
@@ -228,6 +290,23 @@ class PaymentService {
       const codConfig = this.mapCodConfig(await this.paymentMethodConfigRepository.getCodConfig());
       if (!codConfig.enabled) {
         throw new AppError("Cash on Delivery is currently disabled", 400);
+      }
+      const commerceSettings = await commerceSettingsService.getSettings();
+      const shippingAddress = this.normalizeJson(order.shipping_address, {});
+      if (!commerceSettingsService.isCodAllowedForAddress(commerceSettings, shippingAddress)) {
+        throw new AppError("Cash on Delivery is not available for this delivery pincode", 400);
+      }
+      const hydratedOrder = await this.orderRepository.findByIdWithItems(payload.orderId);
+      const sellerCod = await sellerChargeSettingsService.evaluateCodForItems(
+        (hydratedOrder?.items || []).map((item) => ({
+          sellerId: item.seller_id || item.sellerId,
+          discountedLineTotal: Number(item.line_total || 0) - Number(item.discount_amount || 0),
+          quantity: Number(item.quantity || 0),
+        })),
+        shippingAddress,
+      );
+      if (!sellerCod.allowed) {
+        throw new AppError("Cash on Delivery is no longer available for one or more sellers in this order", 400);
       }
       const payment = await this.createOfflinePayment({
         ...payload,

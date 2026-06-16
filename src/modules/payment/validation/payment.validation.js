@@ -68,6 +68,18 @@ const paymentOptionsSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
     orderAmount: Joi.number().min(0).default(0),
+    postalCode: Joi.string().trim().allow("", null),
+    pincode: Joi.string().trim().allow("", null),
+    zip: Joi.string().trim().allow("", null),
+    country: Joi.string().trim().allow("", null),
+    sellerIds: Joi.alternatives().try(
+      Joi.array().items(Joi.string().trim()),
+      Joi.string().trim().allow("", null),
+    ),
+    sellerOrderAmounts: Joi.alternatives().try(
+      Joi.object().pattern(Joi.string(), Joi.number().min(0)),
+      Joi.string().trim().allow("", null),
+    ),
   }).required(),
   params: Joi.object({}).required(),
 });
