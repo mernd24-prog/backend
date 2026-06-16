@@ -4,7 +4,17 @@ const inventoryTransactionSchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      enum: ["reservation", "release", "sale", "restock", "return", "adjustment", "damage"],
+      enum: [
+        "reservation",
+        "release",
+        "sale",
+        "restock",
+        "return",
+        "adjustment",
+        "damage",
+        "cancellation_release",
+        "cancellation_restock",
+      ],
       required: true,
       index: true,
     },

@@ -14,6 +14,8 @@ const {
   shipmentParamSchema,
   trackingEventSchema,
   trackingWebhookSchema,
+  deliveryOtpSchema,
+  confirmDeliverySchema,
   createManifestSchema,
   orderDeliveryParamSchema,
   createEWayBillSchema,
@@ -65,6 +67,22 @@ deliveryRoutes.post(
   allowPermissions("delivery:status_change"),
   checkInput(trackingEventSchema),
   catchErrors(deliveryController.addTrackingEvent),
+);
+
+deliveryRoutes.post(
+  "/shipments/:shipmentId/delivery-otp",
+  authenticate,
+  allowPermissions("delivery:status_change"),
+  checkInput(deliveryOtpSchema),
+  catchErrors(deliveryController.generateDeliveryOtp),
+);
+
+deliveryRoutes.post(
+  "/shipments/:shipmentId/confirm-delivery",
+  authenticate,
+  allowPermissions("delivery:status_change"),
+  checkInput(confirmDeliverySchema),
+  catchErrors(deliveryController.confirmDelivery),
 );
 
 deliveryRoutes.post(

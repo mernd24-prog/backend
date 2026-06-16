@@ -30,6 +30,23 @@ class WalletRepository {
 
     try {
       await this.ensureWalletWithClient(trx, userId);
+      await trx("wallets").where("user_id", userId).forUpdate().first();
+      if (meta.referenceType && meta.referenceId) {
+        const existing = await trx("wallet_transactions")
+          .where({
+            user_id: userId,
+            type: "credit",
+            status: "completed",
+            reference_type: meta.referenceType,
+            reference_id: meta.referenceId,
+          })
+          .first();
+        if (existing) {
+          const [wallet] = await trx("wallets").where("user_id", userId).limit(1);
+          await trx.commit();
+          return wallet;
+        }
+      }
       await trx("wallets").where("user_id", userId).increment("available_balance", amount);
       await trx("wallet_transactions").insert({
         id: uuidv4(),
@@ -134,6 +151,65 @@ class WalletRepository {
       await trx("wallet_transactions").where("id", heldTx.id).update({ status: "released" });
       await trx.commit();
       return heldTx;
+    } catch (error) {
+      await trx.rollback();
+      throw error;
+    }
+  }
+
+  async releaseHeldAmountPartial(userId, referenceId, amount, cancellationId, metadata = {}) {
+    const trx = await knex.transaction();
+    try {
+      const heldTx = await trx("wallet_transactions")
+        .where({ user_id: userId, reference_id: referenceId, status: "held" })
+        .orderBy("created_at", "desc")
+        .first()
+        .forUpdate();
+      if (!heldTx) {
+        await trx.commit();
+        return null;
+      }
+      const releaseAmount = Math.min(Number(amount || 0), Number(heldTx.amount || 0));
+      if (releaseAmount <= 0) {
+        await trx.commit();
+        return null;
+      }
+      const existing = await trx("wallet_transactions")
+        .where({
+          user_id: userId,
+          type: "credit",
+          status: "released",
+          reference_type: "order_cancellation",
+          reference_id: cancellationId,
+        })
+        .first();
+      if (existing) {
+        await trx.commit();
+        return existing;
+      }
+
+      await trx("wallets").where("user_id", userId).update({
+        locked_balance: knex.raw("locked_balance - ?", [releaseAmount]),
+        available_balance: knex.raw("available_balance + ?", [releaseAmount]),
+      });
+      const remaining = Number(heldTx.amount || 0) - releaseAmount;
+      await trx("wallet_transactions").where("id", heldTx.id).update({
+        amount: remaining,
+        status: remaining > 0 ? "held" : "released",
+        metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({ partialReleaseCancellationId: cancellationId })]),
+      });
+      const [transaction] = await trx("wallet_transactions").insert({
+        id: uuidv4(),
+        user_id: userId,
+        type: "credit",
+        status: "released",
+        amount: releaseAmount,
+        reference_type: "order_cancellation",
+        reference_id: cancellationId,
+        metadata: JSON.stringify({ ...metadata, originalReferenceId: referenceId }),
+      }).returning("*");
+      await trx.commit();
+      return transaction;
     } catch (error) {
       await trx.rollback();
       throw error;

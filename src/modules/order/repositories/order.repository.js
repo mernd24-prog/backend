@@ -81,6 +81,9 @@ class OrderRepository {
         platform_fee_amount: item.platformFeeAmount || 0,
         pricing_snapshot: this.jsonb(item.pricingSnapshot),
         product_snapshot: this.jsonb(item.productSnapshot),
+        deal_id: item.dealId || null,
+        deal_snapshot: this.jsonb(item.dealSnapshot),
+        fulfillment_snapshot: this.jsonb(item.fulfillmentSnapshot),
         line_total: item.lineTotal,
       }));
 
@@ -301,6 +304,16 @@ class OrderRepository {
     return payment || null;
   }
 
+  async findRefundablePaymentByOrderId(orderId) {
+    const [payment] = await knex("payments")
+      .where("order_id", orderId)
+      .whereIn("status", ["captured", "paid", "approved", "authorized", "completed"])
+      .orderByRaw("CASE WHEN provider = 'razorpay' AND provider_payment_id IS NOT NULL THEN 0 ELSE 1 END")
+      .orderBy("created_at", "desc")
+      .limit(1);
+    return payment || this.findLatestPaymentByOrderId(orderId);
+  }
+
   async updatePaymentsForOrderCancellation(orderId, payload = {}) {
     const trx = await knex.transaction();
 
@@ -506,6 +519,7 @@ class OrderRepository {
       shipments,
       eWayBills,
       walletTransactions,
+      cancellations,
     ] = await Promise.all([
       includeItems
         ? knex("order_items").whereIn("order_id", orderIds).orderBy("id", "asc")
@@ -531,6 +545,7 @@ class OrderRepository {
       includeWallet
         ? this.optionalTableRows("wallet_transactions", (query) => query.where("reference_type", "order").whereIn("reference_id", orderIds).orderBy("created_at", "desc"))
         : Promise.resolve([]),
+      this.optionalTableRows("order_cancellations", (query) => query.whereIn("order_id", orderIds).orderBy("created_at", "desc")),
     ]);
 
     const trackingEvents = includeDelivery && shipments.length
@@ -552,6 +567,7 @@ class OrderRepository {
       shipments: this.groupBy(shipments, "order_id"),
       eWayBills: this.groupBy(eWayBills, "order_id"),
       walletTransactions: this.groupBy(walletTransactions, "reference_id"),
+      cancellations: this.groupBy(cancellations, "order_id"),
       trackingEvents: this.groupBy(trackingEvents, "shipment_id"),
     };
 
@@ -582,6 +598,7 @@ class OrderRepository {
           shipments: orderShipments,
           eWayBill: (grouped.eWayBills.get(order.id) || [])[0] || null,
           walletTransactions: grouped.walletTransactions.get(order.id) || [],
+          cancellations: grouped.cancellations.get(order.id) || [],
         },
       };
     });

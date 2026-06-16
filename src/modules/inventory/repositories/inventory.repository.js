@@ -304,10 +304,11 @@ class InventoryRepository {
   }
 
   async restockItems(reference, items) {
+    const transactionType = reference.transactionType || "return";
     const transactionChecks = await Promise.all(
       (items || []).map((item) =>
         InventoryTransactionModel.exists({
-          idempotencyKey: this.idempotencyKey("return", reference.referenceId || reference.returnId, item),
+          idempotencyKey: this.idempotencyKey(transactionType, reference.referenceId || reference.returnId, item),
         }),
       ),
     );
@@ -321,8 +322,142 @@ class InventoryRepository {
           : this.productRepository.addStock(item.productId, Number(item.quantity || 0)),
       ),
     );
-    await this.recordTransactions("return", reference, itemsToRestock, reference.metadata || {});
+    await this.recordTransactions(transactionType, reference, itemsToRestock, reference.metadata || {});
     return { changed: true, items: itemsToRestock };
+  }
+
+  async cancelReservationItems(orderId, cancellationId, items, options = {}) {
+    const existingReservation = await InventoryReservationModel.findOne({ orderId });
+    const appliedCancellationIds = existingReservation?.metadata?.appliedCancellationIds || [];
+    if (appliedCancellationIds.includes(String(cancellationId))) {
+      const wasCommitted = Boolean(existingReservation.metadata?.committedAt);
+      await this.recordTransactions(
+        wasCommitted ? "cancellation_restock" : "cancellation_release",
+        {
+          orderId,
+          referenceType: "cancellation",
+          referenceId: cancellationId,
+          actorId: options.actorId || "",
+          actorRole: options.actorRole || "",
+        },
+        items,
+        options.metadata || {},
+      );
+      return { changed: false, reservation: existingReservation, items, wasCommitted };
+    }
+    if (
+      existingReservation?.status === "cancellation_processing" &&
+      String(existingReservation.metadata?.cancellationId || "") === String(cancellationId)
+    ) {
+      throw new Error("Cancellation inventory is awaiting reconciliation after an interrupted update");
+    }
+
+    const reservation = await InventoryReservationModel.findOneAndUpdate(
+      { orderId, status: { $in: ["reserved", "committed"] } },
+      {
+        $set: {
+          status: "cancellation_processing",
+          "metadata.cancellationStartedAt": new Date(),
+          "metadata.cancellationId": cancellationId,
+        },
+      },
+      { new: true },
+    );
+    if (!reservation) {
+      const existing = await InventoryReservationModel.findOne({ orderId });
+      return { changed: false, reservation: existing, items: [] };
+    }
+
+    const wasCommitted = Boolean(reservation.metadata?.committedAt);
+    const cancelled = [];
+    const adjusted = [];
+    try {
+      for (const requested of items || []) {
+        const reservedItem = reservation.items.find((item) =>
+          String(item.productId) === String(requested.productId) &&
+          String(item.variantSku || item.variantId || "") === String(requested.variantSku || requested.variantId || ""),
+        );
+        if (!reservedItem) throw new Error(`Inventory reservation item not found for ${requested.productId}`);
+        const quantity = Number(requested.quantity || 0);
+        if (!Number.isInteger(quantity) || quantity <= 0 || quantity > Number(reservedItem.quantity || 0)) {
+          throw new Error(`Invalid cancellation quantity for ${requested.productId}`);
+        }
+
+        if (wasCommitted) {
+          if (requested.variantSku) {
+            await this.productRepository.adjustVariantStock(requested.productId, requested.variantSku, quantity);
+          } else {
+            await this.productRepository.addStock(requested.productId, quantity);
+          }
+        } else if (requested.variantSku) {
+          await this.productRepository.releaseReservedVariantStock(requested.productId, requested.variantSku, quantity);
+        } else {
+          await this.productRepository.releaseReservedStock(requested.productId, quantity);
+        }
+        adjusted.push({ ...requested, quantity });
+        reservedItem.quantity = Number(reservedItem.quantity || 0) - quantity;
+        cancelled.push({ ...requested, quantity });
+      }
+
+      reservation.items = reservation.items.filter((item) => Number(item.quantity || 0) > 0);
+      reservation.status = reservation.items.length
+        ? wasCommitted ? "committed" : "reserved"
+        : wasCommitted ? "restocked" : "released";
+      reservation.metadata = {
+        ...(reservation.metadata || {}),
+        ...(options.metadata || {}),
+        lastCancellationId: cancellationId,
+        appliedCancellationIds: [
+          ...new Set([...(reservation.metadata?.appliedCancellationIds || []), String(cancellationId)]),
+        ],
+        cancellationCompletedAt: new Date(),
+      };
+      await reservation.save();
+      await this.recordTransactions(
+        wasCommitted ? "cancellation_restock" : "cancellation_release",
+        {
+          orderId,
+          referenceType: "cancellation",
+          referenceId: cancellationId,
+          actorId: options.actorId || "",
+          actorRole: options.actorRole || "",
+        },
+        cancelled,
+        options.metadata || {},
+      );
+      return { changed: true, reservation, items: cancelled, wasCommitted };
+    } catch (error) {
+      const compensationErrors = [];
+      for (const item of adjusted.reverse()) {
+        try {
+          if (wasCommitted) {
+            if (item.variantSku) {
+              await this.productRepository.adjustVariantStock(item.productId, item.variantSku, -Number(item.quantity || 0));
+            } else {
+              await this.productRepository.adjustStock(item.productId, -Number(item.quantity || 0));
+            }
+          } else if (item.variantSku) {
+            await this.productRepository.reserveVariantStock(item.productId, item.variantSku, Number(item.quantity || 0));
+          } else {
+            await this.productRepository.reserveStock(item.productId, Number(item.quantity || 0));
+          }
+        } catch (compensationError) {
+          compensationErrors.push(compensationError.message);
+        }
+      }
+      reservation.status = wasCommitted ? "committed" : "reserved";
+      reservation.metadata = {
+        ...(reservation.metadata || {}),
+        cancellationFailedAt: new Date(),
+        cancellationError: error.message,
+        cancellationCompensationErrors: compensationErrors,
+      };
+      await reservation.save();
+      if (compensationErrors.length) {
+        throw new Error(`${error.message}; stock compensation requires manual review: ${compensationErrors.join("; ")}`);
+      }
+      throw error;
+    }
   }
 
   async recordDamage(reference, items, metadata = {}) {

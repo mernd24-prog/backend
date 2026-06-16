@@ -48,10 +48,18 @@ function registerDomainHandlers() {
     [DOMAIN_EVENTS.SHIPMENT_CREATED_V1, "shipment", (p) => p.shipmentId],
     [DOMAIN_EVENTS.SHIPMENT_TRACKING_UPDATED_V1, "shipment", (p) => p.shipmentId],
     [DOMAIN_EVENTS.SHIPMENT_DELIVERED_V1, "shipment", (p) => p.shipmentId],
+    [DOMAIN_EVENTS.SHIPMENT_DELIVERY_OTP_GENERATED_V1, "shipment", (p) => p.shipmentId],
+    [DOMAIN_EVENTS.SHIPMENT_DELIVERY_VERIFIED_V1, "shipment", (p) => p.shipmentId],
     [DOMAIN_EVENTS.SHIPMENT_FAILED_V1, "shipment", (p) => p.shipmentId],
     [DOMAIN_EVENTS.SHIPMENT_RTO_V1, "shipment", (p) => p.shipmentId],
     [DOMAIN_EVENTS.INVOICE_GENERATED_V1, "invoice", (p) => p.invoiceId],
     [DOMAIN_EVENTS.CREDIT_NOTE_GENERATED_V1, "credit_note", (p) => p.creditNoteId],
+    [DOMAIN_EVENTS.DEAL_CREATED_V1, "deal", (p) => p.dealId],
+    [DOMAIN_EVENTS.DEAL_UPDATED_V1, "deal", (p) => p.dealId],
+    [DOMAIN_EVENTS.DEAL_SUBMITTED_V1, "deal", (p) => p.dealId],
+    [DOMAIN_EVENTS.DEAL_APPROVED_V1, "deal", (p) => p.dealId],
+    [DOMAIN_EVENTS.DEAL_REJECTED_V1, "deal", (p) => p.dealId],
+    [DOMAIN_EVENTS.DEAL_CANCELLED_V1, "deal", (p) => p.dealId],
   ];
 
   auditTargets.forEach(([eventName, targetType, getTargetId]) => {

@@ -72,6 +72,16 @@ class WalletService {
     return transaction;
   }
 
+  async releasePartial(userId, referenceId, amount, cancellationId, metadata = {}) {
+    return this.walletRepository.releaseHeldAmountPartial(
+      userId,
+      referenceId,
+      amount,
+      cancellationId,
+      metadata,
+    );
+  }
+
   async listAdminTransactions(filters = {}) {
     const result = await this.walletRepository.listAllTransactions(filters);
     const userIds = Array.from(new Set(

@@ -4,9 +4,12 @@ const crypto = require("crypto");
 const { AppError } = require("../../../shared/errors/app-error");
 const { DeliveryRepository } = require("../repositories/delivery.repository");
 const { OrderRepository } = require("../../order/repositories/order.repository");
+const { NotificationRepository } = require("../../notification/repositories/notification.repository");
+const { DealService } = require("../../deal/services/deal.service");
 const { shippingProviderRegistry } = require("../../../infrastructure/shipping/provider-registry");
 const { ORDER_STATUS } = require("../../../shared/domain/commerce-constants");
-const { DELIVERY_STATUS } = require("../models/delivery.model");
+const { createOtp } = require("../../../shared/tools/otp");
+const { DELIVERY_STATUS, DELIVERY_VERIFICATION_METHODS } = require("../models/delivery.model");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
@@ -17,22 +20,30 @@ const SHIPMENT_TRANSITIONS = {
   manifested: ["picked_up", "in_transit", "cancelled", "failed"],
   picked_up: ["in_transit", "failed", "rto", "lost", "damaged"],
   in_transit: ["out_for_delivery", "failed", "rto", "lost", "damaged"],
-  out_for_delivery: ["delivered", "failed", "rto", "lost", "damaged"],
+  out_for_delivery: ["delivered", "delivered_verified", "failed", "rto", "lost", "damaged"],
   failed: ["in_transit", "out_for_delivery", "rto", "cancelled"],
-  delivered: [],
+  delivered: ["delivered_verified"],
+  delivered_verified: [],
   cancelled: [],
   rto: [],
   lost: [],
   damaged: [],
 };
 
+const DELIVERY_OTP_TTL_MINUTES = 10;
+const DELIVERY_OTP_MAX_ATTEMPTS = 5;
+
 class DeliveryService {
   constructor({
     deliveryRepository = new DeliveryRepository(),
     orderRepository = new OrderRepository(),
+    notificationRepository = new NotificationRepository(),
+    dealService = new DealService(),
   } = {}) {
     this.deliveryRepository = deliveryRepository;
     this.orderRepository = orderRepository;
+    this.notificationRepository = notificationRepository;
+    this.dealService = dealService;
   }
 
   async getServiceability(pincode) {
@@ -90,6 +101,15 @@ class DeliveryService {
     if (!isAdmin && String(sellerId) !== String(actorSellerId)) {
       throw new AppError("You can create shipments only for your seller account", 403);
     }
+    const dealFulfillment = this.resolveDealFulfillment(order, sellerId, payload);
+    const verificationRequired = Boolean(payload.verificationRequired || dealFulfillment.deliveryVerificationRequired);
+    const verificationMethods = verificationRequired
+      ? this.normalizeVerificationMethods(
+          payload.verificationMethods?.length
+            ? payload.verificationMethods
+            : dealFulfillment.deliveryVerificationMethods,
+        )
+      : [];
     const provider = shippingProviderRegistry.get(payload.provider || "manual");
     const providerResult = await provider.createShipment(payload);
     const shipment = await this.deliveryRepository.createShipment({
@@ -100,6 +120,11 @@ class DeliveryService {
       trackingNumber: providerResult.trackingNumber || payload.trackingNumber || payload.awbNumber,
       labelData: providerResult.labelData || payload.labelData || {},
       shipToSnapshot: payload.shipToSnapshot || order.shipping_address || {},
+      dealId: dealFulfillment.dealId || payload.dealId || null,
+      fulfillmentModel: dealFulfillment.fulfillmentModel || payload.fulfillmentModel || null,
+      verificationRequired,
+      verificationMethods,
+      deliveryProofSnapshot: payload.deliveryProofSnapshot || {},
       createdBy: actor.userId,
       updatedBy: actor.userId,
     });
@@ -134,6 +159,28 @@ class DeliveryService {
     return shipment;
   }
 
+  resolveDealFulfillment(order = {}, sellerId, payload = {}) {
+    if (payload.dealId || payload.fulfillmentModel) {
+      return {
+        dealId: payload.dealId || null,
+        fulfillmentModel: payload.fulfillmentModel || null,
+        deliveryVerificationRequired: Boolean(payload.verificationRequired),
+        deliveryVerificationMethods: payload.verificationMethods || [],
+      };
+    }
+    const sellerItems = (order.items || []).filter((item) => String(item.seller_id || item.sellerId || "") === String(sellerId || ""));
+    const dealItem = sellerItems.find((item) => item.deal_id || item.dealId || item.fulfillment_snapshot?.dealId || item.deal_snapshot?.dealId);
+    if (!dealItem) return {};
+    const fulfillment = this.normalizeJson(dealItem.fulfillment_snapshot || dealItem.fulfillmentSnapshot, {});
+    const dealSnapshot = this.normalizeJson(dealItem.deal_snapshot || dealItem.dealSnapshot, {});
+    return {
+      dealId: dealItem.deal_id || dealItem.dealId || fulfillment.dealId || dealSnapshot.dealId || null,
+      fulfillmentModel: fulfillment.fulfillmentModel || dealSnapshot.fulfillmentModel || null,
+      deliveryVerificationRequired: Boolean(fulfillment.deliveryVerificationRequired || dealSnapshot.deliveryVerificationRequired),
+      deliveryVerificationMethods: fulfillment.deliveryVerificationMethods || dealSnapshot.deliveryVerificationMethods || [],
+    };
+  }
+
   async listShipments(query, actor) {
     if (!["admin", "sub-admin", "super-admin"].includes(actor.role) && !actor.isSuperAdmin) {
       query.sellerId = actor.ownerSellerId || actor.userId;
@@ -157,6 +204,12 @@ class DeliveryService {
     }
 
     await this.assertCanManageOrder(shipment.order_id, actor);
+    if (payload.status === DELIVERY_STATUS.DELIVERED && shipment.verification_required) {
+      throw new AppError("Delivery verification is required. Use the delivery confirmation endpoint.", 409);
+    }
+    if (payload.status === DELIVERY_STATUS.DELIVERED_VERIFIED) {
+      throw new AppError("Use the delivery confirmation endpoint to verify delivery", 409);
+    }
     this.assertTrackingTransition(shipment.status, payload.status, payload);
     const result = await this.deliveryRepository.addTrackingEvent(shipmentId, {
       ...payload,
@@ -165,6 +218,7 @@ class DeliveryService {
     });
 
     await this.syncOrderForTracking(result.shipment, actor);
+    await this.dealService.markOrderDeliveryVerified(result.shipment.order_id, actor).catch(() => null);
     await this.publishShipmentTrackingEvent(result.shipment, actor);
     return result;
   }
@@ -176,6 +230,12 @@ class DeliveryService {
       : null;
     if (!shipment) {
       return { acknowledged: true, ignored: true };
+    }
+    if (payload.status === DELIVERY_STATUS.DELIVERED && shipment.verification_required) {
+      return { acknowledged: true, ignored: true, reason: "delivery_verification_required" };
+    }
+    if (payload.status === DELIVERY_STATUS.DELIVERED_VERIFIED) {
+      return { acknowledged: true, ignored: true, reason: "use_delivery_confirmation_endpoint" };
     }
     this.assertTrackingTransition(shipment.status, payload.status, payload);
     const provider = payload.provider || "manual";
@@ -238,7 +298,7 @@ class DeliveryService {
 
   async syncOrderForTracking(shipment, actor) {
     let nextOrderStatus = null;
-    if (shipment.status === DELIVERY_STATUS.DELIVERED) {
+    if ([DELIVERY_STATUS.DELIVERED, DELIVERY_STATUS.DELIVERED_VERIFIED].includes(shipment.status)) {
       nextOrderStatus = ORDER_STATUS.DELIVERED;
     } else if ([DELIVERY_STATUS.IN_TRANSIT, DELIVERY_STATUS.OUT_FOR_DELIVERY].includes(shipment.status)) {
       nextOrderStatus = ORDER_STATUS.SHIPPED;
@@ -276,6 +336,7 @@ class DeliveryService {
     const order = await this.orderRepository.findById(shipment.order_id);
     const eventByStatus = {
       [DELIVERY_STATUS.DELIVERED]: DOMAIN_EVENTS.SHIPMENT_DELIVERED_V1,
+      [DELIVERY_STATUS.DELIVERED_VERIFIED]: DOMAIN_EVENTS.SHIPMENT_DELIVERY_VERIFIED_V1,
       [DELIVERY_STATUS.FAILED]: DOMAIN_EVENTS.SHIPMENT_FAILED_V1,
       [DELIVERY_STATUS.RTO]: DOMAIN_EVENTS.SHIPMENT_RTO_V1,
     };
@@ -320,6 +381,266 @@ class DeliveryService {
       createdBy: actor.userId,
       updatedBy: actor.userId,
     });
+  }
+
+  async generateDeliveryOtp(shipmentId, payload = {}, actor) {
+    const shipment = await this.deliveryRepository.findShipmentById(shipmentId);
+    if (!shipment) {
+      throw new AppError("Shipment not found", 404);
+    }
+
+    await this.assertCanManageOrder(shipment.order_id, actor);
+    if (shipment.status !== DELIVERY_STATUS.OUT_FOR_DELIVERY) {
+      throw new AppError("Delivery OTP can be generated only when shipment is out for delivery", 409);
+    }
+
+    const otp = createOtp(6);
+    const expiresAt = new Date(Date.now() + Number(payload.ttlMinutes || DELIVERY_OTP_TTL_MINUTES) * 60 * 1000);
+    const result = await this.deliveryRepository.storeDeliveryOtp(shipmentId, {
+      otpHash: this.hashDeliveryOtp(shipmentId, otp),
+      expiresAt,
+      proofSnapshot: {
+        channels: payload.channels || ["in_app"],
+        requestedAt: new Date().toISOString(),
+      },
+      rawPayload: {
+        channels: payload.channels || ["in_app"],
+        ttlMinutes: payload.ttlMinutes || DELIVERY_OTP_TTL_MINUTES,
+      },
+      actorId: actor.userId,
+      actorRole: actor.role,
+      source: payload.source || "manual",
+    });
+
+    const order = await this.orderRepository.findById(shipment.order_id);
+    await this.sendDeliveryOtpNotifications({
+      order,
+      shipment,
+      otp,
+      expiresAt,
+      channels: payload.channels || ["in_app"],
+    });
+    await eventPublisher.publish(
+      makeEvent(
+        DOMAIN_EVENTS.SHIPMENT_DELIVERY_OTP_GENERATED_V1,
+        {
+          shipmentId,
+          orderId: shipment.order_id,
+          buyerId: order?.buyer_id || null,
+          sellerId: shipment.seller_id,
+          expiresAt,
+          channels: payload.channels || ["in_app"],
+          generatedBy: actor.userId,
+          otpQueued: true,
+        },
+        { source: "delivery-module", aggregateId: shipment.order_id },
+      ),
+    );
+
+    return {
+      shipment: result.shipment,
+      verificationEvent: result.event,
+      expiresAt,
+      channels: payload.channels || ["in_app"],
+      otp,
+    };
+  }
+
+  async sendDeliveryOtpNotifications({ order, shipment, otp, expiresAt, channels = [] }) {
+    const buyerId = order?.buyer_id;
+    if (!buyerId) return;
+
+    const uniqueChannels = Array.from(new Set(channels.length ? channels : ["in_app"]));
+    await Promise.all(uniqueChannels.map(async (channel) => {
+      const normalizedChannel = channel === "app" ? "push" : channel;
+      const notification = await this.notificationRepository.create({
+        userId: buyerId,
+        channel: normalizedChannel,
+        subject: "Delivery OTP",
+        template: `Your delivery OTP for order ${order.order_number || shipment.order_id} is ${otp}. It expires at ${new Date(expiresAt).toISOString()}.`,
+        payload: {
+          shipmentId: shipment.id,
+          orderId: shipment.order_id,
+          expiresAt,
+        },
+        status: "queued",
+        idempotencyKey: `delivery_otp:${shipment.id}:${normalizedChannel}:${new Date(expiresAt).getTime()}`,
+      });
+
+      await eventPublisher.publish(
+        makeEvent(
+          DOMAIN_EVENTS.NOTIFICATION_CREATED_V1,
+          {
+            userId: buyerId,
+            channel: normalizedChannel,
+            subject: notification.subject,
+          },
+          { source: "delivery-module", aggregateId: notification.id },
+        ),
+      );
+    }));
+  }
+
+  async confirmDelivery(shipmentId, payload = {}, actor) {
+    const shipment = await this.deliveryRepository.findShipmentById(shipmentId);
+    if (!shipment) {
+      throw new AppError("Shipment not found", 404);
+    }
+
+    await this.assertCanManageOrder(shipment.order_id, actor);
+    if (shipment.status === DELIVERY_STATUS.DELIVERED_VERIFIED) {
+      return { shipment, alreadyVerified: true };
+    }
+    if (![DELIVERY_STATUS.OUT_FOR_DELIVERY, DELIVERY_STATUS.DELIVERED].includes(shipment.status)) {
+      throw new AppError("Delivery can be verified only after shipment is out for delivery", 409);
+    }
+
+    const method = payload.method || "otp";
+    if (!DELIVERY_VERIFICATION_METHODS.includes(method)) {
+      throw new AppError("Unsupported delivery verification method", 400);
+    }
+
+    this.assertVerificationMethodAllowed(shipment, method, actor);
+    await this.verifyDeliveryProof(shipment, payload, actor);
+
+    const result = await this.deliveryRepository.markDeliveryVerified(shipmentId, {
+      method,
+      proofSnapshot: this.buildDeliveryProofSnapshot(payload, actor),
+      rawPayload: payload.rawPayload || {},
+      actorId: actor.userId,
+      actorRole: actor.role,
+      source: payload.source || "manual",
+      location: payload.location || null,
+      note: payload.note || null,
+    });
+
+    await this.syncOrderForTracking(result.shipment, actor);
+    await this.publishShipmentTrackingEvent(result.shipment, actor);
+    return result;
+  }
+
+  normalizeVerificationMethods(methods = []) {
+    const list = Array.isArray(methods) ? methods : [];
+    return Array.from(new Set(
+      list.filter((method) => DELIVERY_VERIFICATION_METHODS.includes(method)),
+    ));
+  }
+
+  normalizeJson(value, fallback = {}) {
+    if (!value) return fallback;
+    if (typeof value === "object") return value;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return fallback;
+    }
+  }
+
+  assertVerificationMethodAllowed(shipment, method, actor) {
+    if (method === "manual_override") {
+      if (!["admin", "sub-admin", "super-admin"].includes(actor.role) && !actor.isSuperAdmin) {
+        throw new AppError("Only admin users can override delivery verification", 403);
+      }
+      return;
+    }
+
+    const requiredMethods = this.normalizeVerificationMethods(shipment.verification_methods);
+    if (shipment.verification_required && requiredMethods.length && !requiredMethods.includes(method)) {
+      throw new AppError(`Delivery verification requires one of: ${requiredMethods.join(", ")}`, 409);
+    }
+  }
+
+  async verifyDeliveryProof(shipment, payload, actor) {
+    const method = payload.method || "otp";
+    if (method === "otp") {
+      return this.verifyDeliveryOtp(shipment, payload, actor);
+    }
+
+    if (method === "manual_override") {
+      if (!String(payload.note || payload.reason || "").trim()) {
+        throw new AppError("Manual delivery override requires a reason", 400);
+      }
+      return;
+    }
+
+    const hasProof = Boolean(
+      payload.verificationReference ||
+      payload.proofUrl ||
+      payload.qrCode ||
+      Object.keys(payload.proofSnapshot || {}).length,
+    );
+    if (!hasProof) {
+      await this.deliveryRepository.recordDeliveryVerificationFailure(shipment.id, {
+        method,
+        failureReason: "proof_required",
+        proofSnapshot: this.buildDeliveryProofSnapshot(payload, actor),
+        rawPayload: payload.rawPayload || {},
+        actorId: actor.userId,
+        actorRole: actor.role,
+        source: payload.source || "manual",
+      });
+      throw new AppError("Delivery proof is required for this verification method", 400);
+    }
+  }
+
+  async verifyDeliveryOtp(shipment, payload, actor) {
+    const otp = String(payload.otp || "").trim();
+    if (!otp) {
+      throw new AppError("Delivery OTP is required", 400);
+    }
+    if (!shipment.delivery_otp_hash || !shipment.delivery_otp_expires_at) {
+      throw new AppError("No active delivery OTP found. Generate a new OTP first.", 409);
+    }
+    if (Number(shipment.delivery_otp_attempts || 0) >= DELIVERY_OTP_MAX_ATTEMPTS) {
+      throw new AppError("Delivery OTP attempts exceeded. Use manual override with proof.", 429);
+    }
+    if (new Date(shipment.delivery_otp_expires_at).getTime() < Date.now()) {
+      await this.deliveryRepository.recordDeliveryVerificationFailure(shipment.id, {
+        method: "otp",
+        failureReason: "otp_expired",
+        incrementAttempts: false,
+        proofSnapshot: this.buildDeliveryProofSnapshot(payload, actor),
+        rawPayload: payload.rawPayload || {},
+        actorId: actor.userId,
+        actorRole: actor.role,
+        source: payload.source || "manual",
+      });
+      throw new AppError("Delivery OTP has expired", 410);
+    }
+
+    const expected = String(shipment.delivery_otp_hash);
+    const provided = this.hashDeliveryOtp(shipment.id, otp);
+    if (expected.length !== provided.length || !crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(provided))) {
+      await this.deliveryRepository.recordDeliveryVerificationFailure(shipment.id, {
+        method: "otp",
+        failureReason: "otp_mismatch",
+        incrementAttempts: true,
+        proofSnapshot: this.buildDeliveryProofSnapshot(payload, actor),
+        rawPayload: payload.rawPayload || {},
+        actorId: actor.userId,
+        actorRole: actor.role,
+        source: payload.source || "manual",
+      });
+      throw new AppError("Invalid delivery OTP", 400);
+    }
+  }
+
+  buildDeliveryProofSnapshot(payload = {}, actor = {}) {
+    return {
+      method: payload.method || "otp",
+      verificationReference: payload.verificationReference || null,
+      proofUrl: payload.proofUrl || null,
+      qrCode: payload.qrCode ? "provided" : null,
+      note: payload.note || payload.reason || null,
+      capturedAt: payload.capturedAt || new Date().toISOString(),
+      actorId: actor.userId || null,
+      actorRole: actor.role || null,
+      ...(payload.proofSnapshot || {}),
+    };
+  }
+
+  hashDeliveryOtp(shipmentId, otp) {
+    return crypto.createHash("sha256").update(`${shipmentId}:${otp}`).digest("hex");
   }
 
   async getEWayBill(orderId, actor) {

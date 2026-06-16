@@ -170,18 +170,18 @@ class InventoryService {
     return summary;
   }
 
-  normalizeReturnItems(returnRequest) {
-    return (returnRequest.items || []).map((item) => ({
+  normalizeReturnItems(returnRequest, itemsOverride = null) {
+    return (itemsOverride || returnRequest.items || []).map((item) => ({
       productId: item.productId,
       variantId: item.variantId || "",
       variantSku: item.variantSku || "",
       sellerId: item.sellerId || "",
-      quantity: Number(item.quantity || 0),
+      quantity: Number(item.quantity ?? item.receivedQuantity ?? item.approvedQuantity ?? 0),
       unitPrice: Number(item.unitPrice || 0),
     }));
   }
 
-  async restockForReturn(returnRequest, actor = {}) {
+  async restockForReturn(returnRequest, actor = {}, itemsOverride = null) {
     const returnId = String(returnRequest._id || returnRequest.id || "");
     const result = await this.inventoryRepository.restockItems(
       {
@@ -193,7 +193,7 @@ class InventoryService {
         actorRole: actor.role,
         metadata: { reason: returnRequest.reason },
       },
-      this.normalizeReturnItems(returnRequest),
+      this.normalizeReturnItems(returnRequest, itemsOverride),
     );
 
     if (result.changed) {
@@ -208,7 +208,7 @@ class InventoryService {
     return result;
   }
 
-  async recordReturnDamage(returnRequest, actor = {}, metadata = {}) {
+  async recordReturnDamage(returnRequest, actor = {}, metadata = {}, itemsOverride = null) {
     const returnId = String(returnRequest._id || returnRequest.id || "");
     const result = await this.inventoryRepository.recordDamage(
       {
@@ -219,7 +219,7 @@ class InventoryService {
         actorId: actor.userId,
         actorRole: actor.role,
       },
-      this.normalizeReturnItems(returnRequest),
+      this.normalizeReturnItems(returnRequest, itemsOverride),
       { reason: returnRequest.reason, ...metadata },
     );
 
@@ -234,6 +234,34 @@ class InventoryService {
             itemCount: result.items.length,
           },
           { source: "inventory-module", aggregateId: returnRequest.orderId },
+        ),
+      );
+    }
+    return result;
+  }
+
+  async cancelOrderItems(orderId, cancellationId, items, actor = {}, metadata = {}) {
+    const result = await this.inventoryRepository.cancelReservationItems(
+      orderId,
+      cancellationId,
+      items,
+      {
+        actorId: actor.userId || "",
+        actorRole: actor.role || "",
+        metadata,
+      },
+    );
+    if (result.changed) {
+      await eventPublisher.publish(
+        makeEvent(
+          result.wasCommitted ? DOMAIN_EVENTS.INVENTORY_RESTOCKED_V1 : DOMAIN_EVENTS.INVENTORY_RELEASED_V1,
+          {
+            orderId,
+            cancellationId,
+            itemCount: result.items.length,
+            reason: "order_cancellation",
+          },
+          { source: "inventory-module", aggregateId: orderId },
         ),
       );
     }
