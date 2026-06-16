@@ -117,6 +117,13 @@ sellerRoutes.patch(
   catchErrors(sellerController.updatePickupAddress),
 );
 sellerRoutes.patch(
+  "/me/return-address",
+  authenticate,
+  allowActions(ACTIONS.SELLER_PROFILE_MANAGE),
+  checkInput(updateSellerAddressSchema),
+  catchErrors(sellerController.updateReturnAddress),
+);
+sellerRoutes.patch(
   "/me/bank-details",
   authenticate,
   allowActions(ACTIONS.SELLER_PROFILE_MANAGE),

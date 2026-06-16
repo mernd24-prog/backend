@@ -474,6 +474,7 @@ class AuthService {
         sellerProfile.primaryContactName = null;
         sellerProfile.businessAddress = null;
         sellerProfile.pickupAddress = null;
+        sellerProfile.returnAddress = null;
       }
       if (sellerProfile.bankVerificationStatus === "rejected") {
         sellerProfile.bankDetails = null;

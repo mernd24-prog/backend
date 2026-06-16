@@ -755,6 +755,7 @@ class AdminService {
             primaryContactName: null,
             businessAddress: null,
             pickupAddress: null,
+            returnAddress: null,
             supportEmail: null,
             supportPhone: null,
             bankDetails: null,

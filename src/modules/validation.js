@@ -321,6 +321,7 @@ const commissionValidation = {
     periodEnd: Joi.date(),
     paymentReference: Joi.string().trim().max(160),
     paymentMethod: Joi.string().trim().max(64),
+    autoProcess: Joi.boolean(),
   }),
 };
 

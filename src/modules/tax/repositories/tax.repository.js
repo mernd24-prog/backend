@@ -4,8 +4,77 @@ const { v4: uuidv4 } = require("uuid");
 class TaxRepository {
   async findInvoiceByOrderId(orderId) {
     const { rows } = await postgresPool.query(
-      "SELECT * FROM tax_invoices WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1",
+      `SELECT *
+       FROM tax_invoices
+       WHERE order_id = $1
+         AND COALESCE(invoice_type, 'order_customer') = 'order_customer'
+       ORDER BY created_at DESC
+       LIMIT 1`,
       [orderId],
+    );
+    return rows[0] || null;
+  }
+
+  async findInvoicesByOrderId(orderId, { invoiceType = null, sellerId = null } = {}) {
+    const values = [orderId];
+    const clauses = ["order_id = $1"];
+    let idx = 2;
+
+    if (invoiceType) {
+      clauses.push(`COALESCE(invoice_type, 'order_customer') = $${idx++}`);
+      values.push(invoiceType);
+    }
+    if (sellerId) {
+      clauses.push(`seller_id = $${idx++}`);
+      values.push(sellerId);
+    }
+
+    const { rows } = await postgresPool.query(
+      `SELECT *
+       FROM tax_invoices
+       WHERE ${clauses.join(" AND ")}
+       ORDER BY issued_at DESC, created_at DESC`,
+      values,
+    );
+    return rows;
+  }
+
+  async findInvoiceByOrderAndType({
+    orderId,
+    invoiceType,
+    sellerId = null,
+    referenceType = null,
+    referenceId = null,
+  }) {
+    const values = [orderId, invoiceType];
+    const clauses = [
+      "order_id = $1",
+      "COALESCE(invoice_type, 'order_customer') = $2",
+    ];
+    let idx = 3;
+
+    if (sellerId) {
+      clauses.push(`seller_id = $${idx++}`);
+      values.push(sellerId);
+    } else {
+      clauses.push("seller_id IS NULL");
+    }
+    if (referenceType) {
+      clauses.push(`reference_type = $${idx++}`);
+      values.push(referenceType);
+    }
+    if (referenceId) {
+      clauses.push(`reference_id = $${idx++}`);
+      values.push(referenceId);
+    }
+
+    const { rows } = await postgresPool.query(
+      `SELECT *
+       FROM tax_invoices
+       WHERE ${clauses.join(" AND ")}
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      values,
     );
     return rows[0] || null;
   }
@@ -25,9 +94,11 @@ class TaxRepository {
         id, invoice_number, order_id, buyer_id, taxable_amount, tax_amount,
         cgst_amount, sgst_amount, igst_amount, tcs_amount, total_amount,
         currency, tax_mode, gstin_marketplace, gstin_seller, place_of_supply,
-        issued_at, metadata, created_by, updated_by
+        invoice_type, seller_id, issuer_type, recipient_type, reference_type,
+        reference_id, parent_invoice_id, issued_at, metadata, created_by, updated_by
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),$17::jsonb,$18,$19
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
+        $17,$18,$19,$20,$21,$22,$23,NOW(),$24::jsonb,$25,$26
       )
       RETURNING *`,
       [
@@ -47,6 +118,13 @@ class TaxRepository {
         payload.gstinMarketplace || null,
         payload.gstinSeller || null,
         payload.placeOfSupply || null,
+        payload.invoiceType || "order_customer",
+        payload.sellerId || null,
+        payload.issuerType || null,
+        payload.recipientType || null,
+        payload.referenceType || null,
+        payload.referenceId || null,
+        payload.parentInvoiceId || null,
         JSON.stringify(payload.metadata || {}),
         payload.createdBy || null,
         payload.updatedBy || payload.createdBy || null,
@@ -60,6 +138,9 @@ class TaxRepository {
     toDate = null,
     sellerId = null,
     buyerId = null,
+    invoiceType = null,
+    referenceType = null,
+    referenceId = null,
     state = null,
     hsnCode = null,
     search = null,
@@ -84,12 +165,28 @@ class TaxRepository {
       clauses.push(`ti.buyer_id = $${idx++}`);
       values.push(buyerId);
     }
+    if (invoiceType) {
+      clauses.push(`COALESCE(ti.invoice_type, 'order_customer') = $${idx++}`);
+      values.push(invoiceType);
+    }
+    if (referenceType) {
+      clauses.push(`ti.reference_type = $${idx++}`);
+      values.push(referenceType);
+    }
+    if (referenceId) {
+      clauses.push(`ti.reference_id = $${idx++}`);
+      values.push(referenceId);
+    }
     if (sellerId) {
-      clauses.push(`EXISTS (
-        SELECT 1 FROM order_items oi
-        WHERE oi.order_id = ti.order_id AND oi.seller_id = $${idx++}
+      clauses.push(`(
+        ti.seller_id = $${idx}
+        OR EXISTS (
+          SELECT 1 FROM order_items oi
+          WHERE oi.order_id = ti.order_id AND oi.seller_id = $${idx}
+        )
       )`);
       values.push(sellerId);
+      idx += 1;
     }
     if (state) {
       clauses.push(`ti.place_of_supply ILIKE $${idx++}`);
@@ -103,7 +200,7 @@ class TaxRepository {
       values.push(hsnCode);
     }
     if (search) {
-      clauses.push(`(ti.invoice_number ILIKE $${idx} OR ti.order_id::text ILIKE $${idx})`);
+      clauses.push(`(ti.invoice_number ILIKE $${idx} OR ti.order_id::text ILIKE $${idx} OR COALESCE(ti.reference_id, '') ILIKE $${idx})`);
       values.push(`%${search}%`);
       idx += 1;
     }
@@ -120,6 +217,8 @@ class TaxRepository {
       tax_amount: "ti.tax_amount",
       totalAmount: "ti.total_amount",
       total_amount: "ti.total_amount",
+      invoiceType: "ti.invoice_type",
+      invoice_type: "ti.invoice_type",
     };
     const orderColumn = sortColumns[sortBy] || "ti.issued_at";
     const orderDirection = String(sortDir).toLowerCase() === "asc" ? "ASC" : "DESC";

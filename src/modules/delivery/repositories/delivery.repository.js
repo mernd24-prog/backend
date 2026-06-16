@@ -127,6 +127,8 @@ class DeliveryRepository {
           verification_required: Boolean(payload.verificationRequired),
           verification_methods: payload.verificationMethods || [],
           delivery_proof_snapshot: payload.deliveryProofSnapshot || {},
+          delivery_agent_id: payload.deliveryAgentId || null,
+          delivery_agent_snapshot: payload.deliveryAgentSnapshot || {},
           manifest_id: payload.manifestId || null,
           expected_delivery_at: payload.expectedDeliveryAt || null,
           idempotency_key: payload.idempotencyKey || null,
@@ -164,6 +166,7 @@ class DeliveryRepository {
     direction = null,
     dealId = null,
     sellerId = null,
+    deliveryAgentId = null,
     status = null,
     courierName = null,
     awbNumber = null,
@@ -183,6 +186,7 @@ class DeliveryRepository {
     if (direction) query.where("direction", direction);
     if (dealId) query.where("deal_id", dealId);
     if (sellerId) query.where("seller_id", sellerId);
+    if (deliveryAgentId) query.where("delivery_agent_id", deliveryAgentId);
     if (status) query.where("status", status);
     if (courierName) query.whereILike("courier_name", `%${courierName}%`);
     if (awbNumber) query.where((builder) => builder.whereILike("awb_number", `%${awbNumber}%`).orWhereILike("tracking_number", `%${awbNumber}%`));
@@ -592,6 +596,105 @@ class DeliveryRepository {
       .returning("*");
 
     return record || null;
+  }
+
+  async listDeliveryAgents({
+    sellerId = null,
+    active = null,
+    verificationStatus = null,
+    search = null,
+    limit = 50,
+    offset = 0,
+  } = {}) {
+    const query = knex("delivery_agents");
+    if (sellerId) query.where("seller_id", sellerId);
+    if (active !== null && active !== undefined) query.where("active", active === true || active === "true");
+    if (verificationStatus) query.where("verification_status", verificationStatus);
+    if (search) {
+      const term = `%${String(search).trim()}%`;
+      query.where((builder) => {
+        builder
+          .whereILike("name", term)
+          .orWhereILike("phone", term)
+          .orWhereILike("email", term)
+          .orWhereILike("vehicle_number", term)
+          .orWhereILike("license_number", term);
+      });
+    }
+
+    const safeLimit = Math.min(Math.max(Number(limit || 50), 1), 200);
+    const safeOffset = Math.max(Number(offset || 0), 0);
+    const [{ count }] = await query.clone().clearSelect().clearOrder().count({ count: "*" });
+    const items = await query
+      .clone()
+      .orderBy("created_at", "desc")
+      .limit(safeLimit)
+      .offset(safeOffset);
+
+    return { items, total: Number(count || 0), limit: safeLimit, offset: safeOffset };
+  }
+
+  async findDeliveryAgentById(agentId) {
+    const [agent] = await knex("delivery_agents").where("id", agentId).limit(1);
+    return agent || null;
+  }
+
+  async createDeliveryAgent(payload = {}) {
+    const [agent] = await knex("delivery_agents")
+      .insert({
+        id: uuidv4(),
+        seller_id: payload.sellerId,
+        name: payload.name,
+        phone: payload.phone,
+        email: payload.email || null,
+        vehicle_type: payload.vehicleType || null,
+        vehicle_number: payload.vehicleNumber || null,
+        license_number: payload.licenseNumber || null,
+        documents: payload.documents || {},
+        verification_status: payload.verificationStatus || "pending",
+        active: payload.active !== false,
+        metadata: payload.metadata || {},
+        created_by: payload.createdBy || null,
+        updated_by: payload.updatedBy || payload.createdBy || null,
+      })
+      .returning("*");
+    return agent;
+  }
+
+  async updateDeliveryAgent(agentId, payload = {}) {
+    const next = {};
+    if (payload.sellerId !== undefined) next.seller_id = payload.sellerId;
+    if (payload.name !== undefined) next.name = payload.name;
+    if (payload.phone !== undefined) next.phone = payload.phone;
+    if (payload.email !== undefined) next.email = payload.email || null;
+    if (payload.vehicleType !== undefined) next.vehicle_type = payload.vehicleType || null;
+    if (payload.vehicleNumber !== undefined) next.vehicle_number = payload.vehicleNumber || null;
+    if (payload.licenseNumber !== undefined) next.license_number = payload.licenseNumber || null;
+    if (payload.documents !== undefined) next.documents = payload.documents || {};
+    if (payload.verificationStatus !== undefined) next.verification_status = payload.verificationStatus;
+    if (payload.active !== undefined) next.active = Boolean(payload.active);
+    if (payload.metadata !== undefined) next.metadata = payload.metadata || {};
+    next.updated_by = payload.updatedBy || null;
+    next.updated_at = knex.fn.now();
+
+    const [agent] = await knex("delivery_agents")
+      .where("id", agentId)
+      .update(next)
+      .returning("*");
+    return agent || null;
+  }
+
+  async assignDeliveryAgentToShipment(shipmentId, agent, payload = {}) {
+    const [shipment] = await knex("shipments")
+      .where("id", shipmentId)
+      .update({
+        delivery_agent_id: agent.id,
+        delivery_agent_snapshot: payload.deliveryAgentSnapshot || {},
+        updated_by: payload.updatedBy || null,
+        updated_at: knex.fn.now(),
+      })
+      .returning("*");
+    return shipment || null;
   }
 }
 

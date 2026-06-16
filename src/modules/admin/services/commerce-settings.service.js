@@ -38,6 +38,10 @@ const DEFAULT_SETTINGS = {
     platformFeeTaxRate: 18,
     chargePlatformFeeTaxToSeller: true,
     payoutReleaseMilestone: "delivered_or_fulfilled",
+    payoutReleaseDaysAfterDelivery: 7,
+    payoutSchedule: "manual",
+    payoutManualApprovalRequired: true,
+    minimumPayoutAmount: 0,
     shippingPolicy: "not_in_seller_payout",
   },
 };
@@ -65,6 +69,7 @@ const ALLOWED = {
   finance: {
     sellerPayoutBase: ["gross_customer_price", "taxable_ex_gst"],
     payoutReleaseMilestone: ["confirmed", "delivered_or_fulfilled", "return_window_closed"],
+    payoutSchedule: ["manual", "daily", "weekly", "monthly"],
     shippingPolicy: ["not_in_seller_payout", "reimburse_seller", "deduct_from_seller"],
   },
 };
@@ -87,8 +92,16 @@ const num = (value, fallback = 0) => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
-const bool = (value, fallback = false) =>
-  value === undefined || value === null ? fallback : Boolean(value);
+const bool = (value, fallback = false) => {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
+  }
+  return Boolean(value);
+};
 
 const pickAllowed = (value, allowed, fallback) =>
   allowed.includes(value) ? value : fallback;
@@ -196,6 +209,23 @@ class CommerceSettingsService {
           source.finance.payoutReleaseMilestone,
           ALLOWED.finance.payoutReleaseMilestone,
           DEFAULT_SETTINGS.finance.payoutReleaseMilestone,
+        ),
+        payoutReleaseDaysAfterDelivery: Math.min(Math.max(
+          num(source.finance.payoutReleaseDaysAfterDelivery, DEFAULT_SETTINGS.finance.payoutReleaseDaysAfterDelivery),
+          0,
+        ), 365),
+        payoutSchedule: pickAllowed(
+          source.finance.payoutSchedule,
+          ALLOWED.finance.payoutSchedule,
+          DEFAULT_SETTINGS.finance.payoutSchedule,
+        ),
+        payoutManualApprovalRequired: bool(
+          source.finance.payoutManualApprovalRequired,
+          DEFAULT_SETTINGS.finance.payoutManualApprovalRequired,
+        ),
+        minimumPayoutAmount: Math.max(
+          num(source.finance.minimumPayoutAmount, DEFAULT_SETTINGS.finance.minimumPayoutAmount),
+          0,
         ),
         shippingPolicy: pickAllowed(
           source.finance.shippingPolicy,

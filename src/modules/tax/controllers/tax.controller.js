@@ -27,6 +27,25 @@ class TaxController {
     res.json(okResponse(invoice));
   };
 
+  createMarketplaceInvoices = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const bundle = await this.taxService.createMarketplaceInvoices(req.params.orderId, actor);
+    await auditService.create(req, {
+      module: "tax",
+      entityId: req.params.orderId,
+      entityType: "MarketplaceInvoiceBundle",
+      newData: bundle,
+      description: "Generated marketplace seller and commission invoices",
+    });
+    res.status(201).json(okResponse(bundle));
+  };
+
+  getMarketplaceInvoices = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const bundle = await this.taxService.getMarketplaceInvoices(req.params.orderId, actor);
+    res.json(okResponse(bundle));
+  };
+
   listInvoices = async (req, res) => {
     const invoices = await this.taxService.listInvoices(req.query);
     res.json(okResponse(invoices));

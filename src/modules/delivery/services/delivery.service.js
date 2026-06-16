@@ -74,6 +74,120 @@ class DeliveryService {
     });
   }
 
+  isAdmin(actor = {}) {
+    return ["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin;
+  }
+
+  getActorSellerId(actor = {}) {
+    return actor.ownerSellerId || actor.userId;
+  }
+
+  resolveSellerIdForAgent(payload = {}, actor = {}) {
+    if (this.isAdmin(actor)) {
+      const sellerId = payload.sellerId || payload.seller_id;
+      if (!sellerId) throw new AppError("Seller ID is required for delivery agent management", 400);
+      return String(sellerId);
+    }
+    if (!["seller", "seller-admin", "seller-sub-admin"].includes(actor.role)) {
+      throw new AppError("Only seller or admin users can manage delivery agents", 403);
+    }
+    return String(this.getActorSellerId(actor));
+  }
+
+  assertCanManageDeliveryAgent(agent, actor = {}) {
+    if (!agent) throw new AppError("Delivery agent not found", 404);
+    if (this.isAdmin(actor)) return;
+    const sellerId = String(this.getActorSellerId(actor));
+    if (String(agent.seller_id) !== sellerId) {
+      throw new AppError("You are not allowed to manage this delivery agent", 403);
+    }
+  }
+
+  buildDeliveryAgentSnapshot(agent = {}) {
+    return {
+      id: agent.id,
+      sellerId: agent.seller_id,
+      name: agent.name,
+      phone: agent.phone,
+      email: agent.email || null,
+      vehicleType: agent.vehicle_type || null,
+      vehicleNumber: agent.vehicle_number || null,
+      licenseNumber: agent.license_number || null,
+      verificationStatus: agent.verification_status || null,
+      assignedAt: new Date().toISOString(),
+    };
+  }
+
+  async listDeliveryAgents(query = {}, actor = {}) {
+    const filters = { ...query };
+    if (!this.isAdmin(actor)) {
+      filters.sellerId = this.resolveSellerIdForAgent({}, actor);
+    }
+    return this.deliveryRepository.listDeliveryAgents(filters);
+  }
+
+  async createDeliveryAgent(payload = {}, actor = {}) {
+    const sellerId = this.resolveSellerIdForAgent(payload, actor);
+    return this.deliveryRepository.createDeliveryAgent({
+      ...payload,
+      sellerId,
+      createdBy: actor.userId,
+      updatedBy: actor.userId,
+    });
+  }
+
+  async getDeliveryAgent(agentId, actor = {}) {
+    const agent = await this.deliveryRepository.findDeliveryAgentById(agentId);
+    this.assertCanManageDeliveryAgent(agent, actor);
+    return agent;
+  }
+
+  async updateDeliveryAgent(agentId, payload = {}, actor = {}) {
+    const agent = await this.deliveryRepository.findDeliveryAgentById(agentId);
+    this.assertCanManageDeliveryAgent(agent, actor);
+    if (payload.sellerId !== undefined) {
+      if (!this.isAdmin(actor)) {
+        throw new AppError("Seller users cannot move delivery agents between sellers", 403);
+      }
+      if (!payload.sellerId) {
+        throw new AppError("Seller ID is required when moving a delivery agent", 400);
+      }
+    }
+    const updated = await this.deliveryRepository.updateDeliveryAgent(agentId, {
+      ...payload,
+      updatedBy: actor.userId,
+    });
+    if (!updated) throw new AppError("Delivery agent not found", 404);
+    return updated;
+  }
+
+  async resolveAssignableDeliveryAgent(agentId, sellerId, actor = {}) {
+    if (!agentId) return null;
+    const agent = await this.deliveryRepository.findDeliveryAgentById(agentId);
+    this.assertCanManageDeliveryAgent(agent, actor);
+    if (String(agent.seller_id) !== String(sellerId)) {
+      throw new AppError("Delivery agent must belong to the shipment seller", 400);
+    }
+    if (agent.active === false) {
+      throw new AppError("Inactive delivery agents cannot be assigned", 409);
+    }
+    if (agent.verification_status === "rejected") {
+      throw new AppError("Rejected delivery agents cannot be assigned", 409);
+    }
+    return agent;
+  }
+
+  async assignDeliveryAgent(shipmentId, deliveryAgentId, actor = {}) {
+    const shipment = await this.deliveryRepository.findShipmentById(shipmentId);
+    if (!shipment) throw new AppError("Shipment not found", 404);
+    await this.assertCanManageOrder(shipment.order_id, actor);
+    const agent = await this.resolveAssignableDeliveryAgent(deliveryAgentId, shipment.seller_id, actor);
+    return this.deliveryRepository.assignDeliveryAgentToShipment(shipmentId, agent, {
+      deliveryAgentSnapshot: this.buildDeliveryAgentSnapshot(agent),
+      updatedBy: actor.userId,
+    });
+  }
+
   async createShipment(payload, actor) {
     const order = await this.orderRepository.findByIdWithItems(payload.orderId);
     if (!order) {
@@ -101,6 +215,9 @@ class DeliveryService {
     if (!isAdmin && String(sellerId) !== String(actorSellerId)) {
       throw new AppError("You can create shipments only for your seller account", 403);
     }
+    const deliveryAgent = payload.deliveryAgentId
+      ? await this.resolveAssignableDeliveryAgent(payload.deliveryAgentId, sellerId, actor)
+      : null;
     const dealFulfillment = this.resolveDealFulfillment(order, sellerId, payload);
     const verificationRequired = Boolean(payload.verificationRequired || dealFulfillment.deliveryVerificationRequired);
     const verificationMethods = verificationRequired
@@ -125,6 +242,8 @@ class DeliveryService {
       verificationRequired,
       verificationMethods,
       deliveryProofSnapshot: payload.deliveryProofSnapshot || {},
+      deliveryAgentId: deliveryAgent?.id || null,
+      deliveryAgentSnapshot: deliveryAgent ? this.buildDeliveryAgentSnapshot(deliveryAgent) : {},
       createdBy: actor.userId,
       updatedBy: actor.userId,
     });

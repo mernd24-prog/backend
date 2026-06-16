@@ -44,6 +44,7 @@ const sellerProfileSchema = new mongoose.Schema(
     bankDetails: sellerBankDetailsSchema,
     businessAddress: sellerAddressSchema,
     pickupAddress: sellerAddressSchema,
+    returnAddress: sellerAddressSchema,
     kycStatus: {
       type: String,
       enum: ["not_submitted", "submitted", "under_review", "verified", "rejected"],

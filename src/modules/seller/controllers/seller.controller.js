@@ -67,6 +67,12 @@ class SellerController {
     res.json(okResponse(profile));
   };
 
+  updateReturnAddress = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const profile = await this.sellerService.patchProfileSection("returnAddress", req.body, actor);
+    res.json(okResponse(profile));
+  };
+
   updateBankDetails = async (req, res) => {
     const actor = getCurrentUser(req);
     const profile = await this.sellerService.patchProfileSection("bankDetails", req.body, actor);

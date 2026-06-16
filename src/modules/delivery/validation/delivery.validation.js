@@ -37,6 +37,7 @@ const listShipmentsSchema = Joi.object({
     shipmentType: Joi.string().valid("forward", "return"),
     direction: Joi.string().valid("forward", "reverse"),
     sellerId: Joi.string().max(64),
+    deliveryAgentId: uuid,
     status: Joi.string().valid(...Object.values(DELIVERY_STATUS)),
     courierName: Joi.string(),
     awbNumber: Joi.string(),
@@ -69,6 +70,7 @@ const createShipmentSchema = Joi.object({
     orderId: uuid.required(),
     dealId: uuid.allow(null),
     sellerId: Joi.string().max(64).allow("", null),
+    deliveryAgentId: uuid.allow("", null),
     provider: Joi.string().default("manual"),
     courierName: Joi.string().allow("", null),
     awbNumber: Joi.string().allow("", null),
@@ -98,6 +100,81 @@ const createShipmentSchema = Joi.object({
 
 const shipmentParamSchema = Joi.object({
   body: Joi.object({}).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    shipmentId: uuid.required(),
+  }).required(),
+});
+
+const deliveryAgentStatusValues = ["pending", "verified", "rejected"];
+
+const deliveryAgentBody = {
+  sellerId: Joi.string().max(64).allow("", null),
+  name: Joi.string().trim().min(2).max(160).required(),
+  phone: Joi.string().trim().min(7).max(32).required(),
+  email: Joi.string().email().max(180).allow("", null),
+  vehicleType: Joi.string().trim().max(64).allow("", null),
+  vehicleNumber: Joi.string().trim().max(64).allow("", null),
+  licenseNumber: Joi.string().trim().max(80).allow("", null),
+  documents: Joi.object().default({}),
+  verificationStatus: Joi.string().valid(...deliveryAgentStatusValues).default("pending"),
+  active: Joi.boolean().default(true),
+  metadata: Joi.object().default({}),
+};
+
+const deliveryAgentUpdateBody = {
+  sellerId: Joi.string().max(64).allow("", null),
+  name: Joi.string().trim().min(2).max(160),
+  phone: Joi.string().trim().min(7).max(32),
+  email: Joi.string().email().max(180).allow("", null),
+  vehicleType: Joi.string().trim().max(64).allow("", null),
+  vehicleNumber: Joi.string().trim().max(64).allow("", null),
+  licenseNumber: Joi.string().trim().max(80).allow("", null),
+  documents: Joi.object(),
+  verificationStatus: Joi.string().valid(...deliveryAgentStatusValues),
+  active: Joi.boolean(),
+  metadata: Joi.object(),
+};
+
+const listDeliveryAgentsSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    sellerId: Joi.string().max(64),
+    active: Joi.boolean(),
+    verificationStatus: Joi.string().valid(...deliveryAgentStatusValues),
+    search: Joi.string().trim().max(160).allow("", null),
+    limit: Joi.number().integer().min(1).max(200).default(50),
+    offset: Joi.number().integer().min(0).default(0),
+  }).required(),
+  params: Joi.object({}).required(),
+});
+
+const createDeliveryAgentSchema = Joi.object({
+  body: Joi.object(deliveryAgentBody).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
+const updateDeliveryAgentSchema = Joi.object({
+  body: Joi.object(deliveryAgentUpdateBody).min(1).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    deliveryAgentId: uuid.required(),
+  }).required(),
+});
+
+const deliveryAgentParamSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    deliveryAgentId: uuid.required(),
+  }).required(),
+});
+
+const assignDeliveryAgentSchema = Joi.object({
+  body: Joi.object({
+    deliveryAgentId: uuid.required(),
+  }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({
     shipmentId: uuid.required(),
@@ -228,6 +305,11 @@ module.exports = {
   listShipmentsSchema,
   createShipmentSchema,
   shipmentParamSchema,
+  listDeliveryAgentsSchema,
+  createDeliveryAgentSchema,
+  updateDeliveryAgentSchema,
+  deliveryAgentParamSchema,
+  assignDeliveryAgentSchema,
   trackingEventSchema,
   trackingWebhookSchema,
   deliveryOtpSchema,

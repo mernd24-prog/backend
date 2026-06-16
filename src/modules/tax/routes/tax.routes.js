@@ -6,6 +6,7 @@ const { catchErrors } = require("../../../shared/middleware/catch-errors");
 const { checkInput } = require("../../../shared/middleware/check-input");
 const {
   createOrderInvoiceSchema,
+  marketplaceInvoiceBundleSchema,
   taxReportSchema,
   listInvoicesSchema,
   createCreditNoteSchema,
@@ -22,12 +23,26 @@ taxRoutes.get(
   catchErrors(taxController.getOrderInvoice),
 );
 
+taxRoutes.get(
+  "/orders/:orderId/marketplace-invoices",
+  authenticate,
+  checkInput(marketplaceInvoiceBundleSchema),
+  catchErrors(taxController.getMarketplaceInvoices),
+);
+
 taxRoutes.post(
   "/orders/:orderId/invoice",
   authenticate,
   allowPermissions("tax:update"),
   checkInput(createOrderInvoiceSchema),
   catchErrors(taxController.createOrderInvoice),
+);
+
+taxRoutes.post(
+  "/orders/:orderId/marketplace-invoices",
+  authenticate,
+  checkInput(marketplaceInvoiceBundleSchema),
+  catchErrors(taxController.createMarketplaceInvoices),
 );
 
 taxRoutes.get(

@@ -71,11 +71,12 @@ class SellerService {
   mergeSellerProfile(existingProfile = {}, payload = {}) {
     const profile = this.toPlainObject(existingProfile);
     const profileFields = { ...payload };
-    const { bankDetails, businessAddress, pickupAddress } = profileFields;
+    const { bankDetails, businessAddress, pickupAddress, returnAddress } = profileFields;
     delete profileFields.onboardingChecklist;
     delete profileFields.bankDetails;
     delete profileFields.businessAddress;
     delete profileFields.pickupAddress;
+    delete profileFields.returnAddress;
 
     return {
       ...profile,
@@ -88,6 +89,9 @@ class SellerService {
         : {}),
       ...(pickupAddress
         ? { pickupAddress: { ...(profile.pickupAddress || {}), ...pickupAddress } }
+        : {}),
+      ...(returnAddress
+        ? { returnAddress: { ...(profile.returnAddress || {}), ...returnAddress } }
         : {}),
     };
   }

@@ -12,6 +12,11 @@ const {
   listShipmentsSchema,
   createShipmentSchema,
   shipmentParamSchema,
+  listDeliveryAgentsSchema,
+  createDeliveryAgentSchema,
+  updateDeliveryAgentSchema,
+  deliveryAgentParamSchema,
+  assignDeliveryAgentSchema,
   trackingEventSchema,
   trackingWebhookSchema,
   deliveryOtpSchema,
@@ -45,6 +50,38 @@ deliveryRoutes.get(
   catchErrors(deliveryController.listShipments),
 );
 
+deliveryRoutes.get(
+  "/agents",
+  authenticate,
+  allowPermissions("delivery:view"),
+  checkInput(listDeliveryAgentsSchema),
+  catchErrors(deliveryController.listDeliveryAgents),
+);
+
+deliveryRoutes.post(
+  "/agents",
+  authenticate,
+  allowPermissions("delivery:create"),
+  checkInput(createDeliveryAgentSchema),
+  catchErrors(deliveryController.createDeliveryAgent),
+);
+
+deliveryRoutes.get(
+  "/agents/:deliveryAgentId",
+  authenticate,
+  allowPermissions("delivery:view"),
+  checkInput(deliveryAgentParamSchema),
+  catchErrors(deliveryController.getDeliveryAgent),
+);
+
+deliveryRoutes.patch(
+  "/agents/:deliveryAgentId",
+  authenticate,
+  allowPermissions("delivery:update"),
+  checkInput(updateDeliveryAgentSchema),
+  catchErrors(deliveryController.updateDeliveryAgent),
+);
+
 deliveryRoutes.post(
   "/shipments",
   authenticate,
@@ -59,6 +96,14 @@ deliveryRoutes.get(
   allowPermissions("delivery:view"),
   checkInput(shipmentParamSchema),
   catchErrors(deliveryController.getShipment),
+);
+
+deliveryRoutes.post(
+  "/shipments/:shipmentId/assign-agent",
+  authenticate,
+  allowPermissions("delivery:assign"),
+  checkInput(assignDeliveryAgentSchema),
+  catchErrors(deliveryController.assignDeliveryAgent),
 );
 
 deliveryRoutes.post(

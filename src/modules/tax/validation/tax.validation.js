@@ -9,6 +9,14 @@ const createOrderInvoiceSchema = Joi.object({
   }).required(),
 });
 
+const marketplaceInvoiceBundleSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    orderId: uuid.required(),
+  }).required(),
+});
+
 const taxReportSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
@@ -28,10 +36,13 @@ const listInvoicesSchema = Joi.object({
     toDate: Joi.date().iso(),
     sellerId: Joi.string(),
     buyerId: Joi.string(),
+    invoiceType: Joi.string().valid("order_customer", "seller_customer", "platform_commission"),
+    referenceType: Joi.string().max(64),
+    referenceId: Joi.string().max(128),
     state: Joi.string(),
     hsnCode: Joi.string(),
     search: Joi.string().trim().max(128),
-    sortBy: Joi.string().valid("issuedAt", "issued_at", "invoiceNumber", "invoice_number", "taxableAmount", "taxable_amount", "taxAmount", "tax_amount", "totalAmount", "total_amount").default("issued_at"),
+    sortBy: Joi.string().valid("issuedAt", "issued_at", "invoiceNumber", "invoice_number", "taxableAmount", "taxable_amount", "taxAmount", "tax_amount", "totalAmount", "total_amount", "invoiceType", "invoice_type").default("issued_at"),
     sortDir: Joi.string().valid("asc", "desc").default("desc"),
     limit: Joi.number().integer().min(1).max(500).default(50),
     offset: Joi.number().integer().min(0).default(0),
@@ -77,6 +88,7 @@ const listCreditNotesSchema = Joi.object({
 
 module.exports = {
   createOrderInvoiceSchema,
+  marketplaceInvoiceBundleSchema,
   taxReportSchema,
   listInvoicesSchema,
   createCreditNoteSchema,

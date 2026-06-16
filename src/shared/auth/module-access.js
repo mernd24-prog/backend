@@ -218,6 +218,104 @@ const MODULE_ALIASES = {
   warranty_templates: "warranty",
   fraud: "fraud",
   chargebacks: "fraud",
+
+  // Deals
+  deals: "deals",
+  "deal-management": "deals",
+  "deal-payouts": "deals",
+  "deal-sponsorships": "deals",
+
+  // Cancellations
+  cancellations: "cancellations",
+  "order-cancellations": "cancellations",
+  order_cancellations: "cancellations",
+
+  // Tax sub-modules
+  "tax-invoices": "tax",
+  tax_invoices: "tax",
+  "credit-notes": "tax",
+  credit_notes: "tax",
+
+  // Subscription plans
+  "subscription-plans": "subscriptions",
+  subscription_plans: "subscriptions",
+
+  // Payment sub-modules
+  "cod-config": "payments",
+  cod_config: "payments",
+
+  // Seller payouts (already has "seller-payouts" but adding slug variants)
+  "seller-payout": "sellers/commissions",
+  seller_payout: "sellers/commissions",
+  payout: "sellers/commissions",
+
+  // Referral sub-modules
+  "influencer-management": "referral",
+  influencer_management: "referral",
+  influencers: "referral",
+
+  // Analytics events
+  "analytics-events": "reports",
+  analytics_events: "reports",
+
+  // Notification templates
+  "notification-templates": "notifications",
+  notification_templates: "notifications",
+
+  // Wallet management
+  "wallet-management": "wallets",
+  wallet_management: "wallets",
+
+  // CMS sub-module
+  "content-pages": "cms_pages",
+  content_pages: "cms_pages",
+
+  // User addresses
+  "users-addresses": "users",
+  users_addresses: "users",
+  "user-addresses": "users",
+  user_addresses: "users",
+
+  // Preferences
+  preferences: "admin",
+
+  // Platform settings
+  badges: "platform",
+  "api-keys": "admin",
+  api_keys: "admin",
+  "feature-flags": "admin",
+  feature_flags: "admin",
+  webhooks: "admin",
+
+  // System management
+  "system-health": "admin",
+  system_health: "admin",
+  "queue-management": "admin",
+  queue_management: "admin",
+  "dead-letter-queue": "admin",
+  dead_letter_queue: "admin",
+
+  // Seller status / sub-admin
+  "seller-status": "sellers",
+  seller_status: "sellers",
+  "seller-sub-admins": "sellers",
+  seller_sub_admins: "sellers",
+
+  // Reports extended
+  "reports-orders": "reports",
+  reports_orders: "reports",
+  "reports-payments": "reports",
+  reports_payments: "reports",
+  "reports-returns": "reports",
+  reports_returns: "reports",
+  "reports-cancellations": "reports",
+  reports_cancellations: "reports",
+  "reports-delivery": "reports",
+  reports_delivery: "reports",
+  "reports-commissions": "reports",
+  reports_commissions: "reports",
+  "reports-users": "reports",
+  reports_users: "reports",
 };
 
 function cleanModuleName(value) {

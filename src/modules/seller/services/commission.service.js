@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require("uuid");
 const { logger } = require("../../../shared/logger/logger");
 const { AppError } = require("../../../shared/errors/app-error");
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
+const { ORDER_STATUS } = require("../../../shared/domain/commerce-constants");
 
 class SellerCommissionService {
   constructor() {
@@ -66,6 +67,205 @@ class SellerCommissionService {
       periodStart: periodStart || new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10),
       periodEnd: periodEnd || now.toISOString().slice(0, 10),
     };
+  }
+
+  getPayoutPolicy(settings = {}) {
+    const finance = settings.finance || settings || {};
+    return {
+      releaseMilestone: finance.payoutReleaseMilestone || "delivered_or_fulfilled",
+      releaseDaysAfterDelivery: Math.max(Number(finance.payoutReleaseDaysAfterDelivery || 0), 0),
+      schedule: finance.payoutSchedule || "manual",
+      manualApprovalRequired: finance.payoutManualApprovalRequired !== false,
+      minimumPayoutAmount: this.round(finance.minimumPayoutAmount || 0),
+    };
+  }
+
+  getScheduledPayoutWindow(schedule = "manual", now = new Date()) {
+    const today = now.toISOString().slice(0, 10);
+    if (["daily", "weekly", "monthly"].includes(schedule)) {
+      return { periodStart: "1970-01-01", periodEnd: today };
+    }
+    return { periodStart: "1970-01-01", periodEnd: today };
+  }
+
+  shouldRunScheduledPayout(policy = {}, now = new Date(), options = {}) {
+    if (options.force === true) return true;
+    if (policy.schedule === "daily") return true;
+    if (policy.schedule === "weekly") return now.getUTCDay() === 1;
+    if (policy.schedule === "monthly") return now.getUTCDate() === 1;
+    return false;
+  }
+
+  toDate(value) {
+    if (!value) return null;
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  addDays(value, days = 0) {
+    const date = this.toDate(value);
+    if (!date) return null;
+    return new Date(date.getTime() + Math.max(Number(days || 0), 0) * 24 * 60 * 60 * 1000);
+  }
+
+  isReleasedOrderStatus(status) {
+    return [ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED].includes(status);
+  }
+
+  isConfirmedOrLaterStatus(status) {
+    return [
+      ORDER_STATUS.CONFIRMED,
+      ORDER_STATUS.PACKED,
+      ORDER_STATUS.SHIPPED,
+      ORDER_STATUS.DELIVERED,
+      ORDER_STATUS.FULFILLED,
+    ].includes(status);
+  }
+
+  isBlockedOrderStatus(status) {
+    return [
+      ORDER_STATUS.PENDING_PAYMENT,
+      ORDER_STATUS.PAYMENT_FAILED,
+      ORDER_STATUS.CANCELLED,
+      ORDER_STATUS.RETURN_REQUESTED,
+      ORDER_STATUS.RETURNED,
+    ].includes(status);
+  }
+
+  async getCommissionOrderReleaseData(commissions = [], client = knex) {
+    const orderIds = Array.from(new Set(
+      commissions.map((commission) => String(commission.order_id || "")).filter(Boolean),
+    ));
+    if (!orderIds.length) return new Map();
+
+    const [orders, releaseRows] = await Promise.all([
+      client("orders")
+        .select("id", "status", "payment_status", "created_at", "updated_at")
+        .whereIn("id", orderIds),
+      client("order_status_history")
+        .select("order_id")
+        .min({ release_status_at: "created_at" })
+        .whereIn("order_id", orderIds)
+        .whereIn("to_status", [ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED])
+        .groupBy("order_id")
+        .catch(() => []),
+    ]);
+
+    const releaseData = new Map();
+    orders.forEach((order) => {
+      releaseData.set(String(order.id), {
+        order,
+        releaseStatusAt: null,
+      });
+    });
+    releaseRows.forEach((row) => {
+      const key = String(row.order_id);
+      const current = releaseData.get(key) || { order: { id: row.order_id }, releaseStatusAt: null };
+      current.releaseStatusAt = row.release_status_at || null;
+      releaseData.set(key, current);
+    });
+
+    return releaseData;
+  }
+
+  evaluateCommissionRelease(commission = {}, releaseData = new Map(), policy = {}, now = new Date()) {
+    const status = String(commission.status || "pending");
+    const netAmount = this.round(commission.net_amount || 0);
+    const orderData = releaseData.get(String(commission.order_id || "")) || {};
+    const order = orderData.order || {};
+    const orderStatus = String(order.status || commission.source_status || "");
+    const deliveredAt =
+      this.toDate(orderData.releaseStatusAt) ||
+      (this.isReleasedOrderStatus(orderStatus)
+        ? this.toDate(order.updated_at || commission.updated_at || commission.created_at)
+        : null);
+    const base = {
+      commissionId: commission.id,
+      orderId: commission.order_id || null,
+      status,
+      orderStatus: orderStatus || null,
+      netAmount,
+      releaseStatus: "pending",
+      available: false,
+      eligibleAt: null,
+      reason: null,
+    };
+
+    if (netAmount <= 0) {
+      return { ...base, releaseStatus: "blocked", reason: "no_payable_amount" };
+    }
+    if (status === "paid") {
+      return { ...base, releaseStatus: "paid", reason: "already_paid" };
+    }
+    if (commission.payout_id || status === "processing") {
+      return { ...base, releaseStatus: "in_process", reason: "payout_in_process" };
+    }
+    if (!["pending", "approved"].includes(status)) {
+      return { ...base, reason: `status_${status}` };
+    }
+    if (this.isBlockedOrderStatus(orderStatus)) {
+      return { ...base, releaseStatus: "blocked", reason: `order_${orderStatus}` };
+    }
+
+    if (policy.releaseMilestone === "confirmed") {
+      if (this.isConfirmedOrLaterStatus(orderStatus)) {
+        return { ...base, releaseStatus: "available", available: true, eligibleAt: new Date().toISOString() };
+      }
+      return { ...base, reason: "waiting_for_order_confirmation" };
+    }
+
+    if (!this.isReleasedOrderStatus(orderStatus)) {
+      return { ...base, reason: "waiting_for_delivery_or_fulfillment" };
+    }
+
+    if (policy.releaseMilestone === "return_window_closed") {
+      const eligibleAt = this.addDays(deliveredAt || commission.updated_at || commission.created_at, policy.releaseDaysAfterDelivery);
+      if (!eligibleAt) {
+        return { ...base, reason: "missing_delivery_timestamp" };
+      }
+      if (eligibleAt.getTime() > now.getTime()) {
+        return {
+          ...base,
+          eligibleAt: eligibleAt.toISOString(),
+          reason: "waiting_for_return_window",
+        };
+      }
+      return {
+        ...base,
+        releaseStatus: "available",
+        available: true,
+        eligibleAt: eligibleAt.toISOString(),
+      };
+    }
+
+    return {
+      ...base,
+      releaseStatus: "available",
+      available: true,
+      eligibleAt: (deliveredAt || new Date()).toISOString(),
+    };
+  }
+
+  async evaluateCommissionsRelease(commissions = [], settings = {}, client = knex) {
+    const policy = this.getPayoutPolicy(settings);
+    const releaseData = await this.getCommissionOrderReleaseData(commissions, client);
+    const now = new Date();
+    return commissions.map((commission) => ({
+      commission,
+      release: this.evaluateCommissionRelease(commission, releaseData, policy, now),
+    }));
+  }
+
+  async filterPayoutEligibleCommissions(commissions = [], options = {}) {
+    const evaluations = await this.evaluateCommissionsRelease(
+      commissions,
+      options.settings || {},
+      options.trx || knex,
+    );
+    const eligible = evaluations
+      .filter(({ release }) => release.available)
+      .map(({ commission }) => commission);
+    return { eligible, evaluations };
   }
 
   async getCommissionInputs(orderId, sellerId, orderAmount) {
@@ -383,6 +583,8 @@ class SellerCommissionService {
 
   async initiatePayout(sellerId, periodStart, periodEnd, options = {}) {
     const range = this.buildDateRange(periodStart, periodEnd);
+    const commerceSettings = await commerceSettingsService.getSettings();
+    const payoutPolicy = this.getPayoutPolicy(commerceSettings);
     return await knex.transaction(async (trx) => {
       const commissions = await trx("seller_commissions")
         .where("seller_id", sellerId)
@@ -395,7 +597,16 @@ class SellerCommissionService {
         throw new AppError("No commissions to payout", 400);
       }
 
-      const totals = commissions.reduce(
+      const { eligible: payoutCommissions, evaluations } = await this.filterPayoutEligibleCommissions(commissions, {
+        settings: commerceSettings,
+        trx,
+      });
+
+      if (!payoutCommissions.length) {
+        throw new AppError("No released commissions to payout for the selected period", 400);
+      }
+
+      const totals = payoutCommissions.reduce(
         (acc, c) => {
           acc.totalAmount += Number(c.amount || 0);
           acc.commissionAmount += Number(c.commission_amount || 0);
@@ -412,7 +623,22 @@ class SellerCommissionService {
         throw new AppError("Invalid payout amount", 400);
       }
 
+      if (payoutPolicy.minimumPayoutAmount > 0 && totals.netAmount < payoutPolicy.minimumPayoutAmount) {
+        throw new AppError(`Payout amount is below the minimum threshold of ${payoutPolicy.minimumPayoutAmount}`, 400);
+      }
+
       const payoutId = uuidv4();
+      const payoutStatus = payoutPolicy.manualApprovalRequired ? "pending" : "processing";
+      const skippedCommissions = evaluations
+        .filter(({ release }) => !release.available)
+        .map(({ release }) => ({
+          commissionId: release.commissionId,
+          orderId: release.orderId,
+          netAmount: release.netAmount,
+          releaseStatus: release.releaseStatus,
+          reason: release.reason,
+          eligibleAt: release.eligibleAt,
+        }));
 
       await trx("seller_payouts").insert({
         id: payoutId,
@@ -425,12 +651,14 @@ class SellerCommissionService {
         refund_amount: this.round(totals.refundAmount || 0),
         adjustment_amount: this.round(totals.adjustmentAmount || 0),
         net_amount: this.round(totals.netAmount),
-        currency: options.currency || commissions[0]?.currency || "INR",
-        status: "processing",
+        currency: options.currency || payoutCommissions[0]?.currency || "INR",
+        status: payoutStatus,
         payment_method: options.paymentMethod || null,
         metadata: this.jsonb({
           source: options.source || "batch_payout",
-          commissionIds: commissions.map((commission) => commission.id),
+          commissionIds: payoutCommissions.map((commission) => commission.id),
+          skippedCommissions,
+          payoutPolicy,
           createdBy: options.actor?.userId || options.actor?.sub || null,
         }),
         created_at: knex.fn.now(),
@@ -440,7 +668,7 @@ class SellerCommissionService {
       await trx("seller_commissions")
         .whereIn(
           "id",
-          commissions.map((c) => c.id)
+          payoutCommissions.map((c) => c.id)
         )
         .update({
           status: "approved",
@@ -449,7 +677,7 @@ class SellerCommissionService {
         });
 
       logger.info(
-        { sellerId, payoutId, amount: totals.netAmount },
+        { sellerId, payoutId, amount: totals.netAmount, commissionCount: payoutCommissions.length },
         "Payout initiated"
       );
 
@@ -557,6 +785,138 @@ class SellerCommissionService {
 
   async getSellerPayouts(sellerId, query = {}) {
     return this.listSellerPayouts({ ...query, sellerId });
+  }
+
+  async getSellerWalletSummary(sellerId, query = {}) {
+    const { limit, offset } = this.normalizePagination(query);
+    const buildCommissionQuery = () => knex("seller_commissions")
+      .where("seller_id", sellerId)
+      .modify((builder) => {
+        if (query.fromDate) builder.where("created_at", ">=", query.fromDate);
+        if (query.toDate) builder.where("created_at", "<=", query.toDate);
+      });
+
+    const [commerceSettings, commissions, paidPayoutRow, inProcessPayoutRow, adjustmentRow] = await Promise.all([
+      commerceSettingsService.getSettings(),
+      buildCommissionQuery().orderBy("created_at", "desc"),
+      knex("seller_payouts")
+        .where({ seller_id: sellerId, status: "completed" })
+        .sum({ paid_amount: "net_amount" })
+        .count({ count: "*" })
+        .first(),
+      knex("seller_payouts")
+        .where("seller_id", sellerId)
+        .whereIn("status", ["pending", "processing"])
+        .sum({ in_process_amount: "net_amount" })
+        .count({ count: "*" })
+        .first(),
+      knex("seller_settlements")
+        .where("seller_id", sellerId)
+        .whereIn("status", ["pending", "processing"])
+        .where("net_amount", "<", 0)
+        .sum({ adjustment_balance: "net_amount" })
+        .count({ count: "*" })
+        .first(),
+    ]);
+
+    const payoutPolicy = this.getPayoutPolicy(commerceSettings);
+    const evaluations = await this.evaluateCommissionsRelease(commissions, commerceSettings);
+    const balances = {
+      pendingBalance: 0,
+      availableBalance: 0,
+      inProcessBalance: 0,
+      paidBalance: this.round(paidPayoutRow?.paid_amount || 0),
+      blockedBalance: 0,
+      refundAdjustmentBalance: this.round(adjustmentRow?.adjustment_balance || 0),
+    };
+    const counts = {
+      pending: 0,
+      available: 0,
+      inProcess: 0,
+      paid: 0,
+      blocked: 0,
+      totalCommissions: evaluations.length,
+    };
+    const nextEligibleDates = [];
+
+    evaluations.forEach(({ release }) => {
+      if (release.releaseStatus === "available") {
+        balances.availableBalance = this.round(balances.availableBalance + release.netAmount);
+        counts.available += 1;
+        return;
+      }
+      if (release.releaseStatus === "in_process") {
+        balances.inProcessBalance = this.round(balances.inProcessBalance + release.netAmount);
+        counts.inProcess += 1;
+        return;
+      }
+      if (release.releaseStatus === "paid") {
+        counts.paid += 1;
+        return;
+      }
+      if (release.releaseStatus === "blocked") {
+        balances.blockedBalance = this.round(balances.blockedBalance + release.netAmount);
+        counts.blocked += 1;
+        return;
+      }
+      balances.pendingBalance = this.round(balances.pendingBalance + release.netAmount);
+      counts.pending += 1;
+      if (release.eligibleAt && new Date(release.eligibleAt).getTime() > Date.now()) {
+        nextEligibleDates.push(release.eligibleAt);
+      }
+    });
+
+    const nextEligibleAt = nextEligibleDates.sort()[0] || null;
+    const minimumPayoutShortfall = Math.max(
+      0,
+      this.round(payoutPolicy.minimumPayoutAmount - balances.availableBalance),
+    );
+    const items = evaluations.slice(offset, offset + limit).map(({ commission, release }) => ({
+      commissionId: commission.id,
+      orderId: commission.order_id,
+      payoutId: commission.payout_id || null,
+      status: commission.status,
+      orderStatus: release.orderStatus,
+      amount: this.round(commission.amount || 0),
+      commissionAmount: this.round(commission.commission_amount || 0),
+      taxAmount: this.round(commission.tax_amount || 0),
+      refundAmount: this.round(commission.refund_amount || 0),
+      netAmount: release.netAmount,
+      currency: commission.currency || "INR",
+      releaseStatus: release.releaseStatus,
+      releaseReason: release.reason,
+      eligibleAt: release.eligibleAt,
+      createdAt: commission.created_at,
+      updatedAt: commission.updated_at,
+    }));
+
+    return {
+      sellerId,
+      currency: commissions[0]?.currency || "INR",
+      balances: {
+        ...balances,
+        totalOpenBalance: this.round(
+          balances.pendingBalance +
+          balances.availableBalance +
+          balances.inProcessBalance +
+          balances.blockedBalance,
+        ),
+      },
+      counts,
+      payoutPolicy,
+      nextEligibleAt,
+      canRequestPayout: balances.availableBalance > 0 && minimumPayoutShortfall === 0,
+      minimumPayoutShortfall,
+      payouts: {
+        paidCount: Number(paidPayoutRow?.count || 0),
+        inProcessCount: Number(inProcessPayoutRow?.count || 0),
+        inProcessAmount: this.round(inProcessPayoutRow?.in_process_amount || 0),
+      },
+      items,
+      total: evaluations.length,
+      limit,
+      offset,
+    };
   }
 
   applyCommissionFilters(query, filters = {}) {
@@ -670,7 +1030,91 @@ class SellerCommissionService {
   async processBatchPayouts(sellerId, options = {}) {
     const range = this.buildDateRange(options.periodStart, options.periodEnd);
     const payoutId = await this.initiatePayout(sellerId, range.periodStart, range.periodEnd, options);
+    const commerceSettings = await commerceSettingsService.getSettings();
+    const payoutPolicy = this.getPayoutPolicy(commerceSettings);
+    if (payoutPolicy.manualApprovalRequired && options.autoProcess !== true) {
+      const payout = await knex("seller_payouts").where("id", payoutId).first();
+      return {
+        payout,
+        approvalRequired: true,
+        payoutPolicy,
+        message: "Payout is pending manual approval",
+      };
+    }
     return this.processPayout(payoutId, options.paymentReference || `batch_${Date.now()}`, options);
+  }
+
+  async processScheduledPayouts(options = {}) {
+    const now = options.now ? new Date(options.now) : new Date();
+    const commerceSettings = await commerceSettingsService.getSettings();
+    const payoutPolicy = this.getPayoutPolicy(commerceSettings);
+
+    if (!this.shouldRunScheduledPayout(payoutPolicy, now, options)) {
+      return {
+        skipped: true,
+        reason: "schedule_not_due",
+        payoutPolicy,
+        processed: [],
+        failed: [],
+      };
+    }
+
+    const range = {
+      ...this.getScheduledPayoutWindow(payoutPolicy.schedule, now),
+      ...(options.periodStart ? { periodStart: options.periodStart } : {}),
+      ...(options.periodEnd ? { periodEnd: options.periodEnd } : {}),
+    };
+    const sellerRows = await knex("seller_commissions")
+      .distinct("seller_id")
+      .whereIn("status", ["pending", "approved"])
+      .whereNull("payout_id")
+      .whereBetween("created_at", [range.periodStart, `${range.periodEnd} 23:59:59`])
+      .orderBy("seller_id", "asc");
+
+    const processed = [];
+    const failed = [];
+
+    for (const row of sellerRows) {
+      const sellerId = row.seller_id;
+      try {
+        const result = await this.processBatchPayouts(sellerId, {
+          ...range,
+          source: "scheduled_payout",
+          autoProcess: options.autoProcess === true,
+          paymentReference: options.paymentReference || `scheduled_${payoutPolicy.schedule}_${Date.now()}`,
+          actor: options.actor || { userId: "system", role: "system" },
+        });
+        processed.push({
+          sellerId,
+          approvalRequired: result.approvalRequired === true,
+          payoutId: result.payout?.id || result.id || null,
+          status: result.payout?.status || result.status || null,
+        });
+      } catch (error) {
+        failed.push({
+          sellerId,
+          error: error.message,
+          statusCode: error.statusCode || error.status || null,
+        });
+      }
+    }
+
+    logger.info({
+      schedule: payoutPolicy.schedule,
+      processed: processed.length,
+      failed: failed.length,
+      periodStart: range.periodStart,
+      periodEnd: range.periodEnd,
+    }, "Scheduled seller payout run completed");
+
+    return {
+      skipped: false,
+      payoutPolicy,
+      periodStart: range.periodStart,
+      periodEnd: range.periodEnd,
+      processed,
+      failed,
+    };
   }
 
   async getSettlements(query = {}) {

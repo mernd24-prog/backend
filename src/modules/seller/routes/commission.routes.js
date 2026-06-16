@@ -61,6 +61,31 @@ router.get("/my-payouts", authenticate, async (req, res, next) => {
 });
 
 // ==============================
+// Seller: Wallet summary
+// ==============================
+router.get("/my-wallet", authenticate, async (req, res, next) => {
+  try {
+    const userId = req.auth?.ownerSellerId || req.auth?.sub;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const wallet = await CommissionService.getSellerWalletSummary(userId, req.query);
+
+    return res.status(200).json({
+      success: true,
+      data: wallet,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ==============================
 // Admin: Finance summary
 // ==============================
 router.get("/summary", authenticate, financeView, async (req, res, next) => {
@@ -69,6 +94,21 @@ router.get("/summary", authenticate, financeView, async (req, res, next) => {
     return res.status(200).json({
       success: true,
       data: summary,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ==============================
+// Admin: Seller wallet summary
+// ==============================
+router.get("/wallet/:sellerId", authenticate, financeView, async (req, res, next) => {
+  try {
+    const wallet = await CommissionService.getSellerWalletSummary(req.params.sellerId, req.query);
+    return res.status(200).json({
+      success: true,
+      data: wallet,
     });
   } catch (err) {
     next(err);
@@ -208,6 +248,7 @@ router.post(
           periodEnd: value.periodEnd || req.body?.periodEnd,
           paymentReference: req.body?.paymentReference,
           paymentMethod: req.body?.paymentMethod,
+          autoProcess: value.autoProcess,
           actor: req.auth,
         },
       );
