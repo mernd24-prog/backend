@@ -108,6 +108,8 @@ const MODULE_ALIASES = {
   "order-cancellation-reasons": "orders",
   order_cancellation_reasons: "orders",
   "view-orders": "orders",
+  "commerce-settings": "admin",
+  commerce_settings: "admin",
   payments: "payments",
   payment: "payments",
   refunds: "payments",

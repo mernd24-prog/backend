@@ -65,6 +65,7 @@ class OrderService {
         payableAmount: pricedOrder.pricing.payableAmount,
         platformFeeAmount: pricedOrder.pricing.platformFeeAmount,
         codChargeAmount: pricedOrder.pricing.codChargeAmount,
+        shippingFeeAmount: pricedOrder.pricing.shippingFeeAmount,
         currency: payload.currency || "INR",
         itemCount: pricedOrder.items.length,
       },
@@ -99,14 +100,19 @@ class OrderService {
           platformFeeBreakup: pricedOrder.pricing.platformFeeBreakup,
           paymentProvider: pricedOrder.pricing.paymentProvider,
           codChargeAmount: pricedOrder.pricing.codChargeAmount,
+          shippingFeeAmount: pricedOrder.pricing.shippingFeeAmount,
           shippingAddress: payload.shippingAddress,
           metadata: {
             paymentProvider: pricedOrder.pricing.paymentProvider,
             codCharge: pricedOrder.pricing.codChargeBreakup,
+            deliveryCharge: pricedOrder.pricing.deliveryChargeBreakup,
+            commerceSettings: pricedOrder.pricing.commerceSettingsSnapshot,
             pricingSummary: {
               customerItemsAmount: pricedOrder.pricing.customerItemsAmount,
               taxIncludedAmount: pricedOrder.pricing.taxIncludedAmount,
               taxPayableAmount: pricedOrder.pricing.taxPayableAmount,
+              deliveryChargeAmount: pricedOrder.pricing.deliveryChargeAmount,
+              shippingFeeAmount: pricedOrder.pricing.shippingFeeAmount,
               platformFeeChargedToCustomer: false,
               sellerPayoutAmount: pricedOrder.pricing.sellerPayoutAmount,
             },
@@ -192,12 +198,16 @@ class OrderService {
         taxPayableAmount: pricing.taxPayableAmount,
         platformFeeAmount: pricing.platformFeeAmount,
         codChargeAmount: pricing.codChargeAmount,
+        deliveryChargeAmount: pricing.deliveryChargeAmount,
+        shippingFeeAmount: pricing.shippingFeeAmount,
         totalAmount: pricing.totalAmount,
         payableAmount: pricing.payableAmount,
       },
       items: pricedOrder.items,
       taxBreakup: pricing.taxBreakup,
       platformFeeBreakup: pricing.platformFeeBreakup,
+      codChargeBreakup: pricing.codChargeBreakup,
+      deliveryChargeBreakup: pricing.deliveryChargeBreakup,
       sellerSettlements: pricing.sellerSettlementBreakup,
       context: {
         buyerId: quoteUserId,
@@ -214,6 +224,8 @@ class OrderService {
         taxPayableAmount: pricing.taxPayableAmount,
         platformFeeAmount: pricing.platformFeeAmount,
         codChargeAmount: pricing.codChargeAmount,
+        deliveryChargeAmount: pricing.deliveryChargeAmount,
+        shippingFeeAmount: pricing.shippingFeeAmount,
         customerTotalAmount: pricing.totalAmount,
         customerPayableAmount: pricing.payableAmount,
         sellerPayoutAmount: pricing.sellerPayoutAmount,
@@ -286,6 +298,7 @@ class OrderService {
     const items = (order.items || []).filter((item) => String(item.seller_id || item.sellerId || "") === sellerKey);
     const productIds = new Set(items.map((item) => String(item.product_id || item.productId || "")));
     const relations = order.relations || {};
+    const metadata = this.normalizeJson(order.metadata, {});
     const sellers = (relations.sellers || []).filter((seller) => String(seller.id || seller._id || "") === sellerKey);
     const sellerSettlements = (relations.sellerSettlements || []).filter((settlement) => String(settlement.sellerId || "") === sellerKey);
     const taxBreakup = this.normalizeJson(order.tax_breakup, {});
@@ -298,7 +311,11 @@ class OrderService {
     const sellerPayoutAmount = Number(
       sellerSettlements.reduce((sum, settlement) => sum + Number(settlement.sellerPayoutAmount || 0), 0).toFixed(2),
     );
-    const customerTotalAmount = Number((subtotalAmount + Number(sellerTaxBreakup.taxPayableAmount || 0)).toFixed(2));
+    const sellerDeliveryCharge = Array.isArray(metadata.deliveryCharge?.sellers)
+      ? metadata.deliveryCharge.sellers.find((entry) => String(entry.sellerId) === sellerKey)
+      : null;
+    const deliveryChargeAmount = Number(sellerDeliveryCharge?.chargeAmount || 0);
+    const customerTotalAmount = Number((subtotalAmount + Number(sellerTaxBreakup.taxPayableAmount || 0) + deliveryChargeAmount).toFixed(2));
 
     return {
       ...order,
@@ -307,6 +324,7 @@ class OrderService {
       total_amount: customerTotalAmount,
       payable_amount: customerTotalAmount,
       platform_fee_amount: platformFeeAmount,
+      shipping_fee_amount: deliveryChargeAmount,
       tax_breakup: sellerTaxBreakup,
       platform_fee_breakup: this.filterPlatformFeeBreakup(order.platform_fee_breakup, productIds),
       items,
@@ -318,6 +336,8 @@ class OrderService {
         taxIncludedAmount: Number(sellerTaxBreakup.taxIncludedAmount || 0),
         taxPayableAmount: Number(sellerTaxBreakup.taxPayableAmount || 0),
         platformFeeAmount,
+        deliveryChargeAmount,
+        shippingFeeAmount: deliveryChargeAmount,
         customerTotalAmount,
         customerPayableAmount: customerTotalAmount,
         sellerPayoutAmount,

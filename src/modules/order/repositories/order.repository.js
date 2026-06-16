@@ -42,6 +42,7 @@ class OrderRepository {
         discount_amount: payload.discountAmount,
         tax_amount: payload.taxAmount,
         total_amount: payload.totalAmount,
+        shipping_fee_amount: payload.shippingFeeAmount || payload.deliveryChargeAmount || 0,
         shipping_address: this.jsonb(payload.shippingAddress),
         coupon_code: payload.couponCode || null,
         wallet_discount_amount: payload.walletDiscountAmount || 0,
@@ -579,7 +580,7 @@ class OrderRepository {
       }));
       const sellerIds = [...new Set(orderItems.map((item) => item.seller_id).filter(Boolean))];
       const sellers = sellerIds.map((sellerId) => usersById.get(String(sellerId)) || { id: sellerId }).filter(Boolean);
-      const sellerSettlements = this.buildSellerSettlements(orderItems, sellers);
+      const sellerSettlements = this.buildSellerSettlements(orderItems, sellers, order);
       const summary = this.buildOrderSummary(order, orderItems, sellerSettlements);
 
       return {
@@ -622,8 +623,14 @@ class OrderRepository {
 
   buildOrderSummary(order = {}, items = [], sellerSettlements = []) {
     const taxBreakup = this.parseJson(order.tax_breakup, {});
+    const metadata = this.parseJson(order.metadata, {});
     const itemAmount = items.reduce((sum, item) => sum + this.money(item.line_total), 0);
     const platformFeeAmount = this.money(order.platform_fee_amount);
+    const shippingFeeAmount = this.money(
+      order.shipping_fee_amount ??
+      metadata.pricingSummary?.shippingFeeAmount ??
+      metadata.pricingSummary?.deliveryChargeAmount,
+    );
     const sellerPayoutAmount = sellerSettlements.reduce((sum, seller) => sum + this.money(seller.sellerPayoutAmount), 0);
 
     return {
@@ -636,6 +643,8 @@ class OrderRepository {
       taxPayableAmount: this.money(taxBreakup.taxPayableAmount),
       platformFeeAmount,
       codChargeAmount: this.money(order.cod_charge_amount),
+      deliveryChargeAmount: shippingFeeAmount,
+      shippingFeeAmount,
       customerTotalAmount: this.money(order.total_amount),
       customerPayableAmount: this.money(order.payable_amount),
       sellerPayoutAmount: Number(sellerPayoutAmount.toFixed(2)),
@@ -643,7 +652,18 @@ class OrderRepository {
     };
   }
 
-  buildSellerSettlements(items = [], sellers = []) {
+  buildSellerSettlements(items = [], sellers = [], order = {}) {
+    const orderMetadata = this.parseJson(order.metadata, {});
+    const shippingPolicy = orderMetadata.commerceSettings?.finance?.shippingPolicy || "not_in_seller_payout";
+    const deliveryChargeSellers = Array.isArray(orderMetadata.deliveryCharge?.sellers)
+      ? orderMetadata.deliveryCharge.sellers
+      : [];
+    const deliveryBySeller = new Map(
+      deliveryChargeSellers.map((seller) => [
+        String(seller.sellerId),
+        this.money(seller.chargeAmount),
+      ]),
+    );
     const sellerNames = new Map(
       sellers.map((seller) => [
         String(seller.id),
@@ -673,6 +693,8 @@ class OrderRepository {
       const lineTotal = this.money(item.line_total);
       const taxableAmount = this.money(taxBreakup.taxableAmount ?? item.line_total);
       const platformFeeAmount = this.money(item.platform_fee_amount || pricing.platformFeeAmount);
+      const platformFeeTaxAmount = this.money(pricing.platformFeeTaxAmount);
+      const sellerPayoutBaseAmount = this.money(pricing.sellerPayoutBaseAmount || lineTotal - this.money(item.discount_amount));
       const taxAmount = item.tax_amount !== undefined && item.tax_amount !== null
         ? this.money(item.tax_amount)
         : this.money(taxBreakup.taxAmount) + this.money(taxBreakup.cessAmount);
@@ -681,18 +703,38 @@ class OrderRepository {
       current.taxableAmount += taxableAmount;
       current.taxAmount += taxAmount;
       current.platformFeeAmount += platformFeeAmount;
-      current.sellerPayoutAmount += Math.max(0, taxableAmount - platformFeeAmount);
+      current.platformFeeTaxAmount = this.money(current.platformFeeTaxAmount) + platformFeeTaxAmount;
+      current.sellerPayoutBaseAmount = this.money(current.sellerPayoutBaseAmount) + sellerPayoutBaseAmount;
+      current.productTaxLiabilityAmount = this.money(current.productTaxLiabilityAmount) + taxAmount;
+      current.sellerPayoutAmount += Math.max(0, sellerPayoutBaseAmount - platformFeeAmount - platformFeeTaxAmount);
       grouped.set(sellerId, current);
     }
 
-    return [...grouped.values()].map((seller) => ({
-      ...seller,
-      grossSalesAmount: Number(seller.grossSalesAmount.toFixed(2)),
-      taxableAmount: Number(seller.taxableAmount.toFixed(2)),
-      taxAmount: Number(seller.taxAmount.toFixed(2)),
-      platformFeeAmount: Number(seller.platformFeeAmount.toFixed(2)),
-      sellerPayoutAmount: Number(seller.sellerPayoutAmount.toFixed(2)),
-    }));
+    return [...grouped.values()].map((seller) => {
+      const sellerDeliveryChargeAmount = this.money(deliveryBySeller.get(String(seller.sellerId)));
+      const shippingReimbursementAmount = shippingPolicy === "reimburse_seller" ? sellerDeliveryChargeAmount : 0;
+      const shippingDeductionAmount = shippingPolicy === "deduct_from_seller" ? sellerDeliveryChargeAmount : 0;
+      const sellerPayoutAmount = Math.max(
+        0,
+        seller.sellerPayoutAmount + shippingReimbursementAmount - shippingDeductionAmount,
+      );
+
+      return {
+        ...seller,
+        grossSalesAmount: Number(seller.grossSalesAmount.toFixed(2)),
+        sellerPayoutBaseAmount: Number(this.money(seller.sellerPayoutBaseAmount).toFixed(2)),
+        taxableAmount: Number(seller.taxableAmount.toFixed(2)),
+        taxAmount: Number(seller.taxAmount.toFixed(2)),
+        platformFeeAmount: Number(seller.platformFeeAmount.toFixed(2)),
+        platformFeeTaxAmount: Number(this.money(seller.platformFeeTaxAmount).toFixed(2)),
+        productTaxLiabilityAmount: Number(this.money(seller.productTaxLiabilityAmount).toFixed(2)),
+        sellerDeliveryChargeAmount: Number(sellerDeliveryChargeAmount.toFixed(2)),
+        shippingReimbursementAmount: Number(shippingReimbursementAmount.toFixed(2)),
+        shippingDeductionAmount: Number(shippingDeductionAmount.toFixed(2)),
+        shippingPolicy,
+        sellerPayoutAmount: Number(sellerPayoutAmount.toFixed(2)),
+      };
+    });
   }
 
   async optionalTableRows(tableName, buildQuery) {

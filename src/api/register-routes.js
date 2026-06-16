@@ -32,6 +32,7 @@ const { fileUploaderRoutes } = require("../shared/routes/file-uploader.routes");
 const { metaRoutes } = require("../shared/routes/meta.routes");
 const searchRoutes = require("../shared/routes/search.routes");
 const { commonManagementRoutes } = require("../modules/admin/routes/common-management.routes");
+const { commerceSettingsRoutes } = require("../modules/admin/routes/commerce-settings.routes");
 
 function registerRoutes(app) {
   app.use(`${env.apiPrefix}/auth`, authRoutes);
@@ -50,6 +51,7 @@ function registerRoutes(app) {
   app.use(`${env.apiPrefix}/pricing`, pricingRoutes);
   app.use(`${env.apiPrefix}/coupons`, pricingRoutes);
   app.use(`${env.apiPrefix}/wallets`, walletRoutes);
+  app.use(`${env.apiPrefix}/admin/commerce-settings`, commerceSettingsRoutes);
   app.use(`${env.apiPrefix}/admin`, adminRoutes);
   app.use(`${env.apiPrefix}/tax`, taxRoutes);
   app.use(`${env.apiPrefix}/subscriptions`, subscriptionRoutes);

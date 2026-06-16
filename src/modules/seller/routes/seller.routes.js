@@ -10,6 +10,7 @@ const {
   reviewSellerKycSchema,
   updateSellerProfileSchema,
   updateSellerSettingsSchema,
+  updateSellerChargeSettingsSchema,
   updateSellerAddressSchema,
   updateSellerBankSchema,
   updateSellerMoreInfoSchema,
@@ -26,6 +27,9 @@ const {
 } = require("../validation/seller.validation");
 const { ACTIONS } = require("../../../shared/constants/actions");
 const { ROLES } = require("../../../shared/constants/roles");
+const { getCurrentUser } = require("../../../shared/auth/current-user");
+const { okResponse } = require("../../../shared/http/reply");
+const { sellerChargeSettingsService } = require("../services/seller-charge-settings.service");
 
 const sellerRoutes = express.Router();
 const sellerController = new SellerController();
@@ -132,6 +136,29 @@ sellerRoutes.patch(
   allowActions(ACTIONS.SELLER_PROFILE_MANAGE),
   checkInput(updateSellerSettingsSchema),
   catchErrors(sellerController.updateSettings),
+);
+sellerRoutes.get(
+  "/me/charge-settings",
+  authenticate,
+  allowActions(ACTIONS.SELLER_PROFILE_MANAGE),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const sellerId = sellerChargeSettingsService.resolveSellerId(actor);
+    const settings = await sellerChargeSettingsService.getSettings(sellerId);
+    res.json(okResponse(settings));
+  }),
+);
+sellerRoutes.put(
+  "/me/charge-settings",
+  authenticate,
+  allowActions(ACTIONS.SELLER_PROFILE_MANAGE),
+  checkInput(updateSellerChargeSettingsSchema),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const sellerId = sellerChargeSettingsService.resolveSellerId(actor);
+    const settings = await sellerChargeSettingsService.updateSettings(sellerId, req.body, actor);
+    res.json(okResponse(settings, { message: "Seller charge settings updated" }));
+  }),
 );
 sellerRoutes.post(
   "/me/kyc",

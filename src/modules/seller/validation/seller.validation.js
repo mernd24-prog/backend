@@ -115,6 +115,39 @@ const updateSellerSettingsSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
+const sellerChargeSettingsBodySchema = Joi.object({
+  cod: Joi.object({
+    enabled: Joi.boolean(),
+    chargeMode: Joi.string().valid("inherit", "none", "flat"),
+    chargeAmount: Joi.number().min(0),
+    minOrderAmount: Joi.number().min(0).allow(null),
+    maxOrderAmount: Joi.number().min(0).allow(null),
+    availabilityMode: Joi.string().valid("inherit", "all_pincodes", "allowlist", "blocklist", "disabled"),
+    allowPincodes: Joi.alternatives().try(
+      Joi.array().items(Joi.string().trim()),
+      Joi.string().allow("", null),
+    ),
+    blockPincodes: Joi.alternatives().try(
+      Joi.array().items(Joi.string().trim()),
+      Joi.string().allow("", null),
+    ),
+    notes: Joi.string().max(1000).allow("", null),
+  }),
+  delivery: Joi.object({
+    mode: Joi.string().valid("none", "flat", "free_over_amount"),
+    chargeAmount: Joi.number().min(0),
+    freeDeliveryMinOrderAmount: Joi.number().min(0).allow(null),
+    notes: Joi.string().max(1000).allow("", null),
+  }),
+  metadata: Joi.object(),
+}).min(1);
+
+const updateSellerChargeSettingsSchema = Joi.object({
+  body: sellerChargeSettingsBodySchema.required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
 const updateSellerAddressSchema = Joi.object({
   body: Joi.object({
     line1: Joi.string().required(),
@@ -295,6 +328,7 @@ module.exports = {
   reviewSellerKycSchema,
   updateSellerProfileSchema,
   updateSellerSettingsSchema,
+  updateSellerChargeSettingsSchema,
   updateSellerAddressSchema,
   updateSellerBankSchema,
   updateSellerMoreInfoSchema,

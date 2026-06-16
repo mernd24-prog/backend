@@ -49,6 +49,7 @@ const SIDEBAR_MODULES = [
   { moduleName: "Gift Card Orders", moduleKey: "gift-card-orders", moduleSlug: "gift-card-orders", icon: "MdCardGiftcard", routePath: "/app/gift-card-orders", moduleType: "page", order: 81, parentModule: "orders-management", requiredModule: "orders" },
   { moduleName: "Cancellation Reasons", moduleKey: "order-cancellation-reasons", moduleSlug: "order-cancellation-reasons", icon: "MdCancel", routePath: "/app/order-cancellation-reasons", moduleType: "page", order: 82, parentModule: "orders-management", requiredModule: "orders" },
   { moduleName: "Subscription Orders", moduleKey: "subscription-orders", moduleSlug: "subscription-orders", icon: "MdSubscriptions", routePath: "/app/subscription-orders", moduleType: "page", order: 83, parentModule: "orders-management", requiredModule: "subscriptions" },
+  { moduleName: "Commerce Settings", moduleKey: "commerce-settings", moduleSlug: "commerce-settings", icon: "MdSettings", routePath: "/app/commerce-settings", moduleType: "page", order: 84, parentModule: "orders-management", requiredModule: "admin" },
 
   { moduleName: "Delivery & Shipping", moduleKey: "delivery-shipping", moduleSlug: "delivery-shipping", icon: "MdLocalShipping", moduleType: "group", order: 85, parentModule: null, requiredModule: "delivery" },
   { moduleName: "Shipment Tracking", moduleKey: "shipment-tracking", moduleSlug: "shipment-tracking", icon: "MdLocalShipping", routePath: "/app/shipment-tracking", moduleType: "page", order: 86, parentModule: "delivery-shipping", requiredModule: "delivery" },
