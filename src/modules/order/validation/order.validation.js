@@ -109,7 +109,11 @@ const updateOrderStatusSchema = Joi.object({
         "returned",
       )
       .required(),
-    reason: Joi.string().max(500).allow("", null),
+    reason: Joi.when("status", {
+      is: "cancelled",
+      then: Joi.string().trim().min(3).max(500).required(),
+      otherwise: Joi.string().max(500).allow("", null),
+    }),
     note: Joi.string().max(1000).allow("", null),
     trackingNumber: Joi.string().trim().max(200).allow("", null),
     carrierName: Joi.string().trim().max(100).allow("", null),
@@ -131,7 +135,24 @@ const orderParamSchema = Joi.object({
 
 const cancelOrderSchema = Joi.object({
   body: Joi.object({
-    reason: Joi.string().max(500).allow("", null),
+    reason: Joi.string().trim().min(3).max(500).required(),
+    reasonCode: Joi.string().valid(
+      "changed_mind",
+      "ordered_by_mistake",
+      "address_issue",
+      "payment_issue",
+      "seller_unavailable",
+      "inventory_unavailable",
+      "delivery_delay",
+      "pricing_issue",
+      "other",
+    ).default("other"),
+    refundMethod: Joi.string().valid("auto", "original_source", "wallet", "manual").default("auto"),
+    idempotencyKey: Joi.string().trim().max(180).allow("", null),
+    items: Joi.array().items(Joi.object({
+      orderItemId: Joi.string().uuid().required(),
+      quantity: Joi.number().integer().min(1).required(),
+    })).min(1),
   }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({

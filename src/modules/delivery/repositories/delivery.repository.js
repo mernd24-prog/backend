@@ -119,6 +119,14 @@ class DeliveryRepository {
           ship_to_snapshot: payload.shipToSnapshot || {},
           rate_snapshot: payload.rateSnapshot || {},
           label_data: payload.labelData || {},
+          shipment_type: payload.shipmentType || "forward",
+          direction: payload.direction || "forward",
+          return_id: payload.returnId || null,
+          deal_id: payload.dealId || null,
+          fulfillment_model: payload.fulfillmentModel || null,
+          verification_required: Boolean(payload.verificationRequired),
+          verification_methods: payload.verificationMethods || [],
+          delivery_proof_snapshot: payload.deliveryProofSnapshot || {},
           manifest_id: payload.manifestId || null,
           expected_delivery_at: payload.expectedDeliveryAt || null,
           idempotency_key: payload.idempotencyKey || null,
@@ -151,6 +159,10 @@ class DeliveryRepository {
 
   async listShipments({
     orderId = null,
+    returnId = null,
+    shipmentType = null,
+    direction = null,
+    dealId = null,
     sellerId = null,
     status = null,
     courierName = null,
@@ -166,6 +178,10 @@ class DeliveryRepository {
   } = {}) {
     const query = knex("shipments");
     if (orderId) query.where("order_id", orderId);
+    if (returnId) query.where("return_id", returnId);
+    if (shipmentType) query.where("shipment_type", shipmentType);
+    if (direction) query.where("direction", direction);
+    if (dealId) query.where("deal_id", dealId);
     if (sellerId) query.where("seller_id", sellerId);
     if (status) query.where("status", status);
     if (courierName) query.whereILike("courier_name", `%${courierName}%`);
@@ -195,7 +211,7 @@ class DeliveryRepository {
       cod: "cod",
     };
     const orderColumn = sortColumns[sortBy] || "created_at";
-    const direction = String(sortDir).toLowerCase() === "asc" ? "asc" : "desc";
+    direction = String(sortDir).toLowerCase() === "asc" ? "asc" : "desc";
     const [{ count }] = await query.clone().clearSelect().clearOrder().count({ count: "*" });
     const items = await query.clone()
       .orderBy(orderColumn, direction)
@@ -216,13 +232,27 @@ class DeliveryRepository {
     const trackingEvents = await knex("shipment_tracking_events")
       .where("shipment_id", shipmentId)
       .orderBy("event_time", "asc");
-    return { ...shipment, trackingEvents };
+    const verificationEvents = await knex("delivery_verification_events")
+      .where("shipment_id", shipmentId)
+      .orderBy("created_at", "asc")
+      .catch(() => []);
+    return { ...shipment, trackingEvents, verificationEvents };
   }
 
   async addTrackingEvent(shipmentId, payload) {
     const trx = await knex.transaction();
 
     try {
+      if (payload.idempotencyKey) {
+        const existingEvent = await trx("shipment_tracking_events")
+          .where("idempotency_key", payload.idempotencyKey)
+          .first();
+        if (existingEvent) {
+          const shipment = await trx("shipments").where("id", existingEvent.shipment_id).first();
+          await trx.commit();
+          return { shipment, event: existingEvent, duplicate: true };
+        }
+      }
       const [shipment] = await trx("shipments").where("id", shipmentId).limit(1).forUpdate();
       if (!shipment) {
         await trx.commit();
@@ -251,11 +281,193 @@ class DeliveryRepository {
           source: payload.source || "manual",
           raw_payload: payload.rawPayload || {},
           actor_id: payload.actorId || null,
+          idempotency_key: payload.idempotencyKey || null,
         })
         .returning("*");
 
       await trx.commit();
       return { shipment: updated, event };
+    } catch (error) {
+      await trx.rollback();
+      throw error;
+    }
+  }
+
+  async storeDeliveryOtp(shipmentId, payload) {
+    const trx = await knex.transaction();
+
+    try {
+      const [shipment] = await trx("shipments").where("id", shipmentId).limit(1).forUpdate();
+      if (!shipment) {
+        await trx.commit();
+        return null;
+      }
+
+      const currentMethods = Array.isArray(shipment.verification_methods)
+        ? shipment.verification_methods
+        : [];
+      const verificationMethods = Array.from(new Set([...currentMethods, "otp"]));
+
+      const [updated] = await trx("shipments")
+        .where("id", shipmentId)
+        .update({
+          verification_required: true,
+          verification_methods: verificationMethods,
+          delivery_otp_hash: payload.otpHash,
+          delivery_otp_expires_at: payload.expiresAt,
+          delivery_otp_attempts: 0,
+          updated_by: payload.actorId || shipment.updated_by,
+          updated_at: knex.fn.now(),
+        })
+        .returning("*");
+
+      const [event] = await trx("delivery_verification_events")
+        .insert({
+          id: uuidv4(),
+          shipment_id: shipmentId,
+          order_id: shipment.order_id,
+          method: "otp",
+          status: "sent",
+          proof_snapshot: payload.proofSnapshot || {},
+          attempts: 0,
+          expires_at: payload.expiresAt,
+          source: payload.source || "manual",
+          raw_payload: payload.rawPayload || {},
+          actor_id: payload.actorId || null,
+          actor_role: payload.actorRole || null,
+        })
+        .returning("*");
+
+      await trx.commit();
+      return { shipment: updated, event };
+    } catch (error) {
+      await trx.rollback();
+      throw error;
+    }
+  }
+
+  async recordDeliveryVerificationFailure(shipmentId, payload) {
+    const trx = await knex.transaction();
+
+    try {
+      const [shipment] = await trx("shipments").where("id", shipmentId).limit(1).forUpdate();
+      if (!shipment) {
+        await trx.commit();
+        return null;
+      }
+
+      const attempts = Number(shipment.delivery_otp_attempts || 0) + (payload.incrementAttempts ? 1 : 0);
+      const [updated] = await trx("shipments")
+        .where("id", shipmentId)
+        .update({
+          delivery_otp_attempts: attempts,
+          updated_by: payload.actorId || shipment.updated_by,
+          updated_at: knex.fn.now(),
+        })
+        .returning("*");
+
+      const [event] = await trx("delivery_verification_events")
+        .insert({
+          id: uuidv4(),
+          shipment_id: shipmentId,
+          order_id: shipment.order_id,
+          method: payload.method,
+          status: "failed",
+          proof_snapshot: payload.proofSnapshot || {},
+          failure_reason: payload.failureReason || null,
+          attempts,
+          source: payload.source || "manual",
+          raw_payload: payload.rawPayload || {},
+          actor_id: payload.actorId || null,
+          actor_role: payload.actorRole || null,
+        })
+        .returning("*");
+
+      await trx.commit();
+      return { shipment: updated, event };
+    } catch (error) {
+      await trx.rollback();
+      throw error;
+    }
+  }
+
+  async markDeliveryVerified(shipmentId, payload) {
+    const trx = await knex.transaction();
+
+    try {
+      const [shipment] = await trx("shipments").where("id", shipmentId).limit(1).forUpdate();
+      if (!shipment) {
+        await trx.commit();
+        return null;
+      }
+
+      if (shipment.status === "delivered_verified") {
+        const trackingEvents = await trx("shipment_tracking_events")
+          .where("shipment_id", shipmentId)
+          .orderBy("event_time", "asc");
+        await trx.commit();
+        return { shipment: { ...shipment, trackingEvents }, event: null, alreadyVerified: true };
+      }
+
+      const verifiedAt = payload.verifiedAt || new Date();
+      const proofSnapshot = {
+        method: payload.method,
+        verifiedAt,
+        ...(payload.proofSnapshot || {}),
+      };
+
+      const [updated] = await trx("shipments")
+        .where("id", shipmentId)
+        .update({
+          status: "delivered_verified",
+          verification_required: true,
+          delivery_otp_hash: null,
+          delivery_otp_expires_at: null,
+          delivery_proof_snapshot: proofSnapshot,
+          delivered_verified_at: verifiedAt,
+          verified_by: payload.actorId || null,
+          updated_by: payload.actorId || shipment.updated_by,
+          updated_at: knex.fn.now(),
+        })
+        .returning("*");
+
+      const [event] = await trx("delivery_verification_events")
+        .insert({
+          id: uuidv4(),
+          shipment_id: shipmentId,
+          order_id: shipment.order_id,
+          method: payload.method,
+          status: payload.method === "manual_override" ? "overridden" : "verified",
+          proof_snapshot: proofSnapshot,
+          attempts: Number(shipment.delivery_otp_attempts || 0),
+          verified_at: verifiedAt,
+          source: payload.source || "manual",
+          raw_payload: payload.rawPayload || {},
+          actor_id: payload.actorId || null,
+          actor_role: payload.actorRole || null,
+        })
+        .returning("*");
+
+      await trx("shipment_tracking_events")
+        .insert({
+          id: uuidv4(),
+          shipment_id: shipmentId,
+          order_id: shipment.order_id,
+          status: "delivered_verified",
+          event_time: verifiedAt,
+          location: payload.location || null,
+          note: payload.note || "Delivery verified",
+          source: payload.source || "manual",
+          raw_payload: {
+            method: payload.method,
+            proofSnapshot,
+            ...(payload.rawPayload || {}),
+          },
+          actor_id: payload.actorId || null,
+        });
+
+      await trx.commit();
+      return { shipment: updated, event, alreadyVerified: false };
     } catch (error) {
       await trx.rollback();
       throw error;

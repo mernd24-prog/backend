@@ -44,16 +44,17 @@ router.post(
       value.reason,
       value.description,
       actor,
-      { photos: value.photos || [] },
+      { photos: value.photos || [], resolution: value.resolution },
     );
-    await auditService.create(req, {
-      module: "returns",
-      entityId: returnReq._id,
-      entityType: "Return",
-      newData: returnReq,
-      reason: value.reason,
-      description: "Return requested",
-    });
+    const created = returnReq?.returns || [returnReq];
+    await Promise.all(created.map((item) => auditService.create(req, {
+        module: "returns",
+        entityId: item._id,
+        entityType: "Return",
+        newData: item,
+        reason: value.reason,
+        description: "Return requested",
+      })));
     res.status(201).json(okResponse(returnReq, "Return requested successfully"));
   }),
 );
@@ -165,13 +166,33 @@ router.post(
 );
 
 router.post(
+  "/:returnId/reverse-shipment/tracking",
+  authenticate,
+  allowPermissions("returns:update"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.updateReverseShipment, { ...req.body, returnId: req.params.returnId });
+    const updated = await ReturnService.updateReverseShipment(value.returnId, value, actor);
+    await auditService.statusChange(req, {
+      module: "returns",
+      entityId: value.returnId,
+      entityType: "Return",
+      newData: updated,
+      reason: value.note,
+      description: `Reverse shipment updated to ${value.status}`,
+    });
+    res.json(okResponse(updated, "Reverse shipment updated"));
+  }),
+);
+
+router.post(
   "/:returnId/receive",
   authenticate,
   allowPermissions("returns:update"),
   catchErrors(async (req, res) => {
     const actor = getCurrentUser(req);
     const value = validate(returnValidation.receiveReturn, { ...req.body, returnId: req.params.returnId });
-    const updated = await ReturnService.receiveReturn(value.returnId, value.notes, actor);
+    const updated = await ReturnService.receiveReturn(value.returnId, value, actor);
     await auditService.statusChange(req, {
       module: "returns",
       entityId: value.returnId,
@@ -180,6 +201,45 @@ router.post(
       description: "Return received",
     });
     res.json(okResponse(updated));
+  }),
+);
+
+router.post(
+  "/:returnId/refund/retry",
+  authenticate,
+  allowPermissions("returns:approve"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.retryRefund, { ...req.body, returnId: req.params.returnId });
+    const updated = await ReturnService.retryRefund(value.returnId, actor, value);
+    await auditService.approve(req, {
+      module: "returns",
+      entityId: value.returnId,
+      entityType: "Return",
+      newData: updated,
+      reason: value.note,
+      description: "Return refund retried",
+    });
+    res.json(okResponse(updated, "Refund retry processed"));
+  }),
+);
+
+router.post(
+  "/:returnId/refund/sync",
+  authenticate,
+  allowPermissions("returns:approve"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.getReturnById, { returnId: req.params.returnId });
+    const updated = await ReturnService.syncRefund(value.returnId, actor);
+    await auditService.statusChange(req, {
+      module: "returns",
+      entityId: value.returnId,
+      entityType: "Return",
+      newData: updated,
+      description: "Provider refund synchronized",
+    });
+    res.json(okResponse(updated, "Refund status synchronized"));
   }),
 );
 
@@ -197,7 +257,7 @@ router.post(
       entityType: "Return",
       newData: updated,
       reason: value.notes,
-      description: value.passed ? "Return QC passed" : "Return QC failed",
+      description: value.items ? "Return item QC recorded" : value.passed ? "Return QC passed" : "Return QC failed",
     });
     res.json(okResponse(updated));
   }),

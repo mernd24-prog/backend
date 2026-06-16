@@ -1,5 +1,6 @@
 const { okResponse } = require("../../../shared/http/reply");
 const { OrderService } = require("../services/order.service");
+const { CancellationService } = require("../../cancellation/services/cancellation.service");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
 const { auditService } = require("../../../shared/logger/audit.service");
 
@@ -11,8 +12,9 @@ function orderResponse(data, message, meta = {}) {
 }
 
 class OrderController {
-  constructor({ orderService = new OrderService() } = {}) {
+  constructor({ orderService = new OrderService(), cancellationService = new CancellationService() } = {}) {
     this.orderService = orderService;
+    this.cancellationService = cancellationService;
   }
 
   create = async (req, res) => {
@@ -61,20 +63,37 @@ class OrderController {
 
   cancel = async (req, res) => {
     const actor = getCurrentUser(req);
-    const order = await this.orderService.cancelOrder(req.params.orderId, req.body, actor);
+    const cancellation = await this.cancellationService.cancelOrder(req.params.orderId, req.body, actor);
     await auditService.statusChange(req, {
       module: "orders",
       entityId: req.params.orderId,
       entityType: "Order",
-      newData: order,
+      newData: cancellation,
       reason: req.body.reason,
       description: "Order cancelled",
     });
-    res.json(orderResponse(order, "Order cancelled successfully"));
+    res.json(orderResponse(cancellation, "Cancellation request processed successfully"));
   };
 
   updateStatus = async (req, res) => {
     const actor = getCurrentUser(req);
+    if (req.body.status === "cancelled") {
+      const cancellation = await this.cancellationService.cancelOrder(req.params.orderId, {
+        reason: req.body.reason,
+        reasonCode: "other",
+        refundMethod: "auto",
+      }, actor);
+      await auditService.statusChange(req, {
+        module: "orders",
+        entityId: req.params.orderId,
+        entityType: "OrderCancellation",
+        newData: cancellation,
+        reason: req.body.reason,
+        description: "Order cancellation processed",
+      });
+      res.json(orderResponse(cancellation, "Cancellation request processed successfully"));
+      return;
+    }
     const order = await this.orderService.updateOrderStatus(req.params.orderId, req.body.status, {
       ...actor,
       reason: req.body.reason || null,

@@ -10,6 +10,8 @@ const { OrderRepository } = require("../../order/repositories/order.repository")
 const { OrderService } = require("../../order/services/order.service");
 const { PaymentMethodConfigRepository } = require("../repositories/payment-method-config.repository");
 const { env } = require("../../../config/env");
+const { ReturnService } = require("../../returns/services/return.service");
+const { CancellationService } = require("../../cancellation/services/cancellation.service");
 
 const PROVIDER_RECEIPT_MAX_LENGTH = 40;
 
@@ -48,11 +50,15 @@ class PaymentService {
     orderRepository = new OrderRepository(),
     paymentMethodConfigRepository = new PaymentMethodConfigRepository(),
     orderService = new OrderService({ orderRepository }),
+    returnService = ReturnService,
+    cancellationService = new CancellationService(),
   } = {}) {
     this.paymentRepository = paymentRepository;
     this.orderRepository = orderRepository;
     this.paymentMethodConfigRepository = paymentMethodConfigRepository;
     this.orderService = orderService;
+    this.returnService = returnService;
+    this.cancellationService = cancellationService;
   }
 
   normalizeJson(value, fallback = {}) {
@@ -497,6 +503,31 @@ class PaymentService {
       throw new AppError("Invalid Razorpay webhook payload", 400);
     }
     const eventType = payload.event;
+
+    if (["refund.created", "refund.processed", "refund.failed"].includes(eventType)) {
+      const entity = payload.payload?.refund?.entity;
+      if (!entity?.id) throw new AppError("Invalid Razorpay refund webhook payload", 400);
+      const eventId = payload.id || `${eventType}:${entity.id}:${entity.status || "unknown"}`;
+      const orderId = entity.notes?.orderId || null;
+      const duplicate = await this.processWebhookEvent({
+        provider: "razorpay",
+        providerEventId: eventId,
+        eventType,
+        paymentId: null,
+        orderId,
+        payload,
+      }, async () => {
+        const refundService = entity.notes?.cancellationId || String(entity.notes?.returnId || "").startsWith("cancellation:")
+          ? this.cancellationService
+          : this.returnService;
+        await refundService.handleProviderRefundWebhook(entity, eventType, {
+          userId: "razorpay-webhook",
+          role: "system",
+        });
+      });
+      if (duplicate) return duplicate;
+      return { acknowledged: true };
+    }
 
     if (eventType === "payment.captured") {
       const entity = payload.payload?.payment?.entity;

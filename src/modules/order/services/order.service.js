@@ -13,6 +13,7 @@ const { validateStatusTransition } = require("../../../shared/domain/status-tran
 const { auditService } = require("../../../shared/logger/audit.service");
 const { TaxService } = require("../../tax/services/tax.service");
 const { CommissionService } = require("../../seller/services/commission.service");
+const { DealService } = require("../../deal/services/deal.service");
 const { logger } = require("../../../shared/logger/logger");
 
 class OrderService {
@@ -23,6 +24,7 @@ class OrderService {
     walletService = new WalletService(),
     taxService = new TaxService({ orderRepository }),
     commissionService = CommissionService,
+    dealService = new DealService(),
   } = {}) {
     this.orderRepository = orderRepository;
     this.pricingService = pricingService;
@@ -30,6 +32,7 @@ class OrderService {
     this.walletService = walletService;
     this.taxService = taxService;
     this.commissionService = commissionService;
+    this.dealService = dealService;
   }
 
   async createOrder(payload, actor) {
@@ -119,11 +122,20 @@ class OrderService {
         },
         orderEvent,
       );
+      const hydratedOrder = await this.orderRepository.findByIdWithItems(order.id);
+      await this.dealService.reserveOrderSales(hydratedOrder, {
+        userId: actor.userId,
+        role: actor.role || "buyer",
+      });
 
       await this.pricingService.finalizeCouponUsage(pricedOrder.couponToConsume);
       if (payableAmount <= 0) {
         await this.walletService.capture(actor.userId, orderId);
         await this.inventoryService.commitForOrder(orderId);
+        await this.dealService.commitOrderSales(orderId, {
+          userId: actor.userId,
+          role: actor.role || "buyer",
+        });
         await this.taxService.createInvoice(orderId);
         await eventPublisher.publish(
           makeEvent(
@@ -146,6 +158,10 @@ class OrderService {
     } catch (error) {
       await this.inventoryService.releaseForOrder(orderId);
       await this.walletService.release(actor.userId, orderId);
+      await this.dealService.releaseOrderSales(orderId, {
+        userId: actor.userId,
+        role: actor.role || "buyer",
+      }).catch(() => null);
       await this.orderRepository.deleteById(orderId);
       throw error;
     }
@@ -429,15 +445,24 @@ class OrderService {
 
     if (nextStatus === ORDER_STATUS.CONFIRMED) {
       await this.inventoryService.commitForOrder(orderId);
+      await this.dealService.commitOrderSales(orderId, actor).catch((error) =>
+        logger.error({ orderId, error: error.message }, "Deal sale commit failed"),
+      );
     }
 
     if (nextStatus === ORDER_STATUS.PAYMENT_FAILED) {
       await this.inventoryService.releaseForOrder(orderId);
       await this.walletService.release(order.buyer_id, orderId);
+      await this.dealService.releaseOrderSales(orderId, actor).catch((error) =>
+        logger.error({ orderId, error: error.message }, "Deal sale release failed"),
+      );
     }
 
     if (nextStatus === ORDER_STATUS.CANCELLED) {
       await this.applyCancellationInventorySideEffects(orderId, order, actor);
+      await this.dealService.releaseOrderSales(orderId, actor).catch((error) =>
+        logger.error({ orderId, error: error.message }, "Deal sale cancellation release failed"),
+      );
       await this.walletService.release(order.buyer_id, orderId);
       if (Number(order.wallet_discount_amount || 0) > 0 && [ORDER_STATUS.CONFIRMED, ORDER_STATUS.PACKED].includes(order.status)) {
         await this.walletService.credit(order.buyer_id, Number(order.wallet_discount_amount), {
@@ -702,6 +727,9 @@ class OrderService {
           reason: actor.reason || "payment_captured",
           metadata: actor.metadata || {},
         });
+        await this.dealService.commitOrderSales(orderId, actor).catch((error) =>
+          logger.error({ orderId, error: error.message }, "Deal sale capture commit failed"),
+        );
         const invoice = await this.taxService.createInvoice(orderId);
         await eventPublisher.publish(
           makeEvent(
@@ -723,6 +751,9 @@ class OrderService {
 
     await this.walletService.capture(order.buyer_id, orderId);
     await this.inventoryService.commitForOrder(orderId);
+    await this.dealService.commitOrderSales(orderId, actor).catch((error) =>
+      logger.error({ orderId, error: error.message }, "Deal sale capture commit failed"),
+    );
     const updatedOrder = await this.updateOrderStatus(orderId, ORDER_STATUS.CONFIRMED, {
       userId: actor.userId || order.buyer_id,
       role: actor.role || "system",
@@ -766,6 +797,9 @@ class OrderService {
 
     await this.walletService.capture(order.buyer_id, orderId);
     await this.inventoryService.commitForOrder(orderId);
+    await this.dealService.commitOrderSales(orderId, actor).catch((error) =>
+      logger.error({ orderId, error: error.message }, "Deal sale authorization commit failed"),
+    );
     const updatedOrder = await this.updateOrderStatus(orderId, ORDER_STATUS.CONFIRMED, {
       userId: actor.userId || order.buyer_id,
       role: actor.role || "system",
@@ -837,6 +871,9 @@ class OrderService {
         quantity: Number(item.quantity || 0),
         unitPrice: Number(item.unit_price || 0),
       })),
+    );
+    await this.dealService.reserveOrderSales(order, actor).catch((error) =>
+      logger.error({ orderId, error: error.message }, "Deal sale retry reserve failed"),
     );
 
     return this.updateOrderStatus(orderId, ORDER_STATUS.PENDING_PAYMENT, {

@@ -103,6 +103,31 @@ class RazorpayProvider {
     };
   }
 
+  async fetchRefund(refundId) {
+    if (!refundId) {
+      throw new AppError("Provider refund ID is required", 400);
+    }
+    if (env.razorpay.mock || !env.razorpay.live || String(refundId).startsWith("rfnd_mock")) {
+      return {
+        refundId,
+        status: "processed",
+        mock: true,
+        metadata: { provider: "razorpay", mode: "mock" },
+      };
+    }
+
+    const client = getRazorpayClient();
+    const refund = await client.refunds.fetch(refundId);
+    return {
+      refundId: refund.id,
+      amount: Number(refund.amount || 0) / 100,
+      status: refund.status,
+      failureReason: refund.error_description || refund.error_reason || null,
+      mock: false,
+      metadata: refund,
+    };
+  }
+
   async verifyPayment(payload) {
     if (env.razorpay.mock) {
       return {

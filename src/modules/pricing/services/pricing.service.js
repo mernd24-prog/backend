@@ -5,6 +5,7 @@ const { ProductRepository } = require("../../product/repositories/product.reposi
 const { WalletRepository } = require("../../wallet/repositories/wallet.repository");
 const { PlatformRepository } = require("../../platform/repositories/platform.repository");
 const { PaymentMethodConfigRepository } = require("../../payment/repositories/payment-method-config.repository");
+const { DealService } = require("../../deal/services/deal.service");
 const { PAYMENT_PROVIDER } = require("../../../shared/domain/commerce-constants");
 const { redis } = require("../../../infrastructure/redis/redis-client");
 const { env } = require("../../../config/env");
@@ -18,6 +19,7 @@ class PricingService {
     walletRepository = new WalletRepository(),
     platformRepository = new PlatformRepository(),
     paymentMethodConfigRepository = new PaymentMethodConfigRepository(),
+    dealService = new DealService(),
     redisClient = redis,
   } = {}) {
     this.pricingRepository = pricingRepository;
@@ -25,6 +27,7 @@ class PricingService {
     this.walletRepository = walletRepository;
     this.platformRepository = platformRepository;
     this.paymentMethodConfigRepository = paymentMethodConfigRepository;
+    this.dealService = dealService;
     this.redis = redisClient;
   }
 
@@ -75,7 +78,19 @@ class PricingService {
         }
 
         const taxData = await this.getProductTaxData(product);
-        const unitPrice = Number(variant?.salePrice ?? variant?.price ?? product.salePrice ?? product.price);
+        const baseUnitPrice = Number(variant?.salePrice ?? variant?.price ?? product.salePrice ?? product.price);
+        const activeDeal = await this.dealService.findActiveDealForItem({
+          productId: String(product.id),
+          variantId: variant ? String(variant._id || variant.id || item.variantId || "") : item.variantId,
+          variantSku: variant?.sku || item.variantSku || "",
+          sellerId: product.sellerId,
+        });
+        if (activeDeal?.maxQuantityPerOrder && Number(item.quantity || 0) > Number(activeDeal.maxQuantityPerOrder)) {
+          throw new AppError(`Deal quantity limit is ${activeDeal.maxQuantityPerOrder} for ${product.title}`, 409);
+        }
+        const unitPrice = activeDeal && activeDeal.dealType !== "sponsored_placement"
+          ? Number(activeDeal.dealPrice)
+          : baseUnitPrice;
         const lineTotal = unitPrice * item.quantity;
         const gstInclusive = Boolean(product.gstInclusive ?? product.gst_inclusive ?? true);
 
@@ -94,7 +109,14 @@ class PricingService {
           category: product.category,
           quantity: item.quantity,
           unitPrice,
+          originalUnitPrice: baseUnitPrice,
           lineTotal,
+          dealId: activeDeal?.dealId || null,
+          dealSnapshot: activeDeal || {},
+          fulfillmentSnapshot: activeDeal?.fulfillmentSnapshot || {},
+          dealDiscountAmount: activeDeal && activeDeal.dealType !== "sponsored_placement"
+            ? Number(((baseUnitPrice - unitPrice) * item.quantity).toFixed(2))
+            : 0,
           gstRate: taxData.gstRate,
           cessRate: taxData.cessRate,
           gstInclusive,
@@ -113,6 +135,8 @@ class PricingService {
             hsnCode: product.hsnCode || null,
             gstRate: taxData.gstRate,
             gstInclusive,
+            dealId: activeDeal?.dealId || null,
+            dealNumber: activeDeal?.dealNumber || null,
           },
         };
       }),
@@ -273,25 +297,44 @@ class PricingService {
     let totalFeeAmount = 0;
 
     for (const item of pricedItems) {
+      const dealRule = item.dealSnapshot?.commissionRuleSnapshot || {};
+      const hasDealCommission = Boolean(item.dealId && (
+        dealRule.id ||
+        dealRule.commission_percent !== undefined ||
+        dealRule.commissionPercent !== undefined ||
+        dealRule.fixed_fee !== undefined ||
+        dealRule.fixedFee !== undefined
+      ));
       const key = String(item.category || "").trim().toLowerCase();
-      const rule = perCategory.get(key) || defaultRule;
-      if (!rule) {
+      const rule = hasDealCommission ? null : perCategory.get(key) || defaultRule;
+      if (!rule && !hasDealCommission) {
         continue;
       }
 
-      const commissionPercent = Number(rule.commission_percent || 0);
-      const fixedFeeAmount = Number(rule.fixed_fee_amount || 0);
-      const closingFeeAmount = Number(rule.closing_fee_amount || 0);
+      const commissionPercent = hasDealCommission
+        ? Number(dealRule.commission_percent ?? dealRule.commissionPercent ?? 0)
+        : Number(rule.commission_percent || 0);
+      const fixedFeeAmount = hasDealCommission
+        ? Number(dealRule.fixed_fee ?? dealRule.fixedFee ?? 0)
+        : Number(rule.fixed_fee_amount || 0);
+      const closingFeeAmount = hasDealCommission ? 0 : Number(rule.closing_fee_amount || 0);
+      const capAmount = hasDealCommission && dealRule.cap_amount !== null && dealRule.cap_amount !== undefined
+        ? Number(dealRule.cap_amount)
+        : hasDealCommission && dealRule.capAmount !== null && dealRule.capAmount !== undefined
+          ? Number(dealRule.capAmount)
+          : null;
 
       const commissionFee = Number(((item.lineTotal * commissionPercent) / 100).toFixed(2));
       const fixedFee = Number((fixedFeeAmount * item.quantity).toFixed(2));
       const closingFee = Number((closingFeeAmount * item.quantity).toFixed(2));
-      const itemFeeTotal = Number((commissionFee + fixedFee + closingFee).toFixed(2));
+      const rawItemFeeTotal = Number((commissionFee + fixedFee + closingFee).toFixed(2));
+      const itemFeeTotal = capAmount !== null ? Math.min(rawItemFeeTotal, capAmount) : rawItemFeeTotal;
 
       totalFeeAmount += itemFeeTotal;
       breakup.push({
         productId: item.productId,
         sellerId: item.sellerId,
+        dealId: item.dealId || null,
         category: item.category,
         quantity: item.quantity,
         commissionPercent,
@@ -299,7 +342,8 @@ class PricingService {
         fixedFee,
         closingFee,
         totalFee: itemFeeTotal,
-        configId: rule.id,
+        configId: hasDealCommission ? dealRule.id || item.dealId : rule.id,
+        source: hasDealCommission ? "deal_commission_rule" : "platform_fee_rule",
       });
     }
 

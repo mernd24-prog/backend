@@ -57,6 +57,35 @@ class DeliveryController {
     res.json(okResponse(result));
   };
 
+  generateDeliveryOtp = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.deliveryService.generateDeliveryOtp(req.params.shipmentId, req.body, actor);
+    await auditService.create(req, {
+      module: "delivery",
+      entityId: req.params.shipmentId,
+      entityType: "DeliveryVerificationOtp",
+      newData: {
+        shipmentId: req.params.shipmentId,
+        expiresAt: result.expiresAt,
+        channels: result.channels,
+      },
+    });
+    res.status(201).json(okResponse(result, { message: "Delivery OTP generated" }));
+  };
+
+  confirmDelivery = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.deliveryService.confirmDelivery(req.params.shipmentId, req.body, actor);
+    await auditService.statusChange(req, {
+      module: "delivery",
+      entityId: req.params.shipmentId,
+      entityType: "Shipment",
+      newData: result,
+      reason: req.body.note || req.body.reason || `delivery_verified_${req.body.method || "otp"}`,
+    });
+    res.json(okResponse(result, { message: "Delivery verified" }));
+  };
+
   trackingWebhook = async (req, res) => {
     const result = await this.deliveryService.handleTrackingWebhook(req.body, {
       signature: req.headers["x-delivery-signature"],
