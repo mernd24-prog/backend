@@ -524,16 +524,32 @@ class SellerService {
     const fromDate = query.fromDate ? new Date(query.fromDate) : this.getDateBeforeDays(30);
     const toDate = query.toDate ? new Date(query.toDate) : new Date();
 
-    const [summary, topProducts, recentOrders, seller, kyc] = await Promise.all([
+    const [
+      summary,
+      topProducts,
+      recentOrders,
+      performance,
+      statusBreakdown,
+      trendRows,
+      seller,
+      kyc,
+    ] = await Promise.all([
       this.sellerRepository.fetchDashboardSummary(sellerId, fromDate, toDate),
       this.sellerRepository.fetchTopProducts(sellerId, fromDate, toDate),
       this.sellerRepository.fetchRecentOrders(sellerId),
+      this.sellerRepository.fetchDashboardPerformance(sellerId, fromDate, toDate),
+      this.sellerRepository.fetchDashboardStatusBreakdown(sellerId, fromDate, toDate),
+      this.sellerRepository.fetchDashboardTrendSummary(sellerId, fromDate, toDate),
       this.sellerRepository.findSellerById(sellerId),
       this.sellerRepository.findKycBySellerId(sellerId),
     ]);
 
     const totalOrders = Number(summary?.total_orders || 0);
     const gmv = Number(summary?.gmv || 0);
+    const trendMap = new Map((trendRows || []).map((row) => [row.period, row]));
+    const currentTrend = trendMap.get("current") || {};
+    const previousTrend = trendMap.get("previous") || {};
+    const hydratedTopProducts = await this.sellerRepository.hydrateTopProducts(topProducts);
     const onboardingState = makeSellerOnboardingState({
       sellerProfile: seller?.sellerProfile || {},
       user: seller || {},
@@ -560,9 +576,41 @@ class SellerService {
         averageOrderValue: totalOrders > 0 ? Number((gmv / totalOrders).toFixed(2)) : 0,
         averageItemValue: Number(summary?.avg_item_value || 0),
       },
-      topProducts,
-      recentOrders,
+      trends: {
+        totalOrders: this.trendPercent(currentTrend.total_orders, previousTrend.total_orders),
+        gmv: this.trendPercent(currentTrend.gmv, previousTrend.gmv),
+        returnedOrders: this.trendPercent(currentTrend.returned_orders, previousTrend.returned_orders),
+      },
+      orderPerformance: performance.map((row) => ({
+        label: row.label,
+        orders: Number(row.orders || 0),
+        value: Number(row.orders || 0),
+        revenue: Number(row.revenue || 0),
+        averageOrderValue: Number(row.average_order_value || 0),
+      })),
+      orderStatus: statusBreakdown.map((row) => ({
+        name: row.status || "pending",
+        label: String(row.status || "pending").replace(/_/g, " "),
+        value: Number(row.value || 0),
+      })),
+      topProducts: hydratedTopProducts,
+      recentOrders: recentOrders.map((row) => ({
+        ...row,
+        orderNumber: row.order_number,
+        buyerId: row.buyer_id,
+        paymentStatus: row.payment_status,
+        sellerOrderTotal: Number(row.seller_order_total || 0),
+        totalAmount: Number(row.total_amount || row.payable_amount || 0),
+        createdAt: row.created_at,
+      })),
     };
+  }
+
+  trendPercent(current, previous) {
+    const currentValue = Number(current || 0);
+    const previousValue = Number(previous || 0);
+    if (!previousValue) return currentValue ? 100 : 0;
+    return Number((((currentValue - previousValue) / previousValue) * 100).toFixed(1));
   }
 
   getDateBeforeDays(days) {

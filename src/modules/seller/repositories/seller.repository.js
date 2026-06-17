@@ -1,6 +1,7 @@
 const { knex, postgresPool } = require("../../../infrastructure/postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
 const { UserRepository } = require("../../user/repositories/user.repository");
+const { ProductModel } = require("../../product/models/product.model");
 const {
   SESSION_INVALIDATION_REASONS,
   makeSessionInvalidationUpdate,
@@ -21,6 +22,38 @@ function statusSessionFields(accountStatus) {
 }
 
 class SellerRepository {
+  async hydrateTopProducts(rows = []) {
+    const productIds = Array.from(new Set(rows.map((row) => String(row.product_id || "")).filter(Boolean)));
+    const products = productIds.length
+      ? await ProductModel.find({ _id: { $in: productIds } })
+          .select("title sku slug brand category")
+          .lean()
+          .catch(() => [])
+      : [];
+    const productMap = new Map(products.map((product) => [String(product._id), product]));
+
+    return rows
+      .map((row) => {
+        const product = productMap.get(String(row.product_id));
+        const name = product?.title || row.name || row.product_title || "";
+        if (!name || name === row.product_id) return null;
+        return {
+          ...row,
+          productId: row.product_id,
+          name,
+          title: name,
+          sku: product?.sku || null,
+          slug: product?.slug || null,
+          brand: product?.brand || null,
+          category: product?.category || null,
+          unitsSold: Number(row.units_sold || 0),
+          units_sold: Number(row.units_sold || 0),
+          revenue: Number(row.revenue || 0),
+        };
+      })
+      .filter(Boolean);
+  }
+
   constructor({ userRepository = new UserRepository() } = {}) {
     this.userRepository = userRepository;
   }
@@ -241,6 +274,7 @@ class SellerRepository {
     const { rows } = await postgresPool.query(
       `SELECT
          oi.product_id,
+         COALESCE(NULLIF(MAX(oi.product_title), ''), oi.product_id) AS name,
          COALESCE(SUM(oi.quantity), 0)::INT AS units_sold,
          COALESCE(SUM(oi.line_total), 0)::NUMERIC AS revenue
        FROM order_items oi
@@ -255,14 +289,108 @@ class SellerRepository {
     return rows;
   }
 
+  async fetchDashboardPerformance(sellerId, fromDate, toDate) {
+    const { rows } = await postgresPool.query(
+      `WITH days AS (
+         SELECT generate_series(
+           date_trunc('day', $2::timestamptz),
+           date_trunc('day', $3::timestamptz),
+           INTERVAL '1 day'
+         ) AS day_start
+       ),
+       seller_orders AS (
+         SELECT
+           o.id,
+           o.created_at,
+           COALESCE(SUM(oi.line_total), 0)::NUMERIC AS seller_total
+         FROM orders o
+         INNER JOIN order_items oi ON oi.order_id = o.id
+         WHERE oi.seller_id = $1
+           AND o.created_at BETWEEN $2 AND $3
+         GROUP BY o.id
+       )
+       SELECT
+         TO_CHAR(days.day_start, 'DD Mon') AS label,
+         COUNT(so.id)::INT AS orders,
+         COALESCE(SUM(so.seller_total), 0)::NUMERIC AS revenue,
+         CASE WHEN COUNT(so.id) > 0
+           THEN ROUND((COALESCE(SUM(so.seller_total), 0) / COUNT(so.id))::NUMERIC, 2)
+           ELSE 0
+         END AS average_order_value
+       FROM days
+       LEFT JOIN seller_orders so
+         ON so.created_at >= days.day_start
+        AND so.created_at < days.day_start + INTERVAL '1 day'
+       GROUP BY days.day_start
+       ORDER BY days.day_start ASC`,
+      [sellerId, fromDate, toDate],
+    );
+    return rows;
+  }
+
+  async fetchDashboardStatusBreakdown(sellerId, fromDate, toDate) {
+    const { rows } = await postgresPool.query(
+      `SELECT
+         o.status,
+         COUNT(DISTINCT o.id)::INT AS value
+       FROM orders o
+       INNER JOIN order_items oi ON oi.order_id = o.id
+       WHERE oi.seller_id = $1
+         AND o.created_at BETWEEN $2 AND $3
+       GROUP BY o.status
+       ORDER BY value DESC`,
+      [sellerId, fromDate, toDate],
+    );
+    return rows;
+  }
+
+  async fetchDashboardTrendSummary(sellerId, fromDate, toDate) {
+    const rangeMs = Math.max(new Date(toDate).getTime() - new Date(fromDate).getTime(), 1);
+    const previousTo = new Date(new Date(fromDate).getTime() - 1);
+    const previousFrom = new Date(previousTo.getTime() - rangeMs);
+    const { rows } = await postgresPool.query(
+      `WITH periods AS (
+         SELECT 'current' AS period, $2::timestamptz AS from_date, $3::timestamptz AS to_date
+         UNION ALL
+         SELECT 'previous' AS period, $4::timestamptz AS from_date, $5::timestamptz AS to_date
+       ),
+       seller_orders AS (
+         SELECT
+           o.id,
+           o.status,
+           o.created_at,
+           COALESCE(SUM(oi.line_total), 0)::NUMERIC AS seller_total
+         FROM orders o
+         INNER JOIN order_items oi ON oi.order_id = o.id
+         WHERE oi.seller_id = $1
+           AND o.created_at BETWEEN $4 AND $3
+         GROUP BY o.id
+       )
+       SELECT
+         periods.period,
+         COUNT(so.id)::INT AS total_orders,
+         COALESCE(SUM(so.seller_total), 0)::NUMERIC AS gmv,
+         COUNT(CASE WHEN so.status = 'returned' THEN 1 END)::INT AS returned_orders
+       FROM periods
+       LEFT JOIN seller_orders so
+         ON so.created_at BETWEEN periods.from_date AND periods.to_date
+       GROUP BY periods.period`,
+      [sellerId, fromDate, toDate, previousFrom, previousTo],
+    );
+    return rows;
+  }
+
   async fetchRecentOrders(sellerId, limit = 10) {
     const { rows } = await postgresPool.query(
       `SELECT
          o.id,
+         o.order_number,
          o.buyer_id,
          o.status,
+         o.payment_status,
          o.currency,
          o.payable_amount,
+         o.total_amount,
          o.created_at,
          COALESCE(SUM(oi.line_total), 0)::NUMERIC AS seller_order_total
        FROM orders o

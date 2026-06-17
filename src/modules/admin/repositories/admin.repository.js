@@ -62,6 +62,45 @@ function buildCreatedAtRange({ dateFrom, dateTo, createdFrom, createdTo } = {}) 
 }
 
 class AdminRepository {
+  trendPercent(current, previous) {
+    const currentValue = Number(current || 0);
+    const previousValue = Number(previous || 0);
+    if (!previousValue) return currentValue ? 100 : 0;
+    return Number((((currentValue - previousValue) / previousValue) * 100).toFixed(1));
+  }
+
+  async hydrateTopProducts(rows = []) {
+    const productIds = Array.from(new Set(rows.map((row) => String(row.product_id || "")).filter(Boolean)));
+    const products = productIds.length
+      ? await ProductModel.find({ _id: { $in: productIds } })
+          .select("title sku slug brand category")
+          .lean()
+          .catch(() => [])
+      : [];
+    const productMap = new Map(products.map((product) => [String(product._id), product]));
+
+    return rows
+      .map((row) => {
+        const product = productMap.get(String(row.product_id));
+        const name = product?.title || row.name || row.product_title || "";
+        if (!name || name === row.product_id) return null;
+        return {
+          productId: row.product_id,
+          product_id: row.product_id,
+          name,
+          title: name,
+          sku: product?.sku || null,
+          slug: product?.slug || null,
+          brand: product?.brand || null,
+          category: product?.category || null,
+          unitsSold: Number(row.units_sold || 0),
+          units_sold: Number(row.units_sold || 0),
+          revenue: Number(row.revenue || 0),
+        };
+      })
+      .filter(Boolean);
+  }
+
   async getOverviewStats() {
     const [totalUsers, totalSellers, totalProducts, pendingProducts] = await Promise.all([
       UserModel.countDocuments({}),
@@ -70,13 +109,30 @@ class AdminRepository {
       ProductModel.countDocuments({ status: "pending_approval" }),
     ]);
 
-    const [ordersAgg, paymentsAgg] = await Promise.all([
+    const [
+      ordersAgg,
+      orderItemsAgg,
+      paymentsAgg,
+      performanceAgg,
+      statusAgg,
+      topProductsAgg,
+      recentOrdersAgg,
+      currentMonthAgg,
+      previousMonthAgg,
+    ] = await Promise.all([
       postgresPool.query(
         `SELECT
            COUNT(*)::INT AS total_orders,
            COALESCE(SUM(total_amount), 0)::NUMERIC AS gmv,
-           COALESCE(SUM(platform_fee_amount), 0)::NUMERIC AS total_platform_fees
+           COALESCE(SUM(platform_fee_amount), 0)::NUMERIC AS total_platform_fees,
+           COUNT(*) FILTER (WHERE created_at::DATE = CURRENT_DATE)::INT AS orders_today,
+           COUNT(*) FILTER (WHERE status = 'returned')::INT AS returned_orders,
+           COUNT(*) FILTER (WHERE status = 'cancelled')::INT AS cancelled_orders
          FROM orders`,
+      ),
+      postgresPool.query(
+        `SELECT COALESCE(SUM(quantity), 0)::INT AS units_sold
+         FROM order_items`,
       ),
       postgresPool.query(
         `SELECT
@@ -85,7 +141,113 @@ class AdminRepository {
          FROM payments
          WHERE status = 'captured'`,
       ),
+      postgresPool.query(
+        `WITH months AS (
+           SELECT generate_series(
+             date_trunc('month', NOW()) - INTERVAL '11 months',
+             date_trunc('month', NOW()),
+             INTERVAL '1 month'
+           ) AS month_start
+         )
+         SELECT
+           TO_CHAR(months.month_start, 'Mon') AS label,
+           COUNT(o.id)::INT AS orders,
+           COALESCE(SUM(o.total_amount), 0)::NUMERIC AS revenue,
+           CASE WHEN COUNT(o.id) > 0
+             THEN ROUND((COALESCE(SUM(o.total_amount), 0) / COUNT(o.id))::NUMERIC, 2)
+             ELSE 0
+           END AS average_order_value
+         FROM months
+         LEFT JOIN orders o
+           ON o.created_at >= months.month_start
+          AND o.created_at < months.month_start + INTERVAL '1 month'
+         GROUP BY months.month_start
+         ORDER BY months.month_start ASC`,
+      ),
+      postgresPool.query(
+        `SELECT status, COUNT(*)::INT AS value
+         FROM orders
+         GROUP BY status
+         ORDER BY value DESC`,
+      ),
+      postgresPool.query(
+        `SELECT
+           oi.product_id,
+           COALESCE(NULLIF(MAX(oi.product_title), ''), oi.product_id) AS name,
+           COALESCE(SUM(oi.quantity), 0)::INT AS units_sold,
+           COALESCE(SUM(oi.line_total), 0)::NUMERIC AS revenue
+         FROM order_items oi
+         GROUP BY oi.product_id
+         ORDER BY revenue DESC
+         LIMIT 8`,
+      ),
+      postgresPool.query(
+        `SELECT
+           id,
+           order_number,
+           buyer_id,
+           status,
+           payment_status,
+           currency,
+           payable_amount,
+           total_amount,
+           created_at
+         FROM orders
+         ORDER BY created_at DESC
+         LIMIT 8`,
+      ),
+      postgresPool.query(
+        `SELECT
+           COUNT(*)::INT AS total_orders,
+           COALESCE(SUM(total_amount), 0)::NUMERIC AS gmv,
+           COUNT(*) FILTER (WHERE status = 'returned')::INT AS returned_orders
+         FROM orders
+         WHERE created_at >= date_trunc('month', NOW())
+           AND created_at < date_trunc('month', NOW()) + INTERVAL '1 month'`,
+      ),
+      postgresPool.query(
+        `SELECT
+           COUNT(*)::INT AS total_orders,
+           COALESCE(SUM(total_amount), 0)::NUMERIC AS gmv,
+           COUNT(*) FILTER (WHERE status = 'returned')::INT AS returned_orders
+         FROM orders
+         WHERE created_at >= date_trunc('month', NOW()) - INTERVAL '1 month'
+           AND created_at < date_trunc('month', NOW())`,
+      ),
     ]);
+
+    const buyerIds = Array.from(new Set(
+      recentOrdersAgg.rows.map((row) => row.buyer_id).filter(Boolean),
+    ));
+    const buyers = buyerIds.length
+      ? await UserModel.find({ _id: { $in: buyerIds } })
+          .select("email phone profile")
+          .lean()
+          .catch(() => [])
+      : [];
+    const buyerMap = new Map(buyers.map((buyer) => [String(buyer._id), buyer]));
+    const recentOrders = recentOrdersAgg.rows.map((order) => {
+      const buyer = buyerMap.get(String(order.buyer_id));
+      const customerName =
+        [buyer?.profile?.firstName, buyer?.profile?.lastName].filter(Boolean).join(" ") ||
+        buyer?.email ||
+        buyer?.phone ||
+        order.buyer_id;
+      return {
+        ...order,
+        orderNumber: order.order_number,
+        buyerId: order.buyer_id,
+        customerName,
+        paymentStatus: order.payment_status,
+        payableAmount: Number(order.payable_amount || order.total_amount || 0),
+        totalAmount: Number(order.total_amount || 0),
+        createdAt: order.created_at,
+      };
+    });
+
+    const currentMonth = currentMonthAgg.rows[0] || {};
+    const previousMonth = previousMonthAgg.rows[0] || {};
+    const topProducts = await this.hydrateTopProducts(topProductsAgg.rows);
 
     return {
       users: {
@@ -100,11 +262,34 @@ class AdminRepository {
         totalOrders: Number(ordersAgg.rows[0]?.total_orders || 0),
         gmv: Number(ordersAgg.rows[0]?.gmv || 0),
         totalPlatformFees: Number(ordersAgg.rows[0]?.total_platform_fees || 0),
+        ordersToday: Number(ordersAgg.rows[0]?.orders_today || 0),
+        unitsSold: Number(orderItemsAgg.rows[0]?.units_sold || 0),
+        returnedOrders: Number(ordersAgg.rows[0]?.returned_orders || 0),
+        cancelledOrders: Number(ordersAgg.rows[0]?.cancelled_orders || 0),
       },
       payments: {
         totalPayments: Number(paymentsAgg.rows[0]?.total_payments || 0),
         totalCollected: Number(paymentsAgg.rows[0]?.total_collected || 0),
       },
+      trends: {
+        totalOrders: this.trendPercent(currentMonth.total_orders, previousMonth.total_orders),
+        gmv: this.trendPercent(currentMonth.gmv, previousMonth.gmv),
+        returnedOrders: this.trendPercent(currentMonth.returned_orders, previousMonth.returned_orders),
+      },
+      orderPerformance: performanceAgg.rows.map((row) => ({
+        label: row.label,
+        orders: Number(row.orders || 0),
+        value: Number(row.orders || 0),
+        revenue: Number(row.revenue || 0),
+        averageOrderValue: Number(row.average_order_value || 0),
+      })),
+      orderStatus: statusAgg.rows.map((row) => ({
+        name: row.status || "pending",
+        label: String(row.status || "pending").replace(/_/g, " "),
+        value: Number(row.value || 0),
+      })),
+      topProducts,
+      recentOrders,
     };
   }
 
