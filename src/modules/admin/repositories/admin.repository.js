@@ -62,30 +62,196 @@ function buildCreatedAtRange({ dateFrom, dateTo, createdFrom, createdTo } = {}) 
 }
 
 class AdminRepository {
+  money(value) {
+    return Number(value || 0);
+  }
+
+  async safePostgresQuery(sql, values = [], fallbackRows = []) {
+    try {
+      const result = await postgresPool.query(sql, values);
+      return result.rows || fallbackRows;
+    } catch {
+      return fallbackRows;
+    }
+  }
+
+  normalizeTrend(current, previous) {
+    const currentValue = this.money(current);
+    const previousValue = this.money(previous);
+    if (!previousValue) return currentValue ? 100 : 0;
+    return Number((((currentValue - previousValue) / previousValue) * 100).toFixed(1));
+  }
+
+  async getUsersByIds(userIds = []) {
+    const ids = [...new Set(userIds.map(String).filter(Boolean))];
+    if (!ids.length) return new Map();
+
+    const users = await UserModel.find({ _id: { $in: ids } })
+      .select("email profile sellerProfile")
+      .lean();
+
+    return new Map(
+      users.map((user) => [
+        String(user._id),
+        user.profile?.name ||
+          [user.profile?.firstName, user.profile?.lastName].filter(Boolean).join(" ") ||
+          user.sellerProfile?.displayName ||
+          user.email ||
+          String(user._id),
+      ]),
+    );
+  }
+
   async getOverviewStats() {
-    const [totalUsers, totalSellers, totalProducts, pendingProducts] = await Promise.all([
+    const [
+      totalUsers,
+      totalSellers,
+      totalProducts,
+      pendingProducts,
+      ordersRows,
+      paymentsRows,
+      statusRows,
+      recentOrdersRows,
+      topProductRows,
+      performanceRows,
+      trendRows,
+      payoutRows,
+    ] = await Promise.all([
       UserModel.countDocuments({}),
       UserModel.countDocuments({ role: "seller" }),
       ProductModel.countDocuments({}),
       ProductModel.countDocuments({ status: "pending_approval" }),
-    ]);
-
-    const [ordersAgg, paymentsAgg] = await Promise.all([
-      postgresPool.query(
+      this.safePostgresQuery(
         `SELECT
            COUNT(*)::INT AS total_orders,
-           COALESCE(SUM(total_amount), 0)::NUMERIC AS gmv,
-           COALESCE(SUM(platform_fee_amount), 0)::NUMERIC AS total_platform_fees
-         FROM orders`,
+           COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)::INT AS orders_today,
+           COUNT(*) FILTER (WHERE LOWER(status) IN ('returned', 'return_requested', 'return_approved', 'refunded', 'partially_refunded'))::INT AS returned_orders,
+           COALESCE(SUM(COALESCE(payable_amount, total_amount, 0)), 0)::NUMERIC AS gmv,
+           COALESCE(SUM(COALESCE(platform_fee_amount, 0)), 0)::NUMERIC AS total_platform_fees,
+           COALESCE(SUM(oi.units_sold), 0)::INT AS units_sold
+         FROM orders o
+         LEFT JOIN (
+           SELECT order_id, SUM(quantity)::INT AS units_sold
+           FROM order_items
+           GROUP BY order_id
+         ) oi ON oi.order_id = o.id`,
       ),
-      postgresPool.query(
+      this.safePostgresQuery(
         `SELECT
            COUNT(*)::INT AS total_payments,
            COALESCE(SUM(amount), 0)::NUMERIC AS total_collected
          FROM payments
          WHERE status = 'captured'`,
       ),
+      this.safePostgresQuery(
+        `SELECT
+           LOWER(COALESCE(NULLIF(status, ''), 'pending')) AS status,
+           COUNT(*)::INT AS count
+         FROM orders
+         GROUP BY LOWER(COALESCE(NULLIF(status, ''), 'pending'))
+         ORDER BY count DESC`,
+      ),
+      this.safePostgresQuery(
+        `SELECT
+           id,
+           order_number,
+           buyer_id,
+           status,
+           payment_status,
+           currency,
+           COALESCE(payable_amount, total_amount, 0)::NUMERIC AS total,
+           created_at
+         FROM orders
+         ORDER BY created_at DESC
+         LIMIT 10`,
+      ),
+      this.safePostgresQuery(
+        `SELECT
+           product_id,
+           COALESCE(MAX(NULLIF(product_title, '')), MAX(NULLIF(product_sku, '')), product_id) AS name,
+           SUM(quantity)::INT AS units_sold,
+           COALESCE(SUM(line_total), 0)::NUMERIC AS revenue
+         FROM order_items
+         GROUP BY product_id
+         ORDER BY revenue DESC, units_sold DESC
+         LIMIT 10`,
+      ),
+      this.safePostgresQuery(
+        `SELECT
+           TO_CHAR(day_bucket, 'Dy') AS label,
+           COALESCE(order_count, 0)::INT AS value,
+           COALESCE(revenue, 0)::NUMERIC AS revenue
+         FROM (
+           SELECT generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, INTERVAL '1 day')::DATE AS day_bucket
+         ) days
+         LEFT JOIN (
+           SELECT
+             created_at::DATE AS order_day,
+             COUNT(*)::INT AS order_count,
+             SUM(COALESCE(payable_amount, total_amount, 0)) AS revenue
+           FROM orders
+           WHERE created_at >= CURRENT_DATE - INTERVAL '6 days'
+           GROUP BY created_at::DATE
+         ) orders_by_day ON orders_by_day.order_day = days.day_bucket
+         ORDER BY day_bucket`,
+      ),
+      this.safePostgresQuery(
+        `SELECT
+           COUNT(*) FILTER (
+             WHERE created_at >= date_trunc('month', CURRENT_DATE)
+           )::INT AS current_orders,
+           COUNT(*) FILTER (
+             WHERE created_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
+               AND created_at < date_trunc('month', CURRENT_DATE)
+           )::INT AS previous_orders,
+           COALESCE(SUM(COALESCE(payable_amount, total_amount, 0)) FILTER (
+             WHERE created_at >= date_trunc('month', CURRENT_DATE)
+           ), 0)::NUMERIC AS current_gmv,
+           COALESCE(SUM(COALESCE(payable_amount, total_amount, 0)) FILTER (
+             WHERE created_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
+               AND created_at < date_trunc('month', CURRENT_DATE)
+           ), 0)::NUMERIC AS previous_gmv,
+           COUNT(*) FILTER (
+             WHERE LOWER(status) IN ('returned', 'return_requested', 'return_approved', 'refunded', 'partially_refunded')
+               AND created_at >= date_trunc('month', CURRENT_DATE)
+           )::INT AS current_returned_orders,
+           COUNT(*) FILTER (
+             WHERE LOWER(status) IN ('returned', 'return_requested', 'return_approved', 'refunded', 'partially_refunded')
+               AND created_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
+               AND created_at < date_trunc('month', CURRENT_DATE)
+           )::INT AS previous_returned_orders
+         FROM orders`,
+      ),
+      this.safePostgresQuery(
+        `SELECT
+           COALESCE(SUM(net_amount), 0)::NUMERIC AS pending_amount,
+           COUNT(*)::INT AS pending_count
+         FROM seller_payouts
+         WHERE status IN ('pending', 'on_hold', 'processing')`,
+      ),
     ]);
+
+    const orders = ordersRows[0] || {};
+    const payments = paymentsRows[0] || {};
+    const trends = trendRows[0] || {};
+    const payouts = payoutRows[0] || {};
+    const buyerNames = await this.getUsersByIds(recentOrdersRows.map((order) => order.buyer_id));
+    const recentOrders = recentOrdersRows.map((order) => ({
+      id: order.id,
+      orderNumber: order.order_number,
+      buyerId: order.buyer_id,
+      customerName: buyerNames.get(String(order.buyer_id)) || order.buyer_id,
+      status: order.status,
+      paymentStatus: order.payment_status,
+      total: this.money(order.total),
+      currency: order.currency || "INR",
+      createdAt: order.created_at,
+    }));
+    const orderStatus = statusRows.map((row) => ({
+      name: row.status,
+      label: String(row.status || "pending").replace(/_/g, " "),
+      value: Number(row.count || 0),
+    }));
 
     return {
       users: {
@@ -97,14 +263,43 @@ class AdminRepository {
         pendingProducts,
       },
       commerce: {
-        totalOrders: Number(ordersAgg.rows[0]?.total_orders || 0),
-        gmv: Number(ordersAgg.rows[0]?.gmv || 0),
-        totalPlatformFees: Number(ordersAgg.rows[0]?.total_platform_fees || 0),
+        totalOrders: Number(orders.total_orders || 0),
+        ordersToday: Number(orders.orders_today || 0),
+        returnedOrders: Number(orders.returned_orders || 0),
+        unitsSold: Number(orders.units_sold || 0),
+        gmv: this.money(orders.gmv),
+        totalPlatformFees: this.money(orders.total_platform_fees),
       },
       payments: {
-        totalPayments: Number(paymentsAgg.rows[0]?.total_payments || 0),
-        totalCollected: Number(paymentsAgg.rows[0]?.total_collected || 0),
+        totalPayments: Number(payments.total_payments || 0),
+        totalCollected: this.money(payments.total_collected),
       },
+      payouts: {
+        pendingAmount: this.money(payouts.pending_amount),
+        pendingCount: Number(payouts.pending_count || 0),
+      },
+      trends: {
+        totalOrders: this.normalizeTrend(trends.current_orders, trends.previous_orders),
+        gmv: this.normalizeTrend(trends.current_gmv, trends.previous_gmv),
+        returnedOrders: this.normalizeTrend(
+          trends.current_returned_orders,
+          trends.previous_returned_orders,
+        ),
+      },
+      orderPerformance: performanceRows.map((row) => ({
+        label: row.label,
+        value: Number(row.value || 0),
+        revenue: this.money(row.revenue),
+      })),
+      orderStatus,
+      statusBreakdown: orderStatus,
+      topProducts: topProductRows.map((row) => ({
+        productId: row.product_id,
+        name: row.name,
+        unitsSold: Number(row.units_sold || 0),
+        revenue: this.money(row.revenue),
+      })),
+      recentOrders,
     };
   }
 

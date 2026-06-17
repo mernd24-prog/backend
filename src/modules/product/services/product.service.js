@@ -1328,7 +1328,11 @@ class ProductService {
         { $ifNull: ["$reservedStock", 0] },
       ],
     };
-    const lowStockThreshold = { $ifNull: ["$inventorySettings.lowStockThreshold", 5] };
+    const requestedThreshold = Number(query.lowStockThreshold || query.threshold || 0);
+    const lowStockThreshold =
+      Number.isFinite(requestedThreshold) && requestedThreshold > 0
+        ? Math.floor(requestedThreshold)
+        : { $ifNull: ["$inventorySettings.lowStockThreshold", 10] };
     const stockStatus = query.stockStatus || query.inventoryStatus;
 
     if (stockStatus && stockStatus !== "all") {
@@ -1426,6 +1430,8 @@ class ProductService {
       "inStock",
       "stockStatus",
       "inventoryStatus",
+      "lowStockThreshold",
+      "threshold",
       "includeAllStatuses",
       "sort",
       "sortBy",
