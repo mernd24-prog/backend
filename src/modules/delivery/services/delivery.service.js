@@ -195,7 +195,7 @@ class DeliveryService {
     }
 
     await this.assertCanManageOrder(payload.orderId, actor);
-    if (![ORDER_STATUS.CONFIRMED, ORDER_STATUS.PACKED, ORDER_STATUS.SHIPPED].includes(order.status)) {
+    if (![ORDER_STATUS.CONFIRMED, ORDER_STATUS.PACKED, ORDER_STATUS.SHIPPED, ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED].includes(order.status)) {
       throw new AppError("Shipment can be created only after order is confirmed", 409);
     }
 
@@ -229,12 +229,14 @@ class DeliveryService {
       : [];
     const provider = shippingProviderRegistry.get(payload.provider || "manual");
     const providerResult = await provider.createShipment(payload);
+    const initialStatus = this.resolveInitialShipmentStatus(payload.status, order.status);
     const shipment = await this.deliveryRepository.createShipment({
       ...payload,
       sellerId,
       provider: payload.provider || providerResult.provider || "manual",
       awbNumber: providerResult.awbNumber || payload.awbNumber,
       trackingNumber: providerResult.trackingNumber || payload.trackingNumber || payload.awbNumber,
+      status: initialStatus,
       labelData: providerResult.labelData || payload.labelData || {},
       shipToSnapshot: payload.shipToSnapshot || order.shipping_address || {},
       dealId: dealFulfillment.dealId || payload.dealId || null,
@@ -276,6 +278,19 @@ class DeliveryService {
     );
 
     return shipment;
+  }
+
+  resolveInitialShipmentStatus(requestedStatus, orderStatus) {
+    if (requestedStatus && requestedStatus !== DELIVERY_STATUS.INITIATED) {
+      return requestedStatus;
+    }
+    if ([ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED].includes(orderStatus)) {
+      return DELIVERY_STATUS.DELIVERED;
+    }
+    if (orderStatus === ORDER_STATUS.SHIPPED) {
+      return DELIVERY_STATUS.IN_TRANSIT;
+    }
+    return DELIVERY_STATUS.INITIATED;
   }
 
   resolveDealFulfillment(order = {}, sellerId, payload = {}) {
@@ -424,6 +439,11 @@ class DeliveryService {
     }
 
     if (nextOrderStatus) {
+      const order = await this.orderRepository.findById(shipment.order_id);
+      if ([ORDER_STATUS.FULFILLED, ORDER_STATUS.RETURNED, ORDER_STATUS.CANCELLED].includes(order?.status)) {
+        await this.updateOrderDeliveryStatusOnly(shipment.order_id, shipment.status, actor, shipment.id);
+        return;
+      }
       await this.orderRepository.updateStatus(shipment.order_id, nextOrderStatus, {
         actorId: actor.userId,
         actorRole: actor.role,

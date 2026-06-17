@@ -90,7 +90,8 @@ class PricingService {
         if (activeDeal?.maxQuantityPerOrder && Number(item.quantity || 0) > Number(activeDeal.maxQuantityPerOrder)) {
           throw new AppError(`Deal quantity limit is ${activeDeal.maxQuantityPerOrder} for ${product.title}`, 409);
         }
-        const unitPrice = activeDeal && activeDeal.dealType !== "sponsored_placement"
+        const hasActiveDealPrice = activeDeal?.dealId && activeDeal.dealType !== "sponsored_placement";
+        const unitPrice = hasActiveDealPrice
           ? Number(activeDeal.dealPrice)
           : baseUnitPrice;
         const lineTotal = unitPrice * item.quantity;
@@ -116,7 +117,7 @@ class PricingService {
           dealId: activeDeal?.dealId || null,
           dealSnapshot: activeDeal || {},
           fulfillmentSnapshot: activeDeal?.fulfillmentSnapshot || {},
-          dealDiscountAmount: activeDeal && activeDeal.dealType !== "sponsored_placement"
+          dealDiscountAmount: hasActiveDealPrice
             ? Number(((baseUnitPrice - unitPrice) * item.quantity).toFixed(2))
             : 0,
           gstRate: taxData.gstRate,

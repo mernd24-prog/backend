@@ -37,7 +37,7 @@ class DealRepository {
     return `DPO-${datePart}-${uuidv4().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
   }
 
-  normalizeDealRow(row = {}) {
+  normalizeDealRow(row) {
     if (!row) return null;
     return {
       ...row,

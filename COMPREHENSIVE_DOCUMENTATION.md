@@ -1768,7 +1768,873 @@ Mounted in `src/api/register-routes.js`:
 /search
 ```
 
-## 15. Admin Development Rules
+## 15. Complete API Route List
+
+Generated from `postman_collection.json` after `npm run postman:sync`. This list is the exact route registry exported for Admin/Postman integration.
+- Total requests: 695
+
+
+### Health & Meta (3)
+
+```txt
+GET /health
+GET /api/v1/meta/routes
+GET /api/v1/meta/dropdowns/:resource
+```
+
+### Auth (13)
+
+```txt
+POST /api/v1/auth/register
+POST /api/v1/auth/register-otp
+POST /api/v1/auth/verify-registration
+POST /api/v1/auth/login
+POST /api/v1/auth/social
+POST /api/v1/auth/refresh
+POST /api/v1/auth/send-otp
+POST /api/v1/auth/verify-otp
+POST /api/v1/auth/resend-otp
+POST /api/v1/auth/forgot-password
+POST /api/v1/auth/reset-password
+POST /api/v1/auth/change-password
+GET /api/v1/auth/status
+```
+
+### Users (8)
+
+```txt
+GET /api/v1/users/me
+PATCH /api/v1/users/me
+POST /api/v1/users/me/kyc
+PATCH /api/v1/users/:userId/kyc/review
+POST /api/v1/users/me/addresses
+PATCH /api/v1/users/me/addresses/:addressId
+DELETE /api/v1/users/me/addresses/:addressId
+POST /api/v1/users/me/kyc/documents
+```
+
+### Products (28)
+
+```txt
+GET /api/v1/products
+GET /api/v1/products/search
+GET /api/v1/products/:productId
+POST /api/v1/products
+PATCH /api/v1/products/:productId
+PATCH /api/v1/products/:productId/review
+GET /api/v1/products/seller/me
+DELETE /api/v1/products/:productId
+GET /api/v1/products/prefill
+PATCH /api/v1/products/:productId/status
+PATCH /api/v1/products/:productId/archive
+PATCH /api/v1/products/:productId/restore
+POST /api/v1/products/:productId/duplicate
+GET /api/v1/products/:productId/revisions
+PATCH /api/v1/products/:productId/revisions/:revisionId/review
+POST /api/v1/products/bulk/update
+PATCH /api/v1/products/:productId/inventory
+GET /api/v1/products/inventory/stats
+GET /api/v1/products/analytics/top
+GET /api/v1/products/:productId/reviews
+POST /api/v1/products/:productId/reviews
+PATCH /api/v1/products/:productId/reviews/:reviewId/helpful
+DELETE /api/v1/products/:productId/reviews/:reviewId
+GET /api/v1/products/:productId/my-review
+GET /api/v1/products/:productId/related
+GET /api/v1/products/:productId/cross-sell
+GET /api/v1/products/:productId/up-sell
+GET /api/v1/products/:productId/completeness
+```
+
+### Cart (5)
+
+```txt
+GET /api/v1/carts/me
+PUT /api/v1/carts/me
+GET /api/v1/carts
+GET /api/v1/carts/:cartId
+DELETE /api/v1/carts/:cartId
+```
+
+### Orders (11)
+
+```txt
+GET /api/v1/orders/me
+POST /api/v1/orders
+PATCH /api/v1/orders/:orderId/status
+GET /api/v1/orders/seller/me
+GET /api/v1/orders/:orderId
+POST /api/v1/orders/:orderId/cancel
+GET /api/v1/orders
+POST /api/v1/orders/quote
+POST /api/v1/orders/checkout/admin-quote
+POST /api/v1/orders/:orderId/payment/retry
+POST /api/v1/orders/:orderId/notes
+```
+
+### Payments (11)
+
+```txt
+POST /api/v1/payments/webhooks/razorpay
+GET /api/v1/payments/me
+POST /api/v1/payments/initiate
+POST /api/v1/payments/verify
+GET /api/v1/payments/options
+GET /api/v1/payments/admin
+GET /api/v1/payments/admin/cod-config
+PUT /api/v1/payments/admin/cod-config
+GET /api/v1/payments/admin/:paymentId
+POST /api/v1/payments/:paymentId/approve
+POST /api/v1/payments/:paymentId/reject
+```
+
+### Sellers (26)
+
+```txt
+POST /api/v1/sellers/onboarding/kyc
+PATCH /api/v1/sellers/onboarding/profile
+PATCH /api/v1/sellers/:sellerId/kyc/review
+PATCH /api/v1/sellers/me/profile
+PATCH /api/v1/sellers/me/settings
+GET /api/v1/sellers/me/dashboard
+POST /api/v1/sellers/me/sub-admins
+GET /api/v1/sellers/me/sub-admins
+PATCH /api/v1/sellers/me/sub-admins/:userId/modules
+GET /api/v1/sellers/me/profile
+PATCH /api/v1/sellers/me/business-address
+PATCH /api/v1/sellers/me/pickup-address
+PATCH /api/v1/sellers/me/bank-details
+PATCH /api/v1/sellers/me/more-info
+POST /api/v1/sellers/onboarding/kyc/documents
+GET /api/v1/sellers/me/access/modules
+GET /api/v1/sellers/me/status
+GET /api/v1/sellers/me/tracking
+GET /api/v1/sellers/me/tracking/:orderId
+PATCH /api/v1/sellers/me/return-address
+GET /api/v1/sellers/me/charge-settings
+PUT /api/v1/sellers/me/charge-settings
+POST /api/v1/sellers/me/kyc
+POST /api/v1/sellers/me/kyc/documents
+PATCH /api/v1/sellers/me/sub-admins/:userId/status
+DELETE /api/v1/sellers/me/sub-admins/:userId
+```
+
+### Seller Commissions (28)
+
+```txt
+GET /api/v1/sellers/commissions/my-commissions
+GET /api/v1/sellers/commissions/my-payouts
+POST /api/v1/sellers/commissions/calculate/:orderId
+POST /api/v1/sellers/commissions/process-payouts
+GET /api/v1/sellers/commissions/settlements
+GET /api/v1/sellers/commissions/my-wallet
+GET /api/v1/sellers/commissions/summary
+GET /api/v1/sellers/commissions/wallet/:sellerId
+GET /api/v1/sellers/commissions
+GET /api/v1/sellers/commissions/payouts
+POST /api/v1/sellers/commissions/payouts/:payoutId/process
+POST /api/v1/sellers/commissions/payouts/:payoutId/fail
+GET /api/v1/sellers/commissions/my-commissions/export
+GET /api/v1/sellers/commissions/my-payouts/export
+GET /api/v1/sellers/commissions/my-settlements
+GET /api/v1/sellers/commissions/my-settlements/export
+GET /api/v1/sellers/commissions/my-settlements/:settlementId/statement
+GET /api/v1/sellers/commissions/export
+GET /api/v1/sellers/commissions/payouts/export
+GET /api/v1/sellers/commissions/settlements/export
+GET /api/v1/sellers/commissions/settlements/:settlementId/statement
+GET /api/v1/sellers/commissions/payout-ops/queue
+GET /api/v1/sellers/commissions/negative-balances
+POST /api/v1/sellers/commissions/negative-balances/:settlementId/resolve
+POST /api/v1/sellers/commissions/payouts/:payoutId/approve
+POST /api/v1/sellers/commissions/payouts/:payoutId/hold
+POST /api/v1/sellers/commissions/payouts/:payoutId/release-hold
+POST /api/v1/sellers/commissions/payouts/:payoutId/retry
+```
+
+### Notifications (5)
+
+```txt
+GET /api/v1/notifications/me
+POST /api/v1/notifications
+GET /api/v1/notifications/preferences
+PUT /api/v1/notifications/preferences
+GET /api/v1/notifications/admin
+```
+
+### Analytics (4)
+
+```txt
+GET /api/v1/analytics
+POST /api/v1/analytics/events
+GET /api/v1/analytics/seller-dashboard
+GET /api/v1/analytics/admin-dashboard
+```
+
+### Pricing (11)
+
+```txt
+GET /api/v1/pricing/coupons
+POST /api/v1/pricing/coupons
+GET /api/v1/dynamic-pricing/price
+POST /api/v1/dynamic-pricing/adjust
+GET /api/v1/pricing/coupons/:couponId
+PATCH /api/v1/pricing/coupons/:couponId
+DELETE /api/v1/pricing/coupons/:couponId
+GET /api/v1/pricing/promotion-banners
+POST /api/v1/pricing/promotion-banners
+PATCH /api/v1/pricing/promotion-banners/:slug
+DELETE /api/v1/pricing/promotion-banners/:slug
+```
+
+### Wallet (2)
+
+```txt
+GET /api/v1/wallets/me
+GET /api/v1/wallets/admin/transactions
+```
+
+### Platform (60)
+
+```txt
+GET /api/v1/platform/categories
+GET /api/v1/platform/categories/:categoryKey
+POST /api/v1/platform/categories
+PATCH /api/v1/platform/categories/:categoryKey
+DELETE /api/v1/platform/categories/:categoryKey
+GET /api/v1/platform/families
+GET /api/v1/platform/families/:familyCode
+POST /api/v1/platform/families
+PATCH /api/v1/platform/families/:familyCode
+DELETE /api/v1/platform/families/:familyCode
+GET /api/v1/platform/variants
+GET /api/v1/platform/variants/:variantId
+POST /api/v1/platform/variants
+PATCH /api/v1/platform/variants/:variantId
+DELETE /api/v1/platform/variants/:variantId
+GET /api/v1/platform/hsn-codes
+GET /api/v1/platform/hsn-codes/:hsnCode
+POST /api/v1/platform/hsn-codes
+PATCH /api/v1/platform/hsn-codes/:hsnCode
+DELETE /api/v1/platform/hsn-codes/:hsnCode
+GET /api/v1/platform/geographies
+GET /api/v1/platform/geographies/:countryCode
+POST /api/v1/platform/geographies
+PATCH /api/v1/platform/geographies/:countryCode
+DELETE /api/v1/platform/geographies/:countryCode
+GET /api/v1/platform/catalog-prefill
+GET /api/v1/platform/categories/:categoryKey/attributes
+GET /api/v1/platform/brands
+GET /api/v1/platform/brands/:brandId
+POST /api/v1/platform/brands
+PATCH /api/v1/platform/brands/:brandId
+DELETE /api/v1/platform/brands/:brandId
+GET /api/v1/platform/warranty-templates
+GET /api/v1/platform/warranty-templates/:templateId
+POST /api/v1/platform/warranty-templates
+PATCH /api/v1/platform/warranty-templates/:templateId
+DELETE /api/v1/platform/warranty-templates/:templateId
+GET /api/v1/platform/finishes
+POST /api/v1/platform/finishes
+PATCH /api/v1/platform/finishes/:finishId
+DELETE /api/v1/platform/finishes/:finishId
+GET /api/v1/platform/dimensions
+POST /api/v1/platform/dimensions
+PATCH /api/v1/platform/dimensions/:dimensionId
+DELETE /api/v1/platform/dimensions/:dimensionId
+GET /api/v1/platform/batches
+POST /api/v1/platform/batches
+PATCH /api/v1/platform/batches/:batchId
+DELETE /api/v1/platform/batches/:batchId
+GET /api/v1/platform/product-options
+POST /api/v1/platform/product-options
+PATCH /api/v1/platform/product-options/:optionId
+DELETE /api/v1/platform/product-options/:optionId
+GET /api/v1/platform/product-option-values
+POST /api/v1/platform/product-option-values
+PATCH /api/v1/platform/product-option-values/:optionValueId
+DELETE /api/v1/platform/product-option-values/:optionValueId
+GET /api/v1/platform/product-reviews
+PATCH /api/v1/platform/product-reviews/:reviewId
+DELETE /api/v1/platform/product-reviews/:reviewId
+```
+
+### Tax (17)
+
+```txt
+POST /api/v1/tax/orders/:orderId/invoice
+GET /api/v1/tax/reports
+GET /api/v1/tax/orders/:orderId/invoice
+GET /api/v1/tax/orders/:orderId/marketplace-invoices
+POST /api/v1/tax/orders/:orderId/marketplace-invoices
+GET /api/v1/tax/invoices
+POST /api/v1/tax/credit-notes
+GET /api/v1/tax/credit-notes
+GET /api/v1/tax/invoices/export
+GET /api/v1/tax/invoices/:invoiceId/download
+GET /api/v1/tax/credit-notes/export
+GET /api/v1/tax/credit-notes/:creditNoteId/download
+GET /api/v1/tax/reports/export
+POST /api/v1/tax/invoices/:invoiceId/dispatch
+POST /api/v1/tax/credit-notes/:creditNoteId/dispatch
+GET /api/v1/tax/document-dispatches
+POST /api/v1/tax/document-dispatches/:dispatchId/retry
+```
+
+### Warranty (7)
+
+```txt
+GET /api/v1/warranty/products/:productId/warranty
+POST /api/v1/warranty/register
+GET /api/v1/warranty/:warrantyId
+GET /api/v1/warranty/orders/:orderId
+GET /api/v1/warranty/customers/:customerId
+POST /api/v1/warranty/:warrantyId/claims
+PATCH /api/v1/warranty/:warrantyId/claims/:claimId/status
+```
+
+### Subscriptions (18)
+
+```txt
+GET /api/v1/subscriptions/plans
+POST /api/v1/subscriptions/purchase
+GET /api/v1/subscriptions/me
+PUT /api/v1/subscriptions/:subscriptionId/pause
+PUT /api/v1/subscriptions/:subscriptionId/resume
+PUT /api/v1/subscriptions/:subscriptionId/cancel
+POST /api/v1/subscriptions/admin/plans
+GET /api/v1/subscriptions/admin/plans
+GET /api/v1/subscriptions/admin/plans/:planId
+PATCH /api/v1/subscriptions/admin/plans/:planId
+DELETE /api/v1/subscriptions/admin/plans/:planId
+GET /api/v1/subscriptions/admin/subscriptions
+PATCH /api/v1/subscriptions/admin/subscriptions/:subscriptionId/status
+POST /api/v1/subscriptions/admin/platform-fee-config
+GET /api/v1/subscriptions/admin/platform-fee-config
+GET /api/v1/subscriptions/admin/platform-fee-config/:configId
+PATCH /api/v1/subscriptions/admin/platform-fee-config/:configId
+DELETE /api/v1/subscriptions/admin/platform-fee-config/:configId
+```
+
+### Loyalty (5)
+
+```txt
+GET /api/v1/loyalty/profile
+GET /api/v1/loyalty/benefits
+POST /api/v1/loyalty/points
+GET /api/v1/loyalty/history
+POST /api/v1/loyalty/redeem
+```
+
+### Recommendations (3)
+
+```txt
+GET /api/v1/recommendations
+POST /api/v1/recommendations/:productId/interact
+GET /api/v1/recommendations/trending
+```
+
+### Returns (17)
+
+```txt
+POST /api/v1/returns
+GET /api/v1/returns/my-returns
+GET /api/v1/returns/order/:orderId
+POST /api/v1/returns/:returnId/approve
+POST /api/v1/returns/:returnId/refund
+GET /api/v1/returns
+GET /api/v1/returns/:returnId
+POST /api/v1/returns/:returnId/reject
+POST /api/v1/returns/:returnId/schedule
+POST /api/v1/returns/:returnId/ship-back
+POST /api/v1/returns/:returnId/reverse-shipment/tracking
+POST /api/v1/returns/:returnId/receive
+POST /api/v1/returns/:returnId/refund/retry
+POST /api/v1/returns/:returnId/refund/sync
+POST /api/v1/returns/:returnId/qc
+POST /api/v1/returns/:returnId/replacement
+POST /api/v1/returns/:returnId/close
+```
+
+### Fraud (1)
+
+```txt
+POST /api/v1/fraud/:fraudId/review
+```
+
+### RBAC (44)
+
+```txt
+GET /api/v1/rbac/modules
+GET /api/v1/rbac/modules/:moduleId
+POST /api/v1/rbac/modules
+PATCH /api/v1/rbac/modules/:moduleId
+DELETE /api/v1/rbac/modules/:moduleId
+GET /api/v1/rbac/permissions
+GET /api/v1/rbac/permissions/:permissionId
+POST /api/v1/rbac/permissions
+PATCH /api/v1/rbac/permissions/:permissionId
+GET /api/v1/rbac/roles
+GET /api/v1/rbac/roles/:roleId
+POST /api/v1/rbac/roles
+PATCH /api/v1/rbac/roles/:roleId
+GET /api/v1/rbac/roles/:roleId/permissions
+POST /api/v1/rbac/roles/:roleId/permissions
+DELETE /api/v1/rbac/roles/:roleId/permissions
+POST /api/v1/rbac/roles/:roleId/permissions/bulk
+GET /api/v1/rbac/users/:userId/permissions
+GET /api/v1/rbac/users/:userId/permissions/effective
+GET /api/v1/rbac/users/:userId/permissions/check
+POST /api/v1/rbac/users/:userId/permissions
+DELETE /api/v1/rbac/users/:userId/permissions
+POST /api/v1/rbac/users/:userId/permissions/bulk
+GET /api/v1/rbac/users/:userId/roles
+GET /api/v1/rbac/users/:userId/roles/check
+POST /api/v1/rbac/users/:userId/roles
+DELETE /api/v1/rbac/users/:userId/roles
+POST /api/v1/rbac/users/:userId/roles/bulk
+GET /api/v1/rbac/permission-management/modules
+GET /api/v1/rbac/modules/sidebar
+POST /api/v1/rbac/modules/reorder
+PATCH /api/v1/rbac/modules/:moduleId/status
+DELETE /api/v1/rbac/permissions/:permissionId
+DELETE /api/v1/rbac/roles/:roleId
+PUT /api/v1/rbac/roles/:roleId/permissions
+PUT /api/v1/rbac/users/:userId/permissions
+POST /api/v1/rbac/users/:userId/force-logout
+POST /api/v1/rbac/users/:userId/copy-from
+POST /api/v1/rbac/users/:userId/apply-template
+GET /api/v1/rbac/audit-logs
+GET /api/v1/rbac/templates
+GET /api/v1/rbac/templates/:templateId
+POST /api/v1/rbac/templates
+PATCH /api/v1/rbac/templates/:templateId
+```
+
+### Admin (251)
+
+```txt
+POST /api/v1/admin/access/admins
+POST /api/v1/admin/access/sub-admins
+GET /api/v1/admin/access/sub-admins
+PATCH /api/v1/admin/access/sub-admins/:userId/modules
+GET /api/v1/admin/dashboard/overview
+GET /api/v1/admin/users
+GET /api/v1/admin/users/:userId
+PATCH /api/v1/admin/users/:userId
+DELETE /api/v1/admin/users/:userId
+GET /api/v1/admin/vendors
+PATCH /api/v1/admin/vendors/:sellerId/status
+GET /api/v1/admin/products/moderation-queue
+PATCH /api/v1/admin/products/:productId/moderate
+GET /api/v1/admin/orders
+GET /api/v1/admin/payments
+POST /api/v1/admin/payouts
+GET /api/v1/admin/payouts
+GET /api/v1/admin/tax/reports
+POST /api/v1/admin/tax/orders/:orderId/invoice
+POST /api/v1/admin/platform/api-keys
+GET /api/v1/admin/platform/api-keys
+POST /api/v1/admin/platform/webhooks
+GET /api/v1/admin/platform/webhooks
+PUT /api/v1/admin/platform/feature-flags
+GET /api/v1/admin/platform/feature-flags
+GET /api/v1/admin/analytics/realtime
+GET /api/v1/admin/returns/analytics
+GET /api/v1/admin/chargebacks
+GET /api/v1/admin/system/health
+GET /api/v1/admin/system/queues
+POST /api/v1/admin/system/queues/:queueName/pause
+POST /api/v1/admin/system/queues/:queueName/resume
+GET /api/v1/admin/system/dead-letter
+POST /api/v1/admin/system/dead-letter/:eventId/retry
+POST /api/v1/admin/system/dead-letter/:eventId/discard
+POST /api/v1/admin/platform/subscription-plans
+GET /api/v1/admin/platform/subscription-plans
+GET /api/v1/admin/platform/subscription-plans/:planId
+PATCH /api/v1/admin/platform/subscription-plans/:planId
+DELETE /api/v1/admin/platform/subscription-plans/:planId
+GET /api/v1/admin/platform/subscriptions
+PATCH /api/v1/admin/platform/subscriptions/:subscriptionId/status
+POST /api/v1/admin/platform/fee-config
+GET /api/v1/admin/platform/fee-config
+GET /api/v1/admin/platform/fee-config/:configId
+PATCH /api/v1/admin/platform/fee-config/:configId
+DELETE /api/v1/admin/platform/fee-config/:configId
+POST /api/v1/admin/platform/categories
+GET /api/v1/admin/platform/categories
+GET /api/v1/admin/platform/categories/:categoryKey
+PATCH /api/v1/admin/platform/categories/:categoryKey
+DELETE /api/v1/admin/platform/categories/:categoryKey
+POST /api/v1/admin/platform/product-families
+GET /api/v1/admin/platform/product-families
+GET /api/v1/admin/platform/product-families/:familyCode
+PATCH /api/v1/admin/platform/product-families/:familyCode
+DELETE /api/v1/admin/platform/product-families/:familyCode
+POST /api/v1/admin/platform/product-variants
+GET /api/v1/admin/platform/product-variants
+GET /api/v1/admin/platform/product-variants/:variantId
+PATCH /api/v1/admin/platform/product-variants/:variantId
+DELETE /api/v1/admin/platform/product-variants/:variantId
+POST /api/v1/admin/platform/hsn-codes
+GET /api/v1/admin/platform/hsn-codes
+GET /api/v1/admin/platform/hsn-codes/:hsnCode
+PATCH /api/v1/admin/platform/hsn-codes/:hsnCode
+DELETE /api/v1/admin/platform/hsn-codes/:hsnCode
+POST /api/v1/admin/platform/geography
+GET /api/v1/admin/platform/geography
+GET /api/v1/admin/platform/geography/:countryCode
+PATCH /api/v1/admin/platform/geography/:countryCode
+DELETE /api/v1/admin/platform/geography/:countryCode
+GET /api/v1/admin/categories/:categoryKey/attributes
+GET /api/v1/admin/platform/brands
+GET /api/v1/admin/platform/brands/:brandId
+POST /api/v1/admin/platform/brands
+PATCH /api/v1/admin/platform/brands/:brandId
+DELETE /api/v1/admin/platform/brands/:brandId
+GET /api/v1/admin/common/countries
+GET /api/v1/admin/common/states
+GET /api/v1/admin/common/cities
+GET /api/v1/admin/access/modules
+GET /api/v1/admin/access/activity-logs
+GET /api/v1/admin/access/admins
+GET /api/v1/admin/admin-users/admins
+GET /api/v1/admin/admin-users/sub-admins
+POST /api/v1/admin/admin-users/admin
+POST /api/v1/admin/admin-users/sub-admin
+PUT /api/v1/admin/admin-users/:userId
+PUT /api/v1/admin/admin-users/:userId/permissions
+PUT /api/v1/admin/admin-users/:userId/status
+GET /api/v1/admin/seller-users/sellers
+GET /api/v1/admin/seller-users/seller-admins
+GET /api/v1/admin/seller-users/seller-sub-admins
+POST /api/v1/admin/seller-users/seller-admin
+POST /api/v1/admin/seller-users/seller-sub-admin
+POST /api/v1/admin/users
+GET /api/v1/admin/sellers
+GET /api/v1/admin/sellers/:sellerId
+GET /api/v1/admin/sellers/:sellerId/kyc
+PATCH /api/v1/admin/sellers/:sellerId/status
+PATCH /api/v1/admin/sellers/:sellerId/kyc/status
+PATCH /api/v1/admin/sellers/:sellerId/bank/status
+PATCH /api/v1/admin/sellers/:sellerId/onboarding/status
+PATCH /api/v1/admin/sellers/:sellerId/go-live
+GET /api/v1/admin/products/prefill
+POST /api/v1/admin/products/bulk/update
+GET /api/v1/admin/products/inventory/stats
+GET /api/v1/admin/products/analytics/top
+GET /api/v1/admin/products
+POST /api/v1/admin/products
+GET /api/v1/admin/products/:productId/revisions
+PATCH /api/v1/admin/products/:productId/revisions/:revisionId/review
+GET /api/v1/admin/products/:productId
+PATCH /api/v1/admin/products/:productId
+DELETE /api/v1/admin/products/:productId
+PATCH /api/v1/admin/products/:productId/status
+PATCH /api/v1/admin/products/:productId/archive
+PATCH /api/v1/admin/products/:productId/restore
+POST /api/v1/admin/products/:productId/duplicate
+PATCH /api/v1/admin/products/:productId/inventory
+PATCH /api/v1/admin/products/:productId/approve
+PATCH /api/v1/admin/products/:productId/reject
+GET /api/v1/admin/platform/catalog-prefill
+GET /api/v1/admin/platform/product-reviews
+PATCH /api/v1/admin/platform/product-reviews/:reviewId
+DELETE /api/v1/admin/platform/product-reviews/:reviewId
+POST /api/v1/admin/platform/warranty-templates
+GET /api/v1/admin/platform/warranty-templates
+GET /api/v1/admin/platform/warranty-templates/:templateId
+PATCH /api/v1/admin/platform/warranty-templates/:templateId
+DELETE /api/v1/admin/platform/warranty-templates/:templateId
+POST /api/v1/admin/platform/finishes
+GET /api/v1/admin/platform/finishes
+PATCH /api/v1/admin/platform/finishes/:finishId
+DELETE /api/v1/admin/platform/finishes/:finishId
+POST /api/v1/admin/platform/dimensions
+GET /api/v1/admin/platform/dimensions
+PATCH /api/v1/admin/platform/dimensions/:dimensionId
+DELETE /api/v1/admin/platform/dimensions/:dimensionId
+POST /api/v1/admin/platform/batches
+GET /api/v1/admin/platform/batches
+PATCH /api/v1/admin/platform/batches/:batchId
+DELETE /api/v1/admin/platform/batches/:batchId
+POST /api/v1/admin/platform/product-options
+GET /api/v1/admin/platform/product-options
+PATCH /api/v1/admin/platform/product-options/:optionId
+DELETE /api/v1/admin/platform/product-options/:optionId
+POST /api/v1/admin/platform/product-option-values
+GET /api/v1/admin/platform/product-option-values
+PATCH /api/v1/admin/platform/product-option-values/:optionValueId
+DELETE /api/v1/admin/platform/product-option-values/:optionValueId
+GET /api/v1/admin/cms
+POST /api/v1/admin/cms
+GET /api/v1/admin/cms/:slug
+PATCH /api/v1/admin/cms/:slug
+DELETE /api/v1/admin/cms/:slug
+GET /api/v1/admin/referral/influencers
+POST /api/v1/admin/referral/influencers/parents
+POST /api/v1/admin/referral/influencers/:parentId/children
+PATCH /api/v1/admin/referral/influencers/:influencerId/status
+PATCH /api/v1/admin/referral/influencers/:influencerId/promote
+GET /api/v1/admin/referral/codes
+POST /api/v1/admin/referral/codes
+PATCH /api/v1/admin/referral/codes/:codeId
+GET /api/v1/admin/referral/orders
+GET /api/v1/admin/referral/commissions
+GET /api/v1/admin/referral/payouts
+PATCH /api/v1/admin/referral/payouts/:payoutId/approve
+PATCH /api/v1/admin/referral/payouts/:payoutId/reject
+PATCH /api/v1/admin/referral/payouts/:payoutId/paid
+GET /api/v1/admin/referral/rules
+PUT /api/v1/admin/referral/rules
+GET /api/v1/admin/referral/reports/summary
+GET /api/v1/admin/referral/reports/hierarchy
+GET /api/v1/admin/referral/fraud
+POST /api/v1/admin/common/countries
+PATCH /api/v1/admin/common/countries/status
+DELETE /api/v1/admin/common/countries
+PATCH /api/v1/admin/common/countries/:countryId
+DELETE /api/v1/admin/common/countries/:countryId
+POST /api/v1/admin/common/states
+PATCH /api/v1/admin/common/states/status
+DELETE /api/v1/admin/common/states
+PATCH /api/v1/admin/common/states/:stateId
+DELETE /api/v1/admin/common/states/:stateId
+POST /api/v1/admin/common/cities
+PATCH /api/v1/admin/common/cities/status
+DELETE /api/v1/admin/common/cities
+PATCH /api/v1/admin/common/cities/:cityId
+DELETE /api/v1/admin/common/cities/:cityId
+GET /api/v1/admin/common/taxes
+POST /api/v1/admin/common/taxes
+PATCH /api/v1/admin/common/taxes/status
+DELETE /api/v1/admin/common/taxes
+PATCH /api/v1/admin/common/taxes/:taxId
+DELETE /api/v1/admin/common/taxes/:taxId
+GET /api/v1/admin/common/sub-taxes
+POST /api/v1/admin/common/sub-taxes
+PATCH /api/v1/admin/common/sub-taxes/status
+DELETE /api/v1/admin/common/sub-taxes
+PATCH /api/v1/admin/common/sub-taxes/:subTaxId
+DELETE /api/v1/admin/common/sub-taxes/:subTaxId
+GET /api/v1/admin/common/tax-rules
+POST /api/v1/admin/common/tax-rules
+PATCH /api/v1/admin/common/tax-rules/status
+DELETE /api/v1/admin/common/tax-rules
+PATCH /api/v1/admin/common/tax-rules/:taxRuleId
+DELETE /api/v1/admin/common/tax-rules/:taxRuleId
+GET /api/v1/admin/common/zip-codes
+POST /api/v1/admin/common/zip-codes
+PATCH /api/v1/admin/common/zip-codes/status
+DELETE /api/v1/admin/common/zip-codes
+PATCH /api/v1/admin/common/zip-codes/:zipCodeId
+DELETE /api/v1/admin/common/zip-codes/:zipCodeId
+GET /api/v1/admin/inventory/stats
+GET /api/v1/admin/inventory/low-stock
+GET /api/v1/admin/inventory/transactions
+POST /api/v1/admin/inventory/reservations/release-expired
+GET /api/v1/admin/inventory/warehouses
+POST /api/v1/admin/inventory/warehouses
+PATCH /api/v1/admin/inventory/warehouses/status
+PATCH /api/v1/admin/inventory/warehouses/:warehouseId
+DELETE /api/v1/admin/inventory/warehouses
+DELETE /api/v1/admin/inventory/warehouses/:warehouseId
+GET /api/v1/admin/shipping/packages
+POST /api/v1/admin/shipping/packages
+PATCH /api/v1/admin/shipping/packages/status
+PATCH /api/v1/admin/shipping/packages/:packageId
+DELETE /api/v1/admin/shipping/packages
+DELETE /api/v1/admin/shipping/packages/:packageId
+GET /api/v1/admin/shipping/pickup-addresses
+POST /api/v1/admin/shipping/pickup-addresses
+PATCH /api/v1/admin/shipping/pickup-addresses/status
+PATCH /api/v1/admin/shipping/pickup-addresses/:pickupAddressId
+DELETE /api/v1/admin/shipping/pickup-addresses
+DELETE /api/v1/admin/shipping/pickup-addresses/:pickupAddressId
+GET /api/v1/admin/carts/me
+PUT /api/v1/admin/carts/me
+GET /api/v1/admin/carts
+GET /api/v1/admin/carts/:cartId
+DELETE /api/v1/admin/carts/:cartId
+GET /api/v1/admin/reports/orders/export
+GET /api/v1/admin/reports/products/export
+GET /api/v1/admin/reports/inventory/export
+GET /api/v1/admin/reports/shipments/export
+GET /api/v1/admin/reports/delivery-agents/export
+GET /api/v1/admin/reports/returns/export
+GET /api/v1/admin/reports/cancellations/export
+GET /api/v1/admin/reports/refunds/export
+GET /api/v1/admin/reports/seller-scorecards/export
+```
+
+### Delivery (18)
+
+```txt
+GET /api/v1/delivery/serviceability
+GET /api/v1/delivery/orders/:orderId/eway-bill
+POST /api/v1/delivery/orders/:orderId/eway-bill
+PATCH /api/v1/delivery/eway-bills/:ewayBillId/status
+GET /api/v1/delivery/rates
+GET /api/v1/delivery/shipments
+GET /api/v1/delivery/agents
+POST /api/v1/delivery/agents
+GET /api/v1/delivery/agents/:deliveryAgentId
+PATCH /api/v1/delivery/agents/:deliveryAgentId
+POST /api/v1/delivery/shipments
+GET /api/v1/delivery/shipments/:shipmentId
+POST /api/v1/delivery/shipments/:shipmentId/assign-agent
+POST /api/v1/delivery/shipments/:shipmentId/tracking
+POST /api/v1/delivery/shipments/:shipmentId/delivery-otp
+POST /api/v1/delivery/shipments/:shipmentId/confirm-delivery
+POST /api/v1/delivery/shipments/webhook
+POST /api/v1/delivery/manifests
+```
+
+### Global (42)
+
+```txt
+GET /api/v1/global/countries
+POST /api/v1/global/countries
+PATCH /api/v1/global/countries/status
+DELETE /api/v1/global/countries
+PATCH /api/v1/global/countries/:countryId
+DELETE /api/v1/global/countries/:countryId
+GET /api/v1/global/states
+POST /api/v1/global/states
+PATCH /api/v1/global/states/status
+DELETE /api/v1/global/states
+PATCH /api/v1/global/states/:stateId
+DELETE /api/v1/global/states/:stateId
+GET /api/v1/global/cities
+POST /api/v1/global/cities
+PATCH /api/v1/global/cities/status
+DELETE /api/v1/global/cities
+PATCH /api/v1/global/cities/:cityId
+DELETE /api/v1/global/cities/:cityId
+GET /api/v1/global/taxes
+POST /api/v1/global/taxes
+PATCH /api/v1/global/taxes/status
+DELETE /api/v1/global/taxes
+PATCH /api/v1/global/taxes/:taxId
+DELETE /api/v1/global/taxes/:taxId
+GET /api/v1/global/sub-taxes
+POST /api/v1/global/sub-taxes
+PATCH /api/v1/global/sub-taxes/status
+DELETE /api/v1/global/sub-taxes
+PATCH /api/v1/global/sub-taxes/:subTaxId
+DELETE /api/v1/global/sub-taxes/:subTaxId
+GET /api/v1/global/tax-rules
+POST /api/v1/global/tax-rules
+PATCH /api/v1/global/tax-rules/status
+DELETE /api/v1/global/tax-rules
+PATCH /api/v1/global/tax-rules/:taxRuleId
+DELETE /api/v1/global/tax-rules/:taxRuleId
+GET /api/v1/global/zip-codes
+POST /api/v1/global/zip-codes
+PATCH /api/v1/global/zip-codes/status
+DELETE /api/v1/global/zip-codes
+PATCH /api/v1/global/zip-codes/:zipCodeId
+DELETE /api/v1/global/zip-codes/:zipCodeId
+```
+
+### Cancellations (4)
+
+```txt
+GET /api/v1/cancellations
+GET /api/v1/cancellations/:cancellationId
+POST /api/v1/cancellations/:cancellationId/retry
+POST /api/v1/cancellations/:cancellationId/manual-refund
+```
+
+### CMS (2)
+
+```txt
+GET /api/v1/cms
+GET /api/v1/cms/:slug
+```
+
+### Coupons (9)
+
+```txt
+GET /api/v1/coupons/coupons
+POST /api/v1/coupons/coupons
+GET /api/v1/coupons/coupons/:couponId
+PATCH /api/v1/coupons/coupons/:couponId
+DELETE /api/v1/coupons/coupons/:couponId
+GET /api/v1/coupons/promotion-banners
+POST /api/v1/coupons/promotion-banners
+PATCH /api/v1/coupons/promotion-banners/:slug
+DELETE /api/v1/coupons/promotion-banners/:slug
+```
+
+### Commerce Settings (5)
+
+```txt
+GET /api/v1/admin/commerce-settings
+PUT /api/v1/admin/commerce-settings
+GET /api/v1/admin/commerce-settings/seller-charge-settings
+GET /api/v1/admin/commerce-settings/seller-charge-settings/:sellerId
+PUT /api/v1/admin/commerce-settings/seller-charge-settings/:sellerId
+```
+
+### Admin Finance (10)
+
+```txt
+GET /api/v1/admin/finance/commission-rules
+GET /api/v1/admin/finance/commission-rules/:id
+POST /api/v1/admin/finance/commission-rules
+PATCH /api/v1/admin/finance/commission-rules/:id
+DELETE /api/v1/admin/finance/commission-rules/:id
+GET /api/v1/admin/finance/platform-fee-rules
+GET /api/v1/admin/finance/platform-fee-rules/:id
+POST /api/v1/admin/finance/platform-fee-rules
+PATCH /api/v1/admin/finance/platform-fee-rules/:id
+DELETE /api/v1/admin/finance/platform-fee-rules/:id
+```
+
+### Deals (20)
+
+```txt
+GET /api/v1/deals/public/placements
+GET /api/v1/deals
+POST /api/v1/deals
+GET /api/v1/deals/analytics
+GET /api/v1/deals/payouts
+POST /api/v1/deals/payouts/generate
+PATCH /api/v1/deals/payouts/:payoutId/process
+GET /api/v1/deals/payouts/:payoutId
+GET /api/v1/deals/:dealId
+PATCH /api/v1/deals/:dealId
+POST /api/v1/deals/:dealId/submit
+POST /api/v1/deals/:dealId/approve
+POST /api/v1/deals/:dealId/reject
+POST /api/v1/deals/:dealId/pause
+POST /api/v1/deals/:dealId/resume
+POST /api/v1/deals/:dealId/cancel
+POST /api/v1/deals/:dealId/renew
+PUT /api/v1/deals/:dealId/commission-rule
+PUT /api/v1/deals/:dealId/sponsorship
+DELETE /api/v1/deals/sponsorships/:sponsorshipId
+```
+
+### File Uploader (3)
+
+```txt
+POST /api/v1/file-uploader/upload
+POST /api/v1/file-uploader/upload-multi
+POST /api/v1/file-uploader/upload-document
+```
+
+### Search (4)
+
+```txt
+GET /api/v1/search
+GET /api/v1/search/autocomplete
+POST /api/v1/search/index-all
+POST /api/v1/search/rebuild
+```
+
+## 16. Admin Development Rules
 
 Use these rules while wiring Admin:
 
@@ -1783,7 +2649,7 @@ Use these rules while wiring Admin:
 - For `/pricing` and `/coupons`, prefer `/pricing` in new Admin screens to avoid the odd `/coupons/coupons` URL, but keep existing calls working unless backend routes are changed.
 - For tax document download/export/report endpoints, expect either JSON metadata or generated document/export responses depending on controller behavior.
 
-## 16. Postman
+## 17. Postman
 
 Postman assets:
 
@@ -1799,7 +2665,7 @@ Regenerate collection:
 npm run postman:sync
 ```
 
-## 17. Source Of Truth
+## 18. Source Of Truth
 
 When behavior and docs disagree, trust these files in this order:
 

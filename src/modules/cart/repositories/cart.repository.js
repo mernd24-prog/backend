@@ -3,6 +3,18 @@ const { CartModel } = require("../models/cart.model");
 const { ProductModel } = require("../../product/models/product.model");
 
 class CartRepository {
+  cartItemKey(item = {}) {
+    const productId =
+      typeof item.productId === "object"
+        ? String(item.productId?._id || item.productId?.id || item.productId?.productId || "")
+        : String(item.productId || "");
+    return [
+      productId,
+      String(item.variantId || ""),
+      String(item.variantSku || ""),
+    ].join(":");
+  }
+
   async _populateItemsProduct(cartDoc) {
     if (!cartDoc || !Array.isArray(cartDoc.items) || cartDoc.items.length === 0) {
       return cartDoc;
@@ -97,6 +109,42 @@ class CartRepository {
           metadata: {
             ...(metadata || {}),
             clearedAt: new Date(),
+          },
+        },
+      },
+      { new: true },
+    ).exec();
+  }
+
+  async removePurchasedItemsForUser(userId, purchasedItems = [], metadata = {}) {
+    const purchasedKeys = new Set(
+      (purchasedItems || [])
+        .map((item) => this.cartItemKey({
+          productId: item.productId || item.product_id,
+          variantId: item.variantId || item.variant_id,
+          variantSku: item.variantSku || item.variant_sku,
+        }))
+        .filter((key) => key && !key.startsWith(":")),
+    );
+
+    if (!userId || !purchasedKeys.size) return null;
+
+    const cart = await CartModel.findOne({ userId: String(userId) }).lean();
+    if (!cart) return null;
+
+    const currentItems = Array.isArray(cart.items) ? cart.items : [];
+    const nextItems = currentItems.filter((item) => !purchasedKeys.has(this.cartItemKey(item)));
+    if (nextItems.length === currentItems.length) return cart;
+
+    return CartModel.findOneAndUpdate(
+      { userId: String(userId) },
+      {
+        $set: {
+          items: nextItems,
+          metadata: {
+            ...(cart.metadata || {}),
+            ...(metadata || {}),
+            checkoutClearedAt: new Date(),
           },
         },
       },

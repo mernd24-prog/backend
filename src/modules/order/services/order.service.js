@@ -14,6 +14,7 @@ const { auditService } = require("../../../shared/logger/audit.service");
 const { TaxService } = require("../../tax/services/tax.service");
 const { CommissionService } = require("../../seller/services/commission.service");
 const { DealService } = require("../../deal/services/deal.service");
+const { CartRepository } = require("../../cart/repositories/cart.repository");
 const { logger } = require("../../../shared/logger/logger");
 
 class OrderService {
@@ -25,6 +26,7 @@ class OrderService {
     taxService = new TaxService({ orderRepository }),
     commissionService = CommissionService,
     dealService = new DealService(),
+    cartRepository = new CartRepository(),
   } = {}) {
     this.orderRepository = orderRepository;
     this.pricingService = pricingService;
@@ -33,6 +35,110 @@ class OrderService {
     this.taxService = taxService;
     this.commissionService = commissionService;
     this.dealService = dealService;
+    this.cartRepository = cartRepository;
+  }
+
+  orderStatusToShipmentStatus(status) {
+    return {
+      [ORDER_STATUS.PACKED]: "initiated",
+      [ORDER_STATUS.SHIPPED]: "in_transit",
+      [ORDER_STATUS.DELIVERED]: "delivered",
+      [ORDER_STATUS.FULFILLED]: "delivered",
+    }[status] || null;
+  }
+
+  orderStatusToDeliveryStatus(status, currentDeliveryStatus = null) {
+    if (currentDeliveryStatus === "delivered_verified") return currentDeliveryStatus;
+    return this.orderStatusToShipmentStatus(status);
+  }
+
+  groupOrderItemsBySeller(items = []) {
+    return items.reduce((groups, item) => {
+      const sellerId = String(item.seller_id || item.sellerId || "");
+      if (!sellerId) return groups;
+      if (!groups.has(sellerId)) groups.set(sellerId, []);
+      groups.get(sellerId).push(item);
+      return groups;
+    }, new Map());
+  }
+
+  getFulfillmentSnapshotForItems(items = []) {
+    const result = {
+      verificationRequired: false,
+      verificationMethods: [],
+      dealId: null,
+      fulfillmentModel: null,
+    };
+
+    for (const item of items) {
+      const fulfillment = this.normalizeJson(item.fulfillment_snapshot || item.fulfillmentSnapshot, {});
+      const deal = this.normalizeJson(item.deal_snapshot || item.dealSnapshot, {});
+      if (!result.dealId) result.dealId = item.deal_id || item.dealId || fulfillment.dealId || deal.dealId || null;
+      if (!result.fulfillmentModel) result.fulfillmentModel = fulfillment.fulfillmentModel || deal.fulfillmentModel || null;
+      if (fulfillment.deliveryVerificationRequired || deal.deliveryVerificationRequired) {
+        result.verificationRequired = true;
+      }
+      const methods = fulfillment.deliveryVerificationMethods || deal.deliveryVerificationMethods || [];
+      if (Array.isArray(methods)) {
+        result.verificationMethods.push(...methods);
+      }
+    }
+
+    result.verificationMethods = Array.from(new Set(result.verificationMethods.filter(Boolean)));
+    return result;
+  }
+
+  async clearPurchasedCartItems(orderId, buyerId, items = [], actor = {}, reason = "order_paid") {
+    try {
+      const purchasedItems = items.length ? items : await this.orderRepository.findItemsByOrderId(orderId);
+      await this.cartRepository.removePurchasedItemsForUser(buyerId, purchasedItems, {
+        checkoutOrderId: orderId,
+        checkoutClearReason: reason,
+        checkoutClearedBy: actor.userId || buyerId,
+        checkoutClearedByRole: actor.role || "system",
+      });
+    } catch (error) {
+      logger.warn({ orderId, buyerId, error: error.message }, "Cart cleanup after checkout failed");
+    }
+  }
+
+  async syncShipmentsForOrderStatus(orderId, nextStatus, actor = {}, trackingInfo = null) {
+    const shipmentStatus = this.orderStatusToShipmentStatus(nextStatus);
+    if (!shipmentStatus) return;
+
+    const order = await this.orderRepository.findByIdWithItems(orderId);
+    if (!order) return;
+
+    const metadata = this.normalizeJson(order.metadata, {});
+    const tracking = trackingInfo || metadata.tracking || {};
+    const itemsBySeller = this.groupOrderItemsBySeller(order.items || []);
+
+    for (const [sellerId, sellerItems] of itemsBySeller.entries()) {
+      const fulfillment = this.getFulfillmentSnapshotForItems(sellerItems);
+      await this.orderRepository.createShipment({
+        orderId,
+        sellerId,
+        status: shipmentStatus,
+        orderStatus: nextStatus,
+        trackingNumber: tracking.trackingNumber || null,
+        carrierName: tracking.carrierName || null,
+        carrierUrl: tracking.carrierUrl || null,
+        provider: tracking.carrierName ? "manual" : undefined,
+        shipToSnapshot: this.normalizeJson(order.shipping_address, {}),
+        dealId: fulfillment.dealId,
+        fulfillmentModel: fulfillment.fulfillmentModel,
+        verificationRequired: fulfillment.verificationRequired,
+        verificationMethods: fulfillment.verificationMethods,
+        metadata: {
+          source: "order_status_sync",
+          orderStatus: nextStatus,
+        },
+        idempotencyKey: `order-status:${orderId}:${sellerId}`,
+        createdBy: actor.userId || null,
+        updatedBy: actor.userId || null,
+        note: `Order moved to ${nextStatus}`,
+      });
+    }
   }
 
   async createOrder(payload, actor) {
@@ -143,6 +249,7 @@ class OrderService {
           role: actor.role || "buyer",
         });
         await this.taxService.createInvoice(orderId);
+        await this.clearPurchasedCartItems(orderId, actor.userId, pricedOrder.items, actor, "zero_payable_order_confirmed");
         await eventPublisher.publish(
           makeEvent(
             DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
@@ -439,6 +546,9 @@ class OrderService {
     const trackingInfo = nextStatus === ORDER_STATUS.SHIPPED && actor.trackingNumber
       ? { trackingNumber: actor.trackingNumber, carrierName: actor.carrierName, carrierUrl: actor.carrierUrl }
       : null;
+    const deliveryStatus = actor.deliveryStatus ||
+      this.orderStatusToDeliveryStatus(nextStatus, order.delivery_status) ||
+      undefined;
 
     const statusMetadata = {
       actorId: actor.userId,
@@ -446,7 +556,7 @@ class OrderService {
       reason: actor.reason || actor.cancellationReason || null,
       note: actor.note || null,
       paymentStatus: actor.paymentStatus || undefined,
-      deliveryStatus: actor.deliveryStatus || undefined,
+      deliveryStatus,
       metadata: actor.metadata || {},
       orderMetadata: trackingInfo
         ? { ...(actor.orderMetadata || {}), tracking: trackingInfo }
@@ -454,13 +564,12 @@ class OrderService {
     };
     const updatedOrder = await this.orderRepository.updateStatus(orderId, nextStatus, statusMetadata);
 
-    if (nextStatus === ORDER_STATUS.SHIPPED && trackingInfo) {
-      await this.orderRepository.createShipment({
-        orderId,
-        trackingNumber: trackingInfo.trackingNumber,
-        carrierName: trackingInfo.carrierName,
-        carrierUrl: trackingInfo.carrierUrl,
-      }).catch((error) => logger.warn({ orderId, error: error.message }, "Shipment record creation failed - non-fatal"));
+    if ([ORDER_STATUS.PACKED, ORDER_STATUS.SHIPPED, ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED].includes(nextStatus)) {
+      try {
+        await this.syncShipmentsForOrderStatus(orderId, nextStatus, actor, trackingInfo);
+      } catch (error) {
+        logger.error({ orderId, status: nextStatus, error: error.message }, "Shipment sync from order status failed");
+      }
     }
 
     if (nextStatus === ORDER_STATUS.CONFIRMED) {
@@ -737,6 +846,7 @@ class OrderService {
 
     if (order.status !== ORDER_STATUS.PENDING_PAYMENT) {
       if (order.payment_status === PAYMENT_STATUS.CAPTURED) {
+        await this.clearPurchasedCartItems(orderId, order.buyer_id, [], actor, "payment_already_captured");
         return this.orderRepository.findByIdWithItems(orderId);
       }
       if (order.status === ORDER_STATUS.CONFIRMED && order.payment_status === PAYMENT_STATUS.AUTHORIZED) {
@@ -764,6 +874,7 @@ class OrderService {
             { source: "order-module", aggregateId: orderId },
           ),
         );
+        await this.clearPurchasedCartItems(orderId, order.buyer_id, [], actor, "payment_captured");
         return this.orderRepository.findByIdWithItems(updatedOrder.id);
       }
       throw new AppError(`Cannot capture payment for order in ${order.status} status`, 409);
@@ -798,6 +909,7 @@ class OrderService {
       ),
     );
 
+    await this.clearPurchasedCartItems(orderId, order.buyer_id, [], actor, "payment_captured");
     return this.orderRepository.findByIdWithItems(updatedOrder.id);
   }
 
@@ -810,6 +922,7 @@ class OrderService {
     if (order.status !== ORDER_STATUS.PENDING_PAYMENT) {
       if (order.status === ORDER_STATUS.CONFIRMED || order.payment_status === PAYMENT_STATUS.AUTHORIZED) {
         await this.taxService.createInvoice(orderId);
+        await this.clearPurchasedCartItems(orderId, order.buyer_id, [], actor, "payment_authorized");
         return this.orderRepository.findByIdWithItems(orderId);
       }
       throw new AppError(`Cannot authorize payment for order in ${order.status} status`, 409);
@@ -829,6 +942,7 @@ class OrderService {
       metadata: actor.metadata || {},
     });
     await this.taxService.createInvoice(orderId);
+    await this.clearPurchasedCartItems(orderId, order.buyer_id, [], actor, "payment_authorized");
 
     return updatedOrder;
   }

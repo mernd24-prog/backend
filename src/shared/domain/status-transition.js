@@ -15,7 +15,7 @@ const FLOWS = {
     confirmed:       ["packed",     "cancelled"],
     packed:          ["shipped"],
     shipped:         ["delivered",  "return_requested"],
-    delivered:       ["return_requested"],
+    delivered:       ["fulfilled", "return_requested"],
     return_requested:["returned"],
     returned:        ["fulfilled"],
     fulfilled:       [],            // terminal

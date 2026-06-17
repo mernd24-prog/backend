@@ -46,7 +46,7 @@ class OrderRepository {
         shipping_address: this.jsonb(payload.shippingAddress),
         coupon_code: payload.couponCode || null,
         wallet_discount_amount: payload.walletDiscountAmount || 0,
-        payable_amount: payload.payableAmount || payload.totalAmount,
+        payable_amount: payload.payableAmount ?? payload.totalAmount,
         tax_breakup: this.jsonb(payload.taxBreakup),
         platform_fee_amount: payload.platformFeeAmount || 0,
         platform_fee_breakup: this.jsonb(payload.platformFeeBreakup, []),
@@ -278,23 +278,161 @@ class OrderRepository {
     return rows.length > 0;
   }
 
+  advanceShipmentStatus(currentStatus, requestedStatus) {
+    if (!requestedStatus) return currentStatus || "initiated";
+    if (!currentStatus) return requestedStatus;
+    if (currentStatus === "delivered_verified") return currentStatus;
+    const rank = new Map([
+      ["initiated", 1],
+      ["manifested", 2],
+      ["picked_up", 3],
+      ["in_transit", 4],
+      ["out_for_delivery", 5],
+      ["delivered", 6],
+      ["delivered_verified", 7],
+    ]);
+    return (rank.get(requestedStatus) || 0) >= (rank.get(currentStatus) || 0)
+      ? requestedStatus
+      : currentStatus;
+  }
+
   async createShipment(payload = {}) {
-    const [row] = await knex("shipments")
-      .insert({
+    if (!payload.orderId || !payload.sellerId) return null;
+
+    const trx = await knex.transaction();
+    try {
+      const [existing] = await trx("shipments")
+        .where("order_id", payload.orderId)
+        .where("seller_id", String(payload.sellerId))
+        .where((builder) => {
+          builder.where("direction", "forward").orWhereNull("direction");
+        })
+        .orderBy("created_at", "desc")
+        .limit(1)
+        .forUpdate();
+
+      const requestedStatus = payload.status || "initiated";
+      const trackingNumber = payload.trackingNumber || payload.awbNumber || null;
+      const courierName = payload.carrierName || payload.courierName || payload.provider || null;
+      const now = new Date();
+
+      if (existing) {
+        const nextStatus = this.advanceShipmentStatus(existing.status, requestedStatus);
+        const shouldWriteEvent = nextStatus !== existing.status;
+        const [updated] = await trx("shipments")
+          .where("id", existing.id)
+          .update({
+            status: nextStatus,
+            provider: payload.provider || existing.provider || "manual",
+            courier_name: courierName || existing.courier_name,
+            awb_number: trackingNumber || existing.awb_number,
+            tracking_number: trackingNumber || existing.tracking_number,
+            ship_to_snapshot: payload.shipToSnapshot || existing.ship_to_snapshot || {},
+            verification_required:
+              payload.verificationRequired === undefined
+                ? existing.verification_required
+                : Boolean(payload.verificationRequired),
+            verification_methods:
+              payload.verificationMethods === undefined
+                ? existing.verification_methods
+                : payload.verificationMethods || [],
+            metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [
+              JSON.stringify({
+                ...(payload.metadata || {}),
+                ...(payload.carrierUrl ? { carrierUrl: payload.carrierUrl } : {}),
+              }),
+            ]),
+            updated_by: payload.updatedBy || payload.createdBy || existing.updated_by,
+            updated_at: knex.fn.now(),
+          })
+          .returning("*");
+
+        if (shouldWriteEvent) {
+          await trx("shipment_tracking_events").insert({
+            id: uuidv4(),
+            shipment_id: existing.id,
+            order_id: payload.orderId,
+            status: nextStatus,
+            event_time: payload.eventTime || now,
+            location: payload.location || null,
+            note: payload.note || `Order moved to ${payload.orderStatus || nextStatus}`,
+            source: payload.source || "order_status_sync",
+            raw_payload: payload.rawPayload || {},
+            actor_id: payload.createdBy || payload.updatedBy || null,
+            idempotency_key: payload.idempotencyKey
+              ? `${payload.idempotencyKey}:${nextStatus}`
+              : null,
+          }).catch((error) => {
+            if (!String(error?.message || "").includes("duplicate")) throw error;
+          });
+        }
+
+        await trx.commit();
+        return updated || null;
+      }
+
+      const id = uuidv4();
+      const [row] = await trx("shipments")
+        .insert({
+          id,
+          order_id: payload.orderId,
+          seller_id: String(payload.sellerId),
+          provider: payload.provider || "manual",
+          courier_name: courierName,
+          awb_number: trackingNumber,
+          tracking_number: trackingNumber,
+          status: requestedStatus,
+          shipping_mode: payload.shippingMode || "standard",
+          cod: Boolean(payload.cod),
+          package_snapshot: payload.packageSnapshot || {},
+          pickup_address_snapshot: payload.pickupAddressSnapshot || {},
+          ship_to_snapshot: payload.shipToSnapshot || {},
+          rate_snapshot: payload.rateSnapshot || {},
+          label_data: payload.labelData || {},
+          shipment_type: payload.shipmentType || "forward",
+          direction: payload.direction || "forward",
+          return_id: payload.returnId || null,
+          deal_id: payload.dealId || null,
+          fulfillment_model: payload.fulfillmentModel || null,
+          verification_required: Boolean(payload.verificationRequired),
+          verification_methods: payload.verificationMethods || [],
+          delivery_proof_snapshot: payload.deliveryProofSnapshot || {},
+          manifest_id: payload.manifestId || null,
+          expected_delivery_at: payload.expectedDeliveryAt || null,
+          idempotency_key: payload.idempotencyKey || null,
+          metadata: {
+            ...(payload.metadata || {}),
+            ...(payload.carrierUrl ? { carrierUrl: payload.carrierUrl } : {}),
+          },
+          created_by: payload.createdBy || null,
+          updated_by: payload.updatedBy || payload.createdBy || null,
+          created_at: now,
+          updated_at: now,
+        })
+        .returning("*");
+
+      await trx("shipment_tracking_events").insert({
+        id: uuidv4(),
+        shipment_id: id,
         order_id: payload.orderId,
-        seller_id: payload.sellerId || null,
-        awb_number: payload.trackingNumber || null,
-        tracking_number: payload.trackingNumber || null,
-        provider: payload.carrierName || null,
-        courier_name: payload.carrierName || null,
-        tracking_url: payload.carrierUrl || null,
-        status: "shipped",
-        created_at: new Date(),
-        updated_at: new Date(),
-      })
-      .returning("*")
-      .catch(() => [null]);
-    return row || null;
+        status: requestedStatus,
+        event_time: payload.eventTime || now,
+        location: payload.location || null,
+        note: payload.note || `Shipment created from order ${payload.orderStatus || requestedStatus}`,
+        source: payload.source || "order_status_sync",
+        raw_payload: payload.rawPayload || {},
+        actor_id: payload.createdBy || null,
+        idempotency_key: payload.idempotencyKey ? `${payload.idempotencyKey}:${requestedStatus}` : null,
+      }).catch((error) => {
+        if (!String(error?.message || "").includes("duplicate")) throw error;
+      });
+
+      await trx.commit();
+      return row || null;
+    } catch (error) {
+      await trx.rollback();
+      throw error;
+    }
   }
 
   async findLatestPaymentByOrderId(orderId) {

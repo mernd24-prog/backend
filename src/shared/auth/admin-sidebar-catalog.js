@@ -56,7 +56,7 @@ const SIDEBAR_MODULES = [
   { moduleName: "Shipping Packages", moduleKey: "shipping-packages", moduleSlug: "shipping-packages", icon: "MdInventory2", routePath: "/app/shipping-packages", moduleType: "page", order: 87, parentModule: "delivery-shipping", requiredModule: "delivery" },
   { moduleName: "Shipping Profiles", moduleKey: "shipping-profile", moduleSlug: "shipping-profile", icon: "MdAssignment", routePath: "/app/shipping-profile", moduleType: "page", order: 88, parentModule: "delivery-shipping", requiredModule: "delivery" },
   { moduleName: "Pickup Addresses", moduleKey: "pickup-addresses", moduleSlug: "pickup-addresses", icon: "MdLocationOn", routePath: "/app/pickup-addresses", moduleType: "page", order: 89, parentModule: "delivery-shipping", requiredModule: "delivery" },
-  { moduleName: "Shipping Company Users", moduleKey: "shipping-company-users", moduleSlug: "shipping-company-users", icon: "MdPeople", routePath: "/app/shipping-company-users", moduleType: "page", order: 90, parentModule: "delivery-shipping", requiredModule: "delivery" },
+  { moduleName: "Delivery Partners", moduleKey: "shipping-company-users", moduleSlug: "shipping-company-users", icon: "MdPeople", routePath: "/app/shipping-company-users", moduleType: "page", order: 90, parentModule: "delivery-shipping", requiredModule: "delivery" },
 
   { moduleName: "Users & Access", moduleKey: "users-access", moduleSlug: "users-access", icon: "MdPeople", moduleType: "group", order: 100, parentModule: null, requiredModule: "users" },
   { moduleName: "Customers", moduleKey: "users", moduleSlug: "users", icon: "MdPerson", routePath: "/app/users", moduleType: "page", order: 101, parentModule: "users-access", requiredModule: "users" },
