@@ -51,6 +51,23 @@ class TaxController {
     res.json(okResponse(invoices));
   };
 
+  exportInvoices = async (req, res) => {
+    const document = await this.taxService.exportInvoices(req.query);
+    this.sendDocument(res, document);
+  };
+
+  downloadInvoice = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const document = await this.taxService.getInvoiceDocument(req.params.invoiceId, req.query, actor);
+    this.sendDocument(res, document);
+  };
+
+  dispatchInvoice = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.taxService.dispatchInvoiceDocument(req.params.invoiceId, req.body, actor);
+    res.status(202).json(okResponse(result));
+  };
+
   createCreditNote = async (req, res) => {
     const actor = getCurrentUser(req);
     const creditNote = await this.taxService.createCreditNote(req.body, actor);
@@ -70,10 +87,49 @@ class TaxController {
     res.json(okResponse(creditNotes));
   };
 
+  exportCreditNotes = async (req, res) => {
+    const document = await this.taxService.exportCreditNotes(req.query);
+    this.sendDocument(res, document);
+  };
+
+  downloadCreditNote = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const document = await this.taxService.getCreditNoteDocument(req.params.creditNoteId, req.query, actor);
+    this.sendDocument(res, document);
+  };
+
+  dispatchCreditNote = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.taxService.dispatchCreditNoteDocument(req.params.creditNoteId, req.body, actor);
+    res.status(202).json(okResponse(result));
+  };
+
   getReport = async (req, res) => {
     const report = await this.taxService.getTaxReport(req.query);
     res.json(okResponse(report));
   };
+
+  exportReport = async (req, res) => {
+    const document = await this.taxService.exportTaxReport(req.query);
+    this.sendDocument(res, document);
+  };
+
+  listDocumentDispatches = async (req, res) => {
+    const dispatches = await this.taxService.listTaxDocumentDispatches(req.query);
+    res.json(okResponse(dispatches.items, { total: dispatches.total, page: dispatches.page, limit: dispatches.limit }));
+  };
+
+  retryDocumentDispatch = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const dispatch = await this.taxService.retryTaxDocumentDispatch(req.params.dispatchId, actor);
+    res.json(okResponse(dispatch));
+  };
+
+  sendDocument(res, document) {
+    res.setHeader("Content-Type", document.contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="${document.fileName}"`);
+    res.send(document.body);
+  }
 }
 
 module.exports = { TaxController };

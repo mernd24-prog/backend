@@ -11,6 +11,11 @@ const {
   listInvoicesSchema,
   createCreditNoteSchema,
   listCreditNotesSchema,
+  taxDocumentDownloadSchema,
+  taxExportSchema,
+  taxDocumentDispatchSchema,
+  listTaxDocumentDispatchesSchema,
+  retryTaxDocumentDispatchSchema,
 } = require("../validation/tax.validation");
 
 const taxRoutes = express.Router();
@@ -53,6 +58,29 @@ taxRoutes.get(
   catchErrors(taxController.listInvoices),
 );
 
+taxRoutes.get(
+  "/invoices/export",
+  authenticate,
+  allowPermissions("tax:export"),
+  checkInput(taxExportSchema("invoices")),
+  catchErrors(taxController.exportInvoices),
+);
+
+taxRoutes.get(
+  "/invoices/:invoiceId/download",
+  authenticate,
+  checkInput(taxDocumentDownloadSchema("invoiceId")),
+  catchErrors(taxController.downloadInvoice),
+);
+
+taxRoutes.post(
+  "/invoices/:invoiceId/dispatch",
+  authenticate,
+  allowPermissions("tax:update"),
+  checkInput(taxDocumentDispatchSchema("invoiceId")),
+  catchErrors(taxController.dispatchInvoice),
+);
+
 taxRoutes.post(
   "/credit-notes",
   authenticate,
@@ -70,11 +98,58 @@ taxRoutes.get(
 );
 
 taxRoutes.get(
+  "/credit-notes/export",
+  authenticate,
+  allowPermissions("tax:export"),
+  checkInput(taxExportSchema("creditNotes")),
+  catchErrors(taxController.exportCreditNotes),
+);
+
+taxRoutes.get(
+  "/credit-notes/:creditNoteId/download",
+  authenticate,
+  checkInput(taxDocumentDownloadSchema("creditNoteId")),
+  catchErrors(taxController.downloadCreditNote),
+);
+
+taxRoutes.post(
+  "/credit-notes/:creditNoteId/dispatch",
+  authenticate,
+  allowPermissions("tax:update"),
+  checkInput(taxDocumentDispatchSchema("creditNoteId")),
+  catchErrors(taxController.dispatchCreditNote),
+);
+
+taxRoutes.get(
   "/reports",
   authenticate,
   allowPermissions("tax:export"),
   checkInput(taxReportSchema),
   catchErrors(taxController.getReport),
+);
+
+taxRoutes.get(
+  "/reports/export",
+  authenticate,
+  allowPermissions("tax:export"),
+  checkInput(taxExportSchema("reports")),
+  catchErrors(taxController.exportReport),
+);
+
+taxRoutes.get(
+  "/document-dispatches",
+  authenticate,
+  allowPermissions("tax:view"),
+  checkInput(listTaxDocumentDispatchesSchema),
+  catchErrors(taxController.listDocumentDispatches),
+);
+
+taxRoutes.post(
+  "/document-dispatches/:dispatchId/retry",
+  authenticate,
+  allowPermissions("tax:update"),
+  checkInput(retryTaxDocumentDispatchSchema),
+  catchErrors(taxController.retryDocumentDispatch),
 );
 
 module.exports = { taxRoutes };

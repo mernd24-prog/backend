@@ -4,6 +4,7 @@ const { logger } = require("../../../shared/logger/logger");
 const { AppError } = require("../../../shared/errors/app-error");
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
 const { ORDER_STATUS } = require("../../../shared/domain/commerce-constants");
+const { documentRendererService } = require("../../../shared/services/document-renderer.service");
 
 class SellerCommissionService {
   constructor() {
@@ -618,6 +619,18 @@ class SellerCommissionService {
         },
         { totalAmount: 0, commissionAmount: 0, taxAmount: 0, refundAmount: 0, adjustmentAmount: 0, netAmount: 0 }
       );
+      const recoveryRows = await trx("seller_settlements")
+        .where("seller_id", sellerId)
+        .where("net_amount", "<", 0)
+        .where("status", "pending")
+        .forUpdate();
+      const recoveryAdjustment = this.round(
+        recoveryRows.reduce((sum, row) => sum + Number(row.net_amount || 0), 0),
+      );
+      if (recoveryAdjustment < 0) {
+        totals.adjustmentAmount = this.round(totals.adjustmentAmount + recoveryAdjustment);
+        totals.netAmount = this.round(totals.netAmount + recoveryAdjustment);
+      }
 
       if (totals.netAmount <= 0) {
         throw new AppError("Invalid payout amount", 400);
@@ -658,6 +671,8 @@ class SellerCommissionService {
           source: options.source || "batch_payout",
           commissionIds: payoutCommissions.map((commission) => commission.id),
           skippedCommissions,
+          recoverySettlementIds: recoveryRows.map((row) => row.id),
+          recoveryAdjustment,
           payoutPolicy,
           createdBy: options.actor?.userId || options.actor?.sub || null,
         }),
@@ -675,6 +690,22 @@ class SellerCommissionService {
           payout_id: payoutId,
           updated_at: knex.fn.now(),
         });
+
+      if (recoveryRows.length) {
+        await trx("seller_settlements")
+          .whereIn("id", recoveryRows.map((row) => row.id))
+          .update({
+            status: "processing",
+            metadata: this.jsonb({
+              source: "negative_balance_offset",
+              offsetPayoutId: payoutId,
+              offsetAmount: recoveryAdjustment,
+              updatedBy: options.actor?.userId || options.actor?.sub || null,
+              updatedAt: new Date().toISOString(),
+            }),
+            updated_at: knex.fn.now(),
+          });
+      }
 
       logger.info(
         { sellerId, payoutId, amount: totals.netAmount, commissionCount: payoutCommissions.length },
@@ -747,6 +778,22 @@ class SellerCommissionService {
         updated_at: knex.fn.now(),
       });
 
+      const payoutMetadata = this.parseJson(payout.metadata, {});
+      if (Array.isArray(payoutMetadata.recoverySettlementIds) && payoutMetadata.recoverySettlementIds.length) {
+        await trx("seller_settlements")
+          .whereIn("id", payoutMetadata.recoverySettlementIds)
+          .update({
+            status: "completed",
+            notes: "Negative balance recovered through payout offset",
+            metadata: this.jsonb({
+              ...payoutMetadata,
+              recoveredByPayoutId: payoutId,
+              recoveredAt: new Date().toISOString(),
+            }),
+            updated_at: knex.fn.now(),
+          });
+      }
+
       logger.info(
         { payoutId, reference: paymentReference },
         "Payout completed"
@@ -775,7 +822,119 @@ class SellerCommissionService {
       await trx("seller_commissions")
         .where("payout_id", payoutId)
         .update({ status: "pending", payout_id: null, updated_at: knex.fn.now() });
+      const payoutMetadata = this.parseJson(payout.metadata, {});
+      if (Array.isArray(payoutMetadata.recoverySettlementIds) && payoutMetadata.recoverySettlementIds.length) {
+        await trx("seller_settlements")
+          .whereIn("id", payoutMetadata.recoverySettlementIds)
+          .update({
+            status: "pending",
+            metadata: this.jsonb({
+              ...payoutMetadata,
+              releasedFromFailedPayoutId: payoutId,
+              releasedAt: new Date().toISOString(),
+            }),
+            updated_at: knex.fn.now(),
+          });
+      }
       return { ...payout, status: "failed" };
+    });
+  }
+
+  async approvePayout(payoutId, options = {}) {
+    return knex.transaction(async (trx) => {
+      const payout = await trx("seller_payouts").where("id", payoutId).first().forUpdate();
+      if (!payout) throw new AppError("Payout not found", 404);
+      if (!["pending", "on_hold"].includes(payout.status)) {
+        throw new AppError(`Payout cannot be approved from ${payout.status}`, 409);
+      }
+
+      const metadata = {
+        ...this.parseJson(payout.metadata, {}),
+        approvedBy: options.actor?.userId || options.actor?.sub || null,
+        approvedAt: new Date().toISOString(),
+        approvalNote: options.note || null,
+      };
+      const [updated] = await trx("seller_payouts")
+        .where("id", payoutId)
+        .update({
+          status: "processing",
+          payment_method: options.paymentMethod || payout.payment_method || null,
+          metadata: this.jsonb(metadata),
+          updated_at: knex.fn.now(),
+        })
+        .returning("*");
+
+      await trx("seller_commissions")
+        .where("payout_id", payoutId)
+        .whereIn("status", ["pending", "approved"])
+        .update({ status: "approved", updated_at: knex.fn.now() });
+
+      return updated;
+    });
+  }
+
+  async holdPayout(payoutId, reason, actor = {}) {
+    return knex.transaction(async (trx) => {
+      const payout = await trx("seller_payouts").where("id", payoutId).first().forUpdate();
+      if (!payout) throw new AppError("Payout not found", 404);
+      if (payout.status === "completed") throw new AppError("Completed payouts cannot be held", 409);
+
+      const [updated] = await trx("seller_payouts")
+        .where("id", payoutId)
+        .update({
+          status: "on_hold",
+          metadata: this.jsonb({
+            ...this.parseJson(payout.metadata, {}),
+            holdReason: reason || "manual_hold",
+            heldBy: actor.userId || actor.sub || null,
+            heldAt: new Date().toISOString(),
+          }),
+          updated_at: knex.fn.now(),
+        })
+        .returning("*");
+      return updated;
+    });
+  }
+
+  async releasePayoutHold(payoutId, options = {}) {
+    return knex.transaction(async (trx) => {
+      const payout = await trx("seller_payouts").where("id", payoutId).first().forUpdate();
+      if (!payout) throw new AppError("Payout not found", 404);
+      if (payout.status !== "on_hold") throw new AppError(`Payout is not on hold`, 409);
+
+      const nextStatus = options.approve === true ? "processing" : "pending";
+      const [updated] = await trx("seller_payouts")
+        .where("id", payoutId)
+        .update({
+          status: nextStatus,
+          metadata: this.jsonb({
+            ...this.parseJson(payout.metadata, {}),
+            holdReleasedBy: options.actor?.userId || options.actor?.sub || null,
+            holdReleasedAt: new Date().toISOString(),
+            holdReleaseNote: options.note || null,
+          }),
+          updated_at: knex.fn.now(),
+        })
+        .returning("*");
+      return updated;
+    });
+  }
+
+  async retryFailedPayout(payoutId, options = {}) {
+    const payout = await knex("seller_payouts").where("id", payoutId).first();
+    if (!payout) throw new AppError("Payout not found", 404);
+    if (payout.status !== "failed") {
+      throw new AppError(`Only failed payouts can be retried`, 409);
+    }
+    return this.processBatchPayouts(payout.seller_id, {
+      periodStart: payout.period_start,
+      periodEnd: payout.period_end,
+      source: "failed_payout_retry",
+      previousPayoutId: payoutId,
+      paymentReference: options.paymentReference,
+      paymentMethod: options.paymentMethod || payout.payment_method || null,
+      autoProcess: options.autoProcess === true,
+      actor: options.actor,
     });
   }
 
@@ -785,6 +944,42 @@ class SellerCommissionService {
 
   async getSellerPayouts(sellerId, query = {}) {
     return this.listSellerPayouts({ ...query, sellerId });
+  }
+
+  async exportSellerCommissions(filters = {}) {
+    const result = await this.listSellerCommissions({
+      ...filters,
+      limit: Number(filters.limit || 500),
+      offset: Number(filters.offset || 0),
+    });
+    return documentRendererService.render(this.buildCommissionsExportDocument(result.items || [], result.summary), {
+      format: filters.format || "csv",
+      fileBaseName: "seller-commissions-export",
+    });
+  }
+
+  async exportSellerPayouts(filters = {}) {
+    const result = await this.listSellerPayouts({
+      ...filters,
+      limit: Number(filters.limit || 500),
+      offset: Number(filters.offset || 0),
+    });
+    return documentRendererService.render(this.buildPayoutsExportDocument(result.items || [], result.summary), {
+      format: filters.format || "csv",
+      fileBaseName: "seller-payouts-export",
+    });
+  }
+
+  async exportSettlements(filters = {}) {
+    const result = await this.getSettlements({
+      ...filters,
+      limit: Number(filters.limit || 500),
+      offset: Number(filters.offset || 0),
+    });
+    return documentRendererService.render(this.buildSettlementsExportDocument(result.items || []), {
+      format: filters.format || "csv",
+      fileBaseName: "seller-settlements-export",
+    });
   }
 
   async getSellerWalletSummary(sellerId, query = {}) {
@@ -1129,6 +1324,318 @@ class SellerCommissionService {
       .limit(limit)
       .offset(offset);
     return { items: rows, total: rows.length, limit, offset };
+  }
+
+  async getSellerSettlements(sellerId, query = {}) {
+    return this.getSettlements({ ...query, sellerId });
+  }
+
+  async getPayoutOperationsQueue(query = {}) {
+    const { limit, offset } = this.normalizePagination(query);
+    const [pendingApproval, onHold, failed, negativeBalances] = await Promise.all([
+      knex("seller_payouts").where("status", "pending").orderBy("created_at", "asc").limit(limit).offset(offset),
+      knex("seller_payouts").where("status", "on_hold").orderBy("updated_at", "desc").limit(limit).offset(offset),
+      knex("seller_payouts").where("status", "failed").orderBy("updated_at", "desc").limit(limit).offset(offset),
+      this.listNegativeBalanceRecoveries({ limit, offset }),
+    ]);
+
+    return {
+      pendingApproval,
+      onHold,
+      failed,
+      negativeBalances: negativeBalances.items,
+      counts: {
+        pendingApproval: pendingApproval.length,
+        onHold: onHold.length,
+        failed: failed.length,
+        negativeBalances: negativeBalances.total,
+      },
+      limit,
+      offset,
+    };
+  }
+
+  async listNegativeBalanceRecoveries(query = {}) {
+    const { limit, offset } = this.normalizePagination(query);
+    const buildBase = () => knex("seller_settlements")
+      .where("net_amount", "<", 0)
+      .modify((builder) => {
+        if (query.sellerId) builder.where("seller_id", query.sellerId);
+        if (query.status) builder.where("status", query.status);
+        else builder.whereIn("status", ["pending", "processing", "on_hold"]);
+      });
+    const [items, countRows] = await Promise.all([
+      buildBase().orderBy("created_at", "asc").limit(limit).offset(offset),
+      buildBase().count({ total: "*" }),
+    ]);
+    return {
+      items,
+      total: Number(countRows?.[0]?.total || 0),
+      limit,
+      offset,
+    };
+  }
+
+  async resolveNegativeBalanceRecovery(settlementId, payload = {}, actor = {}) {
+    const action = payload.action || "offset_future_payout";
+    const validActions = ["offset_future_payout", "collected_from_seller", "platform_write_off"];
+    if (!validActions.includes(action)) {
+      throw new AppError("Invalid negative balance recovery action", 400);
+    }
+
+    return knex.transaction(async (trx) => {
+      const settlement = await trx("seller_settlements").where("id", settlementId).first().forUpdate();
+      if (!settlement) throw new AppError("Negative balance settlement not found", 404);
+      if (Number(settlement.net_amount || 0) >= 0) {
+        throw new AppError("Settlement is not a negative balance recovery item", 400);
+      }
+
+      const nextStatus = action === "offset_future_payout" ? "pending" : "completed";
+      const [updated] = await trx("seller_settlements")
+        .where("id", settlementId)
+        .update({
+          status: nextStatus,
+          notes: payload.note || settlement.notes || this.recoveryActionLabel(action),
+          metadata: this.jsonb({
+            ...this.parseJson(settlement.metadata, {}),
+            recoveryAction: action,
+            recoveryAmount: this.round(Math.abs(Number(settlement.net_amount || 0))),
+            recoveryReference: payload.reference || null,
+            recoveryNote: payload.note || null,
+            resolvedBy: actor.userId || actor.sub || null,
+            resolvedAt: new Date().toISOString(),
+          }),
+          updated_at: knex.fn.now(),
+        })
+        .returning("*");
+      return updated;
+    });
+  }
+
+  async getSettlementStatement(settlementId, query = {}, actor = {}) {
+    const settlement = await knex("seller_settlements").where("id", settlementId).first();
+    if (!settlement) {
+      throw new AppError("Settlement not found", 404);
+    }
+    this.assertSettlementAccess(settlement, actor);
+
+    const [payout, commissions] = await Promise.all([
+      settlement.payout_id
+        ? knex("seller_payouts").where("id", settlement.payout_id).first()
+        : null,
+      settlement.payout_id
+        ? knex("seller_commissions").where("payout_id", settlement.payout_id).orderBy("created_at", "asc")
+        : knex("seller_commissions")
+          .where("seller_id", settlement.seller_id)
+          .whereBetween("created_at", [
+            settlement.period_start || "1970-01-01",
+            `${settlement.period_end || new Date().toISOString().slice(0, 10)} 23:59:59`,
+          ])
+          .orderBy("created_at", "asc"),
+    ]);
+
+    const document = this.buildSettlementDocument(settlement, payout, commissions);
+    return documentRendererService.render(document, {
+      format: query.format || "pdf",
+      fileBaseName: `settlement-${settlement.id}`,
+    });
+  }
+
+  assertSettlementAccess(settlement = {}, actor = {}) {
+    const adminRoles = ["admin", "sub-admin", "super-admin"];
+    if (actor.isSuperAdmin || adminRoles.includes(actor.role)) return;
+    const sellerId = actor.ownerSellerId || actor.userId || actor.sub;
+    if (sellerId && String(settlement.seller_id || "") === String(sellerId)) return;
+    throw new AppError("You are not allowed to download this settlement statement", 403);
+  }
+
+  buildSettlementDocument(settlement = {}, payout = null, commissions = []) {
+    const currency = settlement.currency || payout?.currency || "INR";
+    return {
+      title: "Seller Settlement Statement",
+      subtitle: `Settlement ${settlement.id}`,
+      fileBaseName: `settlement-${settlement.id}`,
+      generatedAt: new Date().toISOString(),
+      raw: { settlement, payout, commissions },
+      sections: [
+        {
+          title: "Settlement Summary",
+          rows: [
+            { label: "Settlement ID", value: settlement.id },
+            { label: "Seller ID", value: settlement.seller_id },
+            { label: "Payout ID", value: settlement.payout_id || "-" },
+            { label: "Status", value: settlement.status },
+            { label: "Period Start", value: settlement.period_start || "-" },
+            { label: "Period End", value: settlement.period_end || "-" },
+            { label: "Settlement Date", value: settlement.settlement_date || settlement.created_at },
+            { label: "Payment Reference", value: payout?.payment_reference || "-" },
+            { label: "Payment Method", value: payout?.payment_method || "-" },
+          ],
+        },
+        {
+          title: "Amounts",
+          rows: [
+            { label: "Gross Amount", value: this.renderMoney(settlement.gross_amount, currency) },
+            { label: "Commission Amount", value: this.renderMoney(settlement.commission_amount, currency) },
+            { label: "Commission Tax", value: this.renderMoney(settlement.tax_amount, currency) },
+            { label: "Refund Amount", value: this.renderMoney(settlement.refund_amount, currency) },
+            { label: "Adjustment Amount", value: this.renderMoney(settlement.adjustment_amount, currency) },
+            { label: "Net Payout Amount", value: this.renderMoney(settlement.net_amount, currency) },
+          ],
+        },
+        {
+          title: "Commission Lines",
+          rows: this.buildSettlementCommissionRows(commissions, currency),
+        },
+        {
+          title: "Notes",
+          rows: [
+            { label: "Statement Notes", value: settlement.notes || "-" },
+            { label: "Generated From", value: "seller_commissions, seller_payouts, seller_settlements" },
+          ],
+        },
+      ],
+    };
+  }
+
+  buildSettlementCommissionRows(commissions = [], currency = "INR") {
+    if (!commissions.length) {
+      return [{ label: "Commissions", value: "No commission lines available" }];
+    }
+    return [
+      ["Order", "Status", "Gross", "Commission", "Tax", "Refund", "Net"],
+      ...commissions.map((commission) => [
+        commission.order_id || "-",
+        commission.status || "-",
+        this.renderMoney(commission.amount, currency),
+        this.renderMoney(commission.commission_amount, currency),
+        this.renderMoney(commission.tax_amount, currency),
+        this.renderMoney(commission.refund_amount, currency),
+        this.renderMoney(commission.net_amount, currency),
+      ]),
+    ];
+  }
+
+  renderMoney(value, currency = "INR") {
+    return `${currency} ${Number(value || 0).toFixed(2)}`;
+  }
+
+  recoveryActionLabel(action) {
+    return {
+      offset_future_payout: "Offset against future payout",
+      collected_from_seller: "Collected from seller",
+      platform_write_off: "Platform write-off",
+    }[action] || "Negative balance recovery";
+  }
+
+  buildCommissionsExportDocument(commissions = [], summary = {}) {
+    return {
+      title: "Seller Commission Export",
+      subtitle: `${commissions.length} commission row(s)`,
+      generatedAt: new Date().toISOString(),
+      sections: [
+        {
+          title: "Summary",
+          rows: [
+            { label: "Gross Amount", value: this.renderMoney(summary.totalAmount) },
+            { label: "Commission Amount", value: this.renderMoney(summary.commissionAmount) },
+            { label: "Commission Tax", value: this.renderMoney(summary.taxAmount) },
+            { label: "Refund Amount", value: this.renderMoney(summary.refundAmount) },
+            { label: "Net Amount", value: this.renderMoney(summary.netAmount) },
+          ],
+        },
+        {
+          title: "Commissions",
+          rows: [
+            ["Commission ID", "Seller ID", "Order ID", "Status", "Payout ID", "Gross", "Commission", "Tax", "Refund", "Net", "Created At"],
+            ...commissions.map((commission) => [
+              commission.id,
+              commission.seller_id,
+              commission.order_id,
+              commission.status,
+              commission.payout_id || "-",
+              this.renderMoney(commission.amount, commission.currency),
+              this.renderMoney(commission.commission_amount, commission.currency),
+              this.renderMoney(commission.tax_amount, commission.currency),
+              this.renderMoney(commission.refund_amount, commission.currency),
+              this.renderMoney(commission.net_amount, commission.currency),
+              commission.created_at,
+            ]),
+          ],
+        },
+      ],
+    };
+  }
+
+  buildPayoutsExportDocument(payouts = [], summary = {}) {
+    return {
+      title: "Seller Payout Export",
+      subtitle: `${payouts.length} payout row(s)`,
+      generatedAt: new Date().toISOString(),
+      sections: [
+        {
+          title: "Summary",
+          rows: [
+            { label: "Gross Amount", value: this.renderMoney(summary.totalAmount) },
+            { label: "Commission Amount", value: this.renderMoney(summary.commissionAmount) },
+            { label: "Commission Tax", value: this.renderMoney(summary.taxAmount) },
+            { label: "Refund Amount", value: this.renderMoney(summary.refundAmount) },
+            { label: "Net Amount", value: this.renderMoney(summary.netAmount) },
+          ],
+        },
+        {
+          title: "Payouts",
+          rows: [
+            ["Payout ID", "Seller ID", "Status", "Period Start", "Period End", "Gross", "Commission", "Tax", "Refund", "Net", "Reference", "Processed At"],
+            ...payouts.map((payout) => [
+              payout.id,
+              payout.seller_id,
+              payout.status,
+              payout.period_start,
+              payout.period_end,
+              this.renderMoney(payout.total_amount, payout.currency),
+              this.renderMoney(payout.commission_amount, payout.currency),
+              this.renderMoney(payout.tax_amount, payout.currency),
+              this.renderMoney(payout.refund_amount, payout.currency),
+              this.renderMoney(payout.net_amount, payout.currency),
+              payout.payment_reference || "-",
+              payout.processed_at || "-",
+            ]),
+          ],
+        },
+      ],
+    };
+  }
+
+  buildSettlementsExportDocument(settlements = []) {
+    return {
+      title: "Seller Settlement Export",
+      subtitle: `${settlements.length} settlement row(s)`,
+      generatedAt: new Date().toISOString(),
+      sections: [
+        {
+          title: "Settlements",
+          rows: [
+            ["Settlement ID", "Seller ID", "Payout ID", "Status", "Period Start", "Period End", "Gross", "Commission", "Tax", "Refund", "Adjustment", "Net", "Settlement Date"],
+            ...settlements.map((settlement) => [
+              settlement.id,
+              settlement.seller_id,
+              settlement.payout_id || "-",
+              settlement.status,
+              settlement.period_start,
+              settlement.period_end,
+              this.renderMoney(settlement.gross_amount, settlement.currency),
+              this.renderMoney(settlement.commission_amount, settlement.currency),
+              this.renderMoney(settlement.tax_amount, settlement.currency),
+              this.renderMoney(settlement.refund_amount, settlement.currency),
+              this.renderMoney(settlement.adjustment_amount, settlement.currency),
+              this.renderMoney(settlement.net_amount, settlement.currency),
+              settlement.settlement_date || settlement.created_at,
+            ]),
+          ],
+        },
+      ],
+    };
   }
 
   async getFinanceSummary(query = {}) {

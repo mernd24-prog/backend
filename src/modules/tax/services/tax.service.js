@@ -7,6 +7,9 @@ const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { ROLES } = require("../../../shared/constants/roles");
 const { UserModel } = require("../../user/models/user.model");
+const { documentRendererService } = require("../../../shared/services/document-renderer.service");
+const { sendMail } = require("../../../infrastructure/mail/mailer");
+const { NotificationQueueModel } = require("../../notification/models/notification-preference.model");
 
 const INVOICE_TYPES = {
   ORDER_CUSTOMER: "order_customer",
@@ -287,12 +290,331 @@ class TaxService {
     return creditNote;
   }
 
+  async createMarketplaceCreditNotes(payload = {}, actor = {}) {
+    const orderId = payload.orderId;
+    const referenceType = payload.referenceType || "manual";
+    const referenceId = payload.referenceId || orderId;
+    if (!orderId || !referenceId) {
+      throw new AppError("orderId and referenceId are required for marketplace credit notes", 400);
+    }
+
+    const order = await this.orderRepository.findByIdWithItems(orderId);
+    if (!order) {
+      throw new AppError("Order not found for marketplace credit notes", 404);
+    }
+
+    const marketplaceInvoices = await this.ensureMarketplaceInvoicesForCreditNote(order, actor);
+    const orderCreditNote = payload.createOrderCreditNote === false
+      ? null
+      : await this.createCreditNote(payload, actor);
+    const refundGroups = this.groupRefundItemsBySeller(order.items || [], payload.items || [], {
+      refundAmount: payload.totalAmount,
+    });
+    const sellerCreditNotes = [];
+    const platformCommissionCreditNotes = [];
+
+    for (const group of refundGroups) {
+      const sellerInvoice = marketplaceInvoices.sellerInvoices.find((invoice) =>
+        String(invoice.seller_id || "") === String(group.sellerId),
+      );
+      if (!sellerInvoice) continue;
+
+      const sellerCreditNote = await this.createCreditNote({
+        orderId,
+        invoiceId: sellerInvoice.id,
+        referenceType: `${referenceType}_seller`,
+        referenceId: `${referenceId}:${group.sellerId}`,
+        taxableAmount: group.taxableAmount,
+        taxAmount: group.taxAmount,
+        cgstAmount: group.cgstAmount,
+        sgstAmount: group.sgstAmount,
+        igstAmount: group.igstAmount,
+        totalAmount: group.totalAmount,
+        reason: payload.reason || "seller_tax_reversal",
+        metadata: {
+          ...(payload.metadata || {}),
+          parentCreditNoteId: orderCreditNote?.id || null,
+          parentReferenceType: referenceType,
+          parentReferenceId: referenceId,
+          sellerId: group.sellerId,
+          creditNoteScope: "seller_customer_invoice",
+          items: group.items,
+        },
+      }, actor);
+      sellerCreditNotes.push(sellerCreditNote);
+
+      const commissionInvoice = marketplaceInvoices.platformCommissionInvoices.find((invoice) =>
+        String(invoice.seller_id || "") === String(group.sellerId),
+      );
+      const commissionAmounts = this.calculateCommissionReversalAmounts(commissionInvoice, sellerInvoice, group);
+      if (!commissionInvoice || commissionAmounts.totalAmount <= 0) continue;
+
+      const commissionCreditNote = await this.createCreditNote({
+        orderId,
+        invoiceId: commissionInvoice.id,
+        referenceType: `${referenceType}_commission`,
+        referenceId: `${referenceId}:${group.sellerId}`,
+        taxableAmount: commissionAmounts.taxableAmount,
+        taxAmount: commissionAmounts.taxAmount,
+        cgstAmount: commissionAmounts.cgstAmount,
+        sgstAmount: commissionAmounts.sgstAmount,
+        igstAmount: commissionAmounts.igstAmount,
+        totalAmount: commissionAmounts.totalAmount,
+        reason: payload.reason || "platform_commission_reversal",
+        metadata: {
+          ...(payload.metadata || {}),
+          parentCreditNoteId: orderCreditNote?.id || null,
+          sellerCreditNoteId: sellerCreditNote?.id || null,
+          parentReferenceType: referenceType,
+          parentReferenceId: referenceId,
+          sellerId: group.sellerId,
+          creditNoteScope: "platform_commission_invoice",
+          reversalRatio: commissionAmounts.reversalRatio,
+        },
+      }, actor);
+      platformCommissionCreditNotes.push(commissionCreditNote);
+    }
+
+    return {
+      id: orderCreditNote?.id || sellerCreditNotes[0]?.id || platformCommissionCreditNotes[0]?.id || null,
+      credit_note_number: orderCreditNote?.credit_note_number ||
+        sellerCreditNotes[0]?.credit_note_number ||
+        platformCommissionCreditNotes[0]?.credit_note_number ||
+        null,
+      orderCreditNote,
+      sellerCreditNotes,
+      platformCommissionCreditNotes,
+    };
+  }
+
   async listCreditNotes(query = {}) {
     return this.taxRepository.listCreditNotes({
       ...query,
       limit: Number(query.limit || 50),
       offset: Number(query.offset || 0),
     });
+  }
+
+  async getInvoiceDocument(invoiceId, query = {}, actor = {}) {
+    const invoice = await this.taxRepository.findInvoiceById(invoiceId);
+    if (!invoice) {
+      throw new AppError("Invoice not found", 404);
+    }
+    this.assertInvoiceDocumentAccess(invoice, actor);
+    return documentRendererService.render(this.buildInvoiceDocument(invoice), {
+      format: query.format || "pdf",
+      fileBaseName: invoice.invoice_number || `invoice-${invoice.id}`,
+    });
+  }
+
+  async getCreditNoteDocument(creditNoteId, query = {}, actor = {}) {
+    const creditNote = await this.taxRepository.findCreditNoteById(creditNoteId);
+    if (!creditNote) {
+      throw new AppError("Credit note not found", 404);
+    }
+    const invoice = creditNote.invoice_id
+      ? await this.taxRepository.findInvoiceById(creditNote.invoice_id)
+      : null;
+    if (invoice) {
+      this.assertInvoiceDocumentAccess(invoice, actor);
+    } else if (!this.isAdminActor(actor) && String(creditNote.buyer_id || "") !== String(actor.userId || "")) {
+      throw new AppError("You are not allowed to download this credit note", 403);
+    }
+    return documentRendererService.render(this.buildCreditNoteDocument(creditNote, invoice), {
+      format: query.format || "pdf",
+      fileBaseName: creditNote.credit_note_number || `credit-note-${creditNote.id}`,
+    });
+  }
+
+  async dispatchInvoiceDocument(invoiceId, payload = {}, actor = {}) {
+    const invoice = await this.taxRepository.findInvoiceById(invoiceId);
+    if (!invoice) throw new AppError("Invoice not found", 404);
+    if (!this.isAdminActor(actor)) {
+      throw new AppError("Only admins can dispatch tax documents", 403);
+    }
+    return this.dispatchTaxDocument({
+      documentType: "invoice",
+      documentId: invoice.id,
+      source: invoice,
+      document: this.buildInvoiceDocument(invoice),
+      payload,
+      actor,
+    });
+  }
+
+  async dispatchCreditNoteDocument(creditNoteId, payload = {}, actor = {}) {
+    const creditNote = await this.taxRepository.findCreditNoteById(creditNoteId);
+    if (!creditNote) throw new AppError("Credit note not found", 404);
+    if (!this.isAdminActor(actor)) {
+      throw new AppError("Only admins can dispatch tax documents", 403);
+    }
+    const invoice = creditNote.invoice_id
+      ? await this.taxRepository.findInvoiceById(creditNote.invoice_id)
+      : null;
+    return this.dispatchTaxDocument({
+      documentType: "credit_note",
+      documentId: creditNote.id,
+      source: creditNote,
+      invoice,
+      document: this.buildCreditNoteDocument(creditNote, invoice),
+      payload,
+      actor,
+    });
+  }
+
+  async dispatchTaxDocument({ documentType, documentId, source, invoice = null, document, payload = {}, actor = {} }) {
+    const channels = Array.isArray(payload.channels) && payload.channels.length
+      ? payload.channels
+      : ["email"];
+    const recipient = this.resolveDocumentRecipient(source, invoice, payload, actor);
+    const results = [];
+
+    for (const channel of channels) {
+      if (channel === "email") {
+        results.push(await this.queueAndSendTaxDocumentEmail({
+          documentType,
+          documentId,
+          source,
+          document,
+          recipient,
+          actor,
+          payload,
+        }));
+      } else if (channel === "whatsapp") {
+        results.push(await this.queueTaxDocumentWhatsapp({
+          documentType,
+          documentId,
+          source,
+          document,
+          recipient,
+          actor,
+          payload,
+        }));
+      }
+    }
+
+    return { documentType, documentId, recipient, results };
+  }
+
+  async queueAndSendTaxDocumentEmail({ documentType, documentId, source, document, recipient, actor, payload = {} }) {
+    if (!recipient.email) {
+      throw new AppError("Recipient email is required for email dispatch", 400);
+    }
+    const htmlDocument = documentRendererService.render(document, { format: "html" });
+    const textDocument = documentRendererService.render(document, { format: "text" });
+    const queueItem = await NotificationQueueModel.create({
+      userId: recipient.userId || source.buyer_id || source.seller_id || actor.userId || "tax-document-recipient",
+      type: "email",
+      channel: "tax_document_dispatch",
+      recipient: recipient.email,
+      subject: payload.subject || document.subtitle || document.title,
+      body: textDocument.body,
+      payload: {
+        documentType,
+        documentId,
+        orderId: source.order_id || null,
+        referenceId: source.reference_id || null,
+        requestedBy: actor.userId || null,
+      },
+      status: "queued",
+      scheduledFor: payload.scheduledFor || null,
+    });
+
+    return this.sendQueuedTaxDocument(queueItem, {
+      html: htmlDocument.body,
+      text: textDocument.body,
+    });
+  }
+
+  async queueTaxDocumentWhatsapp({ documentType, documentId, source, document, recipient, actor, payload = {} }) {
+    const queueItem = await NotificationQueueModel.create({
+      userId: recipient.userId || source.buyer_id || source.seller_id || actor.userId || "tax-document-recipient",
+      type: "whatsapp",
+      channel: "tax_document_dispatch",
+      recipient: payload.recipientPhone || recipient.phone || "",
+      subject: payload.subject || document.subtitle || document.title,
+      body: `${document.title}: ${document.subtitle}`,
+      payload: {
+        documentType,
+        documentId,
+        orderId: source.order_id || null,
+        referenceId: source.reference_id || null,
+        requestedBy: actor.userId || null,
+        provider: "not_configured",
+      },
+      status: "queued",
+      failureReason: "WhatsApp provider is not configured in this backend environment.",
+      scheduledFor: payload.scheduledFor || null,
+    });
+    return queueItem;
+  }
+
+  async retryTaxDocumentDispatch(dispatchId, actor = {}) {
+    if (!this.isAdminActor(actor)) {
+      throw new AppError("Only admins can retry tax document dispatch", 403);
+    }
+    const queueItem = await NotificationQueueModel.findById(dispatchId);
+    if (!queueItem) throw new AppError("Dispatch queue item not found", 404);
+    if (queueItem.channel !== "tax_document_dispatch") {
+      throw new AppError("Dispatch queue item is not a tax document dispatch", 400);
+    }
+    if (queueItem.type !== "email") {
+      queueItem.attempts = Number(queueItem.attempts || 0) + 1;
+      queueItem.lastAttemptAt = new Date();
+      queueItem.status = "queued";
+      queueItem.failureReason = `${queueItem.type || "channel"} provider is not configured`;
+      await queueItem.save();
+      return queueItem;
+    }
+    return this.sendQueuedTaxDocument(queueItem);
+  }
+
+  async listTaxDocumentDispatches(query = {}) {
+    const limit = Math.min(Math.max(Number(query.limit || 50), 1), 200);
+    const page = Math.max(Number(query.page || 1), 1);
+    const filter = { channel: "tax_document_dispatch" };
+    if (query.status) filter.status = query.status;
+    if (query.type) filter.type = query.type;
+    if (query.documentType) filter["payload.documentType"] = query.documentType;
+    if (query.documentId) filter["payload.documentId"] = query.documentId;
+    const [items, total] = await Promise.all([
+      NotificationQueueModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      NotificationQueueModel.countDocuments(filter),
+    ]);
+    return { items, total, page, limit };
+  }
+
+  async sendQueuedTaxDocument(queueItem, rendered = {}) {
+    try {
+      const result = await sendMail({
+        to: queueItem.recipient,
+        subject: queueItem.subject || "Tax document",
+        html: rendered.html || `<pre>${queueItem.body || ""}</pre>`,
+        text: rendered.text || queueItem.body || "",
+      });
+      queueItem.status = "sent";
+      queueItem.attempts = Number(queueItem.attempts || 0) + 1;
+      queueItem.lastAttemptAt = new Date();
+      queueItem.sentAt = new Date();
+      queueItem.failureReason = "";
+      queueItem.payload = {
+        ...(queueItem.payload || {}),
+        mailResult: {
+          messageId: result?.messageId || null,
+          response: result?.response || null,
+          mode: result?.mode || null,
+        },
+      };
+      await queueItem.save();
+      return queueItem;
+    } catch (error) {
+      queueItem.status = "failed";
+      queueItem.attempts = Number(queueItem.attempts || 0) + 1;
+      queueItem.lastAttemptAt = new Date();
+      queueItem.failureReason = error.message;
+      await queueItem.save();
+      throw error;
+    }
   }
 
   async getTaxReport(query) {
@@ -314,6 +636,42 @@ class TaxService {
       },
       entries: reportRows,
     };
+  }
+
+  async exportInvoices(query = {}) {
+    const result = await this.listInvoices({
+      ...query,
+      limit: Number(query.limit || 500),
+      offset: Number(query.offset || 0),
+    });
+    return documentRendererService.render(this.buildInvoicesExportDocument(result.list || [], result.summary), {
+      format: query.format || "csv",
+      fileBaseName: "tax-invoices-export",
+    });
+  }
+
+  async exportCreditNotes(query = {}) {
+    const result = await this.listCreditNotes({
+      ...query,
+      limit: Number(query.limit || 500),
+      offset: Number(query.offset || 0),
+    });
+    return documentRendererService.render(this.buildCreditNotesExportDocument(result.list || []), {
+      format: query.format || "csv",
+      fileBaseName: "tax-credit-notes-export",
+    });
+  }
+
+  async exportTaxReport(query = {}) {
+    const report = await this.getTaxReport({
+      ...query,
+      limit: Number(query.limit || 500),
+      offset: Number(query.offset || 0),
+    });
+    return documentRendererService.render(this.buildTaxReportExportDocument(report), {
+      format: query.format || "csv",
+      fileBaseName: "tax-ledger-report-export",
+    });
   }
 
   async findOrCreateSellerCustomerInvoice({
@@ -385,6 +743,56 @@ class TaxService {
       sellerId,
     });
     return invoice;
+  }
+
+  async ensureMarketplaceInvoicesForCreditNote(order, actor = {}) {
+    const existingInvoices = await this.taxRepository.findInvoicesByOrderId(order.id);
+    const existingSellerInvoices = existingInvoices.filter((invoice) =>
+      this.invoiceType(invoice) === INVOICE_TYPES.SELLER_CUSTOMER,
+    );
+    const existingCommissionInvoices = existingInvoices.filter((invoice) =>
+      this.invoiceType(invoice) === INVOICE_TYPES.PLATFORM_COMMISSION,
+    );
+    const sellerGroups = this.groupItemsBySeller(order.items || []);
+
+    if (
+      existingSellerInvoices.length >= sellerGroups.length &&
+      existingCommissionInvoices.length >= sellerGroups.length
+    ) {
+      return {
+        sellerInvoices: existingSellerInvoices,
+        platformCommissionInvoices: existingCommissionInvoices,
+      };
+    }
+
+    const orderInvoice = await this.createInvoice(order.id, actor);
+    const sellerProfiles = await this.loadSellerProfiles(sellerGroups.map((group) => group.sellerId));
+    const sellerInvoices = [];
+    const platformCommissionInvoices = [];
+
+    for (const group of sellerGroups) {
+      const sellerProfile = sellerProfiles.get(String(group.sellerId)) || null;
+      const sellerInvoice = await this.findOrCreateSellerCustomerInvoice({
+        order,
+        sellerId: group.sellerId,
+        items: group.items,
+        sellerProfile,
+        actor,
+        parentInvoiceId: orderInvoice?.id || null,
+      });
+      const commissionInvoice = await this.findOrCreatePlatformCommissionInvoice({
+        order,
+        sellerId: group.sellerId,
+        items: group.items,
+        sellerProfile,
+        actor,
+        parentInvoiceId: sellerInvoice?.id || orderInvoice?.id || null,
+      });
+      sellerInvoices.push(sellerInvoice);
+      platformCommissionInvoices.push(commissionInvoice);
+    }
+
+    return { sellerInvoices, platformCommissionInvoices };
   }
 
   async findOrCreatePlatformCommissionInvoice({
@@ -525,6 +933,173 @@ class TaxService {
       grouped.set(sellerId, current);
     }
     return [...grouped.entries()].map(([sellerId, groupItems]) => ({ sellerId, items: groupItems }));
+  }
+
+  groupRefundItemsBySeller(orderItems = [], refundItems = [], options = {}) {
+    const orderItemMap = new Map();
+    for (const item of orderItems) {
+      orderItemMap.set(String(item.id), item);
+      orderItemMap.set(`${item.product_id}:${item.variant_sku || item.variant_id || ""}`, item);
+      orderItemMap.set(`${item.product_id}:`, item);
+    }
+
+    const grouped = new Map();
+    for (const item of refundItems) {
+      const orderItem = this.findOrderItemForRefund(orderItemMap, item);
+      const sellerId = String(item.sellerId || item.seller_id || orderItem?.seller_id || "");
+      if (!sellerId) continue;
+
+      const normalized = this.normalizeRefundItem(item, orderItem);
+      const current = grouped.get(sellerId) || {
+        sellerId,
+        taxableAmount: 0,
+        taxAmount: 0,
+        cgstAmount: 0,
+        sgstAmount: 0,
+        igstAmount: 0,
+        totalAmount: 0,
+        items: [],
+      };
+      current.taxableAmount += normalized.taxableAmount;
+      current.taxAmount += normalized.taxAmount;
+      current.cgstAmount += normalized.cgstAmount;
+      current.sgstAmount += normalized.sgstAmount;
+      current.igstAmount += normalized.igstAmount;
+      current.totalAmount += normalized.totalAmount;
+      current.items.push(normalized);
+      grouped.set(sellerId, current);
+    }
+
+    const groups = [...grouped.values()];
+    const rawTotal = groups.reduce((sum, group) => sum + group.totalAmount, 0);
+    const requestedTotal = Number(options.refundAmount || 0);
+    const scale = requestedTotal > 0 && rawTotal > 0 && requestedTotal < rawTotal
+      ? requestedTotal / rawTotal
+      : 1;
+
+    return groups.map((group) => ({
+      ...group,
+      taxableAmount: this.money(group.taxableAmount * scale),
+      taxAmount: this.money(group.taxAmount * scale),
+      cgstAmount: this.money(group.cgstAmount * scale),
+      sgstAmount: this.money(group.sgstAmount * scale),
+      igstAmount: this.money(group.igstAmount * scale),
+      totalAmount: this.money(group.totalAmount * scale),
+      items: group.items.map((item) => ({
+        ...item,
+        taxableAmount: this.money(item.taxableAmount * scale),
+        taxAmount: this.money(item.taxAmount * scale),
+        cgstAmount: this.money(item.cgstAmount * scale),
+        sgstAmount: this.money(item.sgstAmount * scale),
+        igstAmount: this.money(item.igstAmount * scale),
+        totalAmount: this.money(item.totalAmount * scale),
+      })),
+    }));
+  }
+
+  findOrderItemForRefund(orderItemMap, item = {}) {
+    if (item.orderItemId || item.order_item_id || item.id) {
+      const direct = orderItemMap.get(String(item.orderItemId || item.order_item_id || item.id));
+      if (direct) return direct;
+    }
+    return orderItemMap.get(`${item.productId || item.product_id || ""}:${item.variantSku || item.variant_sku || item.variantId || item.variant_id || ""}`) ||
+      orderItemMap.get(`${item.productId || item.product_id || ""}:`) ||
+      null;
+  }
+
+  normalizeRefundItem(item = {}, orderItem = null) {
+    const quantity = Number(
+      item.quantity ||
+      item.approvedQuantity ||
+      item.requestedQuantity ||
+      item.receivedQuantity ||
+      0,
+    );
+    const orderedQuantity = Math.max(Number(orderItem?.quantity || item.orderedQuantity || quantity || 1), 1);
+    const ratio = quantity > 0 ? Math.min(quantity / orderedQuantity, 1) : 1;
+    const orderTaxBreakup = this.normalizeJson(orderItem?.tax_breakup, {});
+    const itemTaxBreakup = this.normalizeJson(item.taxBreakup || item.tax_breakup, {});
+    const taxBreakup = Object.keys(itemTaxBreakup).length ? itemTaxBreakup : orderTaxBreakup;
+
+    const grossAmount = this.money(
+      item.itemAmount ??
+      item.lineTotal ??
+      item.line_total ??
+      Number(orderItem?.line_total || 0) * ratio,
+    );
+    const discountAmount = this.money(
+      item.discountAmount ??
+      item.discount_amount ??
+      Number(orderItem?.discount_amount || 0) * ratio,
+    );
+    const taxableAmount = this.money(
+      item.taxableAmount ??
+      taxBreakup.taxableAmount ??
+      Math.max(grossAmount - discountAmount, 0),
+    );
+    const cgstAmount = this.money(item.cgstAmount ?? taxBreakup.cgstAmount ?? 0);
+    const sgstAmount = this.money(item.sgstAmount ?? taxBreakup.sgstAmount ?? 0);
+    const igstAmount = this.money(item.igstAmount ?? taxBreakup.igstAmount ?? 0);
+    const taxAmount = this.money(
+      item.taxAmount ??
+      item.tax_amount ??
+      taxBreakup.taxAmount ??
+      cgstAmount + sgstAmount + igstAmount,
+    );
+    const totalAmount = this.money(
+      item.refundAmount ??
+      item.eligibleRefundAmount ??
+      item.totalAmount ??
+      taxableAmount + taxAmount,
+    );
+
+    return {
+      orderItemId: item.orderItemId || item.order_item_id || orderItem?.id || null,
+      productId: item.productId || item.product_id || orderItem?.product_id || null,
+      productTitle: item.productTitle || item.product_title || orderItem?.product_title || null,
+      sellerId: item.sellerId || item.seller_id || orderItem?.seller_id || null,
+      quantity,
+      taxableAmount,
+      taxAmount,
+      cgstAmount,
+      sgstAmount,
+      igstAmount,
+      totalAmount,
+    };
+  }
+
+  calculateCommissionReversalAmounts(commissionInvoice, sellerInvoice, refundGroup) {
+    if (!commissionInvoice || !sellerInvoice) {
+      return {
+        taxableAmount: 0,
+        taxAmount: 0,
+        cgstAmount: 0,
+        sgstAmount: 0,
+        igstAmount: 0,
+        totalAmount: 0,
+        reversalRatio: 0,
+      };
+    }
+
+    const sellerInvoiceTotal = Number(sellerInvoice.total_amount || 0);
+    const reversalRatio = sellerInvoiceTotal > 0
+      ? Math.min(Number(refundGroup.totalAmount || 0) / sellerInvoiceTotal, 1)
+      : 0;
+    const taxableAmount = this.money(Number(commissionInvoice.taxable_amount || 0) * reversalRatio);
+    const taxAmount = this.money(Number(commissionInvoice.tax_amount || 0) * reversalRatio);
+    const cgstAmount = this.money(Number(commissionInvoice.cgst_amount || 0) * reversalRatio);
+    const sgstAmount = this.money(Number(commissionInvoice.sgst_amount || 0) * reversalRatio);
+    const igstAmount = this.money(Number(commissionInvoice.igst_amount || 0) * reversalRatio);
+
+    return {
+      taxableAmount,
+      taxAmount,
+      cgstAmount,
+      sgstAmount,
+      igstAmount,
+      totalAmount: this.money(taxableAmount + taxAmount),
+      reversalRatio: this.money(reversalRatio),
+    };
   }
 
   async loadSellerProfiles(sellerIds = []) {
@@ -740,6 +1315,263 @@ class TaxService {
 
   invoiceType(invoice = {}) {
     return invoice.invoice_type || INVOICE_TYPES.ORDER_CUSTOMER;
+  }
+
+  assertInvoiceDocumentAccess(invoice = {}, actor = {}) {
+    if (this.isAdminActor(actor)) return;
+
+    const invoiceType = this.invoiceType(invoice);
+    const sellerId = this.getActorSellerId(actor);
+    if (sellerId && invoice.seller_id && String(invoice.seller_id) === String(sellerId)) {
+      return;
+    }
+
+    if (
+      actor.userId &&
+      String(invoice.buyer_id || "") === String(actor.userId) &&
+      invoiceType !== INVOICE_TYPES.PLATFORM_COMMISSION
+    ) {
+      return;
+    }
+
+    throw new AppError("You are not allowed to download this tax document", 403);
+  }
+
+  buildInvoiceDocument(invoice = {}) {
+    const metadata = this.normalizeJson(invoice.metadata, {});
+    const amounts = metadata.amounts || {};
+    const items = metadata.items || metadata.lineItems || [];
+    const currency = invoice.currency || "INR";
+
+    return {
+      title: this.getInvoiceDocumentTitle(invoice),
+      subtitle: `Invoice ${invoice.invoice_number || invoice.id}`,
+      fileBaseName: invoice.invoice_number || `invoice-${invoice.id}`,
+      generatedAt: new Date().toISOString(),
+      raw: { invoice },
+      sections: [
+        {
+          title: "Document Summary",
+          rows: [
+            { label: "Invoice Number", value: invoice.invoice_number },
+            { label: "Invoice Type", value: this.invoiceType(invoice) },
+            { label: "Order ID", value: invoice.order_id },
+            { label: "Reference", value: [invoice.reference_type, invoice.reference_id].filter(Boolean).join(" / ") },
+            { label: "Issued At", value: invoice.issued_at || invoice.created_at },
+            { label: "Currency", value: currency },
+          ],
+        },
+        {
+          title: "Parties",
+          rows: [
+            { label: "Issuer", value: invoice.issuer_type || "-" },
+            { label: "Recipient", value: invoice.recipient_type || "-" },
+            { label: "Buyer ID", value: invoice.buyer_id || "-" },
+            { label: "Seller ID", value: invoice.seller_id || "-" },
+            { label: "Marketplace GSTIN", value: invoice.gstin_marketplace || "-" },
+            { label: "Seller GSTIN", value: invoice.gstin_seller || "-" },
+            { label: "Place Of Supply", value: invoice.place_of_supply || "-" },
+          ],
+        },
+        {
+          title: "Amounts",
+          rows: [
+            { label: "Gross Sales", value: this.renderMoney(amounts.grossSalesAmount, currency) },
+            { label: "Discount", value: this.renderMoney(amounts.discountAmount, currency) },
+            { label: "Taxable Amount", value: this.renderMoney(invoice.taxable_amount, currency) },
+            { label: "CGST", value: this.renderMoney(invoice.cgst_amount, currency) },
+            { label: "SGST", value: this.renderMoney(invoice.sgst_amount, currency) },
+            { label: "IGST", value: this.renderMoney(invoice.igst_amount, currency) },
+            { label: "TCS", value: this.renderMoney(invoice.tcs_amount, currency) },
+            { label: "Tax Amount", value: this.renderMoney(invoice.tax_amount, currency) },
+            { label: "Delivery Charge", value: this.renderMoney(amounts.deliveryChargeAmount, currency) },
+            { label: "Total Amount", value: this.renderMoney(invoice.total_amount, currency) },
+          ],
+        },
+        {
+          title: "Line Items",
+          rows: this.buildDocumentItemRows(items, currency),
+        },
+      ],
+    };
+  }
+
+  buildCreditNoteDocument(creditNote = {}, invoice = null) {
+    const metadata = this.normalizeJson(creditNote.metadata, {});
+    const currency = creditNote.currency || invoice?.currency || "INR";
+
+    return {
+      title: "Marketplace Credit Note",
+      subtitle: `Credit Note ${creditNote.credit_note_number || creditNote.id}`,
+      fileBaseName: creditNote.credit_note_number || `credit-note-${creditNote.id}`,
+      generatedAt: new Date().toISOString(),
+      raw: { creditNote, invoice },
+      sections: [
+        {
+          title: "Document Summary",
+          rows: [
+            { label: "Credit Note Number", value: creditNote.credit_note_number },
+            { label: "Invoice Number", value: invoice?.invoice_number || creditNote.invoice_id || "-" },
+            { label: "Order ID", value: creditNote.order_id },
+            { label: "Reference", value: [creditNote.reference_type, creditNote.reference_id].filter(Boolean).join(" / ") },
+            { label: "Reason", value: creditNote.reason || "-" },
+            { label: "Issued At", value: creditNote.issued_at || creditNote.created_at },
+            { label: "Scope", value: metadata.creditNoteScope || "-" },
+            { label: "Seller ID", value: metadata.sellerId || invoice?.seller_id || "-" },
+          ],
+        },
+        {
+          title: "Reversal Amounts",
+          rows: [
+            { label: "Taxable Amount", value: this.renderMoney(creditNote.taxable_amount, currency) },
+            { label: "CGST", value: this.renderMoney(creditNote.cgst_amount, currency) },
+            { label: "SGST", value: this.renderMoney(creditNote.sgst_amount, currency) },
+            { label: "IGST", value: this.renderMoney(creditNote.igst_amount, currency) },
+            { label: "Tax Amount", value: this.renderMoney(creditNote.tax_amount, currency) },
+            { label: "Total Amount", value: this.renderMoney(creditNote.total_amount, currency) },
+          ],
+        },
+        {
+          title: "Reversed Items",
+          rows: this.buildDocumentItemRows(metadata.items || [], currency),
+        },
+      ],
+    };
+  }
+
+  buildInvoicesExportDocument(invoices = []) {
+    return {
+      title: "Tax Invoice Export",
+      subtitle: `${invoices.length} invoice row(s)`,
+      generatedAt: new Date().toISOString(),
+      sections: [
+        {
+          title: "Invoices",
+          rows: [
+            ["Invoice Number", "Type", "Order ID", "Seller ID", "Buyer ID", "Taxable", "Tax", "Total", "Issued At"],
+            ...invoices.map((invoice) => [
+              invoice.invoice_number,
+              this.invoiceType(invoice),
+              invoice.order_id,
+              invoice.seller_id || "-",
+              invoice.buyer_id || "-",
+              this.renderMoney(invoice.taxable_amount, invoice.currency),
+              this.renderMoney(invoice.tax_amount, invoice.currency),
+              this.renderMoney(invoice.total_amount, invoice.currency),
+              invoice.issued_at || invoice.created_at,
+            ]),
+          ],
+        },
+      ],
+    };
+  }
+
+  buildCreditNotesExportDocument(creditNotes = []) {
+    return {
+      title: "Tax Credit Note Export",
+      subtitle: `${creditNotes.length} credit-note row(s)`,
+      generatedAt: new Date().toISOString(),
+      sections: [
+        {
+          title: "Credit Notes",
+          rows: [
+            ["Credit Note Number", "Invoice ID", "Order ID", "Reference", "Taxable", "Tax", "Total", "Reason", "Issued At"],
+            ...creditNotes.map((creditNote) => [
+              creditNote.credit_note_number,
+              creditNote.invoice_id || "-",
+              creditNote.order_id,
+              [creditNote.reference_type, creditNote.reference_id].filter(Boolean).join(" / "),
+              this.renderMoney(creditNote.taxable_amount, creditNote.currency),
+              this.renderMoney(creditNote.tax_amount, creditNote.currency),
+              this.renderMoney(creditNote.total_amount, creditNote.currency),
+              creditNote.reason || "-",
+              creditNote.issued_at || creditNote.created_at,
+            ]),
+          ],
+        },
+      ],
+    };
+  }
+
+  buildTaxReportExportDocument(report = {}) {
+    return {
+      title: "Tax Ledger Report Export",
+      subtitle: `${report.window?.fromDate || "-"} to ${report.window?.toDate || "-"}`,
+      generatedAt: new Date().toISOString(),
+      sections: [
+        {
+          title: "Tax Ledger",
+          rows: [
+            ["Component", "Entry Type", "Entry Count", "Total Amount"],
+            ...(report.entries || []).map((entry) => [
+              entry.tax_component,
+              entry.entry_type,
+              entry.entry_count,
+              this.renderMoney(entry.total_amount, "INR"),
+            ]),
+          ],
+        },
+      ],
+    };
+  }
+
+  resolveDocumentRecipient(source = {}, invoice = null, payload = {}, actor = {}) {
+    const sourceMetadata = this.normalizeJson(source.metadata, {});
+    const invoiceMetadata = this.normalizeJson(invoice?.metadata, {});
+    const metadata = { ...invoiceMetadata, ...sourceMetadata };
+    const seller = metadata.seller || {};
+    const buyer = metadata.buyer || {};
+    const recipientType = invoice?.recipient_type || source.recipient_type || null;
+    const sellerRecipient = recipientType === "seller" || metadata.creditNoteScope === "platform_commission_invoice";
+    const email = payload.recipientEmail ||
+      (sellerRecipient ? seller.email : buyer.email) ||
+      buyer.email ||
+      seller.email ||
+      actor.email ||
+      null;
+    const phone = payload.recipientPhone ||
+      (sellerRecipient ? seller.phone : buyer.phone) ||
+      buyer.phone ||
+      seller.phone ||
+      null;
+
+    return {
+      userId: sellerRecipient
+        ? source.seller_id || metadata.sellerId || invoice?.seller_id || null
+        : source.buyer_id || invoice?.buyer_id || null,
+      email,
+      phone,
+      recipientType: sellerRecipient ? "seller" : "buyer",
+    };
+  }
+
+  getInvoiceDocumentTitle(invoice = {}) {
+    const type = this.invoiceType(invoice);
+    if (type === INVOICE_TYPES.SELLER_CUSTOMER) return "Seller Customer Tax Invoice";
+    if (type === INVOICE_TYPES.PLATFORM_COMMISSION) return "Platform Commission Tax Invoice";
+    return "Order Tax Invoice";
+  }
+
+  buildDocumentItemRows(items = [], currency = "INR") {
+    if (!items.length) {
+      return [{ label: "Items", value: "No line items available" }];
+    }
+
+    return [
+      ["Title", "HSN", "Qty", "Taxable", "Tax", "Total"],
+      ...items.map((item) => [
+        item.productTitle || item.description || item.product_title || "-",
+        item.hsnCode || item.hsn_code || "-",
+        item.quantity ?? "-",
+        this.renderMoney(item.taxableAmount ?? item.taxable_amount, currency),
+        this.renderMoney(item.taxAmount ?? item.tax_amount, currency),
+        this.renderMoney(item.totalAmount ?? item.total_amount ?? item.lineTotal ?? item.line_total, currency),
+      ]),
+    ];
+  }
+
+  renderMoney(value, currency = "INR") {
+    return `${currency} ${Number(value || 0).toFixed(2)}`;
   }
 
   isAdminActor(actor = {}) {

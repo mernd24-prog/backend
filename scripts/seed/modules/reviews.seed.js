@@ -85,10 +85,10 @@ class ReviewsSeed {
 
     // Load products and customers
     const products = await conn.collection('products')
-      .find({ status: 'ACTIVE' }, { projection: { _id: 1, sellerId: 1, rating: 1, reviewCount: 1 } })
+      .find({ status: 'active' }, { projection: { _id: 1, sellerId: 1, rating: 1, reviewCount: 1 } })
       .limit(10000).toArray();
     const customers = await conn.collection('users')
-      .find({ role: 'BUYER' }, { projection: { _id: 1 } })
+      .find({ role: 'buyer' }, { projection: { _id: 1 } })
       .limit(5000).toArray();
 
     if (!products.length || !customers.length) {

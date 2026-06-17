@@ -435,15 +435,19 @@ class CancellationService {
     if (!invoice) return null;
     const itemSubtotal = (cancellation.items || []).reduce((sum, item) => sum + Number(item.itemAmount || 0) - Number(item.discountAmount || 0), 0);
     const taxAmount = (cancellation.items || []).reduce((sum, item) => sum + Number(item.taxAmount || 0), 0);
-    return this.taxService.createCreditNote({
+    return this.taxService.createMarketplaceCreditNotes({
       orderId: cancellation.order_id,
       referenceType: "cancellation",
       referenceId: cancellation.id,
+      items: cancellation.items || [],
       taxableAmount: this.round(itemSubtotal),
       taxAmount: this.round(taxAmount),
       totalAmount: Number(cancellation.refund_amount || 0),
       reason: cancellation.reason,
-      metadata: { cancellationNumber: cancellation.cancellation_number },
+      metadata: {
+        cancellationNumber: cancellation.cancellation_number,
+        cancellationScope: cancellation.scope,
+      },
     }, actor);
   }
 

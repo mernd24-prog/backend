@@ -27,7 +27,7 @@ class InventorySeed {
 
     // Load products and warehouses
     const products = await conn.collection('products')
-      .find({ status: 'ACTIVE' }, { projection: { _id: 1, sellerId: 1, sku: 1, stock: 1 } })
+      .find({ status: 'active' }, { projection: { _id: 1, sellerId: 1, sku: 1, stock: 1 } })
       .limit(5000)
       .toArray();
 

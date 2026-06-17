@@ -54,7 +54,7 @@ class VariantsSeed {
 
     // Load variable products
     const variableProducts = await conn.collection('products')
-      .find({ hasVariants: true, status: { $in: ['ACTIVE','SUBMITTED'] } }, {
+      .find({ hasVariants: true, status: { $in: ['active','pending_approval'] } }, {
         projection: { _id: 1, sellerId: 1, category: 1, salePrice: 1, mrp: 1, sku: 1, hsnCode: 1 }
       })
       .limit(3000)

@@ -59,10 +59,10 @@ class OrdersSeed {
     const mongoose = require('mongoose');
     const conn = mongoose.connection;
     const productDocs = await conn.collection('products')
-      .find({ status: 'ACTIVE' }, { projection: { _id: 1, sellerId: 1, salePrice: 1, gstRate: 1, hsnCode: 1, title: 1, sku: 1 } })
+      .find({ status: 'active' }, { projection: { _id: 1, sellerId: 1, salePrice: 1, price: 1, gstRate: 1, hsnCode: 1, title: 1, sku: 1 } })
       .limit(5000).toArray();
     const customerDocs = await conn.collection('users')
-      .find({ role: 'BUYER' }, { projection: { _id: 1 } })
+      .find({ role: 'buyer' }, { projection: { _id: 1 } })
       .limit(5000).toArray();
 
     if (!productDocs.length || !customerDocs.length) {
@@ -103,7 +103,7 @@ class OrdersSeed {
         for (let k = 0; k < itemCount; k++) {
           const product = rand(productDocs);
           const qty = randNum(1, 3);
-          const unitPrice = product.salePrice;
+          const unitPrice = product.salePrice || product.price || 0;
           const taxRate = product.gstRate || 18;
           const taxAmt = parseFloat((unitPrice * qty * taxRate / (100 + taxRate)).toFixed(2));
           const lineTotal = parseFloat((unitPrice * qty).toFixed(2));

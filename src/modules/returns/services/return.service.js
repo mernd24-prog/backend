@@ -9,6 +9,7 @@ const { InventoryService } = require("../../inventory/services/inventory.service
 const { TaxService } = require("../../tax/services/tax.service");
 const { CommissionService } = require("../../seller/services/commission.service");
 const { DeliveryRepository } = require("../../delivery/repositories/delivery.repository");
+const { UserModel } = require("../../user/models/user.model");
 const { shippingProviderRegistry } = require("../../../infrastructure/shipping/provider-registry");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
@@ -159,7 +160,7 @@ class ReturnServiceClass {
     return new Date(delivered?.created_at || delivered?.createdAt || order.updated_at || order.created_at || Date.now());
   }
 
-  resolveReturnPolicy(order, orderItems) {
+  async resolveReturnPolicy(order, orderItems) {
     const orderMetadata = this.parseJson(order.metadata, {});
     const policies = orderItems.map((item) => {
       const snapshot = this.parseJson(item.product_snapshot, {});
@@ -168,8 +169,12 @@ class ReturnServiceClass {
     if (policies.some((policy) => policy.returnable === false || policy.eligible === false)) {
       throw new AppError("One or more selected items are not returnable", 409);
     }
+    const sellerPolicies = await this.loadSellerReturnPolicies(
+      orderItems.map((item) => item.seller_id).filter(Boolean),
+    );
     const configuredWindows = policies
-      .map((policy) => Number(policy.returnWindowDays || policy.windowDays || 0))
+      .map((policy) => Number(policy.returnWindowDays || policy.windowDays || policy.days || 0))
+      .concat(sellerPolicies.map((policy) => Number(policy.returnWindowDays || 0)))
       .filter((days) => days > 0);
     const returnWindowDays = configuredWindows.length
       ? Math.min(...configuredWindows)
@@ -187,8 +192,24 @@ class ReturnServiceClass {
       eligibleUntil,
       shippingPaidBy: policies.find((policy) => policy.shippingPaidBy)?.shippingPaidBy || "platform_policy",
       requiresQc: !policies.some((policy) => policy.requiresQc === false),
-      source: configuredWindows.length ? "product_snapshot" : "order_default",
+      source: configuredWindows.length ? "product_or_seller_policy" : "order_default",
+      sellerPolicyWindows: sellerPolicies,
     };
+  }
+
+  async loadSellerReturnPolicies(sellerIds = []) {
+    const uniqueIds = Array.from(new Set(sellerIds.map((sellerId) => String(sellerId || "")).filter(Boolean)));
+    const objectIds = uniqueIds.filter((sellerId) => UserModel.db.base.Types.ObjectId.isValid(sellerId));
+    if (!objectIds.length) return [];
+
+    const sellers = await UserModel.find({ _id: { $in: objectIds } })
+      .select("sellerSettings.returnWindowDays sellerSettings.shippingModes")
+      .lean();
+    return sellers.map((seller) => ({
+      sellerId: String(seller._id),
+      returnWindowDays: Number(seller.sellerSettings?.returnWindowDays || 0),
+      source: "seller_settings",
+    }));
   }
 
   findOrderItem(orderItems, requestedItem) {
@@ -217,7 +238,7 @@ class ReturnServiceClass {
       if (!orderItem) throw new AppError(`Product ${item.productId} is not part of this order`, 400);
       return orderItem;
     });
-    const policySnapshot = this.resolveReturnPolicy(order, matchedOrderItems);
+    const policySnapshot = await this.resolveReturnPolicy(order, matchedOrderItems);
     const existingReturns = await ReturnModel.find({ orderId, status: { $ne: "rejected" } }).lean();
 
     const normalizedItems = items.map((item, index) => {
@@ -1138,10 +1159,11 @@ class ReturnServiceClass {
   async createCreditNote(returnRequest, refundAmount, actor) {
     const originalRefundAmount = Number(returnRequest.refundBreakup?.totalRefundAmount || refundAmount || 1);
     const ratio = Math.min(Number(refundAmount || 0) / Math.max(originalRefundAmount, 1), 1);
-    return this.taxService.createCreditNote({
+    return this.taxService.createMarketplaceCreditNotes({
       orderId: returnRequest.orderId,
       referenceType: "return",
       referenceId: String(returnRequest._id),
+      items: returnRequest.items || [],
       taxableAmount: this.round(Number(returnRequest.refundBreakup?.itemSubtotal || refundAmount) * ratio),
       taxAmount: this.round(Number(returnRequest.refundBreakup?.taxReversal || 0) * ratio),
       totalAmount: refundAmount,

@@ -36,10 +36,10 @@ class RecommendationsSeed {
     await conn.collection('recommendations').deleteMany({});
 
     const customers = await conn.collection('users')
-      .find({ role: 'BUYER' }, { projection: { _id: 1 } })
+      .find({ role: 'buyer' }, { projection: { _id: 1 } })
       .limit(5000).toArray();
     const products = await conn.collection('products')
-      .find({ status: 'ACTIVE' }, { projection: { _id: 1, category: 1, rating: 1 } })
+      .find({ status: 'active' }, { projection: { _id: 1, category: 1, rating: 1 } })
       .limit(5000).toArray();
 
     if (!customers.length || !products.length) {

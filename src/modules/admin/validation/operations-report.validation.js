@@ -1,0 +1,41 @@
+const Joi = require("joi");
+
+const reportExportSchema = Joi.object({
+  body: Joi.object({}).default({}),
+  params: Joi.object({}).required(),
+  query: Joi.object({
+    format: Joi.string().valid("csv", "pdf", "html", "text", "json").default("csv"),
+    view: Joi.string().valid("snapshot", "transactions"),
+    limit: Joi.number().integer().min(1).max(5000).default(1000),
+    offset: Joi.number().integer().min(0).default(0),
+    fromDate: Joi.date(),
+    toDate: Joi.date(),
+    dateFrom: Joi.date(),
+    dateTo: Joi.date(),
+    createdFrom: Joi.date(),
+    createdTo: Joi.date(),
+    sellerId: Joi.string().allow("", null),
+    buyerId: Joi.string().allow("", null),
+    orderId: Joi.string().allow("", null),
+    productId: Joi.string().allow("", null),
+    returnId: Joi.string().allow("", null),
+    deliveryAgentId: Joi.string().allow("", null),
+    status: Joi.string().allow("", null),
+    paymentStatus: Joi.string().allow("", null),
+    deliveryStatus: Joi.string().allow("", null),
+    refundStatus: Joi.string().allow("", null),
+    stockStatus: Joi.string().valid("available", "low_stock", "out_of_stock").allow("", null),
+    shipmentType: Joi.string().allow("", null),
+    direction: Joi.string().allow("", null),
+    category: Joi.string().allow("", null),
+    brand: Joi.string().allow("", null),
+    type: Joi.string().allow("", null),
+    scope: Joi.string().allow("", null),
+    reason: Joi.string().allow("", null),
+    variantSku: Joi.string().allow("", null),
+    active: Joi.boolean(),
+    search: Joi.string().allow("", null),
+  }).required(),
+});
+
+module.exports = { reportExportSchema };

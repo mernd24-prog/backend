@@ -258,6 +258,14 @@ class TaxRepository {
     return rows[0] || null;
   }
 
+  async findCreditNoteById(creditNoteId) {
+    const { rows } = await postgresPool.query(
+      "SELECT * FROM tax_credit_notes WHERE id = $1 LIMIT 1",
+      [creditNoteId],
+    );
+    return rows[0] || null;
+  }
+
   async createCreditNote(payload) {
     const id = uuidv4();
     const { rows } = await postgresPool.query(

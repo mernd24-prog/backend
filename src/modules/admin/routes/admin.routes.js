@@ -30,6 +30,9 @@ const {
   adminCartRoutes,
 } = require("../../cart/routes/cart.routes");
 const {
+  adminReportRoutes,
+} = require("./operations-report.routes");
+const {
   commonManagementRoutes,
 } = require("./common-management.routes");
 const {
@@ -302,6 +305,7 @@ adminRoutes.use("/common", commonManagementRoutes);
 adminRoutes.use("/inventory", adminInventoryRoutes);
 adminRoutes.use("/shipping", adminShippingRoutes);
 adminRoutes.use("/carts", adminCartRoutes);
+adminRoutes.use("/reports", adminReportRoutes);
 
 adminRoutes.get(
   "/access/modules",

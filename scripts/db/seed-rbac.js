@@ -191,13 +191,7 @@ async function upsertModule(module, transaction) {
     `SELECT id FROM modules
      WHERE slug = :slug
         OR module_key = :moduleKey
-        OR (
-          name = :name
-          AND (
-            (:source = 'sidebar-seed' AND metadata->>'source' = 'sidebar-seed')
-            OR (:source != 'sidebar-seed' AND COALESCE(metadata->>'source', '') != 'sidebar-seed')
-          )
-        )
+        OR name = :name
      ORDER BY CASE
        WHEN slug = :slug OR module_key = :moduleKey THEN 0
        ELSE 1
