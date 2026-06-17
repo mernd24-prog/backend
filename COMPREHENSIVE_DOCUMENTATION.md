@@ -1,381 +1,225 @@
-# Ecommerce Backend Documentation
+# Ecommerce Backend API And Admin Integration Guide
 
-This is the single maintained backend document for the current codebase. Older scattered Markdown notes were removed to avoid stale setup, API, and RBAC instructions.
+This is the single maintained backend handoff document for Admin integration. It is based on the current backend code under `src/api/register-routes.js`, `src/modules/*/routes`, `src/shared/routes`, middleware, validation schemas, and package scripts.
 
-## Overview
+Last verified from code: 2026-06-17.
 
-The backend is a CommonJS Node.js modular monolith for a marketplace ecommerce platform. It exposes REST APIs under `API_PREFIX` and uses:
+## 1. Base Contract
 
-- Express for HTTP routing.
-- MongoDB/Mongoose for user, product, catalog-like document, CMS, marketing, recommendation, referral, loyalty, and notification data.
-- PostgreSQL via Sequelize, Knex, and `pg` for orders, payments, wallets, RBAC, tax ledgers, marketplace operations, subscriptions, logistics, and advanced operational tables.
-- Redis where available for caching and async infrastructure.
-- Socket.IO for realtime events.
-- JWT authentication with role and RBAC-aware access middleware.
-
-Default base URL:
+Default local API host:
 
 ```txt
 http://localhost:4000/api/v1
 ```
 
-Health routes:
+Production Admin should read the host from environment, then append `/api/v1` if the configured value does not already include it.
+
+Health endpoints are outside the API prefix:
 
 ```txt
 GET /
 GET /health
 ```
 
-## Runtime
+All normal API endpoints below are shown relative to `/api/v1`.
 
-Required engine:
+## 2. What This Backend Is
 
-```txt
-Node.js >= 20
-```
+This backend is a CommonJS Node.js modular monolith for a marketplace ecommerce system. It is structured so modules can later be extracted into services, but today Admin should integrate it as one REST API.
 
-Main scripts:
+Main runtime:
 
-```bash
-npm run dev
-npm start
-npm run check
-npm run db:migrate
-npm run db:migrate:undo
-npm run db:seed:commerce
-npm run db:seed:commerce:append
-npm run db:seed:rbac
-npm run db:repair:rbac-role-assignments
-npm run db:create-super-admin
-npm run postman:sync
-```
+- Express HTTP API.
+- MongoDB/Mongoose for users, products, catalog documents, CMS, notification-like documents, marketing, recommendations, loyalty, referral, fraud, and delivery documents.
+- PostgreSQL through Sequelize, Knex, and `pg` for orders, order items, payments, wallets, RBAC, tax, logistics, seller finance, subscriptions, and other operational tables.
+- Redis where enabled for OTP/session-like infrastructure, queues, cache, and workers.
+- Socket.IO for realtime events.
+- JWT authentication with RBAC-aware middleware.
+- Joi validation for most request bodies, params, and query strings.
 
-`db:seed:commerce` runs the new commerce fixture seed with reset enabled. It refreshes product, order, and marketing fixtures only.
-
-`db:seed:commerce:append` adds another set of demo orders while upserting users/products and preserving existing commerce data.
-
-`db:seed:rbac` is the only role/permission seed. It creates RBAC modules, permissions, system roles, default role permissions, sidebar modules, and permission templates.
-
-`db:repair:rbac-role-assignments` is not a seed. Use it after importing or seeding users to backfill missing `user_roles` rows from Mongo `users.role` values and refresh affected sessions.
-
-## Environment
-
-Important environment variables:
-
-```txt
-NODE_ENV=development
-PORT=4000
-APP_NAME=ecommerce
-API_PREFIX=/api/v1
-MONGO_URI=mongodb://localhost:27017/ecommerce
-POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/ecommerce
-REDIS_URL=redis://localhost:6379
-JWT_ACCESS_SECRET=access-secret
-JWT_REFRESH_SECRET=refresh-secret
-JWT_ACCESS_TTL=15m
-JWT_REFRESH_TTL=7d
-BUSINESS_STATE=KARNATAKA
-GSTIN_MARKETPLACE=
-MAX_WALLET_USAGE_PER_ORDER_PERCENT=30
-EMAIL_HOST=localhost
-EMAIL_PORT=1025
-STATIC_OTP=123456
-CLOUDINARY_CLOUD_NAME=
-CLOUDINARY_API_KEY=
-CLOUDINARY_API_SECRET=
-JSON_BODY_LIMIT=50mb
-ENABLE_CRON=true
-PRODUCTION=false
-```
-
-## Application Boot
-
-Entrypoint:
+Key files:
 
 ```txt
 src/server.js
-```
-
-App factory:
-
-```txt
 src/app/create-app.js
-```
-
-Boot sequence:
-
-1. Connect MongoDB.
-2. Connect PostgreSQL through `pg` and Knex.
-3. Register global middleware: logging, helmet, CORS, JSON/urlencoded parsing, uploads, audit log, metrics.
-4. Register API routes.
-5. Register workers, cron jobs, realtime subscribers, and domain event handlers.
-6. Attach 404 and error middleware.
-7. Attach Socket.IO and start HTTP server.
-
-## Data Stores
-
-MongoDB is used for:
-
-- Users and seller profiles.
-- Products and product review-like document data.
-- Platform catalog documents such as categories, brands, options, variants, dimensions, finishes, batches, warranties, content pages.
-- Coupons and dynamic pricing documents.
-- CMS/static pages.
-- Recommendation, loyalty, referral, notification, fraud, delivery documents.
-
-PostgreSQL is used for:
-
-- Orders, order items, payments, wallets, wallet transactions, outbox events.
-- Seller KYC, user KYC, seller documents.
-- Marketplace operations such as platform fee config, penalties, cancellation reasons, returns, shipments, NDR, e-way bills.
-- Subscription plans/orders and platform fees.
-- RBAC modules, permissions, roles, assignments, audit logs, templates.
-- Tax invoices, ledgers, filings.
-
-## Core Relationships
-
-Product relationship:
-
-```txt
-users._id -> products.sellerId
-users._id -> products.createdBy
-products._id -> products.relatedProducts[]
-products._id -> products.crossSellProducts[]
-products._id -> products.upSellProducts[]
-```
-
-Order relationship:
-
-```txt
-users._id -> orders.buyer_id
-orders.id -> order_items.order_id
-products._id -> order_items.product_id
-products.variants._id -> order_items.variant_id
-products.variants.sku -> order_items.variant_sku
-products.sellerId -> order_items.seller_id
-orders.id -> payments.order_id
-users._id -> payments.buyer_id
-```
-
-Marketing relationship:
-
-```txt
-users._id -> coupons.sellerId
-users._id -> coupons.createdBy
-products._id -> dynamic_pricings.productId
-users._id -> recommendations.userId
-products._id -> recommendations.recommendedProducts[].productId
-users._id -> loyalties.userId
-orders.id -> loyalties.pointsHistory[].transactionId
-users._id -> influencer_profiles.userId
-influencer_profiles._id -> referral_codes.influencerId
-orders.id -> referral_orders.orderId
-referral_orders._id -> referral_commission_ledgers.referralOrderId
-```
-
-RBAC relationship:
-
-```txt
-modules.id -> permissions.module_id
-roles.id -> role_permissions.role_id
-permissions.id -> role_permissions.permission_id
-users._id -> user_roles.user_id
-roles.id -> user_roles.role_id
-users._id -> user_permissions.user_id
-permissions.id -> user_permissions.permission_id
-```
-
-## New Commerce Seed Script
-
-The replacement seed script is:
-
-```txt
-scripts/db/seed-commerce-demo.js
-```
-
-Run full commerce refresh:
-
-```bash
-npm run db:migrate
-npm run db:seed:commerce
-```
-
-Append another demo order set without resetting:
-
-```bash
-npm run db:seed:commerce:append
-```
-
-The reset mode deletes and rebuilds only:
-
-- Mongo products.
-- Mongo coupons.
-- Mongo dynamic pricing.
-- Mongo recommendation data.
-- Mongo loyalty data.
-- Mongo referral/influencer marketing data.
-- Seed-tagged promotion content pages.
-- PostgreSQL payments.
-- PostgreSQL order items.
-- PostgreSQL orders.
-- Seeded PostgreSQL platform fee rows for `default`, `electronics`, and `apparel`.
-
-The reset mode deliberately does not touch:
-
-- RBAC modules, permissions, roles, user-role assignments, or user-permission assignments.
-- Tax management tables or ledgers.
-- Location/geography/country/state/city/zip code data.
-- Migrations.
-- Super admin setup.
-
-Demo users:
-
-```txt
-demo.techseller@example.com
-demo.styleseller@example.com
-demo.buyer@example.com
-demo.influencer@example.com
-```
-
-Default seed password:
-
-```txt
-Password@123
-```
-
-Override password:
-
-```bash
-SEED_PASSWORD='YourPassword@123' npm run db:seed:commerce
-```
-
-Seeded product management data:
-
-- Seller-linked active products.
-- Variant and simple products.
-- SKU, barcode, pricing, inventory, images, moderation status, analytics.
-- Product relationships: related, cross-sell, upsell.
-
-Seeded order management data:
-
-- Orders with buyer IDs.
-- Order items linked to product IDs, seller IDs, and variant IDs/SKUs.
-- Payments linked to orders and buyers.
-- Multiple statuses: confirmed, pending payment, delivered.
-
-Seeded marketing data:
-
-- Platform and seller-scoped coupons.
-- Dynamic pricing rules.
-- Recommendation and trending records.
-- Loyalty points and tier history.
-- Influencer profile, referral code, referral order, commission ledger, wallet, commission rule.
-- Promotion banner content pages tagged by `metadata.seedTag`.
-
-## Scripts Kept
-
-Only backend-necessary scripts remain:
-
-```txt
-scripts/db/run-sequelize-migrations.js
-scripts/db/rollback-sequelize-migration.js
-scripts/db/create-super-admin.js
-scripts/db/seed-rbac.js
-scripts/db/repair-rbac-role-assignments.js
-scripts/db/seed-commerce-demo.js
-scripts/postman/sync-postman-collection.js
-```
-
-Old dev/catalog/CMS/location/reset seeders were removed because the new seed flow is scoped and should not reset RBAC, tax, or location data.
-
-## API Route Registry
-
-Routes are registered in:
-
-```txt
 src/api/register-routes.js
+src/config/env.js
+src/shared/http/reply.js
+src/shared/middleware/authenticate.js
+src/shared/middleware/access.js
+src/shared/middleware/check-input.js
+src/shared/middleware/error-handler.js
 ```
 
-Mounted route prefixes:
+## 3. Admin Integration Quick Start
+
+Admin app should do this:
+
+1. Login using `POST /auth/login`.
+2. Store `data.tokens.accessToken` and `data.tokens.refreshToken`.
+3. Send `Authorization: Bearer <accessToken>` on protected requests.
+4. On `401` with token/session codes, call `POST /auth/refresh` with the refresh token and retry once.
+5. Fetch `GET /auth/status` after login/refresh to hydrate user, seller onboarding, modules, and permission state.
+6. Use `data.user.permissions`, `data.user.effectivePermissions`, `data.user.allowedModules`, `data.user.sidebarModules`, or the RBAC/sidebar endpoints to drive route guards and buttons.
+7. For lists, pass `page/limit` or `limit/offset` depending on the endpoint. Most Admin operational endpoints use `limit/offset`; product/catalog endpoints use `page/limit`.
+8. Read validation errors from `error.fields` or `error.details.fields` when present.
+
+Headers:
 
 ```txt
-/auth
-/global
-/users
-/products
-/carts
-/orders
-/payments
-/platform
-/cms
-/sellers
-/notifications
-/analytics
-/pricing
-/coupons
-/wallets
-/admin
-/tax
-/subscriptions
-/rbac
-/warranty
-/loyalty
-/recommendations
-/returns
-/fraud
-/dynamic-pricing
-/sellers/commissions
-/delivery
-/file-uploader
-/meta
+Content-Type: application/json
+Authorization: Bearer <accessToken>
 ```
 
-All prefixes are mounted under `API_PREFIX`, which defaults to `/api/v1`.
+Multipart upload headers should be generated by the browser/client automatically.
 
-## Authentication
+## 4. Response Shape
 
-Auth routes are under:
+Most controllers use `okResponse` and `failResponse`.
+
+Success:
+
+```json
+{
+  "success": true,
+  "message": "Optional message",
+  "data": {},
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 100,
+    "totalPages": 5
+  },
+  "meta": {}
+}
+```
+
+Error:
+
+```json
+{
+  "success": false,
+  "message": "Validation failed",
+  "code": "VALIDATION_ERROR",
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Validation failed",
+    "details": {
+      "fields": [
+        {
+          "field": "email",
+          "message": "email must be a valid email"
+        }
+      ]
+    }
+  }
+}
+```
+
+Important notes:
+
+- Some older modules still return direct payloads, especially loyalty and recommendation routes. Treat `success === true` as the preferred shape, but handle plain JSON defensively for legacy routes.
+- Joi validation runs with `allowUnknown: false` and `stripUnknown: true`. If Admin sends fields not declared by the validation schema, they can be rejected or removed.
+- Pagination may be returned as `pagination`, `meta.pagination`, or `meta` with `total/page/limit`.
+
+## 5. Auth And Session Contract
+
+Roles:
 
 ```txt
-/api/v1/auth
+super-admin
+admin
+sub-admin
+seller
+seller-admin
+seller-sub-admin
+buyer
 ```
 
-The auth module supports login/session behavior through JWT access/refresh secrets. Authenticated requests use:
+Login:
+
+```http
+POST /auth/login
+```
+
+Body:
+
+```json
+{
+  "email": "admin@example.com",
+  "password": "Password@123"
+}
+```
+
+Expected response data includes the authenticated user plus tokens. The sanitized user can include:
 
 ```txt
-Authorization: Bearer <access_token>
+allowedModules
+assignedModules
+assignedPermissions
+permissions
+permissionsByAction
+sidebarModules
+effectivePermissions
+role
+roles
+accountStatus
+ownerAdminId
+ownerSellerId
 ```
 
-The middleware enriches `req.auth` with:
+Refresh:
 
-- `userId`
-- `role`
-- `roles`
-- `isSuperAdmin`
-- `allowedModules`
-- `permissions`
-- owner IDs for admin/seller hierarchy where relevant
+```http
+POST /auth/refresh
+```
 
-## RBAC Rules
+Body:
 
-Canonical actions:
+```json
+{
+  "refreshToken": "<refresh token>"
+}
+```
+
+Auth status:
+
+```http
+GET /auth/status
+Authorization: Bearer <access token or seller onboarding token>
+```
+
+Seller onboarding uses a special onboarding token returned when a seller account exists but is not ready for go-live. That token is accepted by seller onboarding routes and `/auth/status`.
+
+OTP modes:
+
+- `STATIC_OTP` or `DEV_OTP` defaults to `123456`.
+- Live OTP depends on live email mode.
+- In non-production, `EXPOSE_STATIC_OTP` can expose the static OTP behavior.
+
+## 6. RBAC And Permissions
+
+RBAC is central to Admin integration. Do not rely only on role names. The current access flow uses role, allowed modules, effective permission slugs, and request-path inference.
+
+Canonical permission actions:
 
 ```txt
 view
 create
 update
 delete
-status_change
 approve
 reject
 assign
 export
 import
+status_change
 restore
 bulk_action
+adjust
 ```
 
-Old aliases normalize as:
+Action aliases normalized by the backend:
 
 ```txt
 add -> create
@@ -385,19 +229,20 @@ approval -> approve
 action -> status_change
 review -> approve
 manage -> status_change
+activate/deactivate/enable/disable/archive -> status_change
+recover -> restore
+bulk/bulk-action/bulk action/bulkaction -> bulk_action
+adjustment/stock-adjustment/stock_adjustment -> adjust
 ```
 
-Effective permission rules:
+Rules Admin must mirror:
 
-- `module:view` allows sidebar visibility, route access, list/detail views, and GET APIs.
-- `module:create` allows Add/POST actions and implicitly adds view.
-- `module:update` allows Edit/PATCH/PUT actions and implicitly adds view.
-- `module:delete` allows Delete actions and implicitly adds view.
-- `module:status_change` allows status toggles and implicitly adds view.
-- `module:approve` and `module:reject` allow moderation actions and implicitly add view.
-- `module:export` and `module:import` allow import/export controls and implicitly add view.
-- `module:assign` allows role/permission/module assignment and implicitly adds view.
-- Denied permissions override grants after alias normalization.
+- `module:view` is needed for lists/details/sidebar visibility.
+- `create/update/delete/status_change/approve/reject/export/import/assign/adjust` implicitly require and include view when permissions are seeded/synced.
+- Deny permissions override grants.
+- Super admin bypasses normal permission checks.
+- Owner seller can bypass seller-scoped permission checks for some seller routes.
+- Admin/sub-admin/seller role users are checked against both assigned modules and permissions.
 
 Request action inference:
 
@@ -406,374 +251,185 @@ GET -> view
 POST -> create
 PUT/PATCH -> update
 DELETE -> delete
-/status -> status_change
-/approve -> approve
+/approve or /approval -> approve
 /reject -> reject
-/export -> export
+/restore or /recover -> restore
+/status, /archive, /activate, /deactivate -> status_change
+/inventory writes -> adjust
+/bulk writes -> bulk_action
 /import -> import
-/users/:id/permissions -> assign for writes
-/roles/:id/permissions -> assign for writes
-/users/:id/roles -> assign for writes
-/bulk -> bulk_action for writes
+/export -> export
+/roles/:id/permissions writes -> assign
+/users/:id/permissions writes -> assign
+/users/:id/roles writes -> assign
 ```
 
 Important RBAC files:
 
 ```txt
-src/shared/middleware/access.js
-src/shared/auth/rbac-permissions.js
+src/shared/auth/module-catalog.js
 src/shared/auth/module-access.js
-src/modules/rbac/routes/rbac.routes.js
-src/modules/rbac/services/rbac.service.js
-src/modules/rbac/repositories/rbac.repository.js
+src/shared/auth/rbac-permissions.js
+src/shared/middleware/access.js
+src/modules/rbac
+scripts/db/seed-rbac.js
+scripts/db/repair-rbac-role-assignments.js
 ```
 
-## Product Management
+Admin sidebar/module source:
 
-Primary route prefix:
-
-```txt
-/api/v1/products
+```http
+GET /rbac/modules/sidebar
+GET /admin/access/modules
+GET /sellers/me/access/modules
+GET /meta/routes
 ```
 
-Important routes:
+Common module slugs used by Admin:
 
 ```txt
-GET    /products
-GET    /products/search
-GET    /products/:productId
-GET    /products/seller/me
-POST   /products
-PATCH  /products/:productId
-DELETE /products/:productId
-PATCH  /products/:productId/review
-POST   /products/bulk/update
-PATCH  /products/:productId/inventory
-GET    /products/inventory/stats
-GET    /products/analytics/top
-```
-
-Product model highlights:
-
-- Seller ownership through `sellerId`.
-- Product type: simple, variable, digital, bundle, subscription.
-- Visibility: public, private, hidden, scheduled.
-- Category, brand, family, tags, badges.
-- Price, MRP, sale price, GST, HSN.
-- SKU/barcode/color.
-- Variant axes, variants, product options.
-- Stock/reserved stock and inventory settings.
-- Shipping, warranty, SEO, analytics.
-- Related/cross-sell/upsell product IDs.
-- Moderation fields and approval status.
-
-## Order Management
-
-Primary route prefix:
-
-```txt
-/api/v1/orders
-```
-
-Important routes:
-
-```txt
-POST  /orders
-GET   /orders/my
-GET   /orders/seller
-GET   /orders/:orderId
-POST  /orders/:orderId/cancel
-PATCH /orders/:orderId/status
-```
-
-Order service flow:
-
-1. Price order items.
-2. Apply coupon and wallet usage.
-3. Calculate tax and platform fees.
-4. Reserve inventory.
-5. Hold wallet amount.
-6. Create order, order items, and outbox event.
-7. Finalize coupon usage.
-8. Capture wallet and commit inventory for zero-payable orders.
-9. Publish order status events.
-
-Order data lives in PostgreSQL:
-
-```txt
+admin
+admin_users
+rbac
+users
+sellers
+seller_kyc
+seller_bank
+products
+platform
+categories
+brands
+option_masters
+option_values
+inventory
 orders
-order_items
+cancellations
+returns
 payments
 wallets
-wallet_transactions
-outbox_events
+carts
+subscriptions
+sellers/commissions
+coupons
+pricing
+dynamic-pricing
+referral
+loyalty
+recommendations
+banners
+deals
+notifications
+tax
+delivery
+analytics
+reports
+countries
+states
+cities
+zip_codes
+cms_pages
+fraud
+api-keys
+feature-flags
+webhooks
+system-health
+queue-management
+dead-letter-queue
 ```
 
-## Marketing
+## 7. Validation Source Map
 
-Pricing/coupon routes:
+Field-level request contracts live in validation files. When Admin needs exact body/query params, use these files as the source of truth:
 
 ```txt
-/api/v1/pricing
-/api/v1/coupons
+src/modules/auth/validation/auth.validation.js
+src/modules/user/validation/user.validation.js
+src/modules/seller/validation/seller.validation.js
+src/modules/product/validation/product.validation.js
+src/modules/platform/validation/platform.validation.js
+src/modules/order/validation/order.validation.js
+src/modules/payment/validation/payment.validation.js
+src/modules/cancellation/validation/cancellation.validation.js
+src/modules/delivery/validation/delivery.validation.js
+src/modules/delivery/validation/shipping-admin.validation.js
+src/modules/inventory/validation/warehouse.validation.js
+src/modules/admin/validation/admin.validation.js
+src/modules/admin/validation/common-management.validation.js
+src/modules/admin/validation/operations-report.validation.js
+src/modules/cms/validation/cms.validation.js
+src/modules/pricing/validation/pricing.validation.js
+src/modules/rbac/validation/rbac.validation.js
+src/modules/tax/validation/tax.validation.js
+src/modules/warranty/validation/warranty.validation.js
+src/modules/subscription/validation/subscription.validation.js
+src/modules/deal/validation/deal.validation.js
+src/modules/referral/validation/referral-admin.validation.js
 ```
 
-Dynamic pricing routes:
+## 8. Runtime And Setup Commands
+
+Required Node:
 
 ```txt
-/api/v1/dynamic-pricing
+Node.js >= 20
 ```
 
-Referral admin routes are nested under:
-
-```txt
-/api/v1/admin/referral
-```
-
-Loyalty routes:
-
-```txt
-/api/v1/loyalty
-```
-
-Recommendation routes:
-
-```txt
-/api/v1/recommendations
-```
-
-Marketing models:
-
-```txt
-CouponModel
-DynamicPricingModel
-RecommendationModel
-LoyaltyModel
-ReferralModel
-InfluencerProfileModel
-ReferralCodeModel
-ReferralOrderModel
-ReferralCommissionLedgerModel
-InfluencerWalletModel
-InfluencerPayoutRequestModel
-ReferralCommissionRuleModel
-ReferralFraudReviewModel
-ContentPageModel for promotion banners
-```
-
-## Admin And Seller Management
-
-Admin route prefix:
-
-```txt
-/api/v1/admin
-```
-
-Admin areas include:
-
-- Dashboard/overview.
-- Admin and sub-admin management.
-- Seller/vendor management.
-- Seller KYC, bank, onboarding, go-live.
-- Product moderation and catalog operations.
-- Order, payment, payout, returns, chargeback views.
-- Platform catalog management.
-- CMS content pages.
-- Tax and reports.
-- Feature flags, API keys, webhooks, queue status.
-- Access modules and RBAC-adjacent management.
-
-Seller route prefix:
-
-```txt
-/api/v1/sellers
-```
-
-Seller areas include:
-
-- Seller registration/profile/status.
-- KYC and document upload.
-- Seller dashboard.
-- Seller sub-admin management.
-- Seller tracking.
-- Seller commissions through `/api/v1/sellers/commissions`.
-
-Seller product relation:
-
-```txt
-product.sellerId = seller user _id
-```
-
-Seller order relation:
-
-```txt
-order_items.seller_id = seller user _id
-```
-
-## Platform Catalog
-
-Platform route prefix:
-
-```txt
-/api/v1/platform
-```
-
-Admin catalog routes also expose many platform resources under:
-
-```txt
-/api/v1/admin/platform
-```
-
-Platform resources include:
-
-- Categories and category attributes.
-- Product families.
-- Product variants.
-- Product reviews.
-- Brands.
-- Warranty templates.
-- Finishes.
-- Dimensions.
-- Batches.
-- Product options.
-- Product option values.
-- Content pages.
-- HSN codes.
-- Geography.
-
-The new commerce seed intentionally does not reset platform catalog, HSN, tax, or geography/location data.
-
-## CMS
-
-CMS route prefix:
-
-```txt
-/api/v1/cms
-```
-
-CMS content page data is stored in Mongo. The commerce seed only writes seed-tagged promotion banner content pages and only deletes those seed-tagged pages during reset.
-
-## Inventory
-
-Inventory is represented in both product stock fields and supporting inventory modules.
-
-Important concepts:
-
-- `products.stock`
-- `products.reservedStock`
-- variant stock/reserved stock
-- inventory reservations
-- warehouses
-- admin inventory routes
-
-Order creation reserves stock before writing the order.
-
-## Payments And Wallets
-
-Payment route prefix:
-
-```txt
-/api/v1/payments
-```
-
-Wallet route prefix:
-
-```txt
-/api/v1/wallets
-```
-
-Payment and wallet data are stored in PostgreSQL. Orders reference payment records through `payments.order_id`.
-
-## Tax Management
-
-Tax route prefix:
-
-```txt
-/api/v1/tax
-```
-
-Tax tables include invoices, ledgers, GST filings, and HSN-aware tax behavior. The commerce seed does not reset tax data.
-
-## Location Management
-
-Location/common management route prefixes:
-
-```txt
-/api/v1/global
-/api/v1/admin/common
-```
-
-Location data includes countries, states, cities, and zip codes. The commerce seed does not reset location data.
-
-## Subscriptions And Fees
-
-Subscription route prefix:
-
-```txt
-/api/v1/subscriptions
-```
-
-Platform fee config is used by pricing. The commerce seed refreshes only three demo fee categories:
-
-```txt
-default
-electronics
-apparel
-```
-
-## Notifications
-
-Notification route prefix:
-
-```txt
-/api/v1/notifications
-```
-
-Notification preferences are also mounted under the same prefix.
-
-## Delivery And Logistics
-
-Delivery route prefix:
-
-```txt
-/api/v1/delivery
-```
-
-Admin shipping routes are mounted through admin routes. Logistics tables cover shipments, NDR, e-way bills, pickup addresses, shipping packages, and related operational data.
-
-## Returns, Fraud, Analytics
-
-Route prefixes:
-
-```txt
-/api/v1/returns
-/api/v1/fraud
-/api/v1/analytics
-```
-
-These modules support post-order operations, risk workflows, and dashboards.
-
-## Postman
-
-Postman assets:
-
-```txt
-postman_collection.json
-postman_environment.json
-scripts/postman/sync-postman-collection.js
-```
-
-Run:
+Common commands:
 
 ```bash
+npm install
+npm run check
+npm run dev
+npm start
+npm run db:migrate
+npm run db:migrate:undo
+npm run db:seed:rbac
+npm run db:repair:rbac-role-assignments
+npm run db:create-super-admin
 npm run postman:sync
 ```
 
-The commerce seed did not introduce or remove API endpoints, so the Postman collection does not require a route update for this change.
+Seed commands currently available:
 
-## Suggested Local Setup
+```bash
+npm run db:setup
+npm run db:seed:commerce
+npm run db:seed:commerce:append
+npm run db:seed:commerce:qa
+npm run seed:all
+npm run seed:all:append
+npm run seed:catalog
+npm run seed:locations
+npm run seed:categories
+npm run seed:brands
+npm run seed:sellers
+npm run seed:warehouses
+npm run seed:products
+npm run seed:customers
+npm run seed:orders
+npm run seed:reviews
+npm run seed:inventory
+npm run seed:gst
+npm run seed:attributes
+npm run seed:options
+npm run seed:countries
+npm run seed:hsn
+npm run seed:tax-classes
+npm run seed:families
+npm run seed:commissions
+npm run seed:platform-fees
+npm run seed:badges
+npm run seed:tags
+npm run seed:collections
+npm run seed:variants
+npm run seed:recommendations
+npm run seed:analytics
+npm run seed:search
+npm run seed:notifications
+npm run seed:warranty-templates
+```
 
-Fresh local setup:
+Suggested fresh local setup:
 
 ```bash
 npm install
@@ -785,58 +441,1372 @@ npm run db:repair:rbac-role-assignments
 npm run dev
 ```
 
-Commerce-only refresh after migrations already exist:
+`db:seed:rbac` creates/updates modules, permissions, roles, sidebar modules, role defaults, and permission templates.
+
+`db:repair:rbac-role-assignments` backfills `user_roles` rows from Mongo `users.role` and refreshes affected sessions. Use it after importing/seeding users when effective permissions look empty.
+
+`seed:all` runs `scripts/seed/master-seed.js all --reset` and then repairs RBAC role assignments. Treat it as a broad reset seed. Use scoped seed commands when you need to preserve data.
+
+## 9. Important Environment Variables
+
+Defaults are defined in `src/config/env.js`.
+
+```txt
+NODE_ENV=development
+PRODUCTION=false
+PORT=4000
+APP_NAME=ecommerce
+API_PREFIX=/api/v1
+PUBLIC_API_BASE_URL=
+CORS_ORIGIN=*
+SOCKET_CORS_ORIGIN=
+MONGO_URI=mongodb://localhost:27017/ecommerce
+POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/ecommerce
+REDIS_URL=redis://localhost:6379
+ELASTICSEARCH_NODE=http://localhost:9200
+ENABLE_ELASTICSEARCH=false
+JWT_ACCESS_SECRET=access-secret
+JWT_REFRESH_SECRET=refresh-secret
+JWT_ACCESS_TTL=7d
+JWT_REFRESH_TTL=7d
+RAZORPAY_KEY_ID=
+RAZORPAY_KEY_SECRET=
+RAZORPAY_WEBHOOK_SECRET=
+ENABLE_LIVE_RAZORPAY=false
+ENABLE_RAZORPAY_MOCK=true
+RAZORPAY_MOCK_AUTO_CAPTURE=true
+DELIVERY_WEBHOOK_SECRET=
+REQUIRE_DELIVERY_WEBHOOK_SIGNATURE=false
+BUSINESS_STATE=KARNATAKA
+GSTIN_MARKETPLACE=
+MAX_WALLET_USAGE_PER_ORDER_PERCENT=30
+EMAIL_HOST=localhost
+EMAIL_PORT=1025
+EMAIL_FROM=no-reply@example.com
+ENABLE_LIVE_EMAIL=false
+ENABLE_EMAIL_MOCK=true
+STATIC_OTP=123456
+EXPOSE_STATIC_OTP=true
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=
+ENABLE_CLOUDINARY=false
+ENABLE_LOCAL_UPLOAD_STORAGE=true
+JSON_BODY_LIMIT=50mb
+MAX_DOCUMENT_UPLOAD_BYTES=524288000
+ENABLE_CRON=true
+```
+
+Provider fallback behavior:
+
+- Razorpay can run in `live`, `mock`, or `disabled`.
+- Email can run in `live`, `mock`, or `disabled`.
+- Upload storage can run in `cloudinary`, `local`, or `disabled`.
+- Elasticsearch can run live or fall back to Mongo search.
+- Social auth can run in `live`, `static`, or `disabled`.
+
+## 10. Data Store And Relationship Map
+
+MongoDB usually owns:
+
+- Users and seller profile data.
+- Products, product revisions, product reviews.
+- Platform catalog documents: categories, brands, variants, product options, dimensions, finishes, batches, families, content pages, HSN-like catalog data.
+- CMS/static pages and promotion banners.
+- Coupons and dynamic pricing records.
+- Notification, recommendation, loyalty, referral, fraud, delivery-related documents.
+
+PostgreSQL usually owns:
+
+- Orders and order items.
+- Payments.
+- Wallets and wallet transactions.
+- Seller KYC/user KYC operational records.
+- RBAC modules, permissions, roles, assignments, templates, audit logs.
+- Tax invoices, credit notes, document dispatch records, tax reporting.
+- Subscriptions, platform fees, seller finance, logistics tables, outbox events.
+
+Core relationships:
+
+```txt
+users._id -> products.sellerId
+users._id -> products.createdBy
+products._id -> order_items.product_id
+products.variants._id -> order_items.variant_id
+products.variants.sku -> order_items.variant_sku
+products.sellerId -> order_items.seller_id
+users._id -> orders.buyer_id
+orders.id -> order_items.order_id
+orders.id -> payments.order_id
+users._id -> payments.buyer_id
+users._id -> user_roles.user_id
+roles.id -> user_roles.role_id
+modules.id -> permissions.module_id
+roles.id -> role_permissions.role_id
+permissions.id -> role_permissions.permission_id
+users._id -> user_permissions.user_id
+permissions.id -> user_permissions.permission_id
+```
+
+## 11. Core Status Values
+
+Product status:
+
+```txt
+draft
+pending_approval
+active
+change_pending
+inactive
+rejected
+archived
+scheduled
+```
+
+Product type:
+
+```txt
+simple
+variable
+digital
+bundle
+subscription
+```
+
+Product visibility:
+
+```txt
+public
+private
+hidden
+scheduled
+```
+
+Order status:
+
+```txt
+pending_payment
+payment_failed
+confirmed
+packed
+shipped
+delivered
+return_requested
+returned
+cancelled
+fulfilled
+```
+
+Payment provider:
+
+```txt
+razorpay
+stripe
+cod
+manual_bank_transfer
+manual_upi
+wallet_only
+```
+
+Payment status:
+
+```txt
+initiated
+authorized
+captured
+failed
+refunded
+cancelled
+```
+
+KYC status:
+
+```txt
+draft
+submitted
+under_review
+verified
+rejected
+```
+
+## 12. Important Payload Examples
+
+### Create Product
+
+```http
+POST /products
+Authorization: Bearer <seller/admin token>
+```
+
+Minimum body:
+
+```json
+{
+  "title": "Demo Product",
+  "description": "Long enough product description",
+  "price": 999,
+  "mrp": 1299,
+  "category": "electronics",
+  "stock": 50,
+  "productType": "simple",
+  "gstInclusive": true,
+  "images": ["https://example.com/image.jpg"],
+  "sku": "DEMO-001",
+  "status": "draft"
+}
+```
+
+Variable product additions:
+
+```json
+{
+  "hasVariants": true,
+  "variantAxes": ["size", "color"],
+  "options": [
+    {
+      "name": "Size",
+      "values": ["S", "M", "L"],
+      "displayType": "button",
+      "required": true
+    }
+  ],
+  "variants": [
+    {
+      "sku": "DEMO-001-S",
+      "title": "Small",
+      "price": 999,
+      "mrp": 1299,
+      "stock": 10,
+      "attributes": { "size": "S" },
+      "isDefault": true
+    }
+  ]
+}
+```
+
+### Product Moderation
+
+Approve:
+
+```http
+PATCH /admin/products/:productId/approve
+```
+
+Reject:
+
+```http
+PATCH /admin/products/:productId/reject
+```
+
+Body:
+
+```json
+{
+  "rejectionReason": "Images do not match the product",
+  "notes": "Ask seller to upload clear pack shots"
+}
+```
+
+### Order Quote And Create
+
+Quote:
+
+```http
+POST /orders/quote
+```
+
+Create:
+
+```http
+POST /orders
+```
+
+Body:
+
+```json
+{
+  "currency": "INR",
+  "paymentProvider": "razorpay",
+  "idempotencyKey": "checkout-123",
+  "couponCode": "SAVE10",
+  "walletAmount": 0,
+  "shippingAddress": {
+    "line1": "Address line 1",
+    "line2": "",
+    "city": "Bengaluru",
+    "state": "Karnataka",
+    "postalCode": "560001",
+    "country": "India"
+  },
+  "items": [
+    {
+      "productId": "665000000000000000000001",
+      "variantId": null,
+      "variantSku": null,
+      "quantity": 1,
+      "attributes": {}
+    }
+  ]
+}
+```
+
+### Payment Initiate And Verify
+
+Initiate:
+
+```http
+POST /payments/initiate
+```
+
+Body:
+
+```json
+{
+  "orderId": "4b72b7cb-0f4e-4a6c-8f8c-4ce3f3a1892d",
+  "provider": "razorpay",
+  "currency": "INR",
+  "idempotencyKey": "pay-123"
+}
+```
+
+Verify Razorpay:
+
+```http
+POST /payments/verify
+```
+
+Body:
+
+```json
+{
+  "provider": "razorpay",
+  "orderId": "4b72b7cb-0f4e-4a6c-8f8c-4ce3f3a1892d",
+  "razorpayOrderId": "order_xxx",
+  "razorpayPaymentId": "pay_xxx",
+  "razorpaySignature": "signature"
+}
+```
+
+Manual payment approval:
+
+```http
+POST /payments/:paymentId/approve
+```
+
+Body:
+
+```json
+{
+  "referenceId": "BANK-UTR-123",
+  "reason": "Bank transfer received"
+}
+```
+
+### RBAC Sync User Permissions
+
+```http
+PUT /rbac/users/:userId/permissions
+```
+
+Body:
+
+```json
+{
+  "permissionIds": ["uuid-of-allowed-permission"],
+  "deniedPermissionIds": ["uuid-of-denied-permission"]
+}
+```
+
+### Seller Sub-Admin Create
+
+```http
+POST /sellers/me/sub-admins
+```
+
+Body:
+
+```json
+{
+  "email": "staff@seller.com",
+  "phone": "9999999999",
+  "password": "Password@123",
+  "profile": {
+    "firstName": "Staff",
+    "lastName": "User"
+  },
+  "role": "seller-sub-admin",
+  "allowedModules": ["products", "orders"],
+  "modulePermissions": [
+    {
+      "module": "products",
+      "actions": ["view", "create", "update"]
+    },
+    {
+      "module": "orders",
+      "actions": ["view"]
+    }
+  ]
+}
+```
+
+### File Upload
+
+```http
+POST /file-uploader/upload
+Content-Type: multipart/form-data
+Authorization: Bearer <token>
+```
+
+Form fields:
+
+```txt
+file=<image file>
+module=products
+imageType=gallery
+```
+
+Multiple images:
+
+```http
+POST /file-uploader/upload-multi
+```
+
+Document:
+
+```http
+POST /file-uploader/upload-document
+```
+
+Form fields:
+
+```txt
+file=<pdf/image document>
+module=seller-kyc
+documentKey=panDocumentUrl
+```
+
+## 13. Admin Workflow Map
+
+Use this section to map Admin pages to APIs.
+
+### Admin Login And Session
+
+```txt
+POST /auth/login
+GET  /auth/status
+POST /auth/refresh
+POST /auth/change-password
+```
+
+### Admin Dashboard
+
+```txt
+GET /admin/dashboard/overview
+GET /analytics/admin-dashboard
+GET /admin/analytics/realtime
+GET /admin/system/health
+GET /admin/system/queues
+```
+
+### RBAC And User Access
+
+```txt
+GET    /rbac/permission-management/modules
+GET    /rbac/modules/sidebar
+GET    /rbac/modules
+POST   /rbac/modules
+PATCH  /rbac/modules/:moduleId
+PATCH  /rbac/modules/:moduleId/status
+DELETE /rbac/modules/:moduleId
+GET    /rbac/permissions
+POST   /rbac/permissions
+PATCH  /rbac/permissions/:permissionId
+DELETE /rbac/permissions/:permissionId
+GET    /rbac/roles
+POST   /rbac/roles
+PATCH  /rbac/roles/:roleId
+DELETE /rbac/roles/:roleId
+GET    /rbac/users/:userId/permissions/effective
+PUT    /rbac/users/:userId/permissions
+GET    /rbac/users/:userId/roles
+POST   /rbac/users/:userId/roles
+POST   /rbac/users/:userId/force-logout
+GET    /rbac/audit-logs
+GET    /rbac/templates
+POST   /rbac/templates
+PATCH  /rbac/templates/:templateId
+```
+
+### Admin/Sub-Admin Management
+
+```txt
+GET  /admin/access/modules
+GET  /admin/access/activity-logs
+POST /admin/access/admins
+GET  /admin/access/admins
+POST /admin/access/sub-admins
+GET  /admin/access/sub-admins
+PATCH /admin/access/sub-admins/:userId/modules
+GET  /admin/admin-users/admins
+GET  /admin/admin-users/sub-admins
+POST /admin/admin-users/admin
+POST /admin/admin-users/sub-admin
+PUT  /admin/admin-users/:userId
+PUT  /admin/admin-users/:userId/permissions
+PUT  /admin/admin-users/:userId/status
+```
+
+### Seller Management And Onboarding
+
+```txt
+GET   /admin/sellers
+GET   /admin/sellers/:sellerId
+GET   /admin/sellers/:sellerId/kyc
+PATCH /admin/sellers/:sellerId/status
+PATCH /admin/sellers/:sellerId/kyc/status
+PATCH /admin/sellers/:sellerId/bank/status
+PATCH /admin/sellers/:sellerId/onboarding/status
+PATCH /admin/sellers/:sellerId/go-live
+GET   /admin/seller-users/sellers
+GET   /admin/seller-users/seller-admins
+GET   /admin/seller-users/seller-sub-admins
+POST  /admin/seller-users/seller-admin
+POST  /admin/seller-users/seller-sub-admin
+```
+
+Seller panel routes:
+
+```txt
+POST   /sellers/onboarding/kyc/documents
+POST   /sellers/onboarding/kyc
+PATCH  /sellers/onboarding/profile
+GET    /sellers/me/access/modules
+GET    /sellers/me/status
+GET    /sellers/me/profile
+PATCH  /sellers/me/profile
+PATCH  /sellers/me/business-address
+PATCH  /sellers/me/pickup-address
+PATCH  /sellers/me/return-address
+PATCH  /sellers/me/bank-details
+PATCH  /sellers/me/more-info
+PATCH  /sellers/me/settings
+GET    /sellers/me/charge-settings
+PUT    /sellers/me/charge-settings
+POST   /sellers/me/kyc
+POST   /sellers/me/kyc/documents
+GET    /sellers/me/dashboard
+GET    /sellers/me/tracking
+GET    /sellers/me/tracking/:orderId
+POST   /sellers/me/sub-admins
+GET    /sellers/me/sub-admins
+PATCH  /sellers/me/sub-admins/:userId/modules
+PATCH  /sellers/me/sub-admins/:userId/status
+DELETE /sellers/me/sub-admins/:userId
+```
+
+### Catalog And Product Management
+
+Product APIs:
+
+```txt
+GET    /products
+GET    /products/search
+GET    /products/prefill
+GET    /products/seller/me
+POST   /products
+GET    /products/:productId
+PATCH  /products/:productId
+DELETE /products/:productId
+PATCH  /products/:productId/status
+PATCH  /products/:productId/archive
+PATCH  /products/:productId/restore
+POST   /products/:productId/duplicate
+PATCH  /products/:productId/review
+GET    /products/:productId/revisions
+PATCH  /products/:productId/revisions/:revisionId/review
+POST   /products/bulk/update
+PATCH  /products/:productId/inventory
+GET    /products/inventory/stats
+GET    /products/analytics/top
+GET    /products/:productId/reviews
+POST   /products/:productId/reviews
+PATCH  /products/:productId/reviews/:reviewId/helpful
+DELETE /products/:productId/reviews/:reviewId
+GET    /products/:productId/my-review
+GET    /products/:productId/related
+GET    /products/:productId/cross-sell
+GET    /products/:productId/up-sell
+GET    /products/:productId/completeness
+```
+
+Admin product aliases:
+
+```txt
+GET    /admin/products
+POST   /admin/products
+GET    /admin/products/:productId
+PATCH  /admin/products/:productId
+DELETE /admin/products/:productId
+GET    /admin/products/moderation-queue
+GET    /admin/products/prefill
+POST   /admin/products/bulk/update
+GET    /admin/products/inventory/stats
+GET    /admin/products/analytics/top
+GET    /admin/products/:productId/revisions
+PATCH  /admin/products/:productId/revisions/:revisionId/review
+PATCH  /admin/products/:productId/status
+PATCH  /admin/products/:productId/archive
+PATCH  /admin/products/:productId/restore
+POST   /admin/products/:productId/duplicate
+PATCH  /admin/products/:productId/inventory
+PATCH  /admin/products/:productId/approve
+PATCH  /admin/products/:productId/reject
+PATCH  /admin/products/:productId/moderate
+```
+
+Platform catalog APIs:
+
+```txt
+GET    /platform/catalog-prefill
+GET    /platform/categories
+POST   /platform/categories
+GET    /platform/categories/:categoryKey
+PATCH  /platform/categories/:categoryKey
+DELETE /platform/categories/:categoryKey
+GET    /platform/categories/:categoryKey/attributes
+GET    /platform/families
+POST   /platform/families
+GET    /platform/families/:familyCode
+PATCH  /platform/families/:familyCode
+DELETE /platform/families/:familyCode
+GET    /platform/variants
+POST   /platform/variants
+GET    /platform/variants/:variantId
+PATCH  /platform/variants/:variantId
+DELETE /platform/variants/:variantId
+GET    /platform/brands
+POST   /platform/brands
+GET    /platform/brands/:brandId
+PATCH  /platform/brands/:brandId
+DELETE /platform/brands/:brandId
+GET    /platform/hsn-codes
+POST   /platform/hsn-codes
+GET    /platform/hsn-codes/:hsnCode
+PATCH  /platform/hsn-codes/:hsnCode
+DELETE /platform/hsn-codes/:hsnCode
+GET    /platform/geographies
+POST   /platform/geographies
+GET    /platform/geographies/:countryCode
+PATCH  /platform/geographies/:countryCode
+DELETE /platform/geographies/:countryCode
+GET    /platform/warranty-templates
+POST   /platform/warranty-templates
+GET    /platform/warranty-templates/:templateId
+PATCH  /platform/warranty-templates/:templateId
+DELETE /platform/warranty-templates/:templateId
+GET    /platform/finishes
+POST   /platform/finishes
+PATCH  /platform/finishes/:finishId
+DELETE /platform/finishes/:finishId
+GET    /platform/dimensions
+POST   /platform/dimensions
+PATCH  /platform/dimensions/:dimensionId
+DELETE /platform/dimensions/:dimensionId
+GET    /platform/batches
+POST   /platform/batches
+PATCH  /platform/batches/:batchId
+DELETE /platform/batches/:batchId
+GET    /platform/product-options
+POST   /platform/product-options
+PATCH  /platform/product-options/:optionId
+DELETE /platform/product-options/:optionId
+GET    /platform/product-option-values
+POST   /platform/product-option-values
+PATCH  /platform/product-option-values/:optionValueId
+DELETE /platform/product-option-values/:optionValueId
+GET    /platform/product-reviews
+PATCH  /platform/product-reviews/:reviewId
+DELETE /platform/product-reviews/:reviewId
+```
+
+Admin platform aliases use `/admin/platform/...` with these resource names:
+
+```txt
+categories
+brands
+hsn-codes
+geography
+product-families
+product-variants
+product-reviews
+warranty-templates
+finishes
+dimensions
+batches
+product-options
+product-option-values
+catalog-prefill
+api-keys
+webhooks
+feature-flags
+subscription-plans
+subscriptions
+fee-config
+```
+
+### Common Location And Tax Masters
+
+Both prefixes expose the same common-management resources:
+
+```txt
+/global
+/admin/common
+```
+
+Endpoints under either prefix:
+
+```txt
+GET    /countries
+POST   /countries
+PATCH  /countries/status
+DELETE /countries
+PATCH  /countries/:countryId
+DELETE /countries/:countryId
+GET    /states
+POST   /states
+PATCH  /states/status
+DELETE /states
+PATCH  /states/:stateId
+DELETE /states/:stateId
+GET    /cities
+POST   /cities
+PATCH  /cities/status
+DELETE /cities
+PATCH  /cities/:cityId
+DELETE /cities/:cityId
+GET    /zip-codes
+POST   /zip-codes
+PATCH  /zip-codes/status
+DELETE /zip-codes
+PATCH  /zip-codes/:zipCodeId
+DELETE /zip-codes/:zipCodeId
+GET    /taxes
+POST   /taxes
+PATCH  /taxes/status
+DELETE /taxes
+PATCH  /taxes/:taxId
+DELETE /taxes/:taxId
+GET    /sub-taxes
+POST   /sub-taxes
+PATCH  /sub-taxes/status
+DELETE /sub-taxes
+PATCH  /sub-taxes/:subTaxId
+DELETE /sub-taxes/:subTaxId
+GET    /tax-rules
+POST   /tax-rules
+PATCH  /tax-rules/status
+DELETE /tax-rules
+PATCH  /tax-rules/:taxRuleId
+DELETE /tax-rules/:taxRuleId
+```
+
+### CMS, Promotions, Coupons, Pricing
+
+Public CMS:
+
+```txt
+GET /cms
+GET /cms/:slug
+```
+
+Admin CMS:
+
+```txt
+GET    /admin/cms
+POST   /admin/cms
+GET    /admin/cms/:slug
+PATCH  /admin/cms/:slug
+DELETE /admin/cms/:slug
+```
+
+Coupons and promotion banners. The same pricing router is mounted under `/pricing` and `/coupons`, so both prefixes currently work:
+
+```txt
+GET    /pricing/coupons
+POST   /pricing/coupons
+GET    /pricing/coupons/:couponId
+PATCH  /pricing/coupons/:couponId
+DELETE /pricing/coupons/:couponId
+GET    /pricing/promotion-banners
+POST   /pricing/promotion-banners
+PATCH  /pricing/promotion-banners/:slug
+DELETE /pricing/promotion-banners/:slug
+GET    /coupons/coupons
+POST   /coupons/coupons
+GET    /coupons/coupons/:couponId
+PATCH  /coupons/coupons/:couponId
+DELETE /coupons/coupons/:couponId
+GET    /coupons/promotion-banners
+POST   /coupons/promotion-banners
+PATCH  /coupons/promotion-banners/:slug
+DELETE /coupons/promotion-banners/:slug
+```
+
+Dynamic pricing:
+
+```txt
+GET  /dynamic-pricing/price
+POST /dynamic-pricing/adjust
+```
+
+### Cart, Orders, Cancellations, Returns
+
+Cart:
+
+```txt
+GET    /carts/me
+PUT    /carts/me
+GET    /admin/carts
+GET    /admin/carts/:cartId
+DELETE /admin/carts/:cartId
+```
+
+Orders:
+
+```txt
+GET   /orders
+POST  /orders
+GET   /orders/me
+POST  /orders/quote
+POST  /orders/checkout/admin-quote
+GET   /orders/seller/me
+GET   /orders/:orderId
+POST  /orders/:orderId/cancel
+PATCH /orders/:orderId/status
+POST  /orders/:orderId/payment/retry
+POST  /orders/:orderId/notes
+GET   /admin/orders
+```
+
+Cancellations:
+
+```txt
+GET  /cancellations
+GET  /cancellations/:cancellationId
+POST /cancellations/:cancellationId/retry
+POST /cancellations/:cancellationId/manual-refund
+```
+
+Returns:
+
+```txt
+GET  /returns
+POST /returns
+GET  /returns/my-returns
+GET  /returns/order/:orderId
+GET  /returns/:returnId
+POST /returns/:returnId/approve
+POST /returns/:returnId/reject
+POST /returns/:returnId/schedule
+POST /returns/:returnId/ship-back
+POST /returns/:returnId/reverse-shipment/tracking
+POST /returns/:returnId/receive
+POST /returns/:returnId/refund/retry
+POST /returns/:returnId/refund/sync
+POST /returns/:returnId/qc
+POST /returns/:returnId/refund
+POST /returns/:returnId/replacement
+POST /returns/:returnId/close
+GET  /admin/returns/analytics
+```
+
+### Payments, Wallets, Commerce Settings
+
+Payments:
+
+```txt
+GET  /payments/options
+GET  /payments/me
+GET  /payments/admin
+GET  /payments/admin/:paymentId
+GET  /payments/admin/cod-config
+PUT  /payments/admin/cod-config
+POST /payments/initiate
+POST /payments/verify
+POST /payments/:paymentId/approve
+POST /payments/:paymentId/reject
+POST /payments/webhooks/razorpay
+GET  /admin/payments
+```
+
+Wallets:
+
+```txt
+GET /wallets/me
+GET /wallets/admin/transactions
+```
+
+Commerce settings:
+
+```txt
+GET /admin/commerce-settings
+PUT /admin/commerce-settings
+GET /admin/commerce-settings/seller-charge-settings
+GET /admin/commerce-settings/seller-charge-settings/:sellerId
+PUT /admin/commerce-settings/seller-charge-settings/:sellerId
+```
+
+### Seller Finance And Admin Finance
+
+Seller commission/settlement APIs:
+
+```txt
+GET  /sellers/commissions/my-commissions
+GET  /sellers/commissions/my-commissions/export
+GET  /sellers/commissions/my-payouts
+GET  /sellers/commissions/my-payouts/export
+GET  /sellers/commissions/my-wallet
+GET  /sellers/commissions/my-settlements
+GET  /sellers/commissions/my-settlements/export
+GET  /sellers/commissions/my-settlements/:settlementId/statement
+GET  /sellers/commissions/summary
+GET  /sellers/commissions/wallet/:sellerId
+GET  /sellers/commissions
+GET  /sellers/commissions/export
+GET  /sellers/commissions/payouts
+GET  /sellers/commissions/payouts/export
+GET  /sellers/commissions/payout-ops/queue
+GET  /sellers/commissions/negative-balances
+POST /sellers/commissions/negative-balances/:settlementId/resolve
+POST /sellers/commissions/payouts/:payoutId/process
+POST /sellers/commissions/payouts/:payoutId/fail
+POST /sellers/commissions/payouts/:payoutId/approve
+POST /sellers/commissions/payouts/:payoutId/hold
+POST /sellers/commissions/payouts/:payoutId/release-hold
+POST /sellers/commissions/payouts/:payoutId/retry
+POST /sellers/commissions/calculate/:orderId
+POST /sellers/commissions/process-payouts
+GET  /sellers/commissions/settlements
+GET  /sellers/commissions/settlements/export
+GET  /sellers/commissions/settlements/:settlementId/statement
+```
+
+Admin finance rules:
+
+```txt
+GET    /admin/finance/commission-rules
+POST   /admin/finance/commission-rules
+GET    /admin/finance/commission-rules/:id
+PATCH  /admin/finance/commission-rules/:id
+DELETE /admin/finance/commission-rules/:id
+GET    /admin/finance/platform-fee-rules
+POST   /admin/finance/platform-fee-rules
+GET    /admin/finance/platform-fee-rules/:id
+PATCH  /admin/finance/platform-fee-rules/:id
+DELETE /admin/finance/platform-fee-rules/:id
+```
+
+Admin payouts:
+
+```txt
+GET  /admin/payouts
+POST /admin/payouts
+```
+
+### Inventory, Warehouses, Shipping, Delivery
+
+Admin inventory:
+
+```txt
+GET    /admin/inventory/stats
+GET    /admin/inventory/low-stock
+GET    /admin/inventory/transactions
+POST   /admin/inventory/reservations/release-expired
+GET    /admin/inventory/warehouses
+POST   /admin/inventory/warehouses
+PATCH  /admin/inventory/warehouses/status
+PATCH  /admin/inventory/warehouses/:warehouseId
+DELETE /admin/inventory/warehouses
+DELETE /admin/inventory/warehouses/:warehouseId
+```
+
+Admin shipping masters:
+
+```txt
+GET    /admin/shipping/packages
+POST   /admin/shipping/packages
+PATCH  /admin/shipping/packages/status
+PATCH  /admin/shipping/packages/:packageId
+DELETE /admin/shipping/packages
+DELETE /admin/shipping/packages/:packageId
+GET    /admin/shipping/pickup-addresses
+POST   /admin/shipping/pickup-addresses
+PATCH  /admin/shipping/pickup-addresses/status
+PATCH  /admin/shipping/pickup-addresses/:pickupAddressId
+DELETE /admin/shipping/pickup-addresses
+DELETE /admin/shipping/pickup-addresses/:pickupAddressId
+```
+
+Delivery:
+
+```txt
+GET   /delivery/serviceability
+GET   /delivery/rates
+GET   /delivery/shipments
+POST  /delivery/shipments
+GET   /delivery/shipments/:shipmentId
+POST  /delivery/shipments/:shipmentId/assign-agent
+POST  /delivery/shipments/:shipmentId/tracking
+POST  /delivery/shipments/:shipmentId/delivery-otp
+POST  /delivery/shipments/:shipmentId/confirm-delivery
+POST  /delivery/shipments/webhook
+GET   /delivery/agents
+POST  /delivery/agents
+GET   /delivery/agents/:deliveryAgentId
+PATCH /delivery/agents/:deliveryAgentId
+POST  /delivery/manifests
+GET   /delivery/orders/:orderId/eway-bill
+POST  /delivery/orders/:orderId/eway-bill
+PATCH /delivery/eway-bills/:ewayBillId/status
+```
+
+### Tax, Warranty, Subscriptions
+
+Tax:
+
+```txt
+GET  /tax/orders/:orderId/invoice
+POST /tax/orders/:orderId/invoice
+GET  /tax/orders/:orderId/marketplace-invoices
+POST /tax/orders/:orderId/marketplace-invoices
+GET  /tax/invoices
+GET  /tax/invoices/export
+GET  /tax/invoices/:invoiceId/download
+POST /tax/invoices/:invoiceId/dispatch
+POST /tax/credit-notes
+GET  /tax/credit-notes
+GET  /tax/credit-notes/export
+GET  /tax/credit-notes/:creditNoteId/download
+POST /tax/credit-notes/:creditNoteId/dispatch
+GET  /tax/reports
+GET  /tax/reports/export
+GET  /tax/document-dispatches
+POST /tax/document-dispatches/:dispatchId/retry
+GET  /admin/tax/reports
+POST /admin/tax/orders/:orderId/invoice
+```
+
+Warranty:
+
+```txt
+GET   /warranty/products/:productId/warranty
+POST  /warranty/register
+GET   /warranty/:warrantyId
+GET   /warranty/orders/:orderId
+GET   /warranty/customers/:customerId
+POST  /warranty/:warrantyId/claims
+PATCH /warranty/:warrantyId/claims/:claimId/status
+```
+
+Subscriptions:
+
+```txt
+GET    /subscriptions/plans
+POST   /subscriptions/purchase
+GET    /subscriptions/me
+PUT    /subscriptions/:subscriptionId/pause
+PUT    /subscriptions/:subscriptionId/resume
+PUT    /subscriptions/:subscriptionId/cancel
+POST   /subscriptions/admin/plans
+GET    /subscriptions/admin/plans
+GET    /subscriptions/admin/plans/:planId
+PATCH  /subscriptions/admin/plans/:planId
+DELETE /subscriptions/admin/plans/:planId
+GET    /subscriptions/admin/subscriptions
+PATCH  /subscriptions/admin/subscriptions/:subscriptionId/status
+POST   /subscriptions/admin/platform-fee-config
+GET    /subscriptions/admin/platform-fee-config
+GET    /subscriptions/admin/platform-fee-config/:configId
+PATCH  /subscriptions/admin/platform-fee-config/:configId
+DELETE /subscriptions/admin/platform-fee-config/:configId
+```
+
+### Referral, Loyalty, Recommendations, Deals
+
+Referral admin:
+
+```txt
+GET   /admin/referral/influencers
+POST  /admin/referral/influencers/parents
+POST  /admin/referral/influencers/:parentId/children
+PATCH /admin/referral/influencers/:influencerId/status
+PATCH /admin/referral/influencers/:influencerId/promote
+GET   /admin/referral/codes
+POST  /admin/referral/codes
+PATCH /admin/referral/codes/:codeId
+GET   /admin/referral/orders
+GET   /admin/referral/commissions
+GET   /admin/referral/payouts
+PATCH /admin/referral/payouts/:payoutId/approve
+PATCH /admin/referral/payouts/:payoutId/reject
+PATCH /admin/referral/payouts/:payoutId/paid
+GET   /admin/referral/rules
+PUT   /admin/referral/rules
+GET   /admin/referral/reports/summary
+GET   /admin/referral/reports/hierarchy
+GET   /admin/referral/fraud
+```
+
+Loyalty:
+
+```txt
+GET  /loyalty/profile
+GET  /loyalty/benefits
+POST /loyalty/points
+GET  /loyalty/history
+POST /loyalty/redeem
+```
+
+Recommendations:
+
+```txt
+GET  /recommendations
+GET  /recommendations/trending
+POST /recommendations/:productId/interact
+```
+
+Deals:
+
+```txt
+GET    /deals/public/placements
+GET    /deals
+POST   /deals
+GET    /deals/analytics
+GET    /deals/payouts
+POST   /deals/payouts/generate
+GET    /deals/payouts/:payoutId
+PATCH  /deals/payouts/:payoutId/process
+GET    /deals/:dealId
+PATCH  /deals/:dealId
+POST   /deals/:dealId/submit
+POST   /deals/:dealId/approve
+POST   /deals/:dealId/reject
+POST   /deals/:dealId/pause
+POST   /deals/:dealId/resume
+POST   /deals/:dealId/cancel
+POST   /deals/:dealId/renew
+PUT    /deals/:dealId/commission-rule
+PUT    /deals/:dealId/sponsorship
+DELETE /deals/sponsorships/:sponsorshipId
+```
+
+### Notifications, Analytics, Reports, Search, Meta
+
+Notifications:
+
+```txt
+GET  /notifications/me
+GET  /notifications/admin
+POST /notifications
+GET  /notifications/preferences
+PUT  /notifications/preferences
+```
+
+Analytics:
+
+```txt
+GET  /analytics
+POST /analytics/events
+GET  /analytics/seller-dashboard
+GET  /analytics/admin-dashboard
+GET  /admin/analytics/realtime
+```
+
+Reports:
+
+```txt
+GET /admin/reports/orders/export
+GET /admin/reports/products/export
+GET /admin/reports/inventory/export
+GET /admin/reports/shipments/export
+GET /admin/reports/delivery-agents/export
+GET /admin/reports/returns/export
+GET /admin/reports/cancellations/export
+GET /admin/reports/refunds/export
+GET /admin/reports/seller-scorecards/export
+```
+
+Search:
+
+```txt
+GET  /search
+GET  /search/autocomplete
+POST /search/index-all
+POST /search/rebuild
+```
+
+Meta and dropdowns:
+
+```txt
+GET /meta/routes
+GET /meta/dropdowns/:resource
+```
+
+Useful dropdown resources:
+
+```txt
+account-types
+business-types
+bank-review-statuses
+coupon-types
+delivery-statuses
+discount-types
+digital-file-types
+digital-license-types
+inventory-adjustment-reasons
+inventory-transaction-types
+kyc-statuses
+kyc-review-statuses
+notification-frequencies
+module-types
+order-statuses
+payment-methods
+payment-statuses
+product-statuses
+product-option-display-types
+product-types
+product-visibilities
+return-reasons
+return-statuses
+record-statuses
+referral-code-statuses
+referral-filter-statuses
+referral-override-modes
+referral-override-scopes
+shipping-modes
+subscription-billing-cycles
+warranty-units
+wallet-transaction-types
+countries
+states
+cities
+pincodes
+zip-codes
+taxes
+categories
+brands
+product-families
+hsn-codes
+product-options
+product-option-values
+```
+
+File upload:
+
+```txt
+POST /file-uploader/upload
+POST /file-uploader/upload-multi
+POST /file-uploader/upload-document
+```
+
+Fraud:
+
+```txt
+POST /fraud/:fraudId/review
+```
+
+System:
+
+```txt
+GET  /admin/system/health
+GET  /admin/system/queues
+POST /admin/system/queues/:queueName/pause
+POST /admin/system/queues/:queueName/resume
+GET  /admin/system/dead-letter
+POST /admin/system/dead-letter/:eventId/retry
+POST /admin/system/dead-letter/:eventId/discard
+```
+
+## 14. Endpoint Registry By Mounted Prefix
+
+Mounted in `src/api/register-routes.js`:
+
+```txt
+/auth
+/global
+/users
+/products
+/carts
+/orders
+/cancellations
+/payments
+/platform
+/cms
+/sellers
+/notifications
+/analytics
+/pricing
+/coupons
+/wallets
+/admin/commerce-settings
+/admin
+/tax
+/subscriptions
+/rbac
+/warranty
+/loyalty
+/recommendations
+/returns
+/fraud
+/dynamic-pricing
+/sellers/commissions
+/admin/finance
+/delivery
+/deals
+/file-uploader
+/meta
+/search
+```
+
+## 15. Admin Development Rules
+
+Use these rules while wiring Admin:
+
+- Always call APIs through a shared axios/fetch helper that injects the bearer token and handles refresh once.
+- Do not hardcode module permissions in components if the backend returns permissions/sidebar modules.
+- For buttons, check the exact action: create, update, delete, approve, reject, status_change, export, import, assign, bulk_action, adjust.
+- For list pages, preserve backend pagination style. Do not convert `offset` to `page` unless the endpoint schema expects it.
+- For destructive bulk actions, send `ids` or `productIds` exactly as the validation file expects.
+- For upload fields, first upload files using `/file-uploader/*`, then send returned URLs into product/KYC/CMS payloads.
+- For seller onboarding, allow the onboarding token path until seller go-live is complete.
+- For RBAC changes, force logout or refresh session after changing a user's modules/permissions, because auth hydration includes permission/session versions.
+- For `/pricing` and `/coupons`, prefer `/pricing` in new Admin screens to avoid the odd `/coupons/coupons` URL, but keep existing calls working unless backend routes are changed.
+- For tax document download/export/report endpoints, expect either JSON metadata or generated document/export responses depending on controller behavior.
+
+## 16. Postman
+
+Postman assets:
+
+```txt
+postman_collection.json
+postman_environment.json
+scripts/postman/sync-postman-collection.js
+```
+
+Regenerate collection:
 
 ```bash
-npm run db:seed:commerce
+npm run postman:sync
 ```
 
-Append demo orders:
+## 17. Source Of Truth
 
-```bash
-npm run db:seed:commerce:append
-```
+When behavior and docs disagree, trust these files in this order:
 
-## Safety Notes
-
-- `db:seed:commerce` deletes product/order/marketing fixture areas and rebuilds them.
-- It does not drop databases.
-- It does not run `DROP SCHEMA`.
-- It does not reset MongoDB wholesale.
-- It does not delete RBAC, tax management, or location management data.
-- It creates or updates demo users but does not delete all users.
-- It requires PostgreSQL migrations to have already created `orders`, `order_items`, and `payments`.
-
-## Maintained Source Of Truth
-
-For route behavior, trust:
-
-```txt
-src/api/register-routes.js
-src/modules/*/routes/*.js
-```
-
-For models, trust:
-
-```txt
-src/modules/*/models/*.js
-src/infrastructure/sequelize/models/index.js
-sequelize/migrations/*.js
-```
-
-For RBAC and permissions, trust:
-
-```txt
-src/shared/middleware/access.js
-src/shared/auth/rbac-permissions.js
-src/shared/auth/module-access.js
-src/modules/rbac
-```
-
-For seed behavior, trust:
-
-```txt
-scripts/db/seed-commerce-demo.js
-scripts/db/seed-rbac.js
-scripts/db/repair-rbac-role-assignments.js
-```
+1. Route registration: `src/api/register-routes.js`.
+2. Route files: `src/modules/*/routes/*.js` and `src/shared/routes/*.js`.
+3. Validation files: `src/modules/*/validation/*.js`.
+4. Controllers and services: `src/modules/*/controllers/*.js`, `src/modules/*/services/*.js`.
+5. Models and migrations: `src/modules/*/models/*.js`, `src/infrastructure/postgres/models/*.js`, `sequelize/migrations/*.js`.
+6. RBAC rules: `src/shared/middleware/access.js`, `src/shared/auth/rbac-permissions.js`, `src/shared/auth/module-access.js`.
+7. Environment defaults: `src/config/env.js`.
