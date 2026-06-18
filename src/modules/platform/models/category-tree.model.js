@@ -28,7 +28,6 @@ const categoryTreeSchema = new mongoose.Schema(
     ],
     active: { type: Boolean, default: true, index: true },
     sortOrder: { type: Number, default: 0 },
-    imageUrl: { type: String, default: "" },
     bannerUrl: { type: String, default: "" },
     iconUrl: { type: String, default: "" },
     isDashboardVisible: { type: Boolean, default: false, index: true },
