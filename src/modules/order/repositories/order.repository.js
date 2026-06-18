@@ -2,6 +2,7 @@ const { knex, postgresPool } = require("../../../infrastructure/postgres/postgre
 const { v4: uuidv4 } = require("uuid");
 const { OutboxRepository } = require("../../../infrastructure/postgres/outbox.repository");
 const { PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
+const { DELIVERY_STATUS } = require("../../delivery/models/delivery.model");
 const { UserModel } = require("../../user/models/user.model");
 
 class OrderRepository {
@@ -493,6 +494,53 @@ class OrderRepository {
     }
   }
 
+  async updatePaymentsForOrderReturnRefund(orderId, payload = {}) {
+    const trx = await knex.transaction();
+
+    try {
+      const payments = await trx("payments")
+        .where("order_id", orderId)
+        .whereNotIn("status", [PAYMENT_STATUS.CANCELLED, PAYMENT_STATUS.FAILED])
+        .forUpdate();
+
+      if (!payments.length) {
+        await trx.commit();
+        return [];
+      }
+
+      const updated = [];
+      for (const payment of payments) {
+        const existingMetadata = typeof payment.metadata === "object" && payment.metadata
+          ? payment.metadata
+          : {};
+        const refundMetadata = payload.metadata || {};
+        const [row] = await trx("payments")
+          .where("id", payment.id)
+          .update({
+            status: payload.status || payment.status,
+            metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [
+              JSON.stringify({
+                ...existingMetadata,
+                returnRefund: {
+                  ...(existingMetadata.returnRefund || {}),
+                  ...refundMetadata,
+                },
+              }),
+            ]),
+            updated_at: knex.fn.now(),
+          })
+          .returning("*");
+        if (row) updated.push(row);
+      }
+
+      await trx.commit();
+      return updated;
+    } catch (error) {
+      await trx.rollback();
+      throw error;
+    }
+  }
+
   applyOrderFilters(clauses, values, filters = {}, nextIndex) {
     const {
       status = null,
@@ -720,6 +768,13 @@ class OrderRepository {
       const sellers = sellerIds.map((sellerId) => usersById.get(String(sellerId)) || { id: sellerId }).filter(Boolean);
       const sellerSettlements = this.buildSellerSettlements(orderItems, sellers, order);
       const summary = this.buildOrderSummary(order, orderItems, sellerSettlements);
+      const sellerFulfillmentGroups = this.buildSellerFulfillmentGroups(
+        order,
+        orderItems,
+        sellers,
+        sellerSettlements,
+        orderShipments,
+      );
 
       return {
         ...order,
@@ -735,6 +790,7 @@ class OrderRepository {
           invoice: (grouped.invoices.get(order.id) || [])[0] || null,
           invoices: grouped.invoices.get(order.id) || [],
           shipments: orderShipments,
+          sellerFulfillmentGroups,
           eWayBill: (grouped.eWayBills.get(order.id) || [])[0] || null,
           walletTransactions: grouped.walletTransactions.get(order.id) || [],
           cancellations: grouped.cancellations.get(order.id) || [],
@@ -873,6 +929,168 @@ class OrderRepository {
         sellerPayoutAmount: Number(sellerPayoutAmount.toFixed(2)),
       };
     });
+  }
+
+  buildSellerFulfillmentGroups(order = {}, items = [], sellers = [], sellerSettlements = [], shipments = []) {
+    const metadata = this.parseJson(order.metadata, {});
+    const returnLifecycle = metadata.returnLifecycle || {};
+    const sellerNames = new Map(
+      sellers.map((seller) => [
+        String(seller.id || seller._id || ""),
+        seller.sellerProfile?.displayName ||
+          seller.sellerProfile?.businessName ||
+          seller.profile?.name ||
+          seller.email ||
+          seller.id,
+      ]),
+    );
+    const settlementsBySeller = new Map(
+      sellerSettlements.map((settlement) => [String(settlement.sellerId), settlement]),
+    );
+    const itemsBySeller = new Map();
+    const shipmentsBySeller = new Map();
+
+    for (const item of items) {
+      const sellerId = String(item.seller_id || item.sellerId || "platform");
+      if (!itemsBySeller.has(sellerId)) itemsBySeller.set(sellerId, []);
+      itemsBySeller.get(sellerId).push(item);
+    }
+
+    for (const shipment of shipments) {
+      const sellerId = String(shipment.seller_id || shipment.sellerId || "platform");
+      if (!shipmentsBySeller.has(sellerId)) shipmentsBySeller.set(sellerId, []);
+      shipmentsBySeller.get(sellerId).push(shipment);
+    }
+
+    const sellerIds = new Set([
+      ...itemsBySeller.keys(),
+      ...shipmentsBySeller.keys(),
+      ...settlementsBySeller.keys(),
+    ]);
+
+    return [...sellerIds].map((sellerId) => {
+      const sellerItems = itemsBySeller.get(sellerId) || [];
+      const sellerShipments = shipmentsBySeller.get(sellerId) || [];
+      const forwardShipments = sellerShipments.filter((shipment) => this.isForwardShipment(shipment));
+      const reverseShipments = sellerShipments.filter((shipment) => !this.isForwardShipment(shipment));
+      const deliveryStatus = this.resolveSellerDeliveryStatus(forwardShipments, order);
+      const deliveredShipmentCount = forwardShipments.filter((shipment) =>
+        this.isDeliveredShipmentStatus(shipment.status),
+      ).length;
+      const requiresVerification = forwardShipments.some((shipment) => Boolean(shipment.verification_required));
+      const verificationComplete = requiresVerification
+        ? forwardShipments.every((shipment) =>
+            !shipment.verification_required || shipment.status === DELIVERY_STATUS.DELIVERED_VERIFIED,
+          )
+        : null;
+      const latestTrackingEvent = this.latestTrackingEvent(forwardShipments);
+      const sellerReturnLifecycle = this.resolveSellerReturnLifecycle(returnLifecycle, sellerId, order);
+
+      return {
+        sellerId,
+        sellerName: sellerNames.get(sellerId) || sellerId,
+        orderItemIds: sellerItems.map((item) => item.id).filter(Boolean),
+        itemCount: sellerItems.length,
+        quantity: sellerItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+        deliveryStatus,
+        shipmentStatus: deliveryStatus,
+        shipmentIds: sellerShipments.map((shipment) => shipment.id).filter(Boolean),
+        forwardShipmentIds: forwardShipments.map((shipment) => shipment.id).filter(Boolean),
+        reverseShipmentIds: reverseShipments.map((shipment) => shipment.id).filter(Boolean),
+        forwardShipmentCount: forwardShipments.length,
+        reverseShipmentCount: reverseShipments.length,
+        deliveredShipmentCount,
+        pendingShipmentCount: Math.max(forwardShipments.length - deliveredShipmentCount, 0),
+        isFullyDelivered: forwardShipments.length > 0 && deliveredShipmentCount === forwardShipments.length,
+        isPartiallyDelivered: deliveredShipmentCount > 0 && deliveredShipmentCount < forwardShipments.length,
+        requiresVerification,
+        verificationComplete,
+        expectedDeliveryAt: this.resolveExpectedDeliveryAt(forwardShipments),
+        latestTrackingEvent,
+        latestTrackingStatus: latestTrackingEvent?.status || deliveryStatus,
+        settlement: settlementsBySeller.get(sellerId) || null,
+        returnLifecycle: sellerReturnLifecycle,
+      };
+    });
+  }
+
+  isForwardShipment(shipment = {}) {
+    const direction = String(shipment.direction || "forward");
+    const shipmentType = String(shipment.shipment_type || shipment.shipmentType || "forward");
+    return direction !== "reverse" && shipmentType !== "return";
+  }
+
+  isDeliveredShipmentStatus(status) {
+    return [DELIVERY_STATUS.DELIVERED, DELIVERY_STATUS.DELIVERED_VERIFIED].includes(status);
+  }
+
+  resolveSellerDeliveryStatus(shipments = [], order = {}) {
+    if (!shipments.length) return order.delivery_status || null;
+    const statuses = shipments.map((shipment) => shipment.status).filter(Boolean);
+    if (!statuses.length) return order.delivery_status || null;
+
+    const deliveredCount = statuses.filter((status) => this.isDeliveredShipmentStatus(status)).length;
+    if (deliveredCount === shipments.length) {
+      return statuses.every((status) => status === DELIVERY_STATUS.DELIVERED_VERIFIED)
+        ? DELIVERY_STATUS.DELIVERED_VERIFIED
+        : DELIVERY_STATUS.DELIVERED;
+    }
+    if (deliveredCount > 0) return "partially_delivered";
+
+    const priority = [
+      DELIVERY_STATUS.FAILED,
+      DELIVERY_STATUS.RTO,
+      DELIVERY_STATUS.LOST,
+      DELIVERY_STATUS.DAMAGED,
+      DELIVERY_STATUS.OUT_FOR_DELIVERY,
+      DELIVERY_STATUS.IN_TRANSIT,
+      DELIVERY_STATUS.PICKED_UP,
+      DELIVERY_STATUS.MANIFESTED,
+      DELIVERY_STATUS.INITIATED,
+      DELIVERY_STATUS.CANCELLED,
+    ];
+    return priority.find((status) => statuses.includes(status)) || statuses[0] || order.delivery_status || null;
+  }
+
+  latestTrackingEvent(shipments = []) {
+    return shipments
+      .flatMap((shipment) => shipment.trackingEvents || [])
+      .sort((left, right) => {
+        const rightTime = new Date(right.event_time || right.eventTime || right.created_at || 0).getTime();
+        const leftTime = new Date(left.event_time || left.eventTime || left.created_at || 0).getTime();
+        return rightTime - leftTime;
+      })[0] || null;
+  }
+
+  resolveExpectedDeliveryAt(shipments = []) {
+    const timestamps = shipments
+      .map((shipment) => shipment.expected_delivery_at || shipment.expectedDeliveryAt)
+      .filter(Boolean)
+      .map((value) => new Date(value).getTime())
+      .filter((value) => Number.isFinite(value));
+    if (!timestamps.length) return null;
+    return new Date(Math.min(...timestamps)).toISOString();
+  }
+
+  resolveSellerReturnLifecycle(returnLifecycle = {}, sellerId, order = {}) {
+    const sellerEntries = Array.isArray(returnLifecycle.sellers)
+      ? returnLifecycle.sellers
+      : Array.isArray(returnLifecycle.sellerBreakup)
+        ? returnLifecycle.sellerBreakup
+        : [];
+    const sellerLifecycle = sellerEntries.find((entry) => String(entry.sellerId || entry.seller_id || "") === String(sellerId));
+    if (sellerLifecycle) return sellerLifecycle;
+
+    return {
+      status: returnLifecycle.status || null,
+      paymentStatus: returnLifecycle.paymentStatus || order.payment_status || null,
+      refundedAmount: Number(returnLifecycle.refundedAmount || 0),
+      returnedQuantity: Number(returnLifecycle.returnedQuantity || 0),
+      openReturnCount: Number(returnLifecycle.openReturnCount || 0),
+      completedReturnCount: Number(returnLifecycle.completedReturnCount || 0),
+      returnIds: Array.isArray(returnLifecycle.returnIds) ? returnLifecycle.returnIds : [],
+      updatedAt: returnLifecycle.updatedAt || null,
+    };
   }
 
   async optionalTableRows(tableName, buildQuery) {

@@ -16,9 +16,10 @@ const FLOWS = {
     packed:          ["shipped"],
     shipped:         ["delivered",  "return_requested"],
     delivered:       ["fulfilled", "return_requested"],
-    return_requested:["returned"],
+    return_requested:["partially_returned", "returned"],
+    partially_returned:["return_requested", "fulfilled"],
     returned:        ["fulfilled"],
-    fulfilled:       [],            // terminal
+    fulfilled:       ["return_requested"],
     cancelled:       [],            // terminal
   },
 

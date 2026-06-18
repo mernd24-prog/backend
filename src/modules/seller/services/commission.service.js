@@ -110,7 +110,7 @@ class SellerCommissionService {
   }
 
   isReleasedOrderStatus(status) {
-    return [ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED].includes(status);
+    return [ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED, ORDER_STATUS.PARTIALLY_RETURNED].includes(status);
   }
 
   isConfirmedOrLaterStatus(status) {
@@ -120,6 +120,7 @@ class SellerCommissionService {
       ORDER_STATUS.SHIPPED,
       ORDER_STATUS.DELIVERED,
       ORDER_STATUS.FULFILLED,
+      ORDER_STATUS.PARTIALLY_RETURNED,
     ].includes(status);
   }
 
@@ -667,6 +668,7 @@ class SellerCommissionService {
         currency: options.currency || payoutCommissions[0]?.currency || "INR",
         status: payoutStatus,
         payment_method: options.paymentMethod || null,
+        payment_reference: options.paymentReference || null,
         metadata: this.jsonb({
           source: options.source || "batch_payout",
           commissionIds: payoutCommissions.map((commission) => commission.id),
@@ -674,6 +676,7 @@ class SellerCommissionService {
           recoverySettlementIds: recoveryRows.map((row) => row.id),
           recoveryAdjustment,
           payoutPolicy,
+          note: options.note || null,
           createdBy: options.actor?.userId || options.actor?.sub || null,
         }),
         created_at: knex.fn.now(),
@@ -1332,20 +1335,48 @@ class SellerCommissionService {
 
   async getPayoutOperationsQueue(query = {}) {
     const { limit, offset } = this.normalizePagination(query);
-    const [pendingApproval, onHold, failed, negativeBalances] = await Promise.all([
-      knex("seller_payouts").where("status", "pending").orderBy("created_at", "asc").limit(limit).offset(offset),
-      knex("seller_payouts").where("status", "on_hold").orderBy("updated_at", "desc").limit(limit).offset(offset),
-      knex("seller_payouts").where("status", "failed").orderBy("updated_at", "desc").limit(limit).offset(offset),
+    const requestedStatus = query.status === "pending_approval" ? "pending" : query.status;
+    const shouldLoadStatus = (status) => !requestedStatus || requestedStatus === status;
+    const buildPayoutQuery = (status) => {
+      const builder = knex("seller_payouts").where("status", status);
+      if (query.sellerId) builder.where("seller_id", query.sellerId);
+      if (query.fromDate) builder.where("created_at", ">=", query.fromDate);
+      if (query.toDate) builder.where("created_at", "<=", query.toDate);
+      if (query.search) {
+        const term = `%${String(query.search).trim()}%`;
+        builder.where((searchBuilder) => {
+          searchBuilder
+            .whereRaw("seller_id::text ILIKE ?", [term])
+            .orWhereILike("payment_reference", term)
+            .orWhereRaw("id::text ILIKE ?", [term]);
+        });
+      }
+      return builder;
+    };
+    const loadPayouts = (status, orderColumn = "updated_at", orderDirection = "desc") => {
+      if (!shouldLoadStatus(status)) return Promise.resolve([]);
+      return buildPayoutQuery(status)
+        .orderBy(orderColumn, orderDirection)
+        .limit(limit)
+        .offset(offset);
+    };
+    const [pendingApproval, processing, onHold, failed, negativeBalances] = await Promise.all([
+      loadPayouts("pending", "created_at", "asc"),
+      loadPayouts("processing", "updated_at", "desc"),
+      loadPayouts("on_hold", "updated_at", "desc"),
+      loadPayouts("failed", "updated_at", "desc"),
       this.listNegativeBalanceRecoveries({ limit, offset }),
     ]);
 
     return {
       pendingApproval,
+      processing,
       onHold,
       failed,
       negativeBalances: negativeBalances.items,
       counts: {
         pendingApproval: pendingApproval.length,
+        processing: processing.length,
         onHold: onHold.length,
         failed: failed.length,
         negativeBalances: negativeBalances.total,
@@ -1363,6 +1394,16 @@ class SellerCommissionService {
         if (query.sellerId) builder.where("seller_id", query.sellerId);
         if (query.status) builder.where("status", query.status);
         else builder.whereIn("status", ["pending", "processing", "on_hold"]);
+        if (query.search) {
+          const term = `%${String(query.search).trim()}%`;
+          builder.where((searchBuilder) => {
+            searchBuilder
+              .whereRaw("seller_id::text ILIKE ?", [term])
+              .orWhereRaw("payout_id::text ILIKE ?", [term])
+              .orWhereILike("notes", term)
+              .orWhereRaw("id::text ILIKE ?", [term]);
+          });
+        }
       });
     const [items, countRows] = await Promise.all([
       buildBase().orderBy("created_at", "asc").limit(limit).offset(offset),
@@ -1400,7 +1441,7 @@ class SellerCommissionService {
             ...this.parseJson(settlement.metadata, {}),
             recoveryAction: action,
             recoveryAmount: this.round(Math.abs(Number(settlement.net_amount || 0))),
-            recoveryReference: payload.reference || null,
+            recoveryReference: payload.referenceId || payload.reference || null,
             recoveryNote: payload.note || null,
             resolvedBy: actor.userId || actor.sub || null,
             resolvedAt: new Date().toISOString(),

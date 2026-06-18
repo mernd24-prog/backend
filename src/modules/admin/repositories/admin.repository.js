@@ -125,7 +125,7 @@ class AdminRepository {
         `SELECT
            COUNT(*)::INT AS total_orders,
            COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)::INT AS orders_today,
-           COUNT(*) FILTER (WHERE LOWER(status) IN ('returned', 'return_requested', 'return_approved', 'refunded', 'partially_refunded'))::INT AS returned_orders,
+           COUNT(*) FILTER (WHERE LOWER(status) IN ('returned', 'partially_returned', 'return_requested', 'return_approved', 'refunded', 'partially_refunded'))::INT AS returned_orders,
            COALESCE(SUM(COALESCE(payable_amount, total_amount, 0)), 0)::NUMERIC AS gmv,
            COALESCE(SUM(COALESCE(platform_fee_amount, 0)), 0)::NUMERIC AS total_platform_fees,
            COALESCE(SUM(oi.units_sold), 0)::INT AS units_sold
@@ -212,11 +212,11 @@ class AdminRepository {
                AND created_at < date_trunc('month', CURRENT_DATE)
            ), 0)::NUMERIC AS previous_gmv,
            COUNT(*) FILTER (
-             WHERE LOWER(status) IN ('returned', 'return_requested', 'return_approved', 'refunded', 'partially_refunded')
+             WHERE LOWER(status) IN ('returned', 'partially_returned', 'return_requested', 'return_approved', 'refunded', 'partially_refunded')
                AND created_at >= date_trunc('month', CURRENT_DATE)
            )::INT AS current_returned_orders,
            COUNT(*) FILTER (
-             WHERE LOWER(status) IN ('returned', 'return_requested', 'return_approved', 'refunded', 'partially_refunded')
+             WHERE LOWER(status) IN ('returned', 'partially_returned', 'return_requested', 'return_approved', 'refunded', 'partially_refunded')
                AND created_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
                AND created_at < date_trunc('month', CURRENT_DATE)
            )::INT AS previous_returned_orders

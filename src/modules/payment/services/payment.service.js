@@ -741,11 +741,35 @@ class PaymentService {
         orderId: payment.order_id,
         payload,
       }, async () => {
+        const paymentAmount = Number(payment.amount || 0);
+        const rawRefundAmount = Number(entity.amount || 0);
+        const refundAmount = rawRefundAmount > paymentAmount && rawRefundAmount >= 100
+          ? Number((rawRefundAmount / 100).toFixed(2))
+          : rawRefundAmount;
+        const metadata = typeof payment.metadata === "object" && payment.metadata ? payment.metadata : {};
+        const knownRefundedAmount = Math.max(
+          Number(metadata.returnRefund?.refundedAmount || 0),
+          Number(metadata.refundWebhook?.totalRefundedAmount || 0),
+          refundAmount,
+        );
+        const paymentStatus = paymentAmount > 0 && knownRefundedAmount >= paymentAmount - 0.01
+          ? PAYMENT_STATUS.REFUNDED
+          : PAYMENT_STATUS.PARTIALLY_REFUNDED;
         await this.paymentRepository.updatePaymentStatus(payment.id, {
-          status: PAYMENT_STATUS.REFUNDED,
+          status: paymentStatus,
           providerPaymentId,
           verificationMethod: "webhook",
-          metadata: entity,
+          metadata: {
+            ...entity,
+            refundWebhook: {
+              refundId: entity.id,
+              refundAmount,
+              totalRefundedAmount: knownRefundedAmount,
+              paymentAmount,
+              paymentStatus,
+              eventType,
+            },
+          },
           verifiedAt: new Date(),
         });
         const refundEvent = makeEvent(
@@ -757,7 +781,8 @@ class PaymentService {
             provider: payment.provider,
             providerPaymentId,
             refundId: entity.id,
-            amount: Number(entity.amount || payment.amount || 0),
+            amount: refundAmount,
+            paymentStatus,
           },
           { source: "payment-webhook" },
         );

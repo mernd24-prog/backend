@@ -6,6 +6,7 @@ const { DeliveryRepository } = require("../repositories/delivery.repository");
 const { OrderRepository } = require("../../order/repositories/order.repository");
 const { NotificationRepository } = require("../../notification/repositories/notification.repository");
 const { DealService } = require("../../deal/services/deal.service");
+const { CommissionService } = require("../../seller/services/commission.service");
 const { shippingProviderRegistry } = require("../../../infrastructure/shipping/provider-registry");
 const { ORDER_STATUS } = require("../../../shared/domain/commerce-constants");
 const { createOtp } = require("../../../shared/tools/otp");
@@ -14,6 +15,7 @@ const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { env } = require("../../../config/env");
+const { logger } = require("../../../shared/logger/logger");
 
 const SHIPMENT_TRANSITIONS = {
   initiated: ["manifested", "picked_up", "in_transit", "cancelled", "failed"],
@@ -39,11 +41,13 @@ class DeliveryService {
     orderRepository = new OrderRepository(),
     notificationRepository = new NotificationRepository(),
     dealService = new DealService(),
+    commissionService = CommissionService,
   } = {}) {
     this.deliveryRepository = deliveryRepository;
     this.orderRepository = orderRepository;
     this.notificationRepository = notificationRepository;
     this.dealService = dealService;
+    this.commissionService = commissionService;
   }
 
   async getServiceability(pincode) {
@@ -352,7 +356,7 @@ class DeliveryService {
     });
 
     await this.syncOrderForTracking(result.shipment, actor);
-    await this.dealService.markOrderDeliveryVerified(result.shipment.order_id, actor).catch(() => null);
+    await this.syncDealDeliveryForShipment(result.shipment, actor);
     await this.publishShipmentTrackingEvent(result.shipment, actor);
     return result;
   }
@@ -397,6 +401,7 @@ class DeliveryService {
         actorId: "webhook",
       });
       await this.syncOrderForTracking(result.shipment, { userId: "webhook", role: "system" });
+      await this.syncDealDeliveryForShipment(result.shipment, { userId: "webhook", role: "system" });
       await this.publishShipmentTrackingEvent(result.shipment, { userId: "webhook", role: "system" });
       await this.deliveryRepository.completeWebhookEvent(provider, providerEventId, "processed");
       return { acknowledged: true, shipment: result.shipment };
@@ -431,32 +436,98 @@ class DeliveryService {
   }
 
   async syncOrderForTracking(shipment, actor) {
+    if (!this.isForwardShipment(shipment)) {
+      return;
+    }
+
     let nextOrderStatus = null;
+    let aggregateDeliveryStatus = shipment.status;
     if ([DELIVERY_STATUS.DELIVERED, DELIVERY_STATUS.DELIVERED_VERIFIED].includes(shipment.status)) {
-      nextOrderStatus = ORDER_STATUS.DELIVERED;
+      const progress = await this.getForwardDeliveryProgress(shipment.order_id);
+      aggregateDeliveryStatus = progress.aggregateDeliveryStatus;
+      nextOrderStatus = progress.allDelivered ? ORDER_STATUS.DELIVERED : ORDER_STATUS.SHIPPED;
     } else if ([DELIVERY_STATUS.IN_TRANSIT, DELIVERY_STATUS.OUT_FOR_DELIVERY].includes(shipment.status)) {
       nextOrderStatus = ORDER_STATUS.SHIPPED;
     }
 
     if (nextOrderStatus) {
       const order = await this.orderRepository.findById(shipment.order_id);
-      if ([ORDER_STATUS.FULFILLED, ORDER_STATUS.RETURNED, ORDER_STATUS.CANCELLED].includes(order?.status)) {
-        await this.updateOrderDeliveryStatusOnly(shipment.order_id, shipment.status, actor, shipment.id);
+      if ([ORDER_STATUS.FULFILLED, ORDER_STATUS.RETURN_REQUESTED, ORDER_STATUS.PARTIALLY_RETURNED, ORDER_STATUS.RETURNED, ORDER_STATUS.CANCELLED].includes(order?.status)) {
+        await this.updateOrderDeliveryStatusOnly(shipment.order_id, aggregateDeliveryStatus, actor, shipment.id);
         return;
       }
       await this.orderRepository.updateStatus(shipment.order_id, nextOrderStatus, {
         actorId: actor.userId,
         actorRole: actor.role,
-        reason: `delivery_${shipment.status}`,
-        deliveryStatus: shipment.status,
+        reason: `delivery_${aggregateDeliveryStatus}`,
+        deliveryStatus: aggregateDeliveryStatus,
         metadata: { shipmentId: shipment.id },
       }).catch(async () => {
-        await this.updateOrderDeliveryStatusOnly(shipment.order_id, shipment.status, actor, shipment.id);
+        await this.updateOrderDeliveryStatusOnly(shipment.order_id, aggregateDeliveryStatus, actor, shipment.id);
       });
+      if (nextOrderStatus === ORDER_STATUS.DELIVERED) {
+        await this.syncSellerFinanceForDeliveredOrder(shipment.order_id, actor);
+      }
       return;
     }
 
     await this.updateOrderDeliveryStatusOnly(shipment.order_id, shipment.status, actor, shipment.id);
+  }
+
+  isForwardShipment(shipment = {}) {
+    return String(shipment.direction || "forward") !== "reverse" &&
+      String(shipment.shipment_type || "forward") !== "return";
+  }
+
+  isDeliveredShipmentStatus(status) {
+    return [DELIVERY_STATUS.DELIVERED, DELIVERY_STATUS.DELIVERED_VERIFIED].includes(status);
+  }
+
+  async getForwardDeliveryProgress(orderId) {
+    const order = await this.orderRepository.findByIdWithItems(orderId);
+    const sellerIds = new Set(
+      (order?.items || [])
+        .map((item) => String(item.seller_id || item.sellerId || ""))
+        .filter(Boolean),
+    );
+    const forwardShipments = (order?.relations?.shipments || [])
+      .filter((item) => this.isForwardShipment(item));
+    const deliveredSellerIds = new Set(
+      forwardShipments
+        .filter((item) => this.isDeliveredShipmentStatus(item.status))
+        .map((item) => String(item.seller_id || item.sellerId || ""))
+        .filter(Boolean),
+    );
+    const allDelivered = sellerIds.size > 0 && Array.from(sellerIds).every((sellerId) => deliveredSellerIds.has(sellerId));
+    const allVerified = allDelivered && forwardShipments
+      .filter((item) => sellerIds.has(String(item.seller_id || item.sellerId || "")))
+      .every((item) => item.status === DELIVERY_STATUS.DELIVERED_VERIFIED);
+
+    return {
+      order,
+      allDelivered,
+      aggregateDeliveryStatus: allDelivered
+        ? (allVerified ? DELIVERY_STATUS.DELIVERED_VERIFIED : DELIVERY_STATUS.DELIVERED)
+        : "partially_delivered",
+    };
+  }
+
+  async syncDealDeliveryForShipment(shipment, actor = {}) {
+    if (!this.isForwardShipment(shipment) || !this.isDeliveredShipmentStatus(shipment.status)) return;
+    const progress = await this.getForwardDeliveryProgress(shipment.order_id);
+    if (!progress.allDelivered) return;
+    await this.dealService.markOrderDeliveryVerified(shipment.order_id, actor).catch(() => null);
+  }
+
+  async syncSellerFinanceForDeliveredOrder(orderId, actor = {}) {
+    try {
+      await this.commissionService.calculateCommission(orderId, {
+        actor,
+        sourceStatus: ORDER_STATUS.DELIVERED,
+      });
+    } catch (error) {
+      logger.error({ orderId, error: error.message }, "Seller commission sync from delivery failed");
+    }
   }
 
   async updateOrderDeliveryStatusOnly(orderId, deliveryStatus, actor, shipmentId) {
@@ -654,6 +725,7 @@ class DeliveryService {
     });
 
     await this.syncOrderForTracking(result.shipment, actor);
+    await this.syncDealDeliveryForShipment(result.shipment, actor);
     await this.publishShipmentTrackingEvent(result.shipment, actor);
     return result;
   }

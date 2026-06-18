@@ -82,6 +82,7 @@ const ORDER_STATUS = {
   SHIPPED: "shipped",
   DELIVERED: "delivered",
   RETURN_REQUESTED: "return_requested",
+  PARTIALLY_RETURNED: "partially_returned",
   RETURNED: "returned",
   CANCELLED: "cancelled",
   FULFILLED: "fulfilled",
@@ -92,6 +93,7 @@ const PAYMENT_STATUS = {
   AUTHORIZED: "authorized",
   CAPTURED: "captured",
   FAILED: "failed",
+  PARTIALLY_REFUNDED: "partially_refunded",
   REFUNDED: "refunded",
   CANCELLED: "cancelled",
 };

@@ -30,18 +30,6 @@ const {
   updateBrandSchema,
   listBrandsSchema,
   brandIdSchema,
-  createWarrantyTemplateSchema,
-  updateWarrantyTemplateSchema,
-  listWarrantyTemplatesSchema,
-  warrantyTemplateIdSchema,
-  createFinishSchema,
-  updateFinishSchema,
-  listFinishesSchema,
-  finishIdSchema,
-  createDimensionSchema,
-  updateDimensionSchema,
-  listDimensionsSchema,
-  dimensionIdSchema,
   createBatchSchema,
   updateBatchSchema,
   listBatchesSchema,
@@ -213,48 +201,6 @@ platformRoutes.delete(
   checkInput(brandIdSchema),
   catchErrors(platformController.deleteBrand),
 );
-
-platformRoutes.get(
-  "/warranty-templates",
-  checkInput(listWarrantyTemplatesSchema),
-  catchErrors(platformController.listWarrantyTemplates),
-);
-platformRoutes.get(
-  "/warranty-templates/:templateId",
-  checkInput(warrantyTemplateIdSchema),
-  catchErrors(platformController.getWarrantyTemplate),
-);
-platformRoutes.post(
-  "/warranty-templates",
-  authenticate,
-  allowActions(ACTIONS.CATALOG_MANAGE),
-  checkInput(createWarrantyTemplateSchema),
-  catchErrors(platformController.createWarrantyTemplate),
-);
-platformRoutes.patch(
-  "/warranty-templates/:templateId",
-  authenticate,
-  allowActions(ACTIONS.CATALOG_MANAGE),
-  checkInput(updateWarrantyTemplateSchema),
-  catchErrors(platformController.updateWarrantyTemplate),
-);
-platformRoutes.delete(
-  "/warranty-templates/:templateId",
-  authenticate,
-  allowActions(ACTIONS.CATALOG_MANAGE),
-  checkInput(warrantyTemplateIdSchema),
-  catchErrors(platformController.deleteWarrantyTemplate),
-);
-
-platformRoutes.get("/finishes", checkInput(listFinishesSchema), catchErrors(platformController.listFinishes));
-platformRoutes.post("/finishes", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(createFinishSchema), catchErrors(platformController.createFinish));
-platformRoutes.patch("/finishes/:finishId", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(updateFinishSchema), catchErrors(platformController.updateFinish));
-platformRoutes.delete("/finishes/:finishId", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(finishIdSchema), catchErrors(platformController.deleteFinish));
-
-platformRoutes.get("/dimensions", checkInput(listDimensionsSchema), catchErrors(platformController.listDimensions));
-platformRoutes.post("/dimensions", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(createDimensionSchema), catchErrors(platformController.createDimension));
-platformRoutes.patch("/dimensions/:dimensionId", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(updateDimensionSchema), catchErrors(platformController.updateDimension));
-platformRoutes.delete("/dimensions/:dimensionId", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(dimensionIdSchema), catchErrors(platformController.deleteDimension));
 
 platformRoutes.get("/batches", checkInput(listBatchesSchema), catchErrors(platformController.listBatches));
 platformRoutes.post("/batches", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(createBatchSchema), catchErrors(platformController.createBatch));

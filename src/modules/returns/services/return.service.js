@@ -2,7 +2,7 @@ const { v4: uuidv4 } = require("uuid");
 const { ReturnModel } = require("../models/return.model");
 const { logger } = require("../../../shared/logger/logger");
 const { AppError } = require("../../../shared/errors/app-error");
-const { ORDER_STATUS } = require("../../../shared/domain/commerce-constants");
+const { ORDER_STATUS, PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const { OrderRepository } = require("../../order/repositories/order.repository");
 const { WalletService } = require("../../wallet/services/wallet.service");
 const { InventoryService } = require("../../inventory/services/inventory.service");
@@ -98,6 +98,203 @@ class ReturnServiceClass {
 
   makeReturnNumber() {
     return `RMA-${Date.now()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+  }
+
+  getReturnId(returnRequest = {}) {
+    return String(returnRequest._id || returnRequest.id || "");
+  }
+
+  getReturnMetadata(returnRequest = {}) {
+    return {
+      returnId: this.getReturnId(returnRequest),
+      returnNumber: returnRequest.returnNumber || null,
+      sellerId: returnRequest.sellerId || null,
+      status: returnRequest.status || null,
+    };
+  }
+
+  async markOrderReturnRequested(order = {}, returnRequests = [], actor = {}) {
+    if (!order?.id) return null;
+    const metadata = this.parseJson(order.metadata, {});
+    const returnIds = returnRequests.map((item) => this.getReturnId(item)).filter(Boolean);
+    const existingIds = Array.isArray(metadata.returnLifecycle?.returnIds)
+      ? metadata.returnLifecycle.returnIds
+      : [];
+    const nextReturnIds = Array.from(new Set([...existingIds, ...returnIds]));
+    const now = new Date().toISOString();
+
+    return this.orderRepository.updateStatus(order.id, ORDER_STATUS.RETURN_REQUESTED, {
+      actorId: actor.userId || null,
+      actorRole: actor.role || null,
+      reason: "return_requested",
+      paymentStatus: order.payment_status,
+      deliveryStatus: order.delivery_status,
+      metadata: {
+        returnIds,
+        returnStatus: ORDER_STATUS.RETURN_REQUESTED,
+      },
+      orderMetadata: {
+        returnLifecycle: {
+          ...(metadata.returnLifecycle || {}),
+          status: ORDER_STATUS.RETURN_REQUESTED,
+          paymentStatus: order.payment_status,
+          returnIds: nextReturnIds,
+          openReturnCount: nextReturnIds.length,
+          lastReturnId: returnIds[returnIds.length - 1] || metadata.returnLifecycle?.lastReturnId || null,
+          requestedAt: metadata.returnLifecycle?.requestedAt || now,
+          updatedAt: now,
+        },
+      },
+    });
+  }
+
+  isCompletedReturn(returnRequest = {}) {
+    const status = returnRequest.status;
+    const refundStatus = returnRequest.refund?.status;
+    return Boolean(
+      returnRequest.refundedAt ||
+      refundStatus === "completed" ||
+      ["refunded", "replaced"].includes(status) ||
+      (status === "closed" && ["completed", "not_required"].includes(refundStatus)),
+    );
+  }
+
+  getReturnRefundedAmount(returnRequest = {}) {
+    if (!this.isCompletedReturn(returnRequest)) return 0;
+    return this.round(returnRequest.refund?.refundedAmount || returnRequest.refundAmount || 0);
+  }
+
+  buildReturnItemKey(item = {}) {
+    return [
+      item.orderItemId || "",
+      item.productId || "",
+      item.variantSku || item.variantId || "",
+    ].join(":");
+  }
+
+  async buildOrderReturnLifecycle(orderId) {
+    const order = await this.orderRepository.findByIdWithItems(orderId);
+    if (!order) return null;
+
+    const returnRequests = await ReturnModel.find({
+      orderId,
+      status: { $ne: "rejected" },
+    }).lean();
+
+    const orderItems = order.items || [];
+    const totalQuantity = orderItems.reduce((sum, item) => {
+      const quantity = Number(item.quantity || 0);
+      const cancelledQuantity = Number(item.cancelled_quantity || 0);
+      return sum + Math.max(quantity - cancelledQuantity, 0);
+    }, 0);
+    const orderItemIds = new Set(orderItems.map((item) => String(item.id || "")));
+    const returnedQuantityByItem = new Map();
+    let refundedAmount = 0;
+    let completedReturnCount = 0;
+    let openReturnCount = 0;
+
+    returnRequests.forEach((returnRequest) => {
+      const completed = this.isCompletedReturn(returnRequest);
+      if (completed) {
+        completedReturnCount += 1;
+        refundedAmount = this.round(refundedAmount + this.getReturnRefundedAmount(returnRequest));
+      } else if (!["closed", "qc_failed"].includes(returnRequest.status)) {
+        openReturnCount += 1;
+      }
+
+      if (!completed) return;
+      (returnRequest.items || []).forEach((item) => {
+        const orderItemId = String(item.orderItemId || "");
+        const key = orderItemIds.has(orderItemId)
+          ? orderItemId
+          : this.buildReturnItemKey(item);
+        const quantity = Number(
+          item.receivedQuantity ||
+          item.approvedQuantity ||
+          item.requestedQuantity ||
+          item.quantity ||
+          0,
+        );
+        returnedQuantityByItem.set(key, (returnedQuantityByItem.get(key) || 0) + Math.max(quantity, 0));
+      });
+    });
+
+    const returnedQuantity = Array.from(returnedQuantityByItem.values())
+      .reduce((sum, quantity) => sum + quantity, 0);
+    const refundableAmount = this.round(Math.max(
+      Number(order.payable_amount || 0),
+      Number(order.total_amount || 0),
+    ));
+    const hasFullQuantityReturn = totalQuantity > 0 && returnedQuantity >= totalQuantity;
+    const hasFullAmountRefund = refundableAmount > 0 && refundedAmount >= this.round(refundableAmount - 0.01);
+    const paymentStatus = refundedAmount > 0
+      ? (hasFullAmountRefund ? PAYMENT_STATUS.REFUNDED : PAYMENT_STATUS.PARTIALLY_REFUNDED)
+      : order.payment_status;
+    const status = hasFullQuantityReturn
+      ? ORDER_STATUS.RETURNED
+      : openReturnCount > 0
+        ? ORDER_STATUS.RETURN_REQUESTED
+        : refundedAmount > 0 || returnedQuantity > 0
+          ? ORDER_STATUS.PARTIALLY_RETURNED
+          : order.status;
+
+    return {
+      order,
+      lifecycle: {
+        status,
+        paymentStatus,
+        refundedAmount,
+        refundableAmount,
+        returnedQuantity,
+        totalQuantity,
+        completedReturnCount,
+        openReturnCount,
+        returnIds: returnRequests.map((item) => this.getReturnId(item)).filter(Boolean),
+        lastReturnId: returnRequests[0] ? this.getReturnId(returnRequests[0]) : null,
+        fullQuantityReturned: hasFullQuantityReturn,
+        fullAmountRefunded: hasFullAmountRefund,
+        updatedAt: new Date().toISOString(),
+      },
+    };
+  }
+
+  async syncParentOrderAfterReturnRefund(returnRequest, actor = {}) {
+    const result = await this.buildOrderReturnLifecycle(returnRequest.orderId);
+    if (!result) return null;
+
+    const { order, lifecycle } = result;
+    const returnMetadata = this.getReturnMetadata(returnRequest);
+    const updatedOrder = await this.orderRepository.updateStatus(order.id, lifecycle.status, {
+      actorId: actor.userId || null,
+      actorRole: actor.role || null,
+      reason: "return_refund_completed",
+      paymentStatus: lifecycle.paymentStatus,
+      deliveryStatus: order.delivery_status,
+      metadata: {
+        ...returnMetadata,
+        refundAmount: returnRequest.refundAmount || 0,
+        parentOrderStatus: lifecycle.status,
+        parentPaymentStatus: lifecycle.paymentStatus,
+      },
+      orderMetadata: {
+        returnLifecycle: lifecycle,
+      },
+    });
+
+    if ([PAYMENT_STATUS.REFUNDED, PAYMENT_STATUS.PARTIALLY_REFUNDED].includes(lifecycle.paymentStatus)) {
+      await this.orderRepository.updatePaymentsForOrderReturnRefund(order.id, {
+        status: lifecycle.paymentStatus,
+        metadata: {
+          ...returnMetadata,
+          refundedAmount: lifecycle.refundedAmount,
+          refundableAmount: lifecycle.refundableAmount,
+          paymentStatus: lifecycle.paymentStatus,
+          orderStatus: lifecycle.status,
+        },
+      });
+    }
+
+    return updatedOrder;
   }
 
   async getReturnOrThrow(returnId) {
@@ -228,7 +425,7 @@ class ReturnServiceClass {
     const order = await this.orderRepository.findByIdWithItems(orderId);
     if (!order) throw new AppError("Order not found", 404);
     if (order.buyer_id !== buyerId) throw new AppError("You can request return only for your order", 403);
-    if (![ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED, "completed"].includes(order.status)) {
+    if (![ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED, ORDER_STATUS.RETURN_REQUESTED, ORDER_STATUS.PARTIALLY_RETURNED, "completed"].includes(order.status)) {
       throw new AppError("Only delivered orders are eligible for return", 409);
     }
 
@@ -338,6 +535,8 @@ class ReturnServiceClass {
       createdReturns.push(returnRequest);
       await this.publishReturnEvent(DOMAIN_EVENTS.RETURN_REQUESTED_V1, returnRequest, actor);
     }
+
+    await this.markOrderReturnRequested(order, createdReturns, actor);
 
     logger.info({ orderId, returnIds: createdReturns.map((item) => item._id) }, "Return requested");
     return createdReturns.length === 1
@@ -1139,6 +1338,7 @@ class ReturnServiceClass {
       },
     });
     await returnRequest.save();
+    await this.syncParentOrderAfterReturnRefund(returnRequest, actor);
     await this.publishReturnEvent(DOMAIN_EVENTS.RETURN_REFUNDED_V1, returnRequest, actor, {
       refundAmount,
       referenceId,

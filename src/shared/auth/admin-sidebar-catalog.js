@@ -4,13 +4,8 @@ const SIDEBAR_MODULES = [
   { moduleName: "Catalog Management", moduleKey: "catalog-management", moduleSlug: "catalog-management", icon: "MdInventory", moduleType: "group", order: 10, parentModule: null, requiredModule: "products" },
   { moduleName: "Products", moduleKey: "products-menu", moduleSlug: "products-menu", icon: "MdListAlt", moduleType: "group", order: 11, parentModule: "catalog-management", requiredModule: "products" },
   { moduleName: "All Products", moduleKey: "product-catalog", moduleSlug: "product-catalog", icon: "MdViewList", routePath: "/app/product-catalog", moduleType: "page", order: 12, parentModule: "products-menu", requiredModule: "products" },
+  { moduleName: "Product Moderation Queue", moduleKey: "product-moderation-queue", moduleSlug: "product-moderation-queue", icon: "MdFactCheck", routePath: "/app/product-moderation-queue", moduleType: "page", order: 14, parentModule: "products-menu", requiredModule: "products" },
   { moduleName: "Add Product", moduleKey: "add-product", moduleSlug: "add-product", icon: "MdAddBox", routePath: "/app/product-catalog/form", moduleType: "page", order: 13, parentModule: "products-menu", requiredModule: "products" },
-  { moduleName: "Draft Products", moduleKey: "draft-products", moduleSlug: "draft-products", icon: "MdDrafts", routePath: "/app/draft-products", moduleType: "page", order: 14, parentModule: "products-menu", requiredModule: "products" },
-  { moduleName: "Pending Approval", moduleKey: "pending-products", moduleSlug: "pending-products", icon: "MdPendingActions", routePath: "/app/pending-products", moduleType: "page", order: 15, parentModule: "products-menu", requiredModule: "products" },
-  { moduleName: "Change Pending", moduleKey: "change-pending-products", moduleSlug: "change-pending-products", icon: "MdPendingActions", routePath: "/app/change-pending-products", moduleType: "page", order: 16, parentModule: "products-menu", requiredModule: "products" },
-  { moduleName: "Rejected Products", moduleKey: "rejected-products", moduleSlug: "rejected-products", icon: "MdCancel", routePath: "/app/rejected-products", moduleType: "page", order: 17, parentModule: "products-menu", requiredModule: "products" },
-  { moduleName: "Product Setup Flow", moduleKey: "product-flow", moduleSlug: "product-flow", icon: "MdAccountTree", routePath: "/app/product-flow", moduleType: "page", order: 18, parentModule: "products-menu", requiredModule: "products" },
-  { moduleName: "Product Tags", moduleKey: "product-tags", moduleSlug: "product-tags", icon: "MdSell", routePath: "/app/product-tags", moduleType: "page", order: 19, parentModule: "products-menu", requiredModule: "products" },
 
   { moduleName: "Catalog Masters", moduleKey: "catalog-masters", moduleSlug: "catalog-masters", icon: "MdCategory", moduleType: "group", order: 20, parentModule: "catalog-management", requiredModule: "platform" },
   { moduleName: "Category Tree", moduleKey: "categories", moduleSlug: "categories", icon: "MdAccountTree", routePath: "/app/categories", moduleType: "page", order: 21, parentModule: "catalog-masters", requiredModule: "categories" },
@@ -20,10 +15,7 @@ const SIDEBAR_MODULES = [
   { moduleName: "Option Masters", moduleKey: "product-options", moduleSlug: "product-options", icon: "MdSettings", routePath: "/app/product-options", moduleType: "page", order: 25, parentModule: "catalog-masters", requiredModule: "option_masters" },
   { moduleName: "Option Values", moduleKey: "product-option-values", moduleSlug: "product-option-values", icon: "MdListAlt", routePath: "/app/product-option-values", moduleType: "page", order: 26, parentModule: "catalog-masters", requiredModule: "option_values" },
   { moduleName: "Product Variants", moduleKey: "product-variants", moduleSlug: "product-variants", icon: "MdGridView", routePath: "/app/product-variants", moduleType: "page", order: 27, parentModule: "catalog-masters", requiredModule: "platform" },
-  { moduleName: "Product Dimensions", moduleKey: "product-dimensions", moduleSlug: "product-dimensions", icon: "MdStraighten", routePath: "/app/product-dimensions", moduleType: "page", order: 28, parentModule: "catalog-masters", requiredModule: "platform" },
-  { moduleName: "Finish Products", moduleKey: "finish", moduleSlug: "finish", icon: "MdPalette", routePath: "/app/finish", moduleType: "page", order: 29, parentModule: "catalog-masters", requiredModule: "platform" },
-  { moduleName: "Warranty Templates", moduleKey: "warranty", moduleSlug: "warranty", icon: "MdVerified", routePath: "/app/warranty", moduleType: "page", order: 30, parentModule: "catalog-masters", requiredModule: "warranty" },
-  { moduleName: "Product Reviews", moduleKey: "product-reviews", moduleSlug: "product-reviews", icon: "MdReviews", routePath: "/app/product-reviews", moduleType: "page", order: 31, parentModule: "catalog-masters", requiredModule: "reviews" },
+  { moduleName: "Product Reviews", moduleKey: "product-reviews", moduleSlug: "product-reviews", icon: "MdReviews", routePath: "/app/product-reviews", moduleType: "page", order: 28, parentModule: "catalog-masters", requiredModule: "reviews" },
 
   { moduleName: "Inventory Operations", moduleKey: "inventory-management", moduleSlug: "inventory-management", icon: "MdWarehouse", moduleType: "group", order: 50, parentModule: null, requiredModule: "inventory" },
   { moduleName: "Stock Overview", moduleKey: "inventory-overview", moduleSlug: "inventory-overview", icon: "MdDashboard", routePath: "/app/inventory-overview", moduleType: "page", order: 51, parentModule: "inventory-management", requiredModule: "inventory" },
@@ -36,22 +28,15 @@ const SIDEBAR_MODULES = [
   { moduleName: "Orders", moduleKey: "orders", moduleSlug: "orders", icon: "MdReceipt", routePath: "/app/orders", moduleType: "page", order: 71, parentModule: "orders-management", requiredModule: "orders" },
   { moduleName: "Carts", moduleKey: "carts", moduleSlug: "carts", icon: "MdShoppingBag", routePath: "/app/carts", moduleType: "page", order: 72, parentModule: "orders-management", requiredModule: "carts" },
   { moduleName: "Checkout Quote", moduleKey: "checkout-quote", moduleSlug: "checkout-quote", icon: "MdCalculate", routePath: "/app/checkout-quote", moduleType: "page", order: 73, parentModule: "orders-management", requiredModule: "orders" },
-  { moduleName: "Order Status", moduleKey: "order-status", moduleSlug: "order-status", icon: "MdRule", routePath: "/app/order-status", moduleType: "page", order: 74, parentModule: "orders-management", requiredModule: "orders" },
   { moduleName: "Payments", moduleKey: "payments", moduleSlug: "payments", icon: "MdPayment", routePath: "/app/payments", moduleType: "page", order: 75, parentModule: "orders-management", requiredModule: "payments" },
   { moduleName: "Seller Finance", moduleKey: "seller-finance", moduleSlug: "seller-finance", icon: "MdAccountBalanceWallet", routePath: "/app/seller-finance", moduleType: "page", order: 76, parentModule: "orders-management", requiredModule: "sellers/commissions" },
   { moduleName: "Return Requests", moduleKey: "returns", moduleSlug: "returns", icon: "MdAssignmentReturn", routePath: "/app/returns", moduleType: "page", order: 77, parentModule: "orders-management", requiredModule: "returns" },
-  { moduleName: "Return Reasons", moduleKey: "order-return-reasons", moduleSlug: "order-return-reasons", icon: "MdUndo", routePath: "/app/order-return-reasons", moduleType: "page", order: 78, parentModule: "orders-management", requiredModule: "returns" },
-  { moduleName: "Refunds", moduleKey: "refunds", moduleSlug: "refunds", icon: "MdCurrencyRupee", routePath: "/app/refunds", moduleType: "page", order: 79, parentModule: "orders-management", requiredModule: "payments" },
-  { moduleName: "Transactions", moduleKey: "transactions", moduleSlug: "transactions", icon: "MdPayments", routePath: "/app/transactions", moduleType: "page", order: 80, parentModule: "orders-management", requiredModule: "wallets" },
-  { moduleName: "Gift Card Orders", moduleKey: "gift-card-orders", moduleSlug: "gift-card-orders", icon: "MdCardGiftcard", routePath: "/app/gift-card-orders", moduleType: "page", order: 81, parentModule: "orders-management", requiredModule: "orders" },
-  { moduleName: "Cancellation Reasons", moduleKey: "order-cancellation-reasons", moduleSlug: "order-cancellation-reasons", icon: "MdCancel", routePath: "/app/order-cancellation-reasons", moduleType: "page", order: 82, parentModule: "orders-management", requiredModule: "orders" },
   { moduleName: "Subscription Orders", moduleKey: "subscription-orders", moduleSlug: "subscription-orders", icon: "MdSubscriptions", routePath: "/app/subscription-orders", moduleType: "page", order: 83, parentModule: "orders-management", requiredModule: "subscriptions" },
   { moduleName: "Commerce Settings", moduleKey: "commerce-settings", moduleSlug: "commerce-settings", icon: "MdSettings", routePath: "/app/commerce-settings", moduleType: "page", order: 84, parentModule: "orders-management", requiredModule: "admin" },
 
   { moduleName: "Delivery & Shipping", moduleKey: "delivery-shipping", moduleSlug: "delivery-shipping", icon: "MdLocalShipping", moduleType: "group", order: 85, parentModule: null, requiredModule: "delivery" },
   { moduleName: "Shipment Tracking", moduleKey: "shipment-tracking", moduleSlug: "shipment-tracking", icon: "MdLocalShipping", routePath: "/app/shipment-tracking", moduleType: "page", order: 86, parentModule: "delivery-shipping", requiredModule: "delivery" },
   { moduleName: "Shipping Packages", moduleKey: "shipping-packages", moduleSlug: "shipping-packages", icon: "MdInventory2", routePath: "/app/shipping-packages", moduleType: "page", order: 87, parentModule: "delivery-shipping", requiredModule: "delivery" },
-  { moduleName: "Shipping Profiles", moduleKey: "shipping-profile", moduleSlug: "shipping-profile", icon: "MdAssignment", routePath: "/app/shipping-profile", moduleType: "page", order: 88, parentModule: "delivery-shipping", requiredModule: "delivery" },
   { moduleName: "Pickup Addresses", moduleKey: "pickup-addresses", moduleSlug: "pickup-addresses", icon: "MdLocationOn", routePath: "/app/pickup-addresses", moduleType: "page", order: 89, parentModule: "delivery-shipping", requiredModule: "delivery" },
   { moduleName: "Delivery Partners", moduleKey: "shipping-company-users", moduleSlug: "shipping-company-users", icon: "MdPeople", routePath: "/app/shipping-company-users", moduleType: "page", order: 90, parentModule: "delivery-shipping", requiredModule: "delivery" },
 
@@ -70,16 +55,8 @@ const SIDEBAR_MODULES = [
 
   { moduleName: "Marketing", moduleKey: "marketing", moduleSlug: "marketing", icon: "MdCampaign", moduleType: "group", order: 120, parentModule: null, requiredModule: "pricing" },
   { moduleName: "Coupons", moduleKey: "discount-coupons", moduleSlug: "discount-coupons", icon: "MdConfirmationNumber", routePath: "/app/discount-coupons", moduleType: "page", order: 121, parentModule: "marketing", requiredModule: "coupons" },
-  { moduleName: "Special Price", moduleKey: "special-price", moduleSlug: "special-price", icon: "MdPriceChange", routePath: "/app/special-price", moduleType: "page", order: 122, parentModule: "marketing", requiredModule: "pricing" },
-  { moduleName: "Volume Discounts", moduleKey: "volume-discounts", moduleSlug: "volume-discounts", icon: "MdDiscount", routePath: "/app/volume-discounts", moduleType: "page", order: 123, parentModule: "marketing", requiredModule: "pricing" },
-  { moduleName: "Campaigns", moduleKey: "campaigns", moduleSlug: "campaigns", icon: "MdCampaign", routePath: "/app/PPC-promotions-management", moduleType: "page", order: 124, parentModule: "marketing", requiredModule: "pricing" },
   { moduleName: "Promotion Banners", moduleKey: "promotions-banners", moduleSlug: "promotions-banners", icon: "MdWeb", routePath: "/app/content-management/promotion-banner", moduleType: "page", order: 125, parentModule: "marketing", requiredModule: "banners" },
-  { moduleName: "Similar Products", moduleKey: "similar-products", moduleSlug: "similar-products", icon: "MdCompareArrows", routePath: "/app/similar-products", moduleType: "page", order: 126, parentModule: "marketing", requiredModule: "recommendations" },
-  { moduleName: "Frequently Bought Together", moduleKey: "frequently-bought-together", moduleSlug: "frequently-bought-together", icon: "MdAddShoppingCart", routePath: "/app/frequently-bought-together", moduleType: "page", order: 127, parentModule: "marketing", requiredModule: "recommendations" },
-  { moduleName: "Product Event Weightages", moduleKey: "product-event-weightages", moduleSlug: "product-event-weightages", icon: "MdTimeline", routePath: "/app/product-event-weightages", moduleType: "page", order: 128, parentModule: "marketing", requiredModule: "recommendations" },
-  { moduleName: "Recommended Tag Weightages", moduleKey: "recommended-product-tag-weightages", moduleSlug: "recommended-product-tag-weightages", icon: "MdRecommend", routePath: "/app/recommended-product-tag-weightages", moduleType: "page", order: 129, parentModule: "marketing", requiredModule: "recommendations" },
   { moduleName: "Referral Programs", moduleKey: "referral-commerce", moduleSlug: "referral-commerce", icon: "MdShare", routePath: "/app/referral-commerce", moduleType: "page", order: 130, parentModule: "marketing", requiredModule: "referral" },
-  { moduleName: "Reward On Purchase", moduleKey: "reward-on-purchase", moduleSlug: "reward-on-purchase", icon: "MdCardGiftcard", routePath: "/app/reward-on-purchase", moduleType: "page", order: 131, parentModule: "marketing", requiredModule: "loyalty" },
 
   { moduleName: "Tax & Compliance", moduleKey: "tax-compliance", moduleSlug: "tax-compliance", icon: "MdAccountBalance", moduleType: "group", order: 140, parentModule: null, requiredModule: "tax" },
   { moduleName: "HSN Codes", moduleKey: "hsn-code", moduleSlug: "hsn-code", icon: "MdQrCode", routePath: "/app/hsn-code", moduleType: "page", order: 141, parentModule: "tax-compliance", requiredModule: "tax" },
@@ -109,7 +86,6 @@ const SIDEBAR_MODULES = [
   { moduleName: "Badges", moduleKey: "badges", moduleSlug: "badges", icon: "MdMilitaryTech", routePath: "/app/badges", moduleType: "page", order: 202, parentModule: "catalog-masters", requiredModule: "platform" },
 
   // Orders Management additions
-  { moduleName: "Subscriptions Overview", moduleKey: "subscriptions", moduleSlug: "subscriptions", icon: "MdSubscriptions", routePath: "/app/subscriptions", moduleType: "page", order: 240, parentModule: "orders-management", requiredModule: "subscriptions" },
   { moduleName: "Cancellations", moduleKey: "cancellations", moduleSlug: "cancellations", icon: "MdCancel", routePath: "/app/cancellations", moduleType: "page", order: 203, parentModule: "orders-management", requiredModule: "cancellations" },
   { moduleName: "Tax Invoices", moduleKey: "tax-invoices", moduleSlug: "tax-invoices", icon: "MdReceiptLong", routePath: "/app/tax-invoices", moduleType: "page", order: 204, parentModule: "orders-management", requiredModule: "tax" },
   { moduleName: "Credit Notes", moduleKey: "credit-notes", moduleSlug: "credit-notes", icon: "MdCreditScore", routePath: "/app/credit-notes", moduleType: "page", order: 205, parentModule: "orders-management", requiredModule: "tax" },
@@ -118,7 +94,9 @@ const SIDEBAR_MODULES = [
   { moduleName: "Chargebacks", moduleKey: "chargebacks", moduleSlug: "chargebacks", icon: "MdSecurityUpdate", routePath: "/app/chargebacks", moduleType: "page", order: 208, parentModule: "orders-management", requiredModule: "fraud" },
   { moduleName: "Fraud Cases", moduleKey: "fraud-cases", moduleSlug: "fraud-cases", icon: "MdGppBad", routePath: "/app/fraud-cases", moduleType: "page", order: 209, parentModule: "orders-management", requiredModule: "fraud" },
   { moduleName: "Seller Payouts", moduleKey: "seller-payouts", moduleSlug: "seller-payouts", icon: "MdPayments", routePath: "/app/seller-payouts", moduleType: "page", order: 210, parentModule: "orders-management", requiredModule: "sellers/commissions" },
-  { moduleName: "Wallet Management", moduleKey: "wallet-management", moduleSlug: "wallet-management", icon: "MdAccountBalanceWallet", routePath: "/app/wallet-management", moduleType: "page", order: 211, parentModule: "orders-management", requiredModule: "wallets" },
+  { moduleName: "Admin Wallet", moduleKey: "wallet-management", moduleSlug: "wallet-management", icon: "MdAccountBalanceWallet", routePath: "/app/wallet-management", moduleType: "page", order: 211, parentModule: "orders-management", requiredModule: "wallets" },
+  { moduleName: "Payout Ops Queue", moduleKey: "payout-ops-queue", moduleSlug: "payout-ops-queue", icon: "MdOutbox", routePath: "/app/payout-ops-queue", moduleType: "page", order: 241, parentModule: "orders-management", requiredModule: "sellers/commissions" },
+  { moduleName: "Negative Balances", moduleKey: "negative-balances", moduleSlug: "negative-balances", icon: "MdMoneyOff", routePath: "/app/negative-balances", moduleType: "page", order: 242, parentModule: "orders-management", requiredModule: "sellers/commissions" },
 
   // Users & Access additions
   { moduleName: "Seller Onboarding", moduleKey: "seller-onboarding", moduleSlug: "seller-onboarding", icon: "MdPersonAddAlt", routePath: "/app/seller-onboarding", moduleType: "page", order: 212, parentModule: "users-access", requiredModule: "sellers" },
@@ -127,36 +105,28 @@ const SIDEBAR_MODULES = [
   { moduleName: "User Addresses", moduleKey: "users-addresses", moduleSlug: "users-addresses", icon: "MdLocationOn", routePath: "/app/users-addresses", moduleType: "page", order: 215, parentModule: "users-access", requiredModule: "users" },
 
   // Marketing additions
-  { moduleName: "Influencer Management", moduleKey: "influencer-management", moduleSlug: "influencer-management", icon: "MdStarBorder", routePath: "/app/influencer-management", moduleType: "page", order: 216, parentModule: "marketing", requiredModule: "referral" },
-  { moduleName: "Dynamic Pricing", moduleKey: "dynamic-pricing", moduleSlug: "dynamic-pricing", icon: "MdAutoGraph", routePath: "/app/dynamic-pricing", moduleType: "page", order: 237, parentModule: "marketing", requiredModule: "dynamic-pricing" },
+  { moduleName: "Influencers", moduleKey: "influencer-management", moduleSlug: "influencer-management", icon: "MdStarBorder", routePath: "/app/influencer-management", moduleType: "page", order: 216, parentModule: "marketing", requiredModule: "influencer-management" },
   { moduleName: "Notifications", moduleKey: "notifications", moduleSlug: "notifications", icon: "MdNotifications", routePath: "/app/notifications", moduleType: "page", order: 238, parentModule: "marketing", requiredModule: "notifications" },
 
   // Reports & Analytics additions
   { moduleName: "Analytics Dashboard", moduleKey: "analytics", moduleSlug: "analytics", icon: "MdDashboardCustomize", routePath: "/app/analytics", moduleType: "page", order: 239, parentModule: "reports-analytics", requiredModule: "analytics" },
-  { moduleName: "Orders Report", moduleKey: "reports-orders", moduleSlug: "reports-orders", icon: "MdReceipt", routePath: "/app/reports-orders", moduleType: "page", order: 217, parentModule: "reports-analytics", requiredModule: "reports" },
-  { moduleName: "Payments Report", moduleKey: "reports-payments", moduleSlug: "reports-payments", icon: "MdPayment", routePath: "/app/reports-payments", moduleType: "page", order: 218, parentModule: "reports-analytics", requiredModule: "reports" },
-  { moduleName: "Returns Report", moduleKey: "reports-returns", moduleSlug: "reports-returns", icon: "MdAssignmentReturn", routePath: "/app/reports-returns", moduleType: "page", order: 219, parentModule: "reports-analytics", requiredModule: "reports" },
-  { moduleName: "Cancellations Report", moduleKey: "reports-cancellations", moduleSlug: "reports-cancellations", icon: "MdCancel", routePath: "/app/reports-cancellations", moduleType: "page", order: 220, parentModule: "reports-analytics", requiredModule: "reports" },
-  { moduleName: "Delivery Report", moduleKey: "reports-delivery", moduleSlug: "reports-delivery", icon: "MdLocalShipping", routePath: "/app/reports-delivery", moduleType: "page", order: 221, parentModule: "reports-analytics", requiredModule: "reports" },
-  { moduleName: "Commissions Report", moduleKey: "reports-commissions", moduleSlug: "reports-commissions", icon: "MdAccountBalance", routePath: "/app/reports-commissions", moduleType: "page", order: 222, parentModule: "reports-analytics", requiredModule: "reports" },
-  { moduleName: "User Report", moduleKey: "reports-users", moduleSlug: "reports-users", icon: "MdPeople", routePath: "/app/reports-users", moduleType: "page", order: 223, parentModule: "reports-analytics", requiredModule: "reports" },
 
   // Deals Management (new top-level group, order 160 — appears between Reports and Location)
   { moduleName: "Deals Management", moduleKey: "deals-management", moduleSlug: "deals-management", icon: "MdLocalOffer", moduleType: "group", order: 160, parentModule: null, requiredModule: "deals" },
-  { moduleName: "Deal Management", moduleKey: "deal-management", moduleSlug: "deal-management", icon: "MdLocalOffer", routePath: "/app/deal-management", moduleType: "page", order: 224, parentModule: "deals-management", requiredModule: "deals" },
+  { moduleName: "Deals", moduleKey: "deal-management", moduleSlug: "deal-management", icon: "MdLocalOffer", routePath: "/app/deal-management", moduleType: "page", order: 224, parentModule: "deals-management", requiredModule: "deals" },
   { moduleName: "Deal Payouts", moduleKey: "deal-payouts", moduleSlug: "deal-payouts", icon: "MdPayments", routePath: "/app/deal-payouts", moduleType: "page", order: 225, parentModule: "deals-management", requiredModule: "deals" },
   { moduleName: "Deal Sponsorships", moduleKey: "deal-sponsorships", moduleSlug: "deal-sponsorships", icon: "MdHandshake", routePath: "/app/deal-sponsorships", moduleType: "page", order: 226, parentModule: "deals-management", requiredModule: "deals" },
 
   // System Administration (new top-level group, order 175 — appears between Location and Settings)
   { moduleName: "System Administration", moduleKey: "system-admin", moduleSlug: "system-admin", icon: "MdAdminPanelSettings", moduleType: "group", order: 175, parentModule: null, requiredModule: "admin" },
-  { moduleName: "Analytics Events", moduleKey: "analytics-events", moduleSlug: "analytics-events", icon: "MdEventNote", routePath: "/app/analytics-events", moduleType: "page", order: 227, parentModule: "system-admin", requiredModule: "reports" },
-  { moduleName: "Notification Templates", moduleKey: "notification-templates", moduleSlug: "notification-templates", icon: "MdNotificationsActive", routePath: "/app/notification-templates", moduleType: "page", order: 228, parentModule: "system-admin", requiredModule: "notifications" },
-  { moduleName: "API Keys", moduleKey: "api-keys", moduleSlug: "api-keys", icon: "MdKey", routePath: "/app/api-keys", moduleType: "page", order: 229, parentModule: "system-admin", requiredModule: "admin" },
-  { moduleName: "Feature Flags", moduleKey: "feature-flags", moduleSlug: "feature-flags", icon: "MdFlag", routePath: "/app/feature-flags", moduleType: "page", order: 230, parentModule: "system-admin", requiredModule: "admin" },
-  { moduleName: "Webhooks", moduleKey: "webhooks", moduleSlug: "webhooks", icon: "MdWebhook", routePath: "/app/webhooks", moduleType: "page", order: 231, parentModule: "system-admin", requiredModule: "admin" },
-  { moduleName: "System Health", moduleKey: "system-health", moduleSlug: "system-health", icon: "MdMonitorHeart", routePath: "/app/system-health", moduleType: "page", order: 232, parentModule: "system-admin", requiredModule: "admin" },
-  { moduleName: "Queue Management", moduleKey: "queue-management", moduleSlug: "queue-management", icon: "MdQueuePlayNext", routePath: "/app/queue-management", moduleType: "page", order: 233, parentModule: "system-admin", requiredModule: "admin" },
-  { moduleName: "Dead Letter Queue", moduleKey: "dead-letter-queue", moduleSlug: "dead-letter-queue", icon: "MdOutbox", routePath: "/app/dead-letter-queue", moduleType: "page", order: 234, parentModule: "system-admin", requiredModule: "admin" },
+  { moduleName: "Event Log", moduleKey: "analytics-events", moduleSlug: "analytics-events", icon: "MdEventNote", routePath: "/app/analytics-events", moduleType: "page", order: 227, parentModule: "system-admin", requiredModule: "analytics-events" },
+  { moduleName: "Notif. Templates", moduleKey: "notification-templates", moduleSlug: "notification-templates", icon: "MdNotificationsActive", routePath: "/app/notification-templates", moduleType: "page", order: 228, parentModule: "system-admin", requiredModule: "notification-templates" },
+  { moduleName: "API Keys", moduleKey: "api-keys", moduleSlug: "api-keys", icon: "MdKey", routePath: "/app/api-keys", moduleType: "page", order: 229, parentModule: "system-admin", requiredModule: "api-keys" },
+  { moduleName: "Platform Features", moduleKey: "feature-flags", moduleSlug: "feature-flags", icon: "MdFlag", routePath: "/app/feature-flags", moduleType: "page", order: 230, parentModule: "system-admin", requiredModule: "feature-flags" },
+  { moduleName: "Webhooks", moduleKey: "webhooks", moduleSlug: "webhooks", icon: "MdWebhook", routePath: "/app/webhooks", moduleType: "page", order: 231, parentModule: "system-admin", requiredModule: "webhooks" },
+  { moduleName: "System Status", moduleKey: "system-health", moduleSlug: "system-health", icon: "MdMonitorHeart", routePath: "/app/system-health", moduleType: "page", order: 232, parentModule: "system-admin", requiredModule: "system-health" },
+  { moduleName: "Job Queues", moduleKey: "queue-management", moduleSlug: "queue-management", icon: "MdQueuePlayNext", routePath: "/app/queue-management", moduleType: "page", order: 233, parentModule: "system-admin", requiredModule: "queue-management" },
+  { moduleName: "Failed Jobs", moduleKey: "dead-letter-queue", moduleSlug: "dead-letter-queue", icon: "MdOutbox", routePath: "/app/dead-letter-queue", moduleType: "page", order: 234, parentModule: "system-admin", requiredModule: "dead-letter-queue" },
   { moduleName: "Preferences", moduleKey: "preferences", moduleSlug: "preferences", icon: "MdTune", routePath: "/app/preferences", moduleType: "page", order: 235, parentModule: "system-admin", requiredModule: "admin" },
 ];
 

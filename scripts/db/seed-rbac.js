@@ -187,26 +187,31 @@ function slugsForModules(moduleSlugs, actions = CANONICAL_ACTIONS) {
 }
 
 async function upsertModule(module, transaction) {
-  const [existing] = await sequelize.query(
-    `SELECT id FROM modules
-     WHERE slug = :slug
-        OR module_key = :moduleKey
-        OR name = :name
-     ORDER BY CASE
-       WHEN slug = :slug OR module_key = :moduleKey THEN 0
-       ELSE 1
-     END
-     LIMIT 1`,
-    {
-      replacements: {
-        slug: module.slug,
-        moduleKey: module.moduleKey,
-        name: module.name,
-        source: module.metadata?.source || "",
-      },
-      transaction,
+  // Sidebar modules use a prefixed slug (sidebar-*). Never look them up by name,
+  // since sidebar display names can legitimately collide with platform module names.
+  const isSidebarModule = module.slug?.startsWith("sidebar-");
+
+  const lookupSql = isSidebarModule
+    ? `SELECT id FROM modules WHERE slug = :slug OR module_key = :moduleKey LIMIT 1`
+    : `SELECT id FROM modules
+       WHERE slug = :slug
+          OR module_key = :moduleKey
+          OR name = :name
+       ORDER BY CASE
+         WHEN slug = :slug OR module_key = :moduleKey THEN 0
+         ELSE 1
+       END
+       LIMIT 1`;
+
+  const [existing] = await sequelize.query(lookupSql, {
+    replacements: {
+      slug: module.slug,
+      moduleKey: module.moduleKey,
+      name: module.name,
+      source: module.metadata?.source || "",
     },
-  );
+    transaction,
+  });
 
   const dbRow = serializeModuleForDb(module);
   const active = module.status === "active";

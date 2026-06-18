@@ -4,9 +4,6 @@ const { ProductVariantModel } = require("../models/product-variant.model");
 const { HsnCodeModel } = require("../models/hsn-code.model");
 const { GeographyModel } = require("../models/geography.model");
 const { PlatformBrandModel } = require("../models/platform-brand.model");
-const { WarrantyTemplateModel } = require("../models/warranty-template.model");
-const { PlatformFinishModel } = require("../models/platform-finish.model");
-const { PlatformDimensionModel } = require("../models/platform-dimension.model");
 const { PlatformBatchModel } = require("../models/platform-batch.model");
 const { PlatformProductOptionModel } = require("../models/platform-product-option.model");
 const { PlatformProductOptionValueModel } = require("../models/platform-product-option-value.model");
@@ -349,111 +346,6 @@ class PlatformRepository {
 
   async deleteBrand(brandId) {
     return PlatformBrandModel.findByIdAndDelete(brandId);
-  }
-
-  async createWarrantyTemplate(payload) {
-    return WarrantyTemplateModel.create(payload);
-  }
-
-  async updateWarrantyTemplate(templateId, payload) {
-    return WarrantyTemplateModel.findByIdAndUpdate(templateId, payload, { new: true });
-  }
-
-  async getWarrantyTemplate(templateId) {
-    return WarrantyTemplateModel.findById(templateId);
-  }
-
-  async listWarrantyTemplates(filter = {}, pagination = {}) {
-    const sort = buildSort(
-      pagination.sortBy,
-      pagination.sortDir,
-      {
-        period: "period",
-        active: "active",
-        createdAt: "createdAt",
-        updatedAt: "updatedAt",
-      },
-      { createdAt: -1 },
-    );
-    const [items, total] = await Promise.all([
-      WarrantyTemplateModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
-      WarrantyTemplateModel.countDocuments(filter),
-    ]);
-    return { items, total };
-  }
-
-  async deleteWarrantyTemplate(templateId) {
-    return WarrantyTemplateModel.findByIdAndDelete(templateId);
-  }
-
-  async createFinish(payload) {
-    return PlatformFinishModel.create(payload);
-  }
-
-  async updateFinish(finishId, payload) {
-    return PlatformFinishModel.findByIdAndUpdate(finishId, payload, { new: true });
-  }
-
-  async getFinish(finishId) {
-    return PlatformFinishModel.findById(finishId);
-  }
-
-  async listFinishes(filter = {}, pagination = {}) {
-    const sort = buildSort(
-      pagination.sortBy,
-      pagination.sortDir,
-      {
-        name: "name",
-        active: "active",
-        createdAt: "createdAt",
-        updatedAt: "updatedAt",
-      },
-      { createdAt: -1 },
-    );
-    const [items, total] = await Promise.all([
-      PlatformFinishModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
-      PlatformFinishModel.countDocuments(filter),
-    ]);
-    return { items, total };
-  }
-
-  async deleteFinish(finishId) {
-    return PlatformFinishModel.findByIdAndDelete(finishId);
-  }
-
-  async createDimension(payload) {
-    return PlatformDimensionModel.create(payload);
-  }
-
-  async updateDimension(dimensionId, payload) {
-    return PlatformDimensionModel.findByIdAndUpdate(dimensionId, payload, { new: true });
-  }
-
-  async getDimension(dimensionId) {
-    return PlatformDimensionModel.findById(dimensionId);
-  }
-
-  async listDimensions(filter = {}, pagination = {}) {
-    const sort = buildSort(
-      pagination.sortBy,
-      pagination.sortDir,
-      {
-        dimensions_value: "dimensions_value",
-        active: "active",
-        createdAt: "createdAt",
-        updatedAt: "updatedAt",
-      },
-      { createdAt: -1 },
-    );
-    const [items, total] = await Promise.all([
-      PlatformDimensionModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
-      PlatformDimensionModel.countDocuments(filter),
-    ]);
-    return { items, total };
-  }
-
-  async deleteDimension(dimensionId) {
-    return PlatformDimensionModel.findByIdAndDelete(dimensionId);
   }
 
   async createBatch(payload) {

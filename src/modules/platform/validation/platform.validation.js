@@ -560,99 +560,6 @@ const brandIdSchema = Joi.object({
   }).required(),
 });
 
-const createWarrantyTemplateSchema = Joi.object({
-  body: Joi.object({
-    name: Joi.string().trim(),
-    durationMonths: Joi.number().integer().min(0),
-    terms: Joi.string().trim().allow(""),
-    period: Joi.string().trim().required(),
-    active: Joi.boolean().default(true),
-    metadata: Joi.object().default({}),
-  })
-    .rename("name", "period", { ignoreUndefined: true, override: false })
-    .required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({}).required(),
-});
-
-const updateWarrantyTemplateSchema = Joi.object({
-  body: Joi.object({
-    period: Joi.string().trim(),
-    active: Joi.boolean(),
-    metadata: Joi.object(),
-  }).required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({
-    templateId: Joi.string().required(),
-  }).required(),
-});
-
-const listWarrantyTemplatesSchema = Joi.object({
-  body: Joi.object({}).required(),
-  query: listQuery.concat(
-    Joi.object({
-      active: Joi.boolean(),
-    }),
-  ),
-  params: Joi.object({}).required(),
-});
-
-const warrantyTemplateIdSchema = Joi.object({
-  body: Joi.object({}).required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({
-    templateId: Joi.string().required(),
-  }).required(),
-});
-
-const createFinishSchema = Joi.object({
-  body: Joi.object({ name: Joi.string().trim().required(), active: Joi.boolean().default(true) }).required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({}).required(),
-});
-const updateFinishSchema = Joi.object({
-  body: Joi.object({ name: Joi.string().trim(), active: Joi.boolean() }).required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({ finishId: Joi.string().required() }).required(),
-});
-const listFinishesSchema = Joi.object({
-  body: Joi.object({}).required(),
-  query: listQuery.concat(Joi.object({ q: Joi.string().allow(""), keyWord: Joi.string().allow(""), search: Joi.string().allow(""), active: Joi.boolean() })),
-  params: Joi.object({}).required(),
-});
-const finishIdSchema = Joi.object({
-  body: Joi.object({}).required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({ finishId: Joi.string().required() }).required(),
-});
-
-const createDimensionSchema = Joi.object({
-  body: Joi.object({ name: Joi.string().trim(), value: Joi.string().trim(), dimensions_value: Joi.string().trim().required(), active: Joi.boolean().default(true) })
-    .rename("name", "dimensions_value", { ignoreUndefined: true, override: false })
-    .rename("value", "dimensions_value", { ignoreUndefined: true, override: false })
-    .required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({}).required(),
-});
-const updateDimensionSchema = Joi.object({
-  body: Joi.object({ name: Joi.string().trim(), value: Joi.string().trim(), dimensions_value: Joi.string().trim(), active: Joi.boolean() })
-    .rename("name", "dimensions_value", { ignoreUndefined: true, override: false })
-    .rename("value", "dimensions_value", { ignoreUndefined: true, override: false })
-    .required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({ dimensionId: Joi.string().required() }).required(),
-});
-const listDimensionsSchema = Joi.object({
-  body: Joi.object({}).required(),
-  query: listQuery.concat(Joi.object({ q: Joi.string().allow(""), keyWord: Joi.string().allow(""), search: Joi.string().allow(""), active: Joi.boolean() })),
-  params: Joi.object({}).required(),
-});
-const dimensionIdSchema = Joi.object({
-  body: Joi.object({}).required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({ dimensionId: Joi.string().required() }).required(),
-});
-
 const createBatchSchema = Joi.object({
   body: Joi.object({
     batchCode: Joi.string().trim().required(),
@@ -806,18 +713,6 @@ module.exports = {
   updateBrandSchema,
   listBrandsSchema,
   brandIdSchema,
-  createWarrantyTemplateSchema,
-  updateWarrantyTemplateSchema,
-  listWarrantyTemplatesSchema,
-  warrantyTemplateIdSchema,
-  createFinishSchema,
-  updateFinishSchema,
-  listFinishesSchema,
-  finishIdSchema,
-  createDimensionSchema,
-  updateDimensionSchema,
-  listDimensionsSchema,
-  dimensionIdSchema,
   createBatchSchema,
   updateBatchSchema,
   listBatchesSchema,

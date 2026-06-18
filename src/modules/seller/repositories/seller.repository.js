@@ -226,7 +226,7 @@ class SellerRepository {
          COALESCE(SUM(oi.line_total), 0)::NUMERIC AS gmv,
          COALESCE(SUM(CASE WHEN o.status = 'delivered' THEN oi.line_total ELSE 0 END), 0)::NUMERIC AS delivered_revenue,
          COUNT(DISTINCT CASE WHEN o.status = 'cancelled' THEN o.id END)::INT AS cancelled_orders,
-         COUNT(DISTINCT CASE WHEN o.status = 'returned' THEN o.id END)::INT AS returned_orders,
+         COUNT(DISTINCT CASE WHEN o.status IN ('returned', 'partially_returned') THEN o.id END)::INT AS returned_orders,
          COALESCE(AVG(oi.line_total), 0)::NUMERIC AS avg_item_value
        FROM order_items oi
        INNER JOIN orders o ON o.id = oi.order_id

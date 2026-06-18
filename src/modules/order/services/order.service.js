@@ -408,6 +408,9 @@ class OrderService {
     const metadata = this.normalizeJson(order.metadata, {});
     const sellers = (relations.sellers || []).filter((seller) => String(seller.id || seller._id || "") === sellerKey);
     const sellerSettlements = (relations.sellerSettlements || []).filter((settlement) => String(settlement.sellerId || "") === sellerKey);
+    const sellerShipments = (relations.shipments || []).filter((shipment) => String(shipment.seller_id || shipment.sellerId || "") === sellerKey);
+    const sellerFulfillmentGroups = (relations.sellerFulfillmentGroups || [])
+      .filter((group) => String(group.sellerId || group.seller_id || "") === sellerKey);
     const taxBreakup = this.normalizeJson(order.tax_breakup, {});
     const taxItems = Array.isArray(taxBreakup.items)
       ? taxBreakup.items.filter((item) => productIds.has(String(item.productId || item.product_id || "")))
@@ -454,6 +457,8 @@ class OrderService {
         ...relations,
         sellers,
         sellerSettlements,
+        shipments: sellerShipments,
+        sellerFulfillmentGroups,
       },
     };
   }
@@ -682,11 +687,15 @@ class OrderService {
       `${ORDER_STATUS.PACKED}->${ORDER_STATUS.SHIPPED}`,
       `${ORDER_STATUS.SHIPPED}->${ORDER_STATUS.DELIVERED}`,
       `${ORDER_STATUS.DELIVERED}->${ORDER_STATUS.FULFILLED}`,
+      `${ORDER_STATUS.FULFILLED}->${ORDER_STATUS.RETURN_REQUESTED}`,
       `${ORDER_STATUS.CONFIRMED}->${ORDER_STATUS.CANCELLED}`,
       `${ORDER_STATUS.PENDING_PAYMENT}->${ORDER_STATUS.CANCELLED}`,
       `${ORDER_STATUS.PAYMENT_FAILED}->${ORDER_STATUS.CANCELLED}`,
       `${ORDER_STATUS.PACKED}->${ORDER_STATUS.CANCELLED}`,
       `${ORDER_STATUS.DELIVERED}->${ORDER_STATUS.RETURN_REQUESTED}`,
+      `${ORDER_STATUS.RETURN_REQUESTED}->${ORDER_STATUS.PARTIALLY_RETURNED}`,
+      `${ORDER_STATUS.PARTIALLY_RETURNED}->${ORDER_STATUS.RETURN_REQUESTED}`,
+      `${ORDER_STATUS.PARTIALLY_RETURNED}->${ORDER_STATUS.FULFILLED}`,
       `${ORDER_STATUS.RETURN_REQUESTED}->${ORDER_STATUS.RETURNED}`,
     ]);
 
@@ -732,7 +741,7 @@ class OrderService {
       return;
     }
 
-    if ([ORDER_STATUS.DELIVERED, ORDER_STATUS.RETURN_REQUESTED, ORDER_STATUS.RETURNED].includes(nextStatus)) {
+    if ([ORDER_STATUS.DELIVERED, ORDER_STATUS.RETURN_REQUESTED, ORDER_STATUS.PARTIALLY_RETURNED, ORDER_STATUS.RETURNED].includes(nextStatus)) {
       if (!isOwner && !isSeller && !isAdmin) {
         throw new AppError("You are not allowed to update this order", 403);
       }

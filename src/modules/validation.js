@@ -322,6 +322,7 @@ const commissionValidation = {
     paymentReference: Joi.string().trim().max(160),
     paymentMethod: Joi.string().trim().max(64),
     autoProcess: Joi.boolean(),
+    note: Joi.string().trim().max(1000).allow("", null),
   }),
 };
 

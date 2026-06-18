@@ -286,7 +286,7 @@ class AnalyticsRepository {
       .sum({ amount: "amount" })
       .groupBy("status");
 
-    const byStatus = this.normalizeStatusRows(rows, ["initiated", "authorized", "captured", "failed", "refunded", "cancelled"]);
+    const byStatus = this.normalizeStatusRows(rows, ["initiated", "authorized", "captured", "failed", "partially_refunded", "refunded", "cancelled"]);
     return {
       ...byStatus,
       capturedAmount: byStatus.byStatus.captured?.netAmount || 0,

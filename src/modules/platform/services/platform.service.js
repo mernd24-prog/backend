@@ -10,9 +10,6 @@ const {
   AdminSubTaxModel,
   AdminTaxRuleModel,
 } = require("../../admin/models/common-management.model");
-const {
-  buildWarrantyTemplateSeedDocuments,
-} = require("../constants/default-warranty-templates");
 
 function actorIdFromRequest(req) {
   const auth = req?.auth || {};
@@ -40,22 +37,6 @@ class PlatformService {
     if (typeof forget === "function") {
       forget(/^products:/);
     }
-  }
-
-  async ensureDefaultWarrantyTemplates() {
-    const existing = await this.platformRepository.listWarrantyTemplates({}, { skip: 0, limit: 1 });
-    if ((existing.total || 0) > 0) return false;
-
-    const templates = buildWarrantyTemplateSeedDocuments();
-    for (const template of templates) {
-      try {
-        await this.platformRepository.createWarrantyTemplate(template);
-      } catch (error) {
-        if (error?.code !== 11000) throw error;
-      }
-    }
-    this.invalidateCatalogCaches();
-    return true;
   }
 
   async createCategory(payload, req) {
@@ -656,129 +637,6 @@ class PlatformService {
     return result;
   }
 
-  async createWarrantyTemplate(payload, req) {
-    const createPayload = withCreateActor(payload, req);
-    const item = await this.platformRepository.createWarrantyTemplate(createPayload);
-    this.invalidateCatalogCaches();
-    auditService.create(req, { module: "warranty", entityId: item?._id, entityType: "WarrantyTemplate", newData: createPayload });
-    return item;
-  }
-
-  async updateWarrantyTemplate(templateId, payload, req) {
-    const item = await this.platformRepository.getWarrantyTemplate(templateId);
-    if (!item) {
-      throw AppError.notFound("Warranty template");
-    }
-    const updatePayload = withUpdateActor(payload, req);
-    const result = await this.platformRepository.updateWarrantyTemplate(templateId, updatePayload);
-    this.invalidateCatalogCaches();
-    auditService.update(req, { module: "warranty", entityId: templateId, entityType: "WarrantyTemplate", oldData: item, newData: updatePayload });
-    return result;
-  }
-
-  async getWarrantyTemplate(templateId) {
-    const item = await this.platformRepository.getWarrantyTemplate(templateId);
-    if (!item) {
-      throw AppError.notFound("Warranty template");
-    }
-    return item;
-  }
-
-  async listWarrantyTemplates(query) {
-    await this.ensureDefaultWarrantyTemplates();
-    const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir || query.sortOrder };
-    const filter = {};
-    if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
-    const q = query.q || query.keyWord || query.search;
-    if (q) {
-      filter.period = { $regex: q, $options: "i" };
-    }
-    return this.platformRepository.listWarrantyTemplates(filter, pagination);
-  }
-
-  async deleteWarrantyTemplate(templateId, req) {
-    const item = await this.platformRepository.getWarrantyTemplate(templateId);
-    if (!item) {
-      throw AppError.notFound("Warranty template");
-    }
-    const result = await this.platformRepository.deleteWarrantyTemplate(templateId);
-    this.invalidateCatalogCaches();
-    auditService.remove(req, { module: "warranty", entityId: templateId, entityType: "WarrantyTemplate", oldData: item });
-    return result;
-  }
-
-  async createFinish(payload, req) {
-    const createPayload = withCreateActor(payload, req);
-    const item = await this.platformRepository.createFinish(createPayload);
-    this.invalidateCatalogCaches();
-    auditService.create(req, { module: "platform", entityId: item?._id, entityType: "Finish", newData: createPayload });
-    return item;
-  }
-
-  async updateFinish(finishId, payload, req) {
-    const item = await this.platformRepository.getFinish(finishId);
-    if (!item) throw AppError.notFound("Finish");
-    const updatePayload = withUpdateActor(payload, req);
-    const result = await this.platformRepository.updateFinish(finishId, updatePayload);
-    this.invalidateCatalogCaches();
-    auditService.update(req, { module: "platform", entityId: finishId, entityType: "Finish", oldData: item, newData: updatePayload });
-    return result;
-  }
-
-  async listFinishes(query) {
-    const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir || query.sortOrder };
-    const filter = {};
-    if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
-    const q = query.q || query.keyWord || query.search;
-    if (q) filter.name = { $regex: q, $options: "i" };
-    return this.platformRepository.listFinishes(filter, pagination);
-  }
-
-  async deleteFinish(finishId, req) {
-    const item = await this.platformRepository.getFinish(finishId);
-    if (!item) throw AppError.notFound("Finish");
-    const result = await this.platformRepository.deleteFinish(finishId);
-    this.invalidateCatalogCaches();
-    auditService.remove(req, { module: "platform", entityId: finishId, entityType: "Finish", oldData: item });
-    return result;
-  }
-
-  async createDimension(payload, req) {
-    const createPayload = withCreateActor(payload, req);
-    const item = await this.platformRepository.createDimension(createPayload);
-    this.invalidateCatalogCaches();
-    auditService.create(req, { module: "platform", entityId: item?._id, entityType: "Dimension", newData: createPayload });
-    return item;
-  }
-
-  async updateDimension(dimensionId, payload, req) {
-    const item = await this.platformRepository.getDimension(dimensionId);
-    if (!item) throw AppError.notFound("Dimension");
-    const updatePayload = withUpdateActor(payload, req);
-    const result = await this.platformRepository.updateDimension(dimensionId, updatePayload);
-    this.invalidateCatalogCaches();
-    auditService.update(req, { module: "platform", entityId: dimensionId, entityType: "Dimension", oldData: item, newData: updatePayload });
-    return result;
-  }
-
-  async listDimensions(query) {
-    const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir || query.sortOrder };
-    const filter = {};
-    if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
-    const q = query.q || query.keyWord || query.search;
-    if (q) filter.dimensions_value = { $regex: q, $options: "i" };
-    return this.platformRepository.listDimensions(filter, pagination);
-  }
-
-  async deleteDimension(dimensionId, req) {
-    const item = await this.platformRepository.getDimension(dimensionId);
-    if (!item) throw AppError.notFound("Dimension");
-    const result = await this.platformRepository.deleteDimension(dimensionId);
-    this.invalidateCatalogCaches();
-    auditService.remove(req, { module: "platform", entityId: dimensionId, entityType: "Dimension", oldData: item });
-    return result;
-  }
-
   async createBatch(payload, req) {
     const createPayload = withCreateActor(payload, req);
     const item = await this.platformRepository.createBatch(createPayload);
@@ -956,13 +814,11 @@ class PlatformService {
   }
 
   async getCatalogPrefillData(query = {}) {
-    await this.ensureDefaultWarrantyTemplates();
     const categories = (await this.platformRepository.listCategories({}, { skip: 0, limit: 5000 })).items || [];
     const brands = (await this.platformRepository.listBrands(query.includeInactive ? {} : { active: true }, { skip: 0, limit: 500 })).items || [];
     const families = (await this.platformRepository.listProductFamilies({}, { skip: 0, limit: 500 })).items || [];
     const variants = (await this.platformRepository.listProductVariants({}, { skip: 0, limit: 500 })).items || [];
     const hsnCodes = (await this.platformRepository.listHsnCodes({ active: true }, { skip: 0, limit: 1000 })).items || [];
-    const warrantyTemplates = (await this.platformRepository.listWarrantyTemplates(query.includeInactive ? {} : { active: true }, { skip: 0, limit: 500 })).items || [];
     const options = await this.platformRepository.listAllProductOptions(query.includeInactive ? {} : { active: true });
     const optionValuesRaw = await this.platformRepository.listAllProductOptionValues(query.includeInactive ? {} : { active: true });
     const optionValues = await this.decorateProductOptionValues(optionValuesRaw);
@@ -983,7 +839,6 @@ class PlatformService {
       families,
       variants,
       hsnCodes,
-      warrantyTemplates,
       taxes,
       subTaxes,
       taxRules,

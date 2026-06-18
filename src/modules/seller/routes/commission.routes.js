@@ -509,6 +509,8 @@ router.post(
           periodEnd: value.periodEnd || req.body?.periodEnd,
           paymentReference: req.body?.paymentReference,
           paymentMethod: req.body?.paymentMethod,
+          note: value.note,
+          notes: value.note,
           autoProcess: value.autoProcess,
           actor: req.auth,
         },

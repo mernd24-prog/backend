@@ -123,18 +123,6 @@ const {
   updateBrandSchema,
   listBrandsSchema,
   brandIdSchema,
-  createWarrantyTemplateSchema,
-  updateWarrantyTemplateSchema,
-  listWarrantyTemplatesSchema,
-  warrantyTemplateIdSchema,
-  createFinishSchema,
-  updateFinishSchema,
-  listFinishesSchema,
-  finishIdSchema,
-  createDimensionSchema,
-  updateDimensionSchema,
-  listDimensionsSchema,
-  dimensionIdSchema,
   createBatchSchema,
   updateBatchSchema,
   listBatchesSchema,
@@ -974,42 +962,6 @@ adminRoutes.delete(
   checkInput(brandIdSchema),
   catchErrors(platformController.deleteBrand),
 );
-
-adminRoutes.post(
-  "/platform/warranty-templates",
-  checkInput(createWarrantyTemplateSchema),
-  catchErrors(platformController.createWarrantyTemplate),
-);
-adminRoutes.get(
-  "/platform/warranty-templates",
-  checkInput(listWarrantyTemplatesSchema),
-  catchErrors(platformController.listWarrantyTemplates),
-);
-adminRoutes.get(
-  "/platform/warranty-templates/:templateId",
-  checkInput(warrantyTemplateIdSchema),
-  catchErrors(platformController.getWarrantyTemplate),
-);
-adminRoutes.patch(
-  "/platform/warranty-templates/:templateId",
-  checkInput(updateWarrantyTemplateSchema),
-  catchErrors(platformController.updateWarrantyTemplate),
-);
-adminRoutes.delete(
-  "/platform/warranty-templates/:templateId",
-  checkInput(warrantyTemplateIdSchema),
-  catchErrors(platformController.deleteWarrantyTemplate),
-);
-
-adminRoutes.post("/platform/finishes", checkInput(createFinishSchema), catchErrors(platformController.createFinish));
-adminRoutes.get("/platform/finishes", checkInput(listFinishesSchema), catchErrors(platformController.listFinishes));
-adminRoutes.patch("/platform/finishes/:finishId", checkInput(updateFinishSchema), catchErrors(platformController.updateFinish));
-adminRoutes.delete("/platform/finishes/:finishId", checkInput(finishIdSchema), catchErrors(platformController.deleteFinish));
-
-adminRoutes.post("/platform/dimensions", checkInput(createDimensionSchema), catchErrors(platformController.createDimension));
-adminRoutes.get("/platform/dimensions", checkInput(listDimensionsSchema), catchErrors(platformController.listDimensions));
-adminRoutes.patch("/platform/dimensions/:dimensionId", checkInput(updateDimensionSchema), catchErrors(platformController.updateDimension));
-adminRoutes.delete("/platform/dimensions/:dimensionId", checkInput(dimensionIdSchema), catchErrors(platformController.deleteDimension));
 
 adminRoutes.post("/platform/batches", checkInput(createBatchSchema), catchErrors(platformController.createBatch));
 adminRoutes.get("/platform/batches", checkInput(listBatchesSchema), catchErrors(platformController.listBatches));
