@@ -468,7 +468,11 @@ router.post(
 
       const commission = await CommissionService.calculateCommission(
         value.orderId,
-        { actor: req.auth, sourceStatus: req.body?.sourceStatus },
+        {
+          actor: req.auth,
+          sourceStatus: req.body?.sourceStatus,
+          organizationId: req.body?.organizationId,
+        },
       );
 
       return res.status(200).json({
@@ -507,6 +511,7 @@ router.post(
         {
           periodStart: value.periodStart || req.body?.periodStart,
           periodEnd: value.periodEnd || req.body?.periodEnd,
+          ...(value.organizationId ? { organizationId: value.organizationId } : {}),
           paymentReference: req.body?.paymentReference,
           paymentMethod: req.body?.paymentMethod,
           note: value.note,

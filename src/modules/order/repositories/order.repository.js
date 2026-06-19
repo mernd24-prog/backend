@@ -74,7 +74,14 @@ class OrderRepository {
         variant_title: item.variantTitle || null,
         attributes: this.jsonb(item.attributes),
         seller_id: item.sellerId,
+        organization_id: item.organizationId || null,
+        store_id: item.storeId || null,
+        warehouse_id: item.warehouseId || null,
         seller_snapshot: this.jsonb(item.sellerSnapshot || { sellerId: item.sellerId }),
+        organization_snapshot: this.jsonb(item.organizationSnapshot || {
+          organizationId: item.organizationId || null,
+          sellerId: item.sellerId || null,
+        }),
         quantity: item.quantity,
         unit_price: item.unitPrice,
         discount_amount: item.discountAmount || 0,
@@ -149,6 +156,10 @@ class OrderRepository {
       : "";
     if (Array.isArray(productIds)) values.push(productIds);
     if (productFilter) clauses.push(productFilter);
+    if (filters.organizationId) {
+      clauses.push(`oi.organization_id = $${index++}::uuid`);
+      values.push(filters.organizationId);
+    }
     this.applyOrderFilters(clauses, values, filters, () => index++);
     values.push(Number(filters.limit || 50), Number(filters.offset || 0));
 
@@ -547,6 +558,7 @@ class OrderRepository {
       paymentStatus = null,
       deliveryStatus = null,
       buyerId = null,
+      organizationId = null,
       fromDate = null,
       toDate = null,
       search = null,
@@ -567,6 +579,15 @@ class OrderRepository {
     if (buyerId) {
       clauses.push(`o.buyer_id = $${nextIndex()}`);
       values.push(buyerId);
+    }
+    if (organizationId && !filters.sellerId) {
+      clauses.push(`EXISTS (
+        SELECT 1
+        FROM order_items oi_org
+        WHERE oi_org.order_id = o.id
+          AND oi_org.organization_id = $${nextIndex()}::uuid
+      )`);
+      values.push(organizationId);
     }
     if (fromDate) {
       clauses.push(`o.created_at >= $${nextIndex()}`);
@@ -594,8 +615,10 @@ class OrderRepository {
         FROM order_items oi
         WHERE oi.order_id = o.id
           AND oi.seller_id = $${index++}
+          ${filters.organizationId ? `AND oi.organization_id = $${index++}::uuid` : ""}
       )`);
       values.push(filters.sellerId);
+      if (filters.organizationId) values.push(filters.organizationId);
     }
     this.applyOrderFilters(clauses, values, filters, () => index++);
 
@@ -625,8 +648,10 @@ class OrderRepository {
         FROM order_items oi
         WHERE oi.order_id = o.id
           AND oi.seller_id = $${index++}
+          ${filters.organizationId ? `AND oi.organization_id = $${index++}::uuid` : ""}
       )`);
       values.push(filters.sellerId);
+      if (filters.organizationId) values.push(filters.organizationId);
     }
     this.applyOrderFilters(clauses, values, filters, () => index++);
 
@@ -872,11 +897,16 @@ class OrderRepository {
     const grouped = new Map();
     for (const item of items) {
       const sellerId = String(item.seller_id || "platform");
+      const organizationId = item.organization_id ? String(item.organization_id) : null;
+      const organizationSnapshot = this.parseJson(item.organization_snapshot, {});
+      const key = `${sellerId}:${organizationId || "default"}`;
       const taxBreakup = this.parseJson(item.tax_breakup, {});
       const pricing = this.parseJson(item.pricing_snapshot, {});
-      const current = grouped.get(sellerId) || {
+      const current = grouped.get(key) || {
         sellerId,
+        organizationId,
         sellerName: sellerNames.get(sellerId) || sellerId,
+        organizationSnapshot,
         grossSalesAmount: 0,
         taxableAmount: 0,
         taxAmount: 0,
@@ -901,7 +931,7 @@ class OrderRepository {
       current.sellerPayoutBaseAmount = this.money(current.sellerPayoutBaseAmount) + sellerPayoutBaseAmount;
       current.productTaxLiabilityAmount = this.money(current.productTaxLiabilityAmount) + taxAmount;
       current.sellerPayoutAmount += Math.max(0, sellerPayoutBaseAmount - platformFeeAmount - platformFeeTaxAmount);
-      grouped.set(sellerId, current);
+      grouped.set(key, current);
     }
 
     return [...grouped.values()].map((seller) => {
@@ -944,33 +974,50 @@ class OrderRepository {
           seller.id,
       ]),
     );
-    const settlementsBySeller = new Map(
-      sellerSettlements.map((settlement) => [String(settlement.sellerId), settlement]),
+    const groupKey = (sellerId, organizationId = null) => `${String(sellerId)}:${organizationId || "default"}`;
+    const settlementsByGroup = new Map(
+      sellerSettlements.map((settlement) => [
+        groupKey(settlement.sellerId, settlement.organizationId),
+        settlement,
+      ]),
     );
-    const itemsBySeller = new Map();
-    const shipmentsBySeller = new Map();
+    const itemsByGroup = new Map();
+    const shipmentsByGroup = new Map();
 
     for (const item of items) {
       const sellerId = String(item.seller_id || item.sellerId || "platform");
-      if (!itemsBySeller.has(sellerId)) itemsBySeller.set(sellerId, []);
-      itemsBySeller.get(sellerId).push(item);
+      const organizationId = item.organization_id || item.organizationId || null;
+      const key = groupKey(sellerId, organizationId);
+      if (!itemsByGroup.has(key)) {
+        itemsByGroup.set(key, { sellerId, organizationId, items: [] });
+      }
+      itemsByGroup.get(key).items.push(item);
     }
 
     for (const shipment of shipments) {
       const sellerId = String(shipment.seller_id || shipment.sellerId || "platform");
-      if (!shipmentsBySeller.has(sellerId)) shipmentsBySeller.set(sellerId, []);
-      shipmentsBySeller.get(sellerId).push(shipment);
+      const organizationId = shipment.organization_id || shipment.organizationId || null;
+      const key = groupKey(sellerId, organizationId);
+      if (!shipmentsByGroup.has(key)) {
+        shipmentsByGroup.set(key, { sellerId, organizationId, shipments: [] });
+      }
+      shipmentsByGroup.get(key).shipments.push(shipment);
     }
 
-    const sellerIds = new Set([
-      ...itemsBySeller.keys(),
-      ...shipmentsBySeller.keys(),
-      ...settlementsBySeller.keys(),
+    const groupKeys = new Set([
+      ...itemsByGroup.keys(),
+      ...shipmentsByGroup.keys(),
+      ...settlementsByGroup.keys(),
     ]);
 
-    return [...sellerIds].map((sellerId) => {
-      const sellerItems = itemsBySeller.get(sellerId) || [];
-      const sellerShipments = shipmentsBySeller.get(sellerId) || [];
+    return [...groupKeys].map((key) => {
+      const itemGroup = itemsByGroup.get(key) || {};
+      const shipmentGroup = shipmentsByGroup.get(key) || {};
+      const settlement = settlementsByGroup.get(key) || null;
+      const [sellerId, organizationKey] = key.split(":");
+      const organizationId = itemGroup.organizationId || shipmentGroup.organizationId || settlement?.organizationId || (organizationKey === "default" ? null : organizationKey);
+      const sellerItems = itemGroup.items || [];
+      const sellerShipments = shipmentGroup.shipments || [];
       const forwardShipments = sellerShipments.filter((shipment) => this.isForwardShipment(shipment));
       const reverseShipments = sellerShipments.filter((shipment) => !this.isForwardShipment(shipment));
       const deliveryStatus = this.resolveSellerDeliveryStatus(forwardShipments, order);
@@ -988,6 +1035,8 @@ class OrderRepository {
 
       return {
         sellerId,
+        organizationId,
+        organizationSnapshot: this.parseJson(sellerItems[0]?.organization_snapshot, settlement?.organizationSnapshot || {}),
         sellerName: sellerNames.get(sellerId) || sellerId,
         orderItemIds: sellerItems.map((item) => item.id).filter(Boolean),
         itemCount: sellerItems.length,
@@ -1008,7 +1057,7 @@ class OrderRepository {
         expectedDeliveryAt: this.resolveExpectedDeliveryAt(forwardShipments),
         latestTrackingEvent,
         latestTrackingStatus: latestTrackingEvent?.status || deliveryStatus,
-        settlement: settlementsBySeller.get(sellerId) || null,
+        settlement,
         returnLifecycle: sellerReturnLifecycle,
       };
     });

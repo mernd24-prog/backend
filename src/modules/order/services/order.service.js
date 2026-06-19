@@ -353,10 +353,10 @@ class OrderService {
       const productIds = products.map((product) => String(product._id));
       if (!productIds.length) return [];
       orders = await this.orderRepository.listOrdersBySeller(sellerId, productIds, filters);
-      return orders.map((order) => this.filterOrderForSeller(order, sellerId));
+      return orders.map((order) => this.filterOrderForSeller(order, sellerId, filters.organizationId));
     }
     orders = await this.orderRepository.listOrdersBySeller(sellerId, null, filters);
-    return orders.map((order) => this.filterOrderForSeller(order, sellerId));
+    return orders.map((order) => this.filterOrderForSeller(order, sellerId, filters.organizationId));
   }
 
   async listAdminOrders(actor, filters = {}) {
@@ -400,14 +400,21 @@ class OrderService {
     return { ...scopedOrder, notes: visibleNotes };
   }
 
-  filterOrderForSeller(order = {}, sellerId) {
+  filterOrderForSeller(order = {}, sellerId, organizationId = null) {
     const sellerKey = String(sellerId || "");
-    const items = (order.items || []).filter((item) => String(item.seller_id || item.sellerId || "") === sellerKey);
+    const organizationKey = organizationId ? String(organizationId) : null;
+    const items = (order.items || []).filter((item) =>
+      String(item.seller_id || item.sellerId || "") === sellerKey &&
+      (!organizationKey || String(item.organization_id || item.organizationId || "") === organizationKey)
+    );
     const productIds = new Set(items.map((item) => String(item.product_id || item.productId || "")));
     const relations = order.relations || {};
     const metadata = this.normalizeJson(order.metadata, {});
     const sellers = (relations.sellers || []).filter((seller) => String(seller.id || seller._id || "") === sellerKey);
-    const sellerSettlements = (relations.sellerSettlements || []).filter((settlement) => String(settlement.sellerId || "") === sellerKey);
+    const sellerSettlements = (relations.sellerSettlements || []).filter((settlement) =>
+      String(settlement.sellerId || "") === sellerKey &&
+      (!organizationKey || String(settlement.organizationId || "") === organizationKey)
+    );
     const sellerShipments = (relations.shipments || []).filter((shipment) => String(shipment.seller_id || shipment.sellerId || "") === sellerKey);
     const sellerFulfillmentGroups = (relations.sellerFulfillmentGroups || [])
       .filter((group) => String(group.sellerId || group.seller_id || "") === sellerKey);

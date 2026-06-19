@@ -294,7 +294,7 @@ class SellerCommissionService {
     };
   }
 
-  async getOrderSellerGroups(orderId, sellerId = null, orderAmount = null, sellerTier = this.defaultSellerTier) {
+  async getOrderSellerGroups(orderId, sellerId = null, orderAmount = null, sellerTier = this.defaultSellerTier, organizationId = null) {
     if (!orderId) {
       throw new AppError("Invalid commission input", 400);
     }
@@ -311,6 +311,8 @@ class SellerCommissionService {
       const taxAmount = this.round(commissionAmount * commissionTaxRate);
       return [{
         sellerId,
+        organizationId: organizationId || null,
+        organizationSnapshot: {},
         orderId,
         orderItemIds: [],
         amount,
@@ -323,6 +325,7 @@ class SellerCommissionService {
         sourceStatus: "manual",
         metadata: {
           source: "manual_commission_input",
+          organizationId: organizationId || null,
           sellerPayoutBase: commerceSettings.finance.sellerPayoutBase,
           platformFeeTaxRate: Number(commerceSettings.finance.platformFeeTaxRate || 0),
           chargePlatformFeeTaxToSeller: Boolean(commerceSettings.finance.chargePlatformFeeTaxToSeller),
@@ -335,6 +338,8 @@ class SellerCommissionService {
       .select(
         "oi.id",
         "oi.seller_id",
+        "oi.organization_id",
+        "oi.organization_snapshot",
         "oi.line_total",
         "oi.discount_amount",
         "oi.platform_fee_amount",
@@ -350,6 +355,7 @@ class SellerCommissionService {
       .where("oi.order_id", orderId)
       .modify((query) => {
         if (sellerId) query.andWhere("oi.seller_id", sellerId);
+        if (organizationId) query.andWhere("oi.organization_id", organizationId);
       });
 
     if (!rows.length) {
@@ -359,9 +365,12 @@ class SellerCommissionService {
     const grouped = new Map();
     rows.forEach((row) => {
       if (!row.seller_id) return;
-      const key = String(row.seller_id);
+      const organizationId = row.organization_id ? String(row.organization_id) : null;
+      const key = `${String(row.seller_id)}:${organizationId || "default"}`;
       const current = grouped.get(key) || {
-        sellerId: key,
+        sellerId: String(row.seller_id),
+        organizationId,
+        organizationSnapshot: this.parseJson(row.organization_snapshot, {}),
         orderId,
         orderItemIds: [],
         amount: 0,
@@ -411,6 +420,8 @@ class SellerCommissionService {
       const taxAmount = this.round(commissionAmount * commissionTaxRate);
       return {
         sellerId: group.sellerId,
+        organizationId: group.organizationId || null,
+        organizationSnapshot: group.organizationSnapshot || {},
         orderId,
         orderItemIds: group.orderItemIds,
         amount,
@@ -423,6 +434,7 @@ class SellerCommissionService {
         sourceStatus: group.sourceStatus,
         metadata: {
           source: "order_items",
+          organizationId: group.organizationId || null,
           itemCount: group.orderItemIds.length,
           quantity: group.quantity,
           platformFeeAmount,
@@ -439,6 +451,7 @@ class SellerCommissionService {
     if (sellerIdOrOptions && typeof sellerIdOrOptions === "object" && !Array.isArray(sellerIdOrOptions)) {
       return {
         sellerId: sellerIdOrOptions.sellerId,
+        organizationId: sellerIdOrOptions.organizationId,
         orderAmount: sellerIdOrOptions.orderAmount,
         sellerTier: sellerIdOrOptions.sellerTier || sellerTier || this.defaultSellerTier,
         actor: sellerIdOrOptions.actor || {},
@@ -447,6 +460,7 @@ class SellerCommissionService {
     }
     return {
       sellerId: sellerIdOrOptions,
+      organizationId: null,
       orderAmount,
       sellerTier: sellerTier || this.defaultSellerTier,
       actor: {},
@@ -461,6 +475,7 @@ class SellerCommissionService {
       options.sellerId,
       options.orderAmount,
       options.sellerTier,
+      options.organizationId,
     );
 
     const result = await knex.transaction(async (trx) => {
@@ -470,8 +485,14 @@ class SellerCommissionService {
       let skipped = 0;
 
       for (const group of groups) {
-        const existing = await trx("seller_commissions")
-          .where({ seller_id: group.sellerId, order_id: orderId })
+        const existingQuery = trx("seller_commissions")
+          .where({ seller_id: group.sellerId, order_id: orderId });
+        if (group.organizationId) {
+          existingQuery.where("organization_id", group.organizationId);
+        } else {
+          existingQuery.whereNull("organization_id");
+        }
+        const existing = await existingQuery
           .first()
           .forUpdate();
 
@@ -492,6 +513,8 @@ class SellerCommissionService {
 
         const payload = {
           seller_id: group.sellerId,
+          organization_id: group.organizationId || null,
+          organization_snapshot: this.jsonb(group.organizationSnapshot || {}),
           order_id: orderId,
           order_item_ids: this.jsonb(group.orderItemIds, []),
           amount: group.amount,
@@ -587,9 +610,14 @@ class SellerCommissionService {
     const range = this.buildDateRange(periodStart, periodEnd);
     const commerceSettings = await commerceSettingsService.getSettings();
     const payoutPolicy = this.getPayoutPolicy(commerceSettings);
+    const organizationId = options.organizationId || null;
     return await knex.transaction(async (trx) => {
       const commissions = await trx("seller_commissions")
         .where("seller_id", sellerId)
+        .modify((builder) => {
+          if (organizationId) builder.where("organization_id", organizationId);
+          else if (options.organizationId === null) builder.whereNull("organization_id");
+        })
         .whereIn("status", ["pending", "approved"])
         .whereNull("payout_id")
         .whereBetween("created_at", [range.periodStart, `${range.periodEnd} 23:59:59`])
@@ -622,6 +650,10 @@ class SellerCommissionService {
       );
       const recoveryRows = await trx("seller_settlements")
         .where("seller_id", sellerId)
+        .modify((builder) => {
+          if (organizationId) builder.where("organization_id", organizationId);
+          else if (options.organizationId === null) builder.whereNull("organization_id");
+        })
         .where("net_amount", "<", 0)
         .where("status", "pending")
         .forUpdate();
@@ -657,6 +689,8 @@ class SellerCommissionService {
       await trx("seller_payouts").insert({
         id: payoutId,
         seller_id: sellerId,
+        organization_id: organizationId,
+        organization_snapshot: this.jsonb(payoutCommissions[0]?.organization_snapshot || {}),
         period_start: range.periodStart,
         period_end: range.periodEnd,
         total_amount: this.round(totals.totalAmount),
@@ -759,6 +793,8 @@ class SellerCommissionService {
       await trx("seller_settlements").insert({
         id: uuidv4(),
         seller_id: payout.seller_id,
+        organization_id: payout.organization_id || null,
+        organization_snapshot: this.jsonb(payout.organization_snapshot || {}),
         payout_id: payoutId,
         settlement_date: knex.fn.now(),
         period_start: payout.period_start,
@@ -932,6 +968,7 @@ class SellerCommissionService {
     return this.processBatchPayouts(payout.seller_id, {
       periodStart: payout.period_start,
       periodEnd: payout.period_end,
+      organizationId: payout.organization_id || undefined,
       source: "failed_payout_retry",
       previousPayoutId: payoutId,
       paymentReference: options.paymentReference,
@@ -990,6 +1027,7 @@ class SellerCommissionService {
     const buildCommissionQuery = () => knex("seller_commissions")
       .where("seller_id", sellerId)
       .modify((builder) => {
+        if (query.organizationId) builder.where("organization_id", query.organizationId);
         if (query.fromDate) builder.where("created_at", ">=", query.fromDate);
         if (query.toDate) builder.where("created_at", "<=", query.toDate);
       });
@@ -999,12 +1037,18 @@ class SellerCommissionService {
       buildCommissionQuery().orderBy("created_at", "desc"),
       knex("seller_payouts")
         .where({ seller_id: sellerId, status: "completed" })
+        .modify((builder) => {
+          if (query.organizationId) builder.where("organization_id", query.organizationId);
+        })
         .sum({ paid_amount: "net_amount" })
         .count({ count: "*" })
         .first(),
       knex("seller_payouts")
         .where("seller_id", sellerId)
         .whereIn("status", ["pending", "processing"])
+        .modify((builder) => {
+          if (query.organizationId) builder.where("organization_id", query.organizationId);
+        })
         .sum({ in_process_amount: "net_amount" })
         .count({ count: "*" })
         .first(),
@@ -1012,6 +1056,9 @@ class SellerCommissionService {
         .where("seller_id", sellerId)
         .whereIn("status", ["pending", "processing"])
         .where("net_amount", "<", 0)
+        .modify((builder) => {
+          if (query.organizationId) builder.where("organization_id", query.organizationId);
+        })
         .sum({ adjustment_balance: "net_amount" })
         .count({ count: "*" })
         .first(),
@@ -1090,6 +1137,7 @@ class SellerCommissionService {
 
     return {
       sellerId,
+      organizationId: query.organizationId || null,
       currency: commissions[0]?.currency || "INR",
       balances: {
         ...balances,
@@ -1118,8 +1166,9 @@ class SellerCommissionService {
   }
 
   applyCommissionFilters(query, filters = {}) {
-    const { sellerId, status, orderId, payoutId, fromDate, toDate, search } = filters;
+    const { sellerId, organizationId, status, orderId, payoutId, fromDate, toDate, search } = filters;
     if (sellerId) query.where("seller_id", sellerId);
+    if (organizationId) query.where("organization_id", organizationId);
     if (status) query.where("status", status);
     if (orderId) query.where("order_id", orderId);
     if (payoutId) query.where("payout_id", payoutId);
@@ -1172,8 +1221,9 @@ class SellerCommissionService {
   }
 
   applyPayoutFilters(query, filters = {}) {
-    const { sellerId, status, payoutId, fromDate, toDate, search } = filters;
+    const { sellerId, organizationId, status, payoutId, fromDate, toDate, search } = filters;
     if (sellerId) query.where("seller_id", sellerId);
+    if (organizationId) query.where("organization_id", organizationId);
     if (status) query.where("status", status);
     if (payoutId) query.where("id", payoutId);
     if (fromDate) query.where("created_at", ">=", fromDate);
@@ -1227,6 +1277,28 @@ class SellerCommissionService {
 
   async processBatchPayouts(sellerId, options = {}) {
     const range = this.buildDateRange(options.periodStart, options.periodEnd);
+    if (options.organizationId === undefined) {
+      const organizationRows = await knex("seller_commissions")
+        .distinct("organization_id")
+        .where("seller_id", sellerId)
+        .whereIn("status", ["calculated", "failed"])
+        .whereBetween("created_at", [range.periodStart, range.periodEnd])
+        .orderBy("organization_id", "asc");
+      const results = [];
+      for (const row of organizationRows) {
+        results.push(await this.processBatchPayouts(sellerId, {
+          ...options,
+          organizationId: row.organization_id || null,
+        }));
+      }
+      return {
+        sellerId,
+        organizationWise: true,
+        periodStart: range.periodStart,
+        periodEnd: range.periodEnd,
+        results,
+      };
+    }
     const payoutId = await this.initiatePayout(sellerId, range.periodStart, range.periodEnd, options);
     const commerceSettings = await commerceSettingsService.getSettings();
     const payoutPolicy = this.getPayoutPolicy(commerceSettings);
@@ -1263,20 +1335,22 @@ class SellerCommissionService {
       ...(options.periodEnd ? { periodEnd: options.periodEnd } : {}),
     };
     const sellerRows = await knex("seller_commissions")
-      .distinct("seller_id")
+      .distinct("seller_id", "organization_id")
       .whereIn("status", ["pending", "approved"])
       .whereNull("payout_id")
       .whereBetween("created_at", [range.periodStart, `${range.periodEnd} 23:59:59`])
-      .orderBy("seller_id", "asc");
+      .orderBy([{ column: "seller_id", order: "asc" }, { column: "organization_id", order: "asc" }]);
 
     const processed = [];
     const failed = [];
 
     for (const row of sellerRows) {
       const sellerId = row.seller_id;
+      const organizationId = row.organization_id || undefined;
       try {
         const result = await this.processBatchPayouts(sellerId, {
           ...range,
+          organizationId,
           source: "scheduled_payout",
           autoProcess: options.autoProcess === true,
           paymentReference: options.paymentReference || `scheduled_${payoutPolicy.schedule}_${Date.now()}`,
@@ -1284,6 +1358,7 @@ class SellerCommissionService {
         });
         processed.push({
           sellerId,
+          organizationId: row.organization_id || null,
           approvalRequired: result.approvalRequired === true,
           payoutId: result.payout?.id || result.id || null,
           status: result.payout?.status || result.status || null,
@@ -1291,6 +1366,7 @@ class SellerCommissionService {
       } catch (error) {
         failed.push({
           sellerId,
+          organizationId: row.organization_id || null,
           error: error.message,
           statusCode: error.statusCode || error.status || null,
         });
@@ -1320,6 +1396,7 @@ class SellerCommissionService {
     const rows = await knex("seller_settlements")
       .modify((builder) => {
         if (query.sellerId) builder.where("seller_id", query.sellerId);
+        if (query.organizationId) builder.where("organization_id", query.organizationId);
         if (query.status) builder.where("status", query.status);
         if (query.payoutId) builder.where("payout_id", query.payoutId);
       })
@@ -1340,6 +1417,7 @@ class SellerCommissionService {
     const buildPayoutQuery = (status) => {
       const builder = knex("seller_payouts").where("status", status);
       if (query.sellerId) builder.where("seller_id", query.sellerId);
+      if (query.organizationId) builder.where("organization_id", query.organizationId);
       if (query.fromDate) builder.where("created_at", ">=", query.fromDate);
       if (query.toDate) builder.where("created_at", "<=", query.toDate);
       if (query.search) {
@@ -1365,7 +1443,7 @@ class SellerCommissionService {
       loadPayouts("processing", "updated_at", "desc"),
       loadPayouts("on_hold", "updated_at", "desc"),
       loadPayouts("failed", "updated_at", "desc"),
-      this.listNegativeBalanceRecoveries({ limit, offset }),
+      this.listNegativeBalanceRecoveries({ ...query, limit, offset }),
     ]);
 
     return {
@@ -1392,6 +1470,7 @@ class SellerCommissionService {
       .where("net_amount", "<", 0)
       .modify((builder) => {
         if (query.sellerId) builder.where("seller_id", query.sellerId);
+        if (query.organizationId) builder.where("organization_id", query.organizationId);
         if (query.status) builder.where("status", query.status);
         else builder.whereIn("status", ["pending", "processing", "on_hold"]);
         if (query.search) {
@@ -1468,6 +1547,10 @@ class SellerCommissionService {
         ? knex("seller_commissions").where("payout_id", settlement.payout_id).orderBy("created_at", "asc")
         : knex("seller_commissions")
           .where("seller_id", settlement.seller_id)
+          .modify((builder) => {
+            if (settlement.organization_id) builder.where("organization_id", settlement.organization_id);
+            else builder.whereNull("organization_id");
+          })
           .whereBetween("created_at", [
             settlement.period_start || "1970-01-01",
             `${settlement.period_end || new Date().toISOString().slice(0, 10)} 23:59:59`,
@@ -1684,6 +1767,7 @@ class SellerCommissionService {
       if (query.fromDate) builder.where(column, ">=", query.fromDate);
       if (query.toDate) builder.where(column, "<=", query.toDate);
       if (query.sellerId) builder.where("seller_id", query.sellerId);
+      if (query.organizationId) builder.where("organization_id", query.organizationId);
     };
 
     const [commissionSummary, payoutSummary, orderSummary, paymentSummary] = await Promise.all([
@@ -1704,6 +1788,7 @@ class SellerCommissionService {
       knex("order_items")
         .modify((builder) => {
           if (query.sellerId) builder.where("seller_id", query.sellerId);
+          if (query.organizationId) builder.where("organization_id", query.organizationId);
         })
         .sum({ item_sales_amount: "line_total" })
         .countDistinct({ order_count: "order_id" })
@@ -1749,7 +1834,7 @@ class SellerCommissionService {
 
     const orderItems = await knex("order_items")
       .where("order_id", orderId)
-      .select("id", "seller_id", "product_id", "variant_id", "variant_sku", "line_total");
+      .select("id", "seller_id", "organization_id", "organization_snapshot", "product_id", "variant_id", "variant_sku", "line_total");
     const itemMap = new Map();
     orderItems.forEach((item) => {
       itemMap.set(`${item.product_id}:${item.variant_sku || item.variant_id || ""}`, item);
@@ -1763,17 +1848,37 @@ class SellerCommissionService {
         itemMap.get(`${item.productId}:${item.variantSku || item.variantId || ""}`)?.seller_id ||
         itemMap.get(`${item.productId}:`)?.seller_id;
       if (!sellerId) return;
+      const matchedItem =
+        itemMap.get(`${item.productId}:${item.variantSku || item.variantId || ""}`) ||
+        itemMap.get(`${item.productId}:`) ||
+        {};
+      const organizationId = item.organizationId || item.organization_id || matchedItem.organization_id || null;
+      const key = `${String(sellerId)}:${organizationId || "default"}`;
       const amount = this.round(item.refundAmount || item.lineTotal || 0);
-      sellerRefunds.set(String(sellerId), this.round((sellerRefunds.get(String(sellerId)) || 0) + amount));
+      const current = sellerRefunds.get(key) || {
+        sellerId: String(sellerId),
+        organizationId,
+        organizationSnapshot: this.parseJson(matchedItem.organization_snapshot, {}),
+        amount: 0,
+      };
+      current.amount = this.round(current.amount + amount);
+      sellerRefunds.set(key, current);
     });
 
     if (!sellerRefunds.size) return null;
 
     const adjustments = [];
     await knex.transaction(async (trx) => {
-      for (const [sellerId, amount] of sellerRefunds.entries()) {
-        const commission = await trx("seller_commissions")
-          .where({ seller_id: sellerId, order_id: orderId })
+      for (const refund of sellerRefunds.values()) {
+        const { sellerId, organizationId, organizationSnapshot, amount } = refund;
+        const commissionQuery = trx("seller_commissions")
+          .where({ seller_id: sellerId, order_id: orderId });
+        if (organizationId) {
+          commissionQuery.where("organization_id", organizationId);
+        } else {
+          commissionQuery.whereNull("organization_id");
+        }
+        const commission = await commissionQuery
           .first()
           .forUpdate();
 
@@ -1819,6 +1924,8 @@ class SellerCommissionService {
           await trx("seller_settlements").insert({
             id: uuidv4(),
             seller_id: sellerId,
+            organization_id: organizationId || null,
+            organization_snapshot: this.jsonb(organizationSnapshot || commission.organization_snapshot || {}),
             payout_id: commission.payout_id || null,
             settlement_date: knex.fn.now(),
             period_start: null,

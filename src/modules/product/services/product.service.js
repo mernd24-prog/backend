@@ -27,6 +27,7 @@ const { PlatformService } = require("../../platform/services/platform.service");
 const { OrderRepository } = require("../../order/repositories/order.repository");
 const { WarehouseModel } = require("../../inventory/models/warehouse.model");
 const { UserModel } = require("../../user/models/user.model");
+const { sellerOrganizationService } = require("../../seller/services/seller-organization.service");
 const {
   AdminCountryModel,
   AdminStateModel,
@@ -54,6 +55,10 @@ const SELLER_BLOCKED_COMPLIANCE_FIELDS = [
 
 const PRODUCT_LIST_PROJECTION = {
   sellerId: 1,
+  organizationId: 1,
+  storeId: 1,
+  warehouseId: 1,
+  organizationSnapshot: 1,
   title: 1,
   slug: 1,
   shortDescription: 1,
@@ -445,6 +450,10 @@ class ProductService {
       tags: Array.isArray(product.tags) ? product.tags : [],
       origin: product.origin || {},
       sellerId: product.sellerId,
+      organizationId: product.organizationId,
+      storeId: product.storeId || "",
+      warehouseId: product.warehouseId || "",
+      organizationSnapshot: product.organizationSnapshot || {},
       stock: product.stock || 0,
       availableStock: Math.max(0, (product.stock || 0) - (product.reservedStock || 0)),
       rating: product.rating || 0,
@@ -530,6 +539,7 @@ class ProductService {
       includeInactive,
       includeProducts,
       sellerId,
+      organizationId: query.organizationId || null,
       productLimit,
     })}`;
 
@@ -545,6 +555,7 @@ class ProductService {
         tags,
         badges,
         warehouses,
+        organizationsResult,
         sellers,
         countries,
         states,
@@ -555,6 +566,9 @@ class ProductService {
         this.listRawMasterCollection("tags", activeFilter, { sort: { group: 1, name: 1 }, limit: 1000 }),
         this.listRawMasterCollection("badges", activeFilter, { sort: { type: 1, priority: 1, name: 1 } }),
         WarehouseModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(500).lean(),
+        sellerId
+          ? sellerOrganizationService.organizationRepository.listBySeller(sellerId)
+          : sellerOrganizationService.organizationRepository.list({ limit: 500 }),
         UserModel.find({
           role: { $in: ["seller"] },
           ...(includeInactive ? {} : { accountStatus: "active" }),
@@ -570,6 +584,7 @@ class ProductService {
 
       const relatedProductFilter = {
         ...(sellerId ? { sellerId } : {}),
+        ...(query.organizationId ? { organizationId: query.organizationId } : {}),
         ...(includeInactive
           ? {}
           : { status: { $in: [PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.INACTIVE, PRODUCT_STATUS.DRAFT, PRODUCT_STATUS.PENDING_APPROVAL] } }),
@@ -585,6 +600,7 @@ class ProductService {
               title: 1,
               sku: 1,
               sellerId: 1,
+              organizationId: 1,
               status: 1,
               brand: 1,
               category: 1,
@@ -597,6 +613,7 @@ class ProductService {
             title: product.title,
             sku: product.sku || "",
             sellerId: product.sellerId || "",
+            organizationId: product.organizationId || "",
             status: product.status,
             brand: product.brand || "",
             category: product.category || "",
@@ -660,6 +677,9 @@ class ProductService {
         tags,
         badges,
         warehouses,
+        organizations: Array.isArray(organizationsResult)
+          ? organizationsResult
+          : organizationsResult.items || [],
         sellers: sellers.map((seller) => ({
           ...seller,
           _id: String(seller._id || seller.id),
@@ -816,9 +836,49 @@ class ProductService {
     }
   }
 
+  async resolveProductOrganization(payload = {}, actor = {}, sellerId, existingProduct = null) {
+    const requestedOrganizationId =
+      payload.organizationId ||
+      payload.organization_id ||
+      existingProduct?.organizationId ||
+      existingProduct?.organization_id ||
+      null;
+
+    if (!requestedOrganizationId) {
+      throw new AppError("organizationId is required for seller products", 400);
+    }
+
+    const requireApproved = isSellerRole(actor);
+    const organization = await sellerOrganizationService.assertOrganizationForSeller(
+      sellerId,
+      requestedOrganizationId,
+      { requireApproved },
+    );
+
+    return {
+      organizationId: organization.id,
+      organizationSnapshot: sellerOrganizationService.buildSnapshot(organization),
+    };
+  }
+
+  assertOrganizationChangeAllowed(existingProduct, payload = {}, actor = {}) {
+    if (!Object.prototype.hasOwnProperty.call(payload, "organizationId")) return;
+    const current = String(existingProduct.organizationId || "");
+    const next = String(payload.organizationId || "");
+    if (current && next && current !== next) {
+      throw new AppError("Product organization cannot be changed after creation", 409);
+    }
+  }
+
   // ─── Create ───────────────────────────────────────────────────────────────
 
   async createProduct(payload, actor) {
+    const isSeller = isSellerRole(actor);
+    const sellerId = isSeller
+      ? actor.ownerSellerId || actor.userId
+      : payload.sellerId || actor.userId;
+    const organizationContext = await this.resolveProductOrganization(payload, actor, sellerId);
+
     payload = this.normalizeProductMedia(payload);
     payload = this.normalizeProductVariants(payload);
     payload = {
@@ -840,15 +900,11 @@ class ProductService {
     await this.validateProductReferences(payload, actor);
     this._validateProductType(productType, payload);
 
-    const isSeller = isSellerRole(actor);
     const status = isSeller
       ? payload.status === PRODUCT_STATUS.DRAFT
         ? PRODUCT_STATUS.DRAFT
         : PRODUCT_STATUS.PENDING_APPROVAL
       : payload.status || PRODUCT_STATUS.DRAFT;
-    const sellerId = isSeller
-      ? actor.ownerSellerId || actor.userId
-      : payload.sellerId || actor.userId;
 
     const hasVariants = payload.hasVariants === true || (payload.variants || []).length > 0;
 
@@ -858,6 +914,10 @@ class ProductService {
       productType,
       status,
       sellerId,
+      organizationId: organizationContext.organizationId,
+      organizationSnapshot: organizationContext.organizationSnapshot,
+      storeId: payload.storeId || null,
+      warehouseId: payload.warehouseId || null,
       hasVariants,
       slug: slugify(`${payload.title}-${Date.now()}`, { lower: true, strict: true }),
       publishedAt: status === PRODUCT_STATUS.ACTIVE ? new Date() : null,
@@ -906,6 +966,16 @@ class ProductService {
     }
     if (isScopedSellerRole(actor) && String(existingProduct.createdBy || "") !== String(actor.userId || "")) {
       throw new AppError("Permission denied", 403);
+    }
+    this.assertOrganizationChangeAllowed(existingProduct, payload, actor);
+    if (!existingProduct.organizationId && payload.organizationId) {
+      const sellerId = existingProduct.sellerId || (actor.ownerSellerId || actor.userId);
+      const organizationContext = await this.resolveProductOrganization(payload, actor, sellerId, existingProduct);
+      payload.organizationId = organizationContext.organizationId;
+      payload.organizationSnapshot = organizationContext.organizationSnapshot;
+    } else {
+      delete payload.organizationId;
+      delete payload.organizationSnapshot;
     }
 
     payload = this.normalizeProductMedia(payload);
@@ -1043,6 +1113,8 @@ class ProductService {
     const revisionPayload = {
       productId,
       sellerId: existingProduct.sellerId,
+      organizationId: existingProduct.organizationId || draftChanges.organizationId || null,
+      organizationSnapshot: existingProduct.organizationSnapshot || draftChanges.organizationSnapshot || {},
       baseVersion: existingProduct.version || 1,
       draftChanges,
       changedFields,
@@ -1223,6 +1295,9 @@ class ProductService {
     if (query.sku) filter.sku = query.sku;
     if (query.brand) filter.brand = new RegExp(`^${escapeRegExp(query.brand)}$`, "i");
     if (query.sellerId) filter.sellerId = query.sellerId;
+    if (query.organizationId) filter.organizationId = query.organizationId;
+    if (query.storeId) filter.storeId = query.storeId;
+    if (query.warehouseId) filter.warehouseId = query.warehouseId;
     if (query.productType) filter.productType = query.productType;
     if (query.hasVariants !== undefined) {
       filter.hasVariants = query.hasVariants === true || query.hasVariants === "true";
@@ -1305,6 +1380,9 @@ class ProductService {
     }
     if (query.sku) filter.sku = query.sku;
     if (query.brand) filter.brand = new RegExp(`^${escapeRegExp(query.brand)}$`, "i");
+    if (query.organizationId) filter.organizationId = query.organizationId;
+    if (query.storeId) filter.storeId = query.storeId;
+    if (query.warehouseId) filter.warehouseId = query.warehouseId;
     if (query.productFamilyCode || query.family || query.familyCode) {
       filter.productFamilyCode = query.productFamilyCode || query.family || query.familyCode;
     }
@@ -1421,6 +1499,9 @@ class ProductService {
       "brand",
       "tags",
       "sellerId",
+      "organizationId",
+      "storeId",
+      "warehouseId",
       "minPrice",
       "maxPrice",
       "dateFrom",

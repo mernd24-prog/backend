@@ -317,6 +317,7 @@ const commissionValidation = {
   }),
   processPayouts: Joi.object({
     sellerId: Joi.string().required(),
+    organizationId: Joi.string().guid({ version: "uuidv4" }).allow(null),
     periodStart: Joi.date(),
     periodEnd: Joi.date(),
     paymentReference: Joi.string().trim().max(160),

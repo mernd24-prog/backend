@@ -1,6 +1,7 @@
 const { okResponse } = require("../../../shared/http/reply");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
 const { AdminService } = require("../services/admin.service");
+const { sellerOrganizationService } = require("../../seller/services/seller-organization.service");
 
 class AdminController {
   constructor({ adminService = new AdminService() } = {}) {
@@ -79,6 +80,68 @@ class AdminController {
   getSellerKyc = async (req, res) => {
     const result = await this.adminService.getSellerKyc(req.params.sellerId);
     res.json(okResponse(result));
+  };
+
+  listAllSellerOrganizations = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await sellerOrganizationService.adminList(req.query, actor);
+    res.json(okResponse(result.items, {
+      total: result.total,
+      limit: result.limit,
+      offset: result.offset,
+    }));
+  };
+
+  listSellerOrganizations = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await sellerOrganizationService.adminListForSeller(
+      req.params.sellerId,
+      req.query,
+      actor,
+    );
+    res.json(okResponse(result));
+  };
+
+  createSellerOrganization = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const organization = await sellerOrganizationService.adminCreate(
+      req.params.sellerId,
+      req.body,
+      actor,
+    );
+    res.status(201).json(okResponse(organization));
+  };
+
+  getSellerOrganization = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const organization = await sellerOrganizationService.adminGet(
+      req.params.sellerId,
+      req.params.organizationId,
+      actor,
+    );
+    res.json(okResponse(organization));
+  };
+
+  updateSellerOrganization = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const organization = await sellerOrganizationService.adminUpdate(
+      req.params.sellerId,
+      req.params.organizationId,
+      req.body,
+      actor,
+    );
+    res.json(okResponse(organization));
+  };
+
+  reviewSellerOrganization = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const organization = await sellerOrganizationService.adminReview(
+      req.params.sellerId,
+      req.params.organizationId,
+      req.body,
+      actor,
+    );
+    res.json(okResponse(organization));
   };
 
   updateSellerKycStatus = async (req, res) => {

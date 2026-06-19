@@ -96,6 +96,14 @@ const {
   updatePlatformSubAdminModulesSchema,
 } = require("../validation/admin.validation");
 const {
+  adminListAllSellerOrganizationsSchema,
+  adminListSellerOrganizationsSchema,
+  adminCreateSellerOrganizationSchema,
+  adminSellerOrganizationParamSchema,
+  adminReviewSellerOrganizationSchema,
+  adminUpdateSellerOrganizationSchema,
+} = require("../../seller/validation/seller.validation");
+const {
   createCategorySchema,
   updateCategorySchema,
   listCategoriesSchema,
@@ -450,6 +458,11 @@ adminRoutes.get(
   catchErrors(adminController.listVendors),
 );
 adminRoutes.get(
+  "/seller-organizations",
+  checkInput(adminListAllSellerOrganizationsSchema),
+  catchErrors(adminController.listAllSellerOrganizations),
+);
+adminRoutes.get(
   "/sellers/:sellerId",
   checkInput(sellerParamSchema),
   catchErrors(adminController.getSeller),
@@ -458,6 +471,31 @@ adminRoutes.get(
   "/sellers/:sellerId/kyc",
   checkInput(sellerParamSchema),
   catchErrors(adminController.getSellerKyc),
+);
+adminRoutes.get(
+  "/sellers/:sellerId/organizations",
+  checkInput(adminListSellerOrganizationsSchema),
+  catchErrors(adminController.listSellerOrganizations),
+);
+adminRoutes.post(
+  "/sellers/:sellerId/organizations",
+  checkInput(adminCreateSellerOrganizationSchema),
+  catchErrors(adminController.createSellerOrganization),
+);
+adminRoutes.get(
+  "/sellers/:sellerId/organizations/:organizationId",
+  checkInput(adminSellerOrganizationParamSchema),
+  catchErrors(adminController.getSellerOrganization),
+);
+adminRoutes.patch(
+  "/sellers/:sellerId/organizations/:organizationId",
+  checkInput(adminUpdateSellerOrganizationSchema),
+  catchErrors(adminController.updateSellerOrganization),
+);
+adminRoutes.patch(
+  "/sellers/:sellerId/organizations/:organizationId/status",
+  checkInput(adminReviewSellerOrganizationSchema),
+  catchErrors(adminController.reviewSellerOrganization),
 );
 adminRoutes.patch(
   "/vendors/:sellerId/status",

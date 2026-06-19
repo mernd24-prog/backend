@@ -25,13 +25,10 @@ const otpEmailTemplate = require("../../../../templates/otp-email.ejs");
 const { env } = require("../../../config/env");
 const {
   SELLER_ONBOARDING_STATUS,
-  makeSellerOnboardingChecklist,
   makeSellerOnboardingState,
   getSellerKycStatus,
-  hasCompleteSellerBankDetails: hasCompleteSellerBankDetailsForOnboarding,
-  hasCompleteSellerProfile: hasCompleteSellerProfileForOnboarding,
-  getSellerOnboardingStatus,
 } = require("../../../shared/domain/seller-onboarding");
+const { sellerOrganizationService } = require("../../seller/services/seller-organization.service");
 
 const composeProfileName = (firstName = "", lastName = "") => {
   const first = String(firstName || "").trim();
@@ -117,49 +114,12 @@ class AuthService {
     };
   }
 
-  isSellerOnboardingComplete(user) {
-    if (!user || user.role !== ROLES.SELLER) {
-      return true;
-    }
-
-    return (
-      user?.sellerProfile?.onboardingStatus === SELLER_ONBOARDING_STATUS.READY_FOR_GO_LIVE &&
-      user?.sellerProfile?.bankVerificationStatus === "verified" &&
-      user?.sellerProfile?.goLiveStatus === "live" &&
-      user?.accountStatus === "active"
-    );
-  }
-
   async getSellerLoginFlowState(user) {
     if (!user || user.role !== ROLES.SELLER) {
       return null;
     }
 
     return this.getAuthStatus(user.id);
-  }
-
-  hasCompleteSellerProfile(sellerProfile = {}) {
-    return hasCompleteSellerProfileForOnboarding(sellerProfile);
-  }
-
-  hasCompleteSellerBankDetails(bankDetails = {}) {
-    return hasCompleteSellerBankDetailsForOnboarding(bankDetails);
-  }
-
-  makeSellerChecklist(user, kyc) {
-    return makeSellerOnboardingChecklist({
-      sellerProfile: user?.sellerProfile || {},
-      user,
-      kyc,
-    });
-  }
-
-  getSellerAuthStatus(user, checklist, kycStatus) {
-    return getSellerOnboardingStatus(
-      checklist,
-      kycStatus,
-      user?.sellerProfile?.onboardingStatus,
-    );
   }
 
   toPlainObject(value = {}) {
@@ -447,8 +407,12 @@ class AuthService {
 
     const isSeller = user.role === ROLES.SELLER;
     let kyc = null;
+    let organization = null;
     if (isSeller) {
-      kyc = await this.authRepository.findSellerKycBySellerId(user.id);
+      [kyc, organization] = await Promise.all([
+        this.authRepository.findSellerKycBySellerId(user.id),
+        sellerOrganizationService.getDefaultOrOnlyOrganization(user.id),
+      ]);
     }
 
     const sellerProfile = isSeller ? this.toPlainObject(user?.sellerProfile || {}) : {};
@@ -493,11 +457,19 @@ class AuthService {
       : user?.sellerProfile?.onboardingStatus || "initiated";
     const bankVerificationStatus = sellerProfile.bankVerificationStatus || "not_submitted";
     const goLiveStatus = sellerProfile.goLiveStatus || "pending";
+    const organizationApproved = ["approved", "active"].includes(
+      String(organization?.approvalStatus || "").toLowerCase(),
+    );
+    const organizationVerificationReady =
+      organization?.kycStatus === "verified" &&
+      organization?.bankVerificationStatus === "verified";
     const sellerOnboardingComplete =
       kycStatus === "verified" &&
       onboardingState?.requirements?.profile?.completed === true &&
       onboardingState?.requirements?.bankDetails?.completed === true &&
       bankVerificationStatus !== "rejected" &&
+      organizationApproved &&
+      organizationVerificationReady &&
       user.accountStatus === "active";
     const flowState = {
       user: {
@@ -521,6 +493,22 @@ class AuthService {
       bankVerificationStatus,
       bankRejectionReason: sellerProfile.bankRejectionReason || null,
       goLiveStatus,
+      organization: organization
+        ? {
+            id: organization.id,
+            legalBusinessName: organization.legalBusinessName,
+            storeDisplayName: organization.storeDisplayName,
+            approvalStatus: organization.approvalStatus,
+            kycStatus: organization.kycStatus,
+            bankVerificationStatus: organization.bankVerificationStatus,
+            rejectionReason: organization.rejectionReason || null,
+            requiredChanges: organization.requiredChanges || [],
+            approvedAt: organization.approvedAt || null,
+            rejectedAt: organization.rejectedAt || null,
+            resubmittedAt: organization.resubmittedAt || null,
+          }
+        : null,
+      organizationApproved,
       sellerProfile: isSeller ? sellerProfile : null,
       kyc: isSeller ? this.formatSellerKycForStatus(kyc) : null,
       requirements: onboardingState?.requirements || {},

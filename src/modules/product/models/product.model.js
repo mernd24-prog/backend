@@ -220,6 +220,10 @@ const productSchema = new mongoose.Schema(
   {
     // ── Identity
     sellerId: { type: String, required: true, index: true },
+    organizationId: { type: String, required: true, index: true },
+    storeId: { type: String, index: true },
+    warehouseId: { type: String, index: true },
+    organizationSnapshot: { type: Object, default: {} },
     title: { type: String, required: true, trim: true, index: true },
     slug: { type: String, required: true, unique: true, index: true },
     description: { type: String, required: true },
@@ -405,6 +409,8 @@ const productSchema = new mongoose.Schema(
 
 productSchema.index({ title: "text", description: "text", category: 1 });
 productSchema.index({ sellerId: 1, status: 1 });
+productSchema.index({ sellerId: 1, organizationId: 1, status: 1 });
+productSchema.index({ organizationId: 1, status: 1 });
 productSchema.index({ category: 1, status: 1, price: 1 });
 productSchema.index({ productType: 1, status: 1 });
 productSchema.index({ brand: 1, status: 1 });

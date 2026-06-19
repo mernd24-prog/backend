@@ -15,6 +15,165 @@ const sellerKycDocumentKeys = [
   "addressProofUrl",
 ];
 
+const organizationStatuses = ["draft", "pending_review", "resubmitted", "approved", "rejected", "suspended", "blocked", "active"];
+const organizationKycStatuses = ["not_submitted", "submitted", "under_review", "verified", "rejected"];
+const organizationBankStatuses = ["not_submitted", "submitted", "verified", "rejected"];
+
+const sellerOrganizationAddressSchema = Joi.object({
+  line1: Joi.string().allow("", null),
+  line2: Joi.string().allow("", null),
+  city: Joi.string().allow("", null),
+  state: Joi.string().allow("", null),
+  country: Joi.string().default("India"),
+  postalCode: Joi.string().min(5).max(10).allow("", null),
+});
+
+const sellerOrganizationBankSchema = Joi.object({
+  accountHolderName: Joi.string().allow("", null),
+  accountNumber: Joi.string().allow("", null),
+  ifscCode: Joi.string().allow("", null),
+  bankName: Joi.string().allow("", null),
+  branchName: Joi.string().allow("", null),
+});
+
+const sellerOrganizationBodySchema = Joi.object({
+  legalBusinessName: Joi.string().min(2).max(180),
+  legalName: Joi.string().min(2).max(180),
+  storeDisplayName: Joi.string().min(2).max(180),
+  displayName: Joi.string().min(2).max(180),
+  businessName: Joi.string().min(2).max(180),
+  businessType: Joi.string().valid("individual", "proprietorship", "partnership", "private_limited", "llp", "public_limited").allow("", null),
+  gstin: Joi.string().pattern(gstPattern).allow("", null),
+  gstNumber: Joi.string().pattern(gstPattern).allow("", null),
+  pan: Joi.string().pattern(panPattern).allow("", null),
+  panNumber: Joi.string().pattern(panPattern).allow("", null),
+  documents: Joi.object().default({}),
+  kycDocuments: Joi.object().default({}),
+  bankDetails: sellerOrganizationBankSchema.default({}),
+  billingAddress: sellerOrganizationAddressSchema.default({}),
+  businessAddress: sellerOrganizationAddressSchema.default({}),
+  pickupAddress: sellerOrganizationAddressSchema.default({}),
+  returnAddress: sellerOrganizationAddressSchema.default({}),
+  taxSettings: Joi.object().default({}),
+  invoiceSettings: Joi.object().default({}),
+  payoutSettings: Joi.object().default({}),
+  metadata: Joi.object().default({}),
+  isDefault: Joi.boolean(),
+});
+
+const createSellerOrganizationSchema = Joi.object({
+  body: sellerOrganizationBodySchema
+    .fork(["legalBusinessName", "storeDisplayName", "pan", "bankDetails", "billingAddress", "pickupAddress"], (schema) => schema.required())
+    .required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
+const updateSellerOrganizationSchema = Joi.object({
+  body: sellerOrganizationBodySchema.min(1).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    organizationId: Joi.string().guid({ version: "uuidv4" }).required(),
+  }).required(),
+});
+
+const sellerOrganizationParamSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    organizationId: Joi.string().guid({ version: "uuidv4" }).required(),
+  }).required(),
+});
+
+const listSellerOrganizationsSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    q: Joi.string().allow(""),
+    approvalStatus: Joi.string().valid(...organizationStatuses),
+    kycStatus: Joi.string().valid(...organizationKycStatuses),
+    bankVerificationStatus: Joi.string().valid(...organizationBankStatuses),
+    organizationId: Joi.string().guid({ version: "uuidv4" }).allow("", null),
+    sellerId: Joi.string().allow("", null),
+    limit: Joi.number().integer().min(1).max(200),
+    offset: Joi.number().integer().min(0),
+  }).required(),
+  params: Joi.object({}).required(),
+});
+
+const adminListSellerOrganizationsSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: listSellerOrganizationsSchema.extract("query"),
+  params: Joi.object({
+    sellerId: Joi.string().required(),
+  }).required(),
+});
+
+const adminListAllSellerOrganizationsSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: listSellerOrganizationsSchema.extract("query"),
+  params: Joi.object({}).required(),
+});
+
+const adminCreateSellerOrganizationSchema = Joi.object({
+  body: sellerOrganizationBodySchema
+    .keys({
+      approvalStatus: Joi.string().valid(...organizationStatuses),
+      kycStatus: Joi.string().valid(...organizationKycStatuses),
+      bankVerificationStatus: Joi.string().valid(...organizationBankStatuses),
+      rejectionReason: Joi.string().max(2000).allow("", null),
+      requiredChanges: Joi.array().items(Joi.string().max(200)).default([]),
+    })
+    .fork(["legalBusinessName", "storeDisplayName", "pan", "bankDetails", "billingAddress", "pickupAddress"], (schema) => schema.required())
+    .required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    sellerId: Joi.string().required(),
+  }).required(),
+});
+
+const adminSellerOrganizationParamSchema = Joi.object({
+  body: Joi.object({}).default({}),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    sellerId: Joi.string().required(),
+    organizationId: Joi.string().guid({ version: "uuidv4" }).required(),
+  }).required(),
+});
+
+const adminUpdateSellerOrganizationSchema = Joi.object({
+  body: sellerOrganizationBodySchema.keys({
+    approvalStatus: Joi.string().valid(...organizationStatuses),
+    kycStatus: Joi.string().valid(...organizationKycStatuses),
+    bankVerificationStatus: Joi.string().valid(...organizationBankStatuses),
+    suspendedAt: Joi.date().allow(null),
+    rejectionReason: Joi.string().max(2000).allow("", null),
+    requiredChanges: Joi.array().items(Joi.string().max(200)).default([]),
+  }).min(1).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    sellerId: Joi.string().required(),
+    organizationId: Joi.string().guid({ version: "uuidv4" }).required(),
+  }).required(),
+});
+
+const adminReviewSellerOrganizationSchema = Joi.object({
+  body: Joi.object({
+    approvalStatus: Joi.string().valid(...organizationStatuses),
+    status: Joi.string().valid(...organizationStatuses),
+    kycStatus: Joi.string().valid(...organizationKycStatuses),
+    bankVerificationStatus: Joi.string().valid(...organizationBankStatuses),
+    rejectionReason: Joi.string().max(2000).allow("", null),
+    requiredChanges: Joi.array().items(Joi.string().max(200)).default([]),
+    notes: Joi.string().allow("", null),
+    metadata: Joi.object().default({}),
+  }).or("approvalStatus", "status", "kycStatus", "bankVerificationStatus").required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    sellerId: Joi.string().required(),
+    organizationId: Joi.string().guid({ version: "uuidv4" }).required(),
+  }).required(),
+});
+
 const submitKycSchema = Joi.object({
   body: Joi.object({
     panNumber: Joi.string().pattern(panPattern).required(),
@@ -201,6 +360,7 @@ const sellerDashboardSchema = Joi.object({
   query: Joi.object({
     fromDate: Joi.date().iso(),
     toDate: Joi.date().iso(),
+    organizationId: Joi.string().guid({ version: "uuidv4" }),
   }).required(),
   params: Joi.object({}).required(),
 });
@@ -216,6 +376,7 @@ const sellerTrackingSchema = Joi.object({
   query: Joi.object({
     status: Joi.string().valid(...Object.values(ORDER_STATUS)),
     deliveryStatus: Joi.string().valid(...Object.values(DELIVERY_STATUS), "not_created"),
+    organizationId: Joi.string().guid({ version: "uuidv4" }),
     fromDate: Joi.date().iso(),
     toDate: Joi.date().iso(),
     limit: Joi.number().integer().min(1).max(100).default(20),
@@ -350,4 +511,14 @@ module.exports = {
   updateSellerSubAdminModulesSchema,
   updateSellerSubAdminStatusSchema,
   sellerSubAdminParamSchema,
+  createSellerOrganizationSchema,
+  updateSellerOrganizationSchema,
+  sellerOrganizationParamSchema,
+  listSellerOrganizationsSchema,
+  adminListAllSellerOrganizationsSchema,
+  adminListSellerOrganizationsSchema,
+  adminCreateSellerOrganizationSchema,
+  adminSellerOrganizationParamSchema,
+  adminUpdateSellerOrganizationSchema,
+  adminReviewSellerOrganizationSchema,
 };

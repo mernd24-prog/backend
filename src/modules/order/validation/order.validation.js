@@ -20,6 +20,7 @@ const orderFilterQuerySchema = Joi.object({
   paymentStatus: Joi.string().valid("initiated", "authorized", "captured", "failed", "partially_refunded", "refunded", "cancelled"),
   deliveryStatus: Joi.string().max(64),
   sellerId: Joi.string().max(128),
+  organizationId: Joi.string().guid({ version: "uuidv4" }),
   buyerId: Joi.string().max(128),
   fromDate: Joi.date().iso(),
   toDate: Joi.date().iso(),

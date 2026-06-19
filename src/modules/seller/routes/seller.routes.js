@@ -24,6 +24,10 @@ const {
   updateSellerSubAdminModulesSchema,
   updateSellerSubAdminStatusSchema,
   sellerSubAdminParamSchema,
+  createSellerOrganizationSchema,
+  updateSellerOrganizationSchema,
+  sellerOrganizationParamSchema,
+  listSellerOrganizationsSchema,
 } = require("../validation/seller.validation");
 const { ACTIONS } = require("../../../shared/constants/actions");
 const { ROLES } = require("../../../shared/constants/roles");
@@ -94,6 +98,34 @@ sellerRoutes.get(
   authenticate,
   allowActions(ACTIONS.SELLER_PROFILE_MANAGE),
   catchErrors(sellerController.getProfile),
+);
+sellerRoutes.get(
+  "/me/organizations",
+  authenticate,
+  allowActions(ACTIONS.SELLER_PROFILE_MANAGE),
+  checkInput(listSellerOrganizationsSchema),
+  catchErrors(sellerController.listOrganizations),
+);
+sellerRoutes.post(
+  "/me/organizations",
+  authenticate,
+  allowActions(ACTIONS.SELLER_PROFILE_MANAGE),
+  checkInput(createSellerOrganizationSchema),
+  catchErrors(sellerController.createOrganization),
+);
+sellerRoutes.patch(
+  "/me/organizations/:organizationId",
+  authenticate,
+  allowActions(ACTIONS.SELLER_PROFILE_MANAGE),
+  checkInput(updateSellerOrganizationSchema),
+  catchErrors(sellerController.updateOrganization),
+);
+sellerRoutes.patch(
+  "/me/organizations/:organizationId/default",
+  authenticate,
+  allowActions(ACTIONS.SELLER_PROFILE_MANAGE),
+  checkInput(sellerOrganizationParamSchema),
+  catchErrors(sellerController.setDefaultOrganization),
 );
 sellerRoutes.patch(
   "/me/profile",

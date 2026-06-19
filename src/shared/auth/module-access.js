@@ -27,6 +27,8 @@ const MODULE_ALIASES = {
   seller_staff: "sellers",
   "seller-management": "sellers",
   seller_management: "sellers",
+  "seller-organizations": "sellers",
+  seller_organizations: "sellers",
   "seller-onboarding": "sellers",
   seller_onboarding: "sellers",
   "seller-kyc": "seller_kyc",
@@ -373,6 +375,10 @@ function getRequestModule(req) {
       return "seller_bank";
     }
 
+    if (second === "seller-organizations" || (second === "sellers" && fourth === "organizations")) {
+      return "sellers";
+    }
+
     if (second === "common") {
       const commonModuleMap = {
         countries: "countries",
@@ -398,6 +404,7 @@ function getRequestModule(req) {
       cms: "cms_pages",
       dashboard: "admin",
       "seller-users": "sellers",
+      "seller-organizations": "sellers",
       users: "users",
       "admin-users": "admin_users",
       vendors: "sellers",

@@ -3,6 +3,9 @@ const { AdminRepository } = require("../repositories/admin.repository");
 const { ProductService } = require("../../product/services/product.service");
 const { TaxService } = require("../../tax/services/tax.service");
 const {
+  sellerOrganizationService: defaultSellerOrganizationService,
+} = require("../../seller/services/seller-organization.service");
+const {
   SubscriptionService,
 } = require("../../subscription/services/subscription.service");
 const { RbacService } = require("../../rbac/services/rbac.service");
@@ -69,12 +72,14 @@ class AdminService {
     adminRepository = new AdminRepository(),
     productService = new ProductService(),
     taxService = new TaxService(),
+    sellerOrganizationService = defaultSellerOrganizationService,
     subscriptionService = new SubscriptionService(),
     rbacService = new RbacService(),
   } = {}) {
     this.adminRepository = adminRepository;
     this.productService = productService;
     this.taxService = taxService;
+    this.sellerOrganizationService = sellerOrganizationService;
     this.subscriptionService = subscriptionService;
     this.rbacService = rbacService;
     this.queues = {
@@ -118,8 +123,10 @@ class AdminService {
       if (second === "cms") return "cms_pages";
       if (second === "dashboard") return "admin";
       if (second === "vendors") return "sellers";
+      if (second === "seller-organizations") return "sellers";
       if (second === "sellers" && fourth === "kyc") return "seller_kyc";
       if (second === "sellers" && fourth === "bank") return "seller_bank";
+      if (second === "sellers" && fourth === "organizations") return "sellers";
       if (second === "common") {
         return cleanModuleName(third || "platform");
       }
@@ -721,6 +728,64 @@ class AdminService {
     return this.enrichSellerForAdmin(user, kycBySellerId.get(String(sellerId)) || null);
   }
 
+  async syncDefaultSellerOrganization(sellerId, sellerProfile = {}, statusUpdates = {}, actor = {}) {
+    const profile = this.toPlainObject(sellerProfile || {});
+    const fallbackName =
+      profile.legalBusinessName ||
+      profile.businessName ||
+      profile.displayName ||
+      `Seller ${sellerId}`;
+    const organization = await this.sellerOrganizationService.ensureDefaultOrganizationForSeller(
+      sellerId,
+      profile,
+      actor,
+    );
+    const normalizeAddress = (address) => this.sellerOrganizationService.normalizeAddress(address || {});
+    const updatePayload = {
+      legalBusinessName: fallbackName,
+      storeDisplayName: profile.displayName || profile.businessName || fallbackName,
+      businessType: profile.businessType || null,
+      gstin: this.sellerOrganizationService.normalizeCode(profile.gstNumber),
+      pan: this.sellerOrganizationService.normalizeCode(profile.panNumber),
+      bankDetails: profile.bankDetails || {},
+      billingAddress: normalizeAddress(profile.businessAddress),
+      pickupAddress: normalizeAddress(profile.pickupAddress),
+      returnAddress: normalizeAddress(profile.returnAddress),
+      taxSettings: {
+        ...(organization.taxSettings || {}),
+        gstin: this.sellerOrganizationService.normalizeCode(profile.gstNumber),
+        pan: this.sellerOrganizationService.normalizeCode(profile.panNumber),
+        state: profile.businessAddress?.state || profile.pickupAddress?.state || "",
+      },
+      invoiceSettings: {
+        ...(organization.invoiceSettings || {}),
+        invoicePrefix: organization.invoiceSettings?.invoicePrefix || "INV",
+        state: profile.businessAddress?.state || profile.pickupAddress?.state || "",
+      },
+      payoutSettings: {
+        ...(organization.payoutSettings || {}),
+        payoutSchedule: profile.payoutSchedule || organization.payoutSettings?.payoutSchedule || "weekly",
+      },
+      metadata: {
+        ...(organization.metadata || {}),
+        source: "admin_seller_profile_bridge",
+        lastSyncedAt: new Date().toISOString(),
+      },
+      ...statusUpdates,
+      updatedBy: actor.userId || actor.sub || null,
+    };
+
+    return this.sellerOrganizationService.organizationRepository.update(organization.id, {
+      ...updatePayload,
+      ...this.sellerOrganizationService.buildLifecyclePatch(
+        organization,
+        updatePayload,
+        actor,
+        { action: "admin_seller_profile_organization_sync" },
+      ),
+    });
+  }
+
   async updateSellerKycStatus(sellerId, payload, actor = {}) {
     if (payload.kycStatus === "rejected" && !payload.rejectionReason) {
       throw new AppError("Rejection reason is required when KYC is rejected", 400);
@@ -784,6 +849,14 @@ class AdminService {
       sellerProfile: nextSellerProfile,
       ...(kycRejected ? { accountStatus: "pending_approval" } : {}),
     });
+    await this.syncDefaultSellerOrganization(sellerId, nextSellerProfile, {
+      kycStatus: payload.kycStatus,
+      ...(kycRejected ? { bankVerificationStatus: "not_submitted" } : {}),
+      approvalStatus: kycRejected
+        ? "rejected"
+        : "pending_review",
+      ...(kycRejected ? { rejectionReason: payload.rejectionReason || null } : {}),
+    }, actor);
     return this.getSeller(sellerId);
   }
 
@@ -849,6 +922,13 @@ class AdminService {
         ? { accountStatus: "pending_approval" }
         : {}),
     });
+    await this.syncDefaultSellerOrganization(sellerId, nextSellerProfile, {
+      bankVerificationStatus: payload.bankVerificationStatus,
+      approvalStatus: bankRejected
+        ? "rejected"
+        : "pending_review",
+      ...(bankRejected ? { rejectionReason: payload.bankRejectionReason || null } : {}),
+    }, actor);
     return this.getSeller(sellerId);
   }
 
@@ -889,19 +969,34 @@ class AdminService {
     const bankReady =
       bankVerificationStatus === "verified" ||
       (bankVerificationStatus === "submitted" && bankDetailsComplete);
+    const organization =
+      await this.sellerOrganizationService.getDefaultOrOnlyOrganization(sellerId) ||
+      await this.syncDefaultSellerOrganization(sellerId, profile, {}, actor);
+    const organizationApproved = ["approved", "active"].includes(
+      String(organization?.approvalStatus || "").toLowerCase(),
+    );
+    const organizationVerificationReady =
+      organization?.kycStatus === "verified" &&
+      organization?.bankVerificationStatus === "verified";
     const canGoLive =
       kycStatus === "verified" &&
       bankReady &&
-      profileCompleted;
+      profileCompleted &&
+      organizationApproved &&
+      organizationVerificationReady;
 
     if (payload.goLiveStatus === "live" && !canGoLive) {
       throw new AppError(
-        "Seller can go live only when KYC and bank are verified, and profile is completed",
+        "Seller can go live only when onboarding is complete and the organization is approved",
         400,
         {
           kycStatus,
           bankVerificationStatus,
           profileCompleted,
+          organizationId: organization?.id || null,
+          organizationApprovalStatus: organization?.approvalStatus || "missing",
+          organizationKycStatus: organization?.kycStatus || "missing",
+          organizationBankVerificationStatus: organization?.bankVerificationStatus || "missing",
           accountStatus,
           onboardingStatus: onboardingState.onboardingStatus,
           missingBankFields: onboardingState.requirements.bankDetails.missingFields,
@@ -937,6 +1032,11 @@ class AdminService {
       sellerProfile: nextSellerProfile,
       ...(payload.goLiveStatus === "live" ? { accountStatus: "active" } : {}),
     });
+    await this.syncDefaultSellerOrganization(sellerId, nextSellerProfile, {
+      kycStatus,
+      bankVerificationStatus:
+        payload.goLiveStatus === "live" && bankReady ? "verified" : bankVerificationStatus,
+    }, actor);
     return this.getSeller(sellerId);
   }
 
@@ -1307,7 +1407,7 @@ class AdminService {
   }
 
   roleHasFullModuleAccess(role) {
-    return role === ROLES.SUPER_ADMIN;
+    return role === ROLES.SUPER_ADMIN || role === ROLES.ADMIN;
   }
 
   getRbacModuleMap(modules = []) {

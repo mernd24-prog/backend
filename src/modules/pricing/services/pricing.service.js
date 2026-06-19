@@ -109,6 +109,10 @@ class PricingService {
           variantTitle: variant?.title || item.variantTitle || "",
           attributes: variant?.attributes || item.attributes || {},
           sellerId: product.sellerId,
+          organizationId: product.organizationId || null,
+          storeId: product.storeId || null,
+          warehouseId: product.warehouseId || null,
+          organizationSnapshot: product.organizationSnapshot || {},
           category: product.category,
           quantity: item.quantity,
           unitPrice,
@@ -140,6 +144,9 @@ class PricingService {
             gstInclusive,
             dealId: activeDeal?.dealId || null,
             dealNumber: activeDeal?.dealNumber || null,
+            organizationId: product.organizationId || null,
+            storeId: product.storeId || null,
+            warehouseId: product.warehouseId || null,
           },
         };
       }),
@@ -174,6 +181,7 @@ class PricingService {
       );
       item.pricingSnapshot = {
         commissionPercent: fee?.commissionPercent || 0,
+        organizationId: item.organizationId || null,
         commissionFee: fee?.commissionFee || 0,
         fixedFee: fee?.fixedFee || 0,
         closingFee: fee?.closingFee || 0,
@@ -254,8 +262,11 @@ class PricingService {
     const sellers = new Map();
     for (const item of pricedItems) {
       const sellerId = item.sellerId || "platform";
-      const current = sellers.get(sellerId) || {
+      const organizationId = item.organizationId || null;
+      const key = `${sellerId}:${organizationId || "default"}`;
+      const current = sellers.get(key) || {
         sellerId,
+        organizationId,
         grossSalesAmount: 0,
         sellerPayoutBaseAmount: 0,
         taxableAmount: 0,
@@ -273,7 +284,7 @@ class PricingService {
       current.platformFeeTaxAmount += Number(item.platformFeeTaxAmount || 0);
       current.productTaxLiabilityAmount += Number(item.productTaxLiabilityAmount || 0);
       current.sellerPayoutAmount += Number(item.settlementAmount || 0);
-      sellers.set(sellerId, current);
+      sellers.set(key, current);
     }
 
     const shippingBySeller = new Map(
@@ -434,6 +445,7 @@ class PricingService {
       breakup.push({
         productId: item.productId,
         sellerId: item.sellerId,
+        organizationId: item.organizationId || null,
         dealId: item.dealId || null,
         category: item.category,
         quantity: item.quantity,
