@@ -9,8 +9,6 @@ const withCategoryAliases = (schema) =>
   schema
     .rename("name", "title", { ignoreUndefined: true, override: false })
     .rename("categoryName", "title", { ignoreUndefined: true, override: false })
-    .rename("thumbnails", "imageUrl", { ignoreUndefined: true, override: false })
-    .rename("seoUrl", "imageUrl", { ignoreUndefined: true, override: false })
     .rename("priority", "sortOrder", { ignoreUndefined: true, override: false });
 
 const createCategorySchema = Joi.object({
@@ -41,7 +39,6 @@ const createCategorySchema = Joi.object({
       .default([]),
     active: Joi.boolean().default(true),
     sortOrder: Joi.number().integer().default(0),
-    imageUrl: Joi.string().allow(""),
     bannerUrl: Joi.string().allow(""),
     iconUrl: Joi.string().allow(""),
     isDashboardVisible: Joi.boolean().default(false),
@@ -73,7 +70,6 @@ const updateCategorySchema = Joi.object({
     ),
     active: Joi.boolean(),
     sortOrder: Joi.number().integer(),
-    imageUrl: Joi.string().allow(""),
     bannerUrl: Joi.string().allow(""),
     iconUrl: Joi.string().allow(""),
     isDashboardVisible: Joi.boolean(),
