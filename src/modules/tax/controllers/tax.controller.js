@@ -2,10 +2,28 @@ const { okResponse } = require("../../../shared/http/reply");
 const { TaxService } = require("../services/tax.service");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
 const { auditService } = require("../../../shared/logger/audit.service");
+const { ROLES } = require("../../../shared/constants/roles");
 
 class TaxController {
   constructor({ taxService = new TaxService() } = {}) {
     this.taxService = taxService;
+  }
+
+  isSellerActor(actor = {}) {
+    return [ROLES.SELLER, "seller-admin", "seller-sub-admin"].includes(actor.role);
+  }
+
+  applyActorScope(query = {}, actor = {}) {
+    if (!this.isSellerActor(actor)) {
+      return { ...query };
+    }
+
+    const sellerId = actor.ownerSellerId || actor.userId || null;
+    return {
+      ...query,
+      ...(sellerId ? { sellerId } : {}),
+      ...(actor.organizationId ? { organizationId: actor.organizationId } : {}),
+    };
   }
 
   createOrderInvoice = async (req, res) => {
@@ -47,12 +65,14 @@ class TaxController {
   };
 
   listInvoices = async (req, res) => {
-    const invoices = await this.taxService.listInvoices(req.query);
+    const actor = getCurrentUser(req);
+    const invoices = await this.taxService.listInvoices(this.applyActorScope(req.query, actor));
     res.json(okResponse(invoices));
   };
 
   exportInvoices = async (req, res) => {
-    const document = await this.taxService.exportInvoices(req.query);
+    const actor = getCurrentUser(req);
+    const document = await this.taxService.exportInvoices(this.applyActorScope(req.query, actor));
     this.sendDocument(res, document);
   };
 
@@ -83,12 +103,14 @@ class TaxController {
   };
 
   listCreditNotes = async (req, res) => {
-    const creditNotes = await this.taxService.listCreditNotes(req.query);
+    const actor = getCurrentUser(req);
+    const creditNotes = await this.taxService.listCreditNotes(this.applyActorScope(req.query, actor));
     res.json(okResponse(creditNotes));
   };
 
   exportCreditNotes = async (req, res) => {
-    const document = await this.taxService.exportCreditNotes(req.query);
+    const actor = getCurrentUser(req);
+    const document = await this.taxService.exportCreditNotes(this.applyActorScope(req.query, actor));
     this.sendDocument(res, document);
   };
 
@@ -105,12 +127,14 @@ class TaxController {
   };
 
   getReport = async (req, res) => {
-    const report = await this.taxService.getTaxReport(req.query);
+    const actor = getCurrentUser(req);
+    const report = await this.taxService.getTaxReport(this.applyActorScope(req.query, actor));
     res.json(okResponse(report));
   };
 
   exportReport = async (req, res) => {
-    const document = await this.taxService.exportTaxReport(req.query);
+    const actor = getCurrentUser(req);
+    const document = await this.taxService.exportTaxReport(this.applyActorScope(req.query, actor));
     this.sendDocument(res, document);
   };
 

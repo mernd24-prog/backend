@@ -218,7 +218,10 @@ class SellerRepository {
     ).select("email phone role profile accountStatus allowedModules createdBy createdByRole parentAdminId parentSellerId hierarchyLevel ownerAdminId ownerSellerId createdAt updatedAt lastLoginAt");
   }
 
-  async fetchDashboardSummary(sellerId, fromDate, toDate) {
+  async fetchDashboardSummary(sellerId, fromDate, toDate, organizationId = null) {
+    const values = [sellerId, fromDate, toDate];
+    const orgSql = organizationId ? "AND oi.organization_id = $4::uuid" : "";
+    if (organizationId) values.push(organizationId);
     const { rows } = await postgresPool.query(
       `SELECT
          COUNT(DISTINCT o.id)::INT AS total_orders,
@@ -231,13 +234,17 @@ class SellerRepository {
        FROM order_items oi
        INNER JOIN orders o ON o.id = oi.order_id
        WHERE oi.seller_id = $1
-         AND o.created_at BETWEEN $2 AND $3`,
-      [sellerId, fromDate, toDate],
+         AND o.created_at BETWEEN $2 AND $3
+         ${orgSql}`,
+      values,
     );
     return rows[0];
   }
 
-  async fetchTopProducts(sellerId, fromDate, toDate, limit = 5) {
+  async fetchTopProducts(sellerId, fromDate, toDate, limit = 5, organizationId = null) {
+    const values = [sellerId, fromDate, toDate, limit];
+    const orgSql = organizationId ? "AND oi.organization_id = $5::uuid" : "";
+    if (organizationId) values.push(organizationId);
     const { rows } = await postgresPool.query(
       `SELECT
          oi.product_id,
@@ -247,15 +254,19 @@ class SellerRepository {
        INNER JOIN orders o ON o.id = oi.order_id
        WHERE oi.seller_id = $1
          AND o.created_at BETWEEN $2 AND $3
+         ${orgSql}
        GROUP BY oi.product_id
        ORDER BY revenue DESC
        LIMIT $4`,
-      [sellerId, fromDate, toDate, limit],
+      values,
     );
     return rows;
   }
 
-  async fetchRecentOrders(sellerId, limit = 10) {
+  async fetchRecentOrders(sellerId, limit = 10, organizationId = null) {
+    const values = [sellerId, limit];
+    const orgSql = organizationId ? "AND oi.organization_id = $3::uuid" : "";
+    if (organizationId) values.push(organizationId);
     const { rows } = await postgresPool.query(
       `SELECT
          o.id,
@@ -268,10 +279,11 @@ class SellerRepository {
        FROM orders o
        INNER JOIN order_items oi ON oi.order_id = o.id
        WHERE oi.seller_id = $1
+       ${orgSql}
        GROUP BY o.id
        ORDER BY o.created_at DESC
        LIMIT $2`,
-      [sellerId, limit],
+      values,
     );
 
     return rows;
@@ -294,6 +306,11 @@ class SellerRepository {
         clauses.push(`ewb.status = $${index++}`);
         values.push(filters.deliveryStatus);
       }
+    }
+
+    if (filters.organizationId) {
+      clauses.push(`oi.organization_id = $${index++}::uuid`);
+      values.push(filters.organizationId);
     }
 
     if (filters.fromDate) {

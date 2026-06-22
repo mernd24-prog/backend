@@ -79,6 +79,9 @@ class TaxService {
           productId: item.product_id,
           productTitle: item.product_title,
           sellerId: item.seller_id,
+          organizationId: item.organization_id || null,
+          storeId: item.store_id || null,
+          warehouseId: item.warehouse_id || null,
           hsnCode: item.hsn_code,
           gstRate: Number(item.gst_rate || 0),
           taxableAmount: Number(item.line_total || 0) - Number(item.discount_amount || 0),
@@ -170,6 +173,8 @@ class TaxService {
       const sellerInvoice = await this.findOrCreateSellerCustomerInvoice({
         order,
         sellerId: group.sellerId,
+        organizationId: group.organizationId,
+        organizationSnapshot: group.organizationSnapshot,
         items: group.items,
         sellerProfile,
         actor,
@@ -178,6 +183,8 @@ class TaxService {
       const commissionInvoice = await this.findOrCreatePlatformCommissionInvoice({
         order,
         sellerId: group.sellerId,
+        organizationId: group.organizationId,
+        organizationSnapshot: group.organizationSnapshot,
         items: group.items,
         sellerProfile,
         actor,
@@ -247,6 +254,8 @@ class TaxService {
       invoiceId: invoice.id,
       orderId: invoice.order_id,
       buyerId: invoice.buyer_id,
+      organizationId: invoice.organization_id || payload.organizationId || null,
+      organizationSnapshot: this.normalizeJson(invoice.organization_snapshot, payload.organizationSnapshot || {}),
       referenceType,
       referenceId,
       taxableAmount,
@@ -267,9 +276,13 @@ class TaxService {
     });
 
     const ledgerEntries = [];
-    if (cgstAmount > 0) ledgerEntries.push(this.makeLedgerEntry(invoice.order_id, invoice.id, "tax_reversed", "cgst", cgstAmount, "credit_note", creditNote.id));
-    if (sgstAmount > 0) ledgerEntries.push(this.makeLedgerEntry(invoice.order_id, invoice.id, "tax_reversed", "sgst", sgstAmount, "credit_note", creditNote.id));
-    if (igstAmount > 0) ledgerEntries.push(this.makeLedgerEntry(invoice.order_id, invoice.id, "tax_reversed", "igst", igstAmount, "credit_note", creditNote.id));
+    const creditOrganization = {
+      organizationId: creditNote.organization_id || null,
+      organizationSnapshot: this.normalizeJson(creditNote.organization_snapshot, {}),
+    };
+    if (cgstAmount > 0) ledgerEntries.push(this.makeLedgerEntry(invoice.order_id, invoice.id, "tax_reversed", "cgst", cgstAmount, "credit_note", creditNote.id, creditOrganization));
+    if (sgstAmount > 0) ledgerEntries.push(this.makeLedgerEntry(invoice.order_id, invoice.id, "tax_reversed", "sgst", sgstAmount, "credit_note", creditNote.id, creditOrganization));
+    if (igstAmount > 0) ledgerEntries.push(this.makeLedgerEntry(invoice.order_id, invoice.id, "tax_reversed", "igst", igstAmount, "credit_note", creditNote.id, creditOrganization));
 
     await this.taxRepository.insertLedgerEntries(ledgerEntries);
     await eventPublisher.publish(
@@ -315,7 +328,8 @@ class TaxService {
 
     for (const group of refundGroups) {
       const sellerInvoice = marketplaceInvoices.sellerInvoices.find((invoice) =>
-        String(invoice.seller_id || "") === String(group.sellerId),
+        String(invoice.seller_id || "") === String(group.sellerId) &&
+        String(invoice.organization_id || "") === String(group.organizationId || ""),
       );
       if (!sellerInvoice) continue;
 
@@ -323,7 +337,7 @@ class TaxService {
         orderId,
         invoiceId: sellerInvoice.id,
         referenceType: `${referenceType}_seller`,
-        referenceId: `${referenceId}:${group.sellerId}`,
+        referenceId: `${referenceId}:${group.sellerId}:${group.organizationId || "default"}`,
         taxableAmount: group.taxableAmount,
         taxAmount: group.taxAmount,
         cgstAmount: group.cgstAmount,
@@ -337,6 +351,8 @@ class TaxService {
           parentReferenceType: referenceType,
           parentReferenceId: referenceId,
           sellerId: group.sellerId,
+          organizationId: group.organizationId || null,
+          organization: group.organizationSnapshot || {},
           creditNoteScope: "seller_customer_invoice",
           items: group.items,
         },
@@ -344,7 +360,8 @@ class TaxService {
       sellerCreditNotes.push(sellerCreditNote);
 
       const commissionInvoice = marketplaceInvoices.platformCommissionInvoices.find((invoice) =>
-        String(invoice.seller_id || "") === String(group.sellerId),
+        String(invoice.seller_id || "") === String(group.sellerId) &&
+        String(invoice.organization_id || "") === String(group.organizationId || ""),
       );
       const commissionAmounts = this.calculateCommissionReversalAmounts(commissionInvoice, sellerInvoice, group);
       if (!commissionInvoice || commissionAmounts.totalAmount <= 0) continue;
@@ -353,7 +370,7 @@ class TaxService {
         orderId,
         invoiceId: commissionInvoice.id,
         referenceType: `${referenceType}_commission`,
-        referenceId: `${referenceId}:${group.sellerId}`,
+        referenceId: `${referenceId}:${group.sellerId}:${group.organizationId || "default"}`,
         taxableAmount: commissionAmounts.taxableAmount,
         taxAmount: commissionAmounts.taxAmount,
         cgstAmount: commissionAmounts.cgstAmount,
@@ -368,6 +385,8 @@ class TaxService {
           parentReferenceType: referenceType,
           parentReferenceId: referenceId,
           sellerId: group.sellerId,
+          organizationId: group.organizationId || null,
+          organization: group.organizationSnapshot || {},
           creditNoteScope: "platform_commission_invoice",
           reversalRatio: commissionAmounts.reversalRatio,
         },
@@ -625,6 +644,7 @@ class TaxService {
       fromDate,
       toDate,
       taxComponent: query.taxComponent || null,
+      organizationId: query.organizationId || null,
       limit: Number(query.limit || 200),
       offset: Number(query.offset || 0),
     });
@@ -677,16 +697,19 @@ class TaxService {
   async findOrCreateSellerCustomerInvoice({
     order,
     sellerId,
+    organizationId = null,
+    organizationSnapshot = {},
     items,
     sellerProfile,
     actor,
     parentInvoiceId,
   }) {
-    const referenceId = `${order.id}:${sellerId}`;
+    const referenceId = `${order.id}:${sellerId}:${organizationId || "default"}`;
     const existing = await this.taxRepository.findInvoiceByOrderAndType({
       orderId: order.id,
       invoiceType: INVOICE_TYPES.SELLER_CUSTOMER,
       sellerId,
+      organizationId,
       referenceType: "seller_order",
       referenceId,
     });
@@ -695,13 +718,15 @@ class TaxService {
     }
 
     const amounts = this.calculateSellerCustomerAmounts(order, sellerId, items);
-    const sellerSnapshot = this.buildSellerSnapshot(sellerId, sellerProfile);
+    const sellerSnapshot = this.buildSellerSnapshot(sellerId, sellerProfile, organizationSnapshot);
     const invoiceNumber = await this.taxRepository.nextInvoiceNumber("GST-S");
     const invoice = await this.taxRepository.createInvoice({
       invoiceNumber,
       orderId: order.id,
       buyerId: order.buyer_id,
       sellerId,
+      organizationId,
+      organizationSnapshot,
       taxableAmount: amounts.taxableAmount,
       taxAmount: amounts.taxAmount,
       cgstAmount: amounts.cgstAmount,
@@ -725,6 +750,8 @@ class TaxService {
         orderId: order.id,
         orderNumber: order.order_number,
         orderStatus: order.status,
+        organizationId: organizationId || null,
+        organization: organizationSnapshot || {},
         seller: sellerSnapshot,
         buyer: this.buildBuyerSnapshot(order),
         shippingAddress: this.normalizeJson(order.shipping_address, {}),
@@ -737,10 +764,14 @@ class TaxService {
       updatedBy: actor.userId || null,
     });
 
-    await this.taxRepository.insertLedgerEntries(this.buildTaxLedgerEntries(order.id, invoice.id, amounts));
+    await this.taxRepository.insertLedgerEntries(this.buildTaxLedgerEntries(order.id, invoice.id, amounts, {
+      organizationId,
+      organizationSnapshot,
+    }));
     await this.publishInvoiceGenerated(invoice, order, {
       invoiceType: INVOICE_TYPES.SELLER_CUSTOMER,
       sellerId,
+      organizationId,
     });
     return invoice;
   }
@@ -775,6 +806,8 @@ class TaxService {
       const sellerInvoice = await this.findOrCreateSellerCustomerInvoice({
         order,
         sellerId: group.sellerId,
+        organizationId: group.organizationId,
+        organizationSnapshot: group.organizationSnapshot,
         items: group.items,
         sellerProfile,
         actor,
@@ -783,6 +816,8 @@ class TaxService {
       const commissionInvoice = await this.findOrCreatePlatformCommissionInvoice({
         order,
         sellerId: group.sellerId,
+        organizationId: group.organizationId,
+        organizationSnapshot: group.organizationSnapshot,
         items: group.items,
         sellerProfile,
         actor,
@@ -798,16 +833,19 @@ class TaxService {
   async findOrCreatePlatformCommissionInvoice({
     order,
     sellerId,
+    organizationId = null,
+    organizationSnapshot = {},
     items,
     sellerProfile,
     actor,
     parentInvoiceId,
   }) {
-    const referenceId = `${order.id}:${sellerId}`;
+    const referenceId = `${order.id}:${sellerId}:${organizationId || "default"}`;
     const existing = await this.taxRepository.findInvoiceByOrderAndType({
       orderId: order.id,
       invoiceType: INVOICE_TYPES.PLATFORM_COMMISSION,
       sellerId,
+      organizationId,
       referenceType: "platform_commission",
       referenceId,
     });
@@ -815,7 +853,7 @@ class TaxService {
       return existing;
     }
 
-    const sellerSnapshot = this.buildSellerSnapshot(sellerId, sellerProfile);
+    const sellerSnapshot = this.buildSellerSnapshot(sellerId, sellerProfile, organizationSnapshot);
     const amounts = this.calculatePlatformCommissionAmounts(items, sellerSnapshot);
     const invoiceNumber = await this.taxRepository.nextInvoiceNumber("GST-C");
     const invoice = await this.taxRepository.createInvoice({
@@ -823,6 +861,8 @@ class TaxService {
       orderId: order.id,
       buyerId: sellerId,
       sellerId,
+      organizationId,
+      organizationSnapshot,
       taxableAmount: amounts.taxableAmount,
       taxAmount: amounts.taxAmount,
       cgstAmount: amounts.cgstAmount,
@@ -846,6 +886,8 @@ class TaxService {
         orderId: order.id,
         orderNumber: order.order_number,
         orderStatus: order.status,
+        organizationId: organizationId || null,
+        organization: organizationSnapshot || {},
         seller: sellerSnapshot,
         buyer: this.buildBuyerSnapshot(order),
         amounts,
@@ -871,10 +913,14 @@ class TaxService {
       updatedBy: actor.userId || null,
     });
 
-    await this.taxRepository.insertLedgerEntries(this.buildTaxLedgerEntries(order.id, invoice.id, amounts));
+    await this.taxRepository.insertLedgerEntries(this.buildTaxLedgerEntries(order.id, invoice.id, amounts, {
+      organizationId,
+      organizationSnapshot,
+    }));
     await this.publishInvoiceGenerated(invoice, order, {
       invoiceType: INVOICE_TYPES.PLATFORM_COMMISSION,
       sellerId,
+      organizationId,
     });
     return invoice;
   }
@@ -928,11 +974,18 @@ class TaxService {
       const sellerId = String(item.seller_id || "");
       if (!sellerId) continue;
       if (sellerScope && sellerId !== String(sellerScope)) continue;
-      const current = grouped.get(sellerId) || [];
-      current.push(item);
-      grouped.set(sellerId, current);
+      const organizationId = item.organization_id ? String(item.organization_id) : null;
+      const key = `${sellerId}:${organizationId || "default"}`;
+      const current = grouped.get(key) || {
+        sellerId,
+        organizationId,
+        organizationSnapshot: this.normalizeJson(item.organization_snapshot, {}),
+        items: [],
+      };
+      current.items.push(item);
+      grouped.set(key, current);
     }
-    return [...grouped.entries()].map(([sellerId, groupItems]) => ({ sellerId, items: groupItems }));
+    return [...grouped.values()];
   }
 
   groupRefundItemsBySeller(orderItems = [], refundItems = [], options = {}) {
@@ -948,10 +1001,14 @@ class TaxService {
       const orderItem = this.findOrderItemForRefund(orderItemMap, item);
       const sellerId = String(item.sellerId || item.seller_id || orderItem?.seller_id || "");
       if (!sellerId) continue;
+      const organizationId = item.organizationId || item.organization_id || orderItem?.organization_id || null;
+      const key = `${sellerId}:${organizationId || "default"}`;
 
       const normalized = this.normalizeRefundItem(item, orderItem);
-      const current = grouped.get(sellerId) || {
+      const current = grouped.get(key) || {
         sellerId,
+        organizationId,
+        organizationSnapshot: this.normalizeJson(orderItem?.organization_snapshot, item.organizationSnapshot || item.organization_snapshot || {}),
         taxableAmount: 0,
         taxAmount: 0,
         cgstAmount: 0,
@@ -967,7 +1024,7 @@ class TaxService {
       current.igstAmount += normalized.igstAmount;
       current.totalAmount += normalized.totalAmount;
       current.items.push(normalized);
-      grouped.set(sellerId, current);
+      grouped.set(key, current);
     }
 
     const groups = [...grouped.values()];
@@ -1058,6 +1115,9 @@ class TaxService {
       productId: item.productId || item.product_id || orderItem?.product_id || null,
       productTitle: item.productTitle || item.product_title || orderItem?.product_title || null,
       sellerId: item.sellerId || item.seller_id || orderItem?.seller_id || null,
+      organizationId: item.organizationId || item.organization_id || orderItem?.organization_id || null,
+      storeId: item.storeId || item.store_id || orderItem?.store_id || null,
+      warehouseId: item.warehouseId || item.warehouse_id || orderItem?.warehouse_id || null,
       quantity,
       taxableAmount,
       taxAmount,
@@ -1196,6 +1256,10 @@ class TaxService {
       productId: item.product_id,
       productTitle: item.product_title,
       productSku: item.product_sku,
+      sellerId: item.seller_id || null,
+      organizationId: item.organization_id || null,
+      storeId: item.store_id || null,
+      warehouseId: item.warehouse_id || null,
       variantId: item.variant_id,
       variantSku: item.variant_sku,
       hsnCode: item.hsn_code,
@@ -1214,16 +1278,16 @@ class TaxService {
     };
   }
 
-  buildTaxLedgerEntries(orderId, invoiceId, amounts = {}) {
+  buildTaxLedgerEntries(orderId, invoiceId, amounts = {}, organization = {}) {
     const entries = [];
     if (Number(amounts.cgstAmount || 0) > 0) {
-      entries.push(this.makeLedgerEntry(orderId, invoiceId, "tax_collected", "cgst", amounts.cgstAmount));
+      entries.push(this.makeLedgerEntry(orderId, invoiceId, "tax_collected", "cgst", amounts.cgstAmount, "invoice", invoiceId, organization));
     }
     if (Number(amounts.sgstAmount || 0) > 0) {
-      entries.push(this.makeLedgerEntry(orderId, invoiceId, "tax_collected", "sgst", amounts.sgstAmount));
+      entries.push(this.makeLedgerEntry(orderId, invoiceId, "tax_collected", "sgst", amounts.sgstAmount, "invoice", invoiceId, organization));
     }
     if (Number(amounts.igstAmount || 0) > 0) {
-      entries.push(this.makeLedgerEntry(orderId, invoiceId, "tax_collected", "igst", amounts.igstAmount));
+      entries.push(this.makeLedgerEntry(orderId, invoiceId, "tax_collected", "igst", amounts.igstAmount, "invoice", invoiceId, organization));
     }
     return entries;
   }
@@ -1247,9 +1311,32 @@ class TaxService {
     );
   }
 
-  buildSellerSnapshot(sellerId, seller = {}) {
+  buildSellerSnapshot(sellerId, seller = {}, organizationSnapshot = {}) {
     const sellerProfile = seller?.sellerProfile || {};
     const profile = seller?.profile || {};
+    const organization = this.normalizeJson(organizationSnapshot, {});
+    if (organization?.organizationId || organization?.legalBusinessName || organization?.gstin) {
+      const billingAddress = organization.billingAddress || organization.businessAddress || null;
+      return {
+        sellerId,
+        organizationId: organization.organizationId || organization.id || null,
+        email: seller?.email || null,
+        phone: seller?.phone || null,
+        displayName: organization.storeDisplayName || organization.legalBusinessName || null,
+        legalBusinessName: organization.legalBusinessName || null,
+        businessName: organization.storeDisplayName || null,
+        primaryContactName: sellerProfile.primaryContactName || [profile.firstName, profile.lastName].filter(Boolean).join(" ") || null,
+        gstNumber: organization.gstin || organization.taxSettings?.gstin || null,
+        panNumber: organization.pan || organization.taxSettings?.pan || null,
+        businessAddress: billingAddress,
+        billingAddress,
+        pickupAddress: organization.pickupAddress || null,
+        returnAddress: organization.returnAddress || null,
+        taxSettings: organization.taxSettings || {},
+        invoiceSettings: organization.invoiceSettings || {},
+        payoutSettings: organization.payoutSettings || {},
+      };
+    }
     return {
       sellerId,
       email: seller?.email || null,
@@ -1323,6 +1410,12 @@ class TaxService {
     const invoiceType = this.invoiceType(invoice);
     const sellerId = this.getActorSellerId(actor);
     if (sellerId && invoice.seller_id && String(invoice.seller_id) === String(sellerId)) {
+      if (
+        actor.organizationId &&
+        String(invoice.organization_id || "") !== String(actor.organizationId)
+      ) {
+        throw new AppError("This tax document belongs to another organization", 403);
+      }
       return;
     }
 
@@ -1594,7 +1687,7 @@ class TaxService {
     return Number(Number(value || 0).toFixed(2));
   }
 
-  makeLedgerEntry(orderId, invoiceId, entryType, taxComponent, amount, referenceType = "invoice", referenceId = invoiceId) {
+  makeLedgerEntry(orderId, invoiceId, entryType, taxComponent, amount, referenceType = "invoice", referenceId = invoiceId, organization = {}) {
     return {
       orderId,
       invoiceId,
@@ -1602,6 +1695,8 @@ class TaxService {
       taxComponent,
       amount: Number(amount),
       currency: "INR",
+      organizationId: organization.organizationId || null,
+      organizationSnapshot: organization.organizationSnapshot || {},
       referenceType,
       referenceId,
     };

@@ -24,6 +24,8 @@ const sellerBankDetailsSchema = new mongoose.Schema(
   { _id: false },
 );
 
+// Seller profile keeps login/onboarding summary and legacy compatibility fields.
+// Legal/GST/bank/address source of truth is seller_organizations.
 const sellerProfileSchema = new mongoose.Schema(
   {
     businessName: String,

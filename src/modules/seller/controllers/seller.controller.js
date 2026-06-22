@@ -1,5 +1,6 @@
 const { okResponse } = require("../../../shared/http/reply");
 const { SellerService } = require("../services/seller.service");
+const { sellerOrganizationService } = require("../services/seller-organization.service");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
 
 class SellerController {
@@ -131,6 +132,37 @@ class SellerController {
     const actor = getCurrentUser(req);
     const result = await this.sellerService.deleteSellerSubAdmin(req.params.userId, { ...actor, _req: req });
     res.json(okResponse(result));
+  };
+
+  listOrganizations = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await sellerOrganizationService.listMine(req.query, actor);
+    res.json(okResponse(result));
+  };
+
+  createOrganization = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const organization = await sellerOrganizationService.createMine(req.body, actor);
+    res.status(201).json(okResponse(organization));
+  };
+
+  updateOrganization = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const organization = await sellerOrganizationService.updateMine(
+      req.params.organizationId,
+      req.body,
+      actor,
+    );
+    res.json(okResponse(organization));
+  };
+
+  setDefaultOrganization = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const organization = await sellerOrganizationService.setMineDefault(
+      req.params.organizationId,
+      actor,
+    );
+    res.json(okResponse(organization));
   };
 }
 

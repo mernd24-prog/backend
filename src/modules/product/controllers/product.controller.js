@@ -28,9 +28,11 @@ class ProductController {
   };
 
   list = async (req, res) => {
+    const actor = req.auth ? getCurrentUser(req) : null;
     const { page, limit } = getPage(req.query);
     const result = await this.productService.listProducts(req.query, {
       publicOnly: !req.auth,
+      actor,
     });
     res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
   };

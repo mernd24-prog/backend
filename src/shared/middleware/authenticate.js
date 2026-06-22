@@ -2,8 +2,10 @@ const jwt = require("jsonwebtoken");
 const { env } = require("../../config/env");
 const { UserModel } = require("../../modules/user/models/user.model");
 const { ROLES } = require("../constants/roles");
+const { AppError } = require("../errors/app-error");
 const { RbacService } = require("../../modules/rbac/services/rbac.service");
 const { Role } = require("../../infrastructure/sequelize/models");
+const { SellerOrganizationRepository } = require("../../modules/seller/repositories/seller-organization.repository");
 const {
   AUTH_ERROR_CODES,
   authError,
@@ -13,6 +15,7 @@ const {
 } = require("../auth/session-state");
 
 const rbacService = new RbacService();
+const sellerOrganizationRepository = new SellerOrganizationRepository();
 const permissionCache = new Map();
 const PERMISSION_CACHE_TTL_MS = Math.max(
   Number(env.rbacPermissionCacheTtlMs ?? 0) || 0,
@@ -21,6 +24,36 @@ const PERMISSION_CACHE_TTL_MS = Math.max(
 
 function isSuperAdminPayload(payload = {}) {
   return payload.isSuperAdmin === true || payload.role === ROLES.SUPER_ADMIN;
+}
+
+async function attachOrganizationContext(req, auth = {}) {
+  const organizationId = String(req.headers["x-organization-id"] || "").trim();
+  if (
+    auth.isOnboarding === true ||
+    !organizationId ||
+    ![ROLES.SELLER, "seller-admin", "seller-sub-admin"].includes(auth.role)
+  ) {
+    return auth;
+  }
+
+  const sellerId = auth.ownerSellerId || auth.sub;
+  const organization = await sellerOrganizationRepository.findByIdForSeller(sellerId, organizationId);
+  if (
+    !organization ||
+    !["approved", "active"].includes(organization.approvalStatus) ||
+    organization.kycStatus !== "verified" ||
+    organization.bankVerificationStatus !== "verified" ||
+    organization.goLiveStatus !== "live"
+  ) {
+    throw new AppError(
+      "Selected organization is not approved for selling",
+      403,
+      { organizationId },
+      "ORGANIZATION_NOT_LIVE",
+    );
+  }
+
+  return { ...auth, selectedOrganizationId: organizationId };
 }
 
 async function validateAuthUser(payload = {}) {
@@ -134,7 +167,7 @@ async function authenticate(req, res, next) {
 
   try {
     const payload = jwt.verify(token, env.jwtAccessSecret);
-    req.auth = await hydrateAuthPermissions(payload);
+    req.auth = await attachOrganizationContext(req, await hydrateAuthPermissions(payload));
     return next();
   } catch (error) {
     if (error?.statusCode) {
@@ -162,7 +195,7 @@ async function authenticatePendingSeller(req, res, next) {
 
   try {
     const payload = jwt.verify(token, env.jwtAccessSecret);
-    req.auth = payload;
+    req.auth = await attachOrganizationContext(req, payload);
 
     // Check if this is an onboarding token for a pending seller
     if (!payload.isOnboarding || payload.role !== ROLES.SELLER) {
@@ -228,11 +261,11 @@ async function authenticateForStatus(req, res, next) {
         return next(statusError);
       }
 
-      req.auth = { ...payload, sub: String(payload.sub), user };
+      req.auth = await attachOrganizationContext(req, { ...payload, sub: String(payload.sub), user });
       return next();
     }
 
-    req.auth = await hydrateAuthPermissions(payload);
+    req.auth = await attachOrganizationContext(req, await hydrateAuthPermissions(payload));
     return next();
   } catch (error) {
     if (error?.statusCode) {

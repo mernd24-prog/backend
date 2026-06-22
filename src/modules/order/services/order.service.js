@@ -347,16 +347,20 @@ class OrderService {
 
   async listSellerOrders(actor, filters = {}) {
     const sellerId = actor.ownerSellerId || actor.userId;
+    const scopedFilters = {
+      ...filters,
+      organizationId: filters.organizationId || actor.organizationId || null,
+    };
     let orders;
     if (["seller-admin", "seller-sub-admin"].includes(actor.role)) {
       const products = await ProductModel.find({ sellerId, createdBy: actor.userId }).select("_id");
       const productIds = products.map((product) => String(product._id));
       if (!productIds.length) return [];
-      orders = await this.orderRepository.listOrdersBySeller(sellerId, productIds, filters);
-      return orders.map((order) => this.filterOrderForSeller(order, sellerId));
+      orders = await this.orderRepository.listOrdersBySeller(sellerId, productIds, scopedFilters);
+      return orders.map((order) => this.filterOrderForSeller(order, sellerId, scopedFilters.organizationId));
     }
-    orders = await this.orderRepository.listOrdersBySeller(sellerId, null, filters);
-    return orders.map((order) => this.filterOrderForSeller(order, sellerId));
+    orders = await this.orderRepository.listOrdersBySeller(sellerId, null, scopedFilters);
+    return orders.map((order) => this.filterOrderForSeller(order, sellerId, scopedFilters.organizationId));
   }
 
   async listAdminOrders(actor, filters = {}) {
@@ -388,8 +392,12 @@ class OrderService {
     }
 
     const scopedOrder = !isOwner && isSeller
-      ? this.filterOrderForSeller(order, sellerId)
+      ? this.filterOrderForSeller(order, sellerId, actor.organizationId)
       : order;
+
+    if (!isOwner && isSeller && actor.organizationId && !scopedOrder.items?.length) {
+      throw new AppError("Order does not belong to the selected organization", 403);
+    }
 
     const visibleNotes = (order.notes || []).filter((note) => {
       if (isOwner) return note.visibility === "buyer";
@@ -400,14 +408,21 @@ class OrderService {
     return { ...scopedOrder, notes: visibleNotes };
   }
 
-  filterOrderForSeller(order = {}, sellerId) {
+  filterOrderForSeller(order = {}, sellerId, organizationId = null) {
     const sellerKey = String(sellerId || "");
-    const items = (order.items || []).filter((item) => String(item.seller_id || item.sellerId || "") === sellerKey);
+    const organizationKey = organizationId ? String(organizationId) : null;
+    const items = (order.items || []).filter((item) =>
+      String(item.seller_id || item.sellerId || "") === sellerKey &&
+      (!organizationKey || String(item.organization_id || item.organizationId || "") === organizationKey)
+    );
     const productIds = new Set(items.map((item) => String(item.product_id || item.productId || "")));
     const relations = order.relations || {};
     const metadata = this.normalizeJson(order.metadata, {});
     const sellers = (relations.sellers || []).filter((seller) => String(seller.id || seller._id || "") === sellerKey);
-    const sellerSettlements = (relations.sellerSettlements || []).filter((settlement) => String(settlement.sellerId || "") === sellerKey);
+    const sellerSettlements = (relations.sellerSettlements || []).filter((settlement) =>
+      String(settlement.sellerId || "") === sellerKey &&
+      (!organizationKey || String(settlement.organizationId || "") === organizationKey)
+    );
     const sellerShipments = (relations.shipments || []).filter((shipment) => String(shipment.seller_id || shipment.sellerId || "") === sellerKey);
     const sellerFulfillmentGroups = (relations.sellerFulfillmentGroups || [])
       .filter((group) => String(group.sellerId || group.seller_id || "") === sellerKey);

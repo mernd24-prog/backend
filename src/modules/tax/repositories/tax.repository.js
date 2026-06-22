@@ -15,7 +15,7 @@ class TaxRepository {
     return rows[0] || null;
   }
 
-  async findInvoicesByOrderId(orderId, { invoiceType = null, sellerId = null } = {}) {
+  async findInvoicesByOrderId(orderId, { invoiceType = null, sellerId = null, organizationId = undefined } = {}) {
     const values = [orderId];
     const clauses = ["order_id = $1"];
     let idx = 2;
@@ -27,6 +27,14 @@ class TaxRepository {
     if (sellerId) {
       clauses.push(`seller_id = $${idx++}`);
       values.push(sellerId);
+    }
+    if (organizationId !== undefined) {
+      if (organizationId) {
+        clauses.push(`organization_id = $${idx++}`);
+        values.push(organizationId);
+      } else {
+        clauses.push("organization_id IS NULL");
+      }
     }
 
     const { rows } = await postgresPool.query(
@@ -43,6 +51,7 @@ class TaxRepository {
     orderId,
     invoiceType,
     sellerId = null,
+    organizationId = undefined,
     referenceType = null,
     referenceId = null,
   }) {
@@ -58,6 +67,14 @@ class TaxRepository {
       values.push(sellerId);
     } else {
       clauses.push("seller_id IS NULL");
+    }
+    if (organizationId !== undefined) {
+      if (organizationId) {
+        clauses.push(`organization_id = $${idx++}`);
+        values.push(organizationId);
+      } else {
+        clauses.push("organization_id IS NULL");
+      }
     }
     if (referenceType) {
       clauses.push(`reference_type = $${idx++}`);
@@ -94,11 +111,12 @@ class TaxRepository {
         id, invoice_number, order_id, buyer_id, taxable_amount, tax_amount,
         cgst_amount, sgst_amount, igst_amount, tcs_amount, total_amount,
         currency, tax_mode, gstin_marketplace, gstin_seller, place_of_supply,
-        invoice_type, seller_id, issuer_type, recipient_type, reference_type,
-        reference_id, parent_invoice_id, issued_at, metadata, created_by, updated_by
+        invoice_type, seller_id, organization_id, organization_snapshot,
+        issuer_type, recipient_type, reference_type, reference_id,
+        parent_invoice_id, issued_at, metadata, created_by, updated_by
       ) VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
-        $17,$18,$19,$20,$21,$22,$23,NOW(),$24::jsonb,$25,$26
+        $17,$18,$19,$20::jsonb,$21,$22,$23,$24,$25,NOW(),$26::jsonb,$27,$28
       )
       RETURNING *`,
       [
@@ -120,6 +138,8 @@ class TaxRepository {
         payload.placeOfSupply || null,
         payload.invoiceType || "order_customer",
         payload.sellerId || null,
+        payload.organizationId || null,
+        JSON.stringify(payload.organizationSnapshot || {}),
         payload.issuerType || null,
         payload.recipientType || null,
         payload.referenceType || null,
@@ -137,6 +157,7 @@ class TaxRepository {
     fromDate = null,
     toDate = null,
     sellerId = null,
+    organizationId = null,
     buyerId = null,
     invoiceType = null,
     referenceType = null,
@@ -186,6 +207,17 @@ class TaxRepository {
         )
       )`);
       values.push(sellerId);
+      idx += 1;
+    }
+    if (organizationId) {
+      clauses.push(`(
+        ti.organization_id = $${idx}
+        OR EXISTS (
+          SELECT 1 FROM order_items oi
+          WHERE oi.order_id = ti.order_id AND oi.organization_id = $${idx}
+        )
+      )`);
+      values.push(organizationId);
       idx += 1;
     }
     if (state) {
@@ -270,11 +302,12 @@ class TaxRepository {
     const id = uuidv4();
     const { rows } = await postgresPool.query(
       `INSERT INTO tax_credit_notes (
-        id, credit_note_number, invoice_id, order_id, buyer_id, reference_type,
-        reference_id, taxable_amount, tax_amount, cgst_amount, sgst_amount,
-        igst_amount, total_amount, currency, reason, metadata, issued_at, created_by, updated_by
+        id, credit_note_number, invoice_id, order_id, buyer_id, organization_id,
+        organization_snapshot, reference_type, reference_id, taxable_amount,
+        tax_amount, cgst_amount, sgst_amount, igst_amount, total_amount,
+        currency, reason, metadata, issued_at, created_by, updated_by
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),$17,$18
+        $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,NOW(),$19,$20
       )
       RETURNING *`,
       [
@@ -283,6 +316,8 @@ class TaxRepository {
         payload.invoiceId,
         payload.orderId,
         payload.buyerId,
+        payload.organizationId || null,
+        JSON.stringify(payload.organizationSnapshot || {}),
         payload.referenceType,
         payload.referenceId,
         payload.taxableAmount,
@@ -293,7 +328,7 @@ class TaxRepository {
         payload.totalAmount,
         payload.currency || "INR",
         payload.reason || null,
-        payload.metadata || {},
+        JSON.stringify(payload.metadata || {}),
         payload.createdBy || null,
         payload.updatedBy || payload.createdBy || null,
       ],
@@ -306,6 +341,7 @@ class TaxRepository {
     toDate = null,
     orderId = null,
     buyerId = null,
+    organizationId = null,
     referenceType = null,
     search = null,
     sortBy = "issued_at",
@@ -332,6 +368,10 @@ class TaxRepository {
     if (buyerId) {
       clauses.push(`buyer_id = $${idx++}`);
       values.push(buyerId);
+    }
+    if (organizationId) {
+      clauses.push(`organization_id = $${idx++}`);
+      values.push(organizationId);
     }
     if (referenceType) {
       clauses.push(`reference_type = $${idx++}`);
@@ -392,7 +432,7 @@ class TaxRepository {
 
     for (const entry of entries) {
       values.push(
-        `($${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},NOW(),$${idx++})`,
+        `($${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++},$${idx++}::jsonb,$${idx++},NOW(),$${idx++})`,
       );
       params.push(
         uuidv4(),
@@ -402,6 +442,8 @@ class TaxRepository {
         entry.taxComponent,
         entry.amount,
         entry.currency || "INR",
+        entry.organizationId || null,
+        JSON.stringify(entry.organizationSnapshot || {}),
         entry.referenceType || "order",
         entry.referenceId || entry.orderId,
       );
@@ -409,7 +451,8 @@ class TaxRepository {
 
     const { rows } = await postgresPool.query(
       `INSERT INTO tax_ledger_entries (
-        id, order_id, invoice_id, entry_type, tax_component, amount, currency, reference_type, created_at, reference_id
+        id, order_id, invoice_id, entry_type, tax_component, amount, currency,
+        organization_id, organization_snapshot, reference_type, created_at, reference_id
       )
       VALUES ${values.join(",")}
       RETURNING *`,
@@ -419,7 +462,7 @@ class TaxRepository {
     return rows;
   }
 
-  async listTaxReports({ fromDate, toDate, taxComponent = null, limit = 200, offset = 0 }) {
+  async listTaxReports({ fromDate, toDate, taxComponent = null, organizationId = null, limit = 200, offset = 0 }) {
     const values = [fromDate, toDate];
     let whereSql = "WHERE created_at BETWEEN $1 AND $2";
     let idx = 3;
@@ -428,19 +471,24 @@ class TaxRepository {
       whereSql += ` AND tax_component = $${idx++}`;
       values.push(taxComponent);
     }
+    if (organizationId) {
+      whereSql += ` AND organization_id = $${idx++}`;
+      values.push(organizationId);
+    }
 
     values.push(limit, offset);
 
     const { rows } = await postgresPool.query(
       `SELECT
+         organization_id,
          tax_component,
          entry_type,
          COUNT(*)::INT AS entry_count,
          COALESCE(SUM(amount), 0)::NUMERIC AS total_amount
        FROM tax_ledger_entries
        ${whereSql}
-       GROUP BY tax_component, entry_type
-       ORDER BY tax_component ASC, entry_type ASC
+       GROUP BY organization_id, tax_component, entry_type
+       ORDER BY organization_id ASC NULLS FIRST, tax_component ASC, entry_type ASC
        LIMIT $${idx++} OFFSET $${idx}`,
       values,
     );

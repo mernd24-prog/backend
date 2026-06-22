@@ -7,6 +7,8 @@ const productRevisionSchema = new mongoose.Schema(
   {
     productId: { type: String, required: true, index: true },
     sellerId: { type: String, index: true },
+    organizationId: { type: String, index: true },
+    organizationSnapshot: { type: Object, default: {} },
     baseVersion: { type: Number, default: 1 },
     targetVersion: { type: Number },
     draftChanges: { type: Object, required: true, default: {} },
@@ -33,6 +35,7 @@ const productRevisionSchema = new mongoose.Schema(
 
 productRevisionSchema.index({ productId: 1, status: 1, createdAt: -1 });
 productRevisionSchema.index({ sellerId: 1, status: 1, createdAt: -1 });
+productRevisionSchema.index({ sellerId: 1, organizationId: 1, status: 1, createdAt: -1 });
 
 const ProductRevisionModel = mongoose.model("ProductRevision", productRevisionSchema);
 
