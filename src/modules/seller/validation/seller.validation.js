@@ -18,6 +18,7 @@ const sellerKycDocumentKeys = [
 const organizationStatuses = ["draft", "pending_review", "resubmitted", "approved", "rejected", "suspended", "blocked", "active"];
 const organizationKycStatuses = ["not_submitted", "submitted", "under_review", "verified", "rejected"];
 const organizationBankStatuses = ["not_submitted", "submitted", "verified", "rejected"];
+const organizationGoLiveStatuses = ["pending", "ready", "live", "blocked", "rejected"];
 
 const sellerOrganizationAddressSchema = Joi.object({
   line1: Joi.string().allow("", null),
@@ -43,12 +44,20 @@ const sellerOrganizationBodySchema = Joi.object({
   displayName: Joi.string().min(2).max(180),
   businessName: Joi.string().min(2).max(180),
   businessType: Joi.string().valid("individual", "proprietorship", "partnership", "private_limited", "llp", "public_limited").allow("", null),
+  description: Joi.string().max(2000).allow("", null),
+  supportEmail: Joi.string().email(),
+  supportPhone: Joi.string().pattern(/^\d{10,15}$/),
+  registrationNumber: Joi.string().max(128).allow("", null),
+  aadhaarNumber: Joi.string().pattern(aadhaarPattern).allow("", null),
+  dateOfBirth: Joi.date().iso().allow("", null),
+  businessWebsite: Joi.string().uri().allow("", null),
+  primaryContactName: Joi.string().min(2).max(180),
   gstin: Joi.string().pattern(gstPattern).allow("", null),
   gstNumber: Joi.string().pattern(gstPattern).allow("", null),
   pan: Joi.string().pattern(panPattern).allow("", null),
   panNumber: Joi.string().pattern(panPattern).allow("", null),
-  documents: Joi.object().default({}),
-  kycDocuments: Joi.object().default({}),
+  documents: makeKycDocumentsSchema(sellerKycDocumentKeys),
+  kycDocuments: makeKycDocumentsSchema(sellerKycDocumentKeys),
   bankDetails: sellerOrganizationBankSchema.default({}),
   billingAddress: sellerOrganizationAddressSchema.default({}),
   businessAddress: sellerOrganizationAddressSchema.default({}),
@@ -57,13 +66,29 @@ const sellerOrganizationBodySchema = Joi.object({
   taxSettings: Joi.object().default({}),
   invoiceSettings: Joi.object().default({}),
   payoutSettings: Joi.object().default({}),
+  complianceSettings: Joi.object().default({}),
   metadata: Joi.object().default({}),
   isDefault: Joi.boolean(),
 });
 
 const createSellerOrganizationSchema = Joi.object({
   body: sellerOrganizationBodySchema
-    .fork(["legalBusinessName", "storeDisplayName", "pan", "bankDetails", "billingAddress", "pickupAddress"], (schema) => schema.required())
+    .fork([
+      "legalBusinessName",
+      "storeDisplayName",
+      "businessType",
+      "supportEmail",
+      "supportPhone",
+      "gstin",
+      "pan",
+      "aadhaarNumber",
+      "dateOfBirth",
+      "primaryContactName",
+      "documents",
+      "bankDetails",
+      "billingAddress",
+      "pickupAddress",
+    ], (schema) => schema.required())
     .required(),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),
@@ -92,6 +117,7 @@ const listSellerOrganizationsSchema = Joi.object({
     approvalStatus: Joi.string().valid(...organizationStatuses),
     kycStatus: Joi.string().valid(...organizationKycStatuses),
     bankVerificationStatus: Joi.string().valid(...organizationBankStatuses),
+    goLiveStatus: Joi.string().valid(...organizationGoLiveStatuses),
     organizationId: Joi.string().guid({ version: "uuidv4" }).allow("", null),
     sellerId: Joi.string().allow("", null),
     limit: Joi.number().integer().min(1).max(200),
@@ -120,10 +146,26 @@ const adminCreateSellerOrganizationSchema = Joi.object({
       approvalStatus: Joi.string().valid(...organizationStatuses),
       kycStatus: Joi.string().valid(...organizationKycStatuses),
       bankVerificationStatus: Joi.string().valid(...organizationBankStatuses),
+      goLiveStatus: Joi.string().valid(...organizationGoLiveStatuses),
       rejectionReason: Joi.string().max(2000).allow("", null),
       requiredChanges: Joi.array().items(Joi.string().max(200)).default([]),
     })
-    .fork(["legalBusinessName", "storeDisplayName", "pan", "bankDetails", "billingAddress", "pickupAddress"], (schema) => schema.required())
+    .fork([
+      "legalBusinessName",
+      "storeDisplayName",
+      "businessType",
+      "supportEmail",
+      "supportPhone",
+      "gstin",
+      "pan",
+      "aadhaarNumber",
+      "dateOfBirth",
+      "primaryContactName",
+      "documents",
+      "bankDetails",
+      "billingAddress",
+      "pickupAddress",
+    ], (schema) => schema.required())
     .required(),
   query: Joi.object({}).required(),
   params: Joi.object({
@@ -145,6 +187,7 @@ const adminUpdateSellerOrganizationSchema = Joi.object({
     approvalStatus: Joi.string().valid(...organizationStatuses),
     kycStatus: Joi.string().valid(...organizationKycStatuses),
     bankVerificationStatus: Joi.string().valid(...organizationBankStatuses),
+    goLiveStatus: Joi.string().valid(...organizationGoLiveStatuses),
     suspendedAt: Joi.date().allow(null),
     rejectionReason: Joi.string().max(2000).allow("", null),
     requiredChanges: Joi.array().items(Joi.string().max(200)).default([]),
@@ -162,11 +205,12 @@ const adminReviewSellerOrganizationSchema = Joi.object({
     status: Joi.string().valid(...organizationStatuses),
     kycStatus: Joi.string().valid(...organizationKycStatuses),
     bankVerificationStatus: Joi.string().valid(...organizationBankStatuses),
+    goLiveStatus: Joi.string().valid(...organizationGoLiveStatuses),
     rejectionReason: Joi.string().max(2000).allow("", null),
     requiredChanges: Joi.array().items(Joi.string().max(200)).default([]),
     notes: Joi.string().allow("", null),
     metadata: Joi.object().default({}),
-  }).or("approvalStatus", "status", "kycStatus", "bankVerificationStatus").required(),
+  }).or("approvalStatus", "status", "kycStatus", "bankVerificationStatus", "goLiveStatus").required(),
   query: Joi.object({}).required(),
   params: Joi.object({
     sellerId: Joi.string().required(),

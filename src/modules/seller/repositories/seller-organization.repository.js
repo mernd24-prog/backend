@@ -1,6 +1,6 @@
 const { knex } = require("../../../infrastructure/postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
-const AppError = require("../../../shared/errors/app-error");
+const { AppError } = require("../../../shared/errors/app-error");
 
 class SellerOrganizationRepository {
   jsonb(value, fallback = {}) {
@@ -37,6 +37,14 @@ class SellerOrganizationRepository {
       legalBusinessName: row.legal_business_name,
       storeDisplayName: row.store_display_name,
       businessType: row.business_type || null,
+      description: row.description || null,
+      supportEmail: row.support_email || null,
+      supportPhone: row.support_phone || null,
+      registrationNumber: row.registration_number || null,
+      aadhaarNumber: row.aadhaar_number || null,
+      dateOfBirth: row.date_of_birth || null,
+      businessWebsite: row.business_website || null,
+      primaryContactName: row.primary_contact_name || null,
       gstin: row.gstin || null,
       pan: row.pan || null,
       kycStatus: row.kyc_status || "not_submitted",
@@ -50,6 +58,7 @@ class SellerOrganizationRepository {
       taxSettings: this.parseJson(row.tax_settings, {}),
       invoiceSettings: this.parseJson(row.invoice_settings, {}),
       payoutSettings: this.parseJson(row.payout_settings, {}),
+      complianceSettings: this.parseJson(row.compliance_settings, {}),
       metadata: this.parseJson(row.metadata, {}),
       rejectionReason: row.rejection_reason || null,
       requiredChanges: this.parseJson(row.required_changes, []),
@@ -62,6 +71,13 @@ class SellerOrganizationRepository {
       resubmittedBy: row.resubmitted_by || null,
       blockedAt: row.blocked_at || null,
       blockedBy: row.blocked_by || null,
+      goLiveStatus: row.go_live_status || "pending",
+      kycReviewedAt: row.kyc_reviewed_at || null,
+      kycReviewedBy: row.kyc_reviewed_by || null,
+      bankReviewedAt: row.bank_reviewed_at || null,
+      bankReviewedBy: row.bank_reviewed_by || null,
+      goLiveApprovedAt: row.go_live_approved_at || null,
+      goLiveApprovedBy: row.go_live_approved_by || null,
       isDefault: Boolean(row.is_default),
       suspendedAt: row.suspended_at || null,
       createdBy: row.created_by || null,
@@ -83,6 +99,14 @@ class SellerOrganizationRepository {
       ...(payload.legalBusinessName !== undefined ? { legal_business_name: payload.legalBusinessName } : {}),
       ...(payload.storeDisplayName !== undefined ? { store_display_name: payload.storeDisplayName } : {}),
       ...(payload.businessType !== undefined ? { business_type: payload.businessType || null } : {}),
+      ...(payload.description !== undefined ? { description: payload.description || null } : {}),
+      ...(payload.supportEmail !== undefined ? { support_email: payload.supportEmail || null } : {}),
+      ...(payload.supportPhone !== undefined ? { support_phone: payload.supportPhone || null } : {}),
+      ...(payload.registrationNumber !== undefined ? { registration_number: payload.registrationNumber || null } : {}),
+      ...(payload.aadhaarNumber !== undefined ? { aadhaar_number: payload.aadhaarNumber || null } : {}),
+      ...(payload.dateOfBirth !== undefined ? { date_of_birth: payload.dateOfBirth || null } : {}),
+      ...(payload.businessWebsite !== undefined ? { business_website: payload.businessWebsite || null } : {}),
+      ...(payload.primaryContactName !== undefined ? { primary_contact_name: payload.primaryContactName || null } : {}),
       ...(payload.gstin !== undefined ? { gstin: payload.gstin || null } : {}),
       ...(payload.pan !== undefined ? { pan: payload.pan || null } : {}),
       ...(payload.kycStatus !== undefined ? { kyc_status: payload.kycStatus } : {}),
@@ -96,6 +120,7 @@ class SellerOrganizationRepository {
       ...(payload.taxSettings !== undefined ? { tax_settings: this.jsonb(payload.taxSettings) } : {}),
       ...(Object.keys(invoiceSettings).length ? { invoice_settings: this.jsonb(invoiceSettings) } : {}),
       ...(payload.payoutSettings !== undefined ? { payout_settings: this.jsonb(payload.payoutSettings) } : {}),
+      ...(payload.complianceSettings !== undefined ? { compliance_settings: this.jsonb(payload.complianceSettings) } : {}),
       ...(payload.metadata !== undefined ? { metadata: this.jsonb(payload.metadata) } : {}),
       ...(payload.rejectionReason !== undefined ? { rejection_reason: payload.rejectionReason || null } : {}),
       ...(payload.requiredChanges !== undefined ? { required_changes: this.jsonb(payload.requiredChanges, []) } : {}),
@@ -108,6 +133,13 @@ class SellerOrganizationRepository {
       ...(payload.resubmittedBy !== undefined ? { resubmitted_by: payload.resubmittedBy || null } : {}),
       ...(payload.blockedAt !== undefined ? { blocked_at: payload.blockedAt || null } : {}),
       ...(payload.blockedBy !== undefined ? { blocked_by: payload.blockedBy || null } : {}),
+      ...(payload.goLiveStatus !== undefined ? { go_live_status: payload.goLiveStatus || "pending" } : {}),
+      ...(payload.kycReviewedAt !== undefined ? { kyc_reviewed_at: payload.kycReviewedAt || null } : {}),
+      ...(payload.kycReviewedBy !== undefined ? { kyc_reviewed_by: payload.kycReviewedBy || null } : {}),
+      ...(payload.bankReviewedAt !== undefined ? { bank_reviewed_at: payload.bankReviewedAt || null } : {}),
+      ...(payload.bankReviewedBy !== undefined ? { bank_reviewed_by: payload.bankReviewedBy || null } : {}),
+      ...(payload.goLiveApprovedAt !== undefined ? { go_live_approved_at: payload.goLiveApprovedAt || null } : {}),
+      ...(payload.goLiveApprovedBy !== undefined ? { go_live_approved_by: payload.goLiveApprovedBy || null } : {}),
       ...(payload.isDefault !== undefined ? { is_default: Boolean(payload.isDefault) } : {}),
       ...(payload.suspendedAt !== undefined ? { suspended_at: payload.suspendedAt } : {}),
       ...(payload.createdBy !== undefined ? { created_by: payload.createdBy || null } : {}),
@@ -129,6 +161,7 @@ class SellerOrganizationRepository {
       taxSettings: payload.taxSettings || {},
       invoiceSettings: payload.invoiceSettings || {},
       payoutSettings: payload.payoutSettings || {},
+      complianceSettings: payload.complianceSettings || {},
       metadata: payload.metadata || {},
     });
 
@@ -221,6 +254,7 @@ class SellerOrganizationRepository {
         if (filters.approvalStatus) builder.where("approval_status", filters.approvalStatus);
         if (filters.kycStatus) builder.where("kyc_status", filters.kycStatus);
         if (filters.bankVerificationStatus) builder.where("bank_verification_status", filters.bankVerificationStatus);
+        if (filters.goLiveStatus) builder.where("go_live_status", filters.goLiveStatus);
         if (filters.q || sellerIds.length) {
           const term = `%${String(filters.q).trim()}%`;
           builder.where((q) => {

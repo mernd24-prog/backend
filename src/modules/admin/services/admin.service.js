@@ -304,9 +304,12 @@ class AdminService {
     };
   }
 
-  enrichSellerForAdmin(seller, kyc = null) {
+  enrichSellerForAdmin(seller, kyc = null, organization = null) {
     const plainSeller = this.toPlainObject(seller);
-    const sellerProfile = this.toPlainObject(plainSeller.sellerProfile || {});
+    const sellerProfile = this.sellerOrganizationService.buildSellerProfileMirror(
+      this.toPlainObject(plainSeller.sellerProfile || {}),
+      organization,
+    );
     const onboardingState = makeSellerOnboardingState({
       sellerProfile,
       user: plainSeller,
@@ -338,7 +341,12 @@ class AdminService {
         kycSubmittedAt: kyc?.submitted_at || null,
         kycReviewedAt: kyc?.reviewed_at || null,
         requirements: onboardingState.requirements,
+        organizationStatus: organization?.approvalStatus || "not_created",
+        organizationApproved: ["approved", "active"].includes(
+          String(organization?.approvalStatus || "").toLowerCase(),
+        ),
       },
+      organization: this.sellerOrganizationService.buildPublicSummary(organization),
       kyc: this.formatKycForAdmin(kyc),
     };
   }
@@ -362,6 +370,7 @@ class AdminService {
       .map((item) => this.getRecordId(item))
       .filter(Boolean);
     const kycBySellerId = await this.getSellerKycByIdMap(sellerIds);
+    const organizationBySellerId = await this.sellerOrganizationService.getDefaultOrganizationMap(sellerIds);
 
     return plainItems.map((item) => {
       if (item.role && item.role !== ROLES.SELLER) {
@@ -370,6 +379,7 @@ class AdminService {
       return this.enrichSellerForAdmin(
         item,
         kycBySellerId.get(this.getRecordId(item)) || null,
+        organizationBySellerId.get(this.getRecordId(item)) || null,
       );
     });
   }
@@ -629,10 +639,14 @@ class AdminService {
     }
     this.assertActorCanSeeUser(user, actor);
     if (user.role === ROLES.SELLER) {
-      const kycBySellerId = await this.getSellerKycByIdMap([userId]);
+      const [kycBySellerId, organization] = await Promise.all([
+        this.getSellerKycByIdMap([userId]),
+        this.sellerOrganizationService.getDefaultOrOnlyOrganization(userId),
+      ]);
       return this.enrichSellerForAdmin(
         user,
         kycBySellerId.get(String(userId)) || null,
+        organization,
       );
     }
     return user;
@@ -673,7 +687,8 @@ class AdminService {
       throw new AppError("User not found", 404);
     }
     if (user.role === ROLES.SELLER) {
-      return this.enrichSellerForAdmin(user, kyc);
+      const organization = await this.sellerOrganizationService.getDefaultOrOnlyOrganization(userId);
+      return this.enrichSellerForAdmin(user, kyc, organization);
     }
     return user;
   }
@@ -716,7 +731,8 @@ class AdminService {
     if (!seller) {
       throw new AppError("Seller not found", 404);
     }
-    return this.enrichSellerForAdmin(seller, kyc);
+    const organization = await this.sellerOrganizationService.getDefaultOrOnlyOrganization(sellerId);
+    return this.enrichSellerForAdmin(seller, kyc, organization);
   }
 
   async getSeller(sellerId) {
@@ -724,8 +740,15 @@ class AdminService {
     if (!user || user.role !== ROLES.SELLER) {
       throw new AppError("Seller not found", 404);
     }
-    const kycBySellerId = await this.getSellerKycByIdMap([sellerId]);
-    return this.enrichSellerForAdmin(user, kycBySellerId.get(String(sellerId)) || null);
+    const [kycBySellerId, organization] = await Promise.all([
+      this.getSellerKycByIdMap([sellerId]),
+      this.sellerOrganizationService.getDefaultOrOnlyOrganization(sellerId),
+    ]);
+    return this.enrichSellerForAdmin(
+      user,
+      kycBySellerId.get(String(sellerId)) || null,
+      organization,
+    );
   }
 
   async syncDefaultSellerOrganization(sellerId, sellerProfile = {}, statusUpdates = {}, actor = {}) {
@@ -745,6 +768,14 @@ class AdminService {
       legalBusinessName: fallbackName,
       storeDisplayName: profile.displayName || profile.businessName || fallbackName,
       businessType: profile.businessType || null,
+      description: profile.description || null,
+      supportEmail: profile.supportEmail || null,
+      supportPhone: profile.supportPhone || null,
+      registrationNumber: profile.registrationNumber || null,
+      aadhaarNumber: profile.aadhaarNumber || null,
+      dateOfBirth: profile.dateOfBirth || null,
+      businessWebsite: profile.businessWebsite || null,
+      primaryContactName: profile.primaryContactName || null,
       gstin: this.sellerOrganizationService.normalizeCode(profile.gstNumber),
       pan: this.sellerOrganizationService.normalizeCode(profile.panNumber),
       bankDetails: profile.bankDetails || {},

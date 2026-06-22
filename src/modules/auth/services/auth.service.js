@@ -415,8 +415,12 @@ class AuthService {
       ]);
     }
 
-    const sellerProfile = isSeller ? this.toPlainObject(user?.sellerProfile || {}) : {};
+    let sellerProfile = isSeller ? this.toPlainObject(user?.sellerProfile || {}) : {};
     if (isSeller) {
+      sellerProfile = sellerOrganizationService.buildSellerProfileMirror(
+        sellerProfile,
+        organization,
+      );
       sellerProfile.businessName =
         sellerProfile.businessName ||
         sellerProfile.legalBusinessName ||
@@ -493,21 +497,7 @@ class AuthService {
       bankVerificationStatus,
       bankRejectionReason: sellerProfile.bankRejectionReason || null,
       goLiveStatus,
-      organization: organization
-        ? {
-            id: organization.id,
-            legalBusinessName: organization.legalBusinessName,
-            storeDisplayName: organization.storeDisplayName,
-            approvalStatus: organization.approvalStatus,
-            kycStatus: organization.kycStatus,
-            bankVerificationStatus: organization.bankVerificationStatus,
-            rejectionReason: organization.rejectionReason || null,
-            requiredChanges: organization.requiredChanges || [],
-            approvedAt: organization.approvedAt || null,
-            rejectedAt: organization.rejectedAt || null,
-            resubmittedAt: organization.resubmittedAt || null,
-          }
-        : null,
+      organization: sellerOrganizationService.buildPublicSummary(organization),
       organizationApproved,
       sellerProfile: isSeller ? sellerProfile : null,
       kyc: isSeller ? this.formatSellerKycForStatus(kyc) : null,

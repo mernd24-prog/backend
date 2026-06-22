@@ -347,16 +347,20 @@ class OrderService {
 
   async listSellerOrders(actor, filters = {}) {
     const sellerId = actor.ownerSellerId || actor.userId;
+    const scopedFilters = {
+      ...filters,
+      organizationId: filters.organizationId || actor.organizationId || null,
+    };
     let orders;
     if (["seller-admin", "seller-sub-admin"].includes(actor.role)) {
       const products = await ProductModel.find({ sellerId, createdBy: actor.userId }).select("_id");
       const productIds = products.map((product) => String(product._id));
       if (!productIds.length) return [];
-      orders = await this.orderRepository.listOrdersBySeller(sellerId, productIds, filters);
-      return orders.map((order) => this.filterOrderForSeller(order, sellerId, filters.organizationId));
+      orders = await this.orderRepository.listOrdersBySeller(sellerId, productIds, scopedFilters);
+      return orders.map((order) => this.filterOrderForSeller(order, sellerId, scopedFilters.organizationId));
     }
-    orders = await this.orderRepository.listOrdersBySeller(sellerId, null, filters);
-    return orders.map((order) => this.filterOrderForSeller(order, sellerId, filters.organizationId));
+    orders = await this.orderRepository.listOrdersBySeller(sellerId, null, scopedFilters);
+    return orders.map((order) => this.filterOrderForSeller(order, sellerId, scopedFilters.organizationId));
   }
 
   async listAdminOrders(actor, filters = {}) {
@@ -388,8 +392,12 @@ class OrderService {
     }
 
     const scopedOrder = !isOwner && isSeller
-      ? this.filterOrderForSeller(order, sellerId)
+      ? this.filterOrderForSeller(order, sellerId, actor.organizationId)
       : order;
+
+    if (!isOwner && isSeller && actor.organizationId && !scopedOrder.items?.length) {
+      throw new AppError("Order does not belong to the selected organization", 403);
+    }
 
     const visibleNotes = (order.notes || []).filter((note) => {
       if (isOwner) return note.visibility === "buyer";

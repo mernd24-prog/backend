@@ -840,6 +840,7 @@ class ProductService {
     const requestedOrganizationId =
       payload.organizationId ||
       payload.organization_id ||
+      actor.organizationId ||
       existingProduct?.organizationId ||
       existingProduct?.organization_id ||
       null;
@@ -966,6 +967,13 @@ class ProductService {
     }
     if (isScopedSellerRole(actor) && String(existingProduct.createdBy || "") !== String(actor.userId || "")) {
       throw new AppError("Permission denied", 403);
+    }
+    if (
+      isSellerRole(actor) &&
+      actor.organizationId &&
+      String(existingProduct.organizationId || "") !== String(actor.organizationId)
+    ) {
+      throw new AppError("Product does not belong to the selected organization", 403);
     }
     this.assertOrganizationChangeAllowed(existingProduct, payload, actor);
     if (!existingProduct.organizationId && payload.organizationId) {
@@ -1279,7 +1287,7 @@ class ProductService {
 
   // ─── List ─────────────────────────────────────────────────────────────────
 
-  async listProducts(query, { publicOnly = true } = {}) {
+  async listProducts(query, { publicOnly = true, actor = null } = {}) {
     const pagination = { ...getPage(query), sortBy: query.sortBy || query.sort, sortDir: query.sortDir };
     const filter = {};
 
@@ -1295,7 +1303,8 @@ class ProductService {
     if (query.sku) filter.sku = query.sku;
     if (query.brand) filter.brand = new RegExp(`^${escapeRegExp(query.brand)}$`, "i");
     if (query.sellerId) filter.sellerId = query.sellerId;
-    if (query.organizationId) filter.organizationId = query.organizationId;
+    const organizationId = query.organizationId || actor?.organizationId;
+    if (organizationId) filter.organizationId = organizationId;
     if (query.storeId) filter.storeId = query.storeId;
     if (query.warehouseId) filter.warehouseId = query.warehouseId;
     if (query.productType) filter.productType = query.productType;
@@ -2255,6 +2264,12 @@ class ProductService {
         String(product.createdBy || "") !== String(actor.userId || "")
       ) {
         throw new AppError("Permission denied", 403);
+      }
+      if (
+        actor.organizationId &&
+        String(product.organizationId || "") !== String(actor.organizationId)
+      ) {
+        throw new AppError("Product does not belong to the selected organization", 403);
       }
       return;
     }

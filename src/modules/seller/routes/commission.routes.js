@@ -16,6 +16,13 @@ function sendDocument(res, document) {
   res.send(document.body);
 }
 
+function sellerOrganizationQuery(req) {
+  return {
+    ...(req.query || {}),
+    organizationId: req.query?.organizationId || req.auth?.selectedOrganizationId || undefined,
+  };
+}
+
 // ==============================
 // Seller: View commission breakdown
 // ==============================
@@ -30,7 +37,7 @@ router.get("/my-commissions", authenticate, async (req, res, next) => {
       });
     }
 
-    const commissions = await CommissionService.getSellerCommissions(userId, req.query);
+    const commissions = await CommissionService.getSellerCommissions(userId, sellerOrganizationQuery(req));
 
     return res.status(200).json({
       success: true,
@@ -55,7 +62,7 @@ router.get("/my-commissions/export", authenticate, async (req, res, next) => {
       });
     }
 
-    const document = await CommissionService.exportSellerCommissions({ ...req.query, sellerId: userId });
+    const document = await CommissionService.exportSellerCommissions({ ...sellerOrganizationQuery(req), sellerId: userId });
     return sendDocument(res, document);
   } catch (err) {
     next(err);
@@ -76,7 +83,7 @@ router.get("/my-payouts", authenticate, async (req, res, next) => {
       });
     }
 
-    const payouts = await CommissionService.getSellerPayouts(userId, req.query);
+    const payouts = await CommissionService.getSellerPayouts(userId, sellerOrganizationQuery(req));
 
     return res.status(200).json({
       success: true,
@@ -101,7 +108,7 @@ router.get("/my-payouts/export", authenticate, async (req, res, next) => {
       });
     }
 
-    const document = await CommissionService.exportSellerPayouts({ ...req.query, sellerId: userId });
+    const document = await CommissionService.exportSellerPayouts({ ...sellerOrganizationQuery(req), sellerId: userId });
     return sendDocument(res, document);
   } catch (err) {
     next(err);
@@ -122,7 +129,7 @@ router.get("/my-wallet", authenticate, async (req, res, next) => {
       });
     }
 
-    const wallet = await CommissionService.getSellerWalletSummary(userId, req.query);
+    const wallet = await CommissionService.getSellerWalletSummary(userId, sellerOrganizationQuery(req));
 
     return res.status(200).json({
       success: true,
@@ -147,7 +154,7 @@ router.get("/my-settlements", authenticate, async (req, res, next) => {
       });
     }
 
-    const settlements = await CommissionService.getSellerSettlements(userId, req.query);
+    const settlements = await CommissionService.getSellerSettlements(userId, sellerOrganizationQuery(req));
 
     return res.status(200).json({
       success: true,
@@ -172,7 +179,7 @@ router.get("/my-settlements/export", authenticate, async (req, res, next) => {
       });
     }
 
-    const document = await CommissionService.exportSettlements({ ...req.query, sellerId: userId });
+    const document = await CommissionService.exportSettlements({ ...sellerOrganizationQuery(req), sellerId: userId });
     return sendDocument(res, document);
   } catch (err) {
     next(err);
@@ -186,7 +193,7 @@ router.get("/my-settlements/:settlementId/statement", authenticate, async (req, 
   try {
     const document = await CommissionService.getSettlementStatement(
       req.params.settlementId,
-      req.query,
+      sellerOrganizationQuery(req),
       req.auth,
     );
     return sendDocument(res, document);

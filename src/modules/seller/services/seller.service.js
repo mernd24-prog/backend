@@ -177,6 +177,14 @@ class SellerService {
         sellerProfile.businessName ||
         organization.storeDisplayName,
       businessType: sellerProfile.businessType || organization.businessType || null,
+      description: sellerProfile.description || organization.description || null,
+      supportEmail: sellerProfile.supportEmail || organization.supportEmail || user?.email || null,
+      supportPhone: sellerProfile.supportPhone || organization.supportPhone || user?.phone || null,
+      registrationNumber: sellerProfile.registrationNumber || organization.registrationNumber || null,
+      aadhaarNumber: sellerProfile.aadhaarNumber || organization.aadhaarNumber || null,
+      dateOfBirth: sellerProfile.dateOfBirth || organization.dateOfBirth || null,
+      businessWebsite: sellerProfile.businessWebsite || organization.businessWebsite || null,
+      primaryContactName: sellerProfile.primaryContactName || organization.primaryContactName || null,
       gstin: sellerProfile.gstNumber || organization.gstin || null,
       pan: sellerProfile.panNumber || organization.pan || null,
       bankDetails: sellerProfile.bankDetails || organization.bankDetails || {},
@@ -317,19 +325,25 @@ class SellerService {
 
   async getProfile(actor) {
     const sellerId = this.getSellerId(actor);
-    const [seller, kyc] = await Promise.all([
+    const [seller, kyc, organization] = await Promise.all([
       this.sellerRepository.findSellerById(sellerId),
       this.sellerRepository.findKycBySellerId(sellerId),
+      sellerOrganizationService.getDefaultOrOnlyOrganization(sellerId),
     ]);
 
     if (!seller) {
       throw AppError.notFound("Seller profile");
     }
 
+    const organizationBackedProfile = sellerOrganizationService.buildSellerProfileMirror(
+      seller.sellerProfile || {},
+      organization,
+    );
     return {
-      profile: this.withOnboardingState(seller.sellerProfile || {}, kyc, seller),
+      profile: this.withOnboardingState(organizationBackedProfile, kyc, seller),
       settings: seller.sellerSettings || null,
       kyc,
+      organization: sellerOrganizationService.buildPublicSummary(organization),
     };
   }
 
@@ -423,12 +437,16 @@ class SellerService {
       throw AppError.notFound("Seller profile");
     }
 
+    const organizationBackedProfile = sellerOrganizationService.buildSellerProfileMirror(
+      seller.sellerProfile || {},
+      organization,
+    );
     const onboardingState = makeSellerOnboardingState({
-      sellerProfile: seller.sellerProfile || {},
+      sellerProfile: organizationBackedProfile,
       user: seller || {},
       kyc,
     });
-    const profile = this.withOnboardingState(seller.sellerProfile || {}, kyc, seller);
+    const profile = this.withOnboardingState(organizationBackedProfile, kyc, seller);
     const organizationApproved = ["approved", "active"].includes(
       String(organization?.approvalStatus || "").toLowerCase(),
     );
@@ -459,22 +477,7 @@ class SellerService {
         organizationApproved,
         nextSteps: this.getSellerWebNextSteps(onboardingState.checklist, onboardingState.kycStatus, organization),
       },
-      organization: organization
-        ? {
-            id: organization.id,
-            legalBusinessName: organization.legalBusinessName,
-            storeDisplayName: organization.storeDisplayName,
-            approvalStatus: organization.approvalStatus,
-            kycStatus: organization.kycStatus,
-            bankVerificationStatus: organization.bankVerificationStatus,
-            rejectionReason: organization.rejectionReason || organization.metadata?.lastVerificationEvent?.rejectionReason || null,
-            requiredChanges: organization.requiredChanges || [],
-            approvedAt: organization.approvedAt || null,
-            rejectedAt: organization.rejectedAt || null,
-            resubmittedAt: organization.resubmittedAt || null,
-            verificationHistory: organization.verificationHistory || [],
-          }
-        : null,
+      organization: sellerOrganizationService.buildPublicSummary(organization),
       kyc: kyc
         ? {
             status: kyc.verification_status,
@@ -535,7 +538,10 @@ class SellerService {
 
   async listWebTracking(query, actor) {
     const sellerId = this.assertSellerWebActor(actor);
-    const filters = this.cleanTrackingQuery(query);
+    const filters = this.cleanTrackingQuery({
+      ...query,
+      organizationId: query.organizationId || actor.organizationId || null,
+    });
     const [orders, summary] = await Promise.all([
       this.sellerRepository.fetchSellerTrackingOrders(sellerId, filters),
       this.sellerRepository.fetchSellerTrackingSummary(sellerId, filters),
@@ -670,24 +676,29 @@ class SellerService {
 
   async getDashboard(query, actor) {
     const sellerId = this.getSellerId(actor);
+    const organizationId = query.organizationId || actor.organizationId || null;
     const fromDate = query.fromDate ? new Date(query.fromDate) : this.getDateBeforeDays(30);
     const toDate = query.toDate ? new Date(query.toDate) : new Date();
 
     const [summary, topProducts, recentOrders, seller, kyc, organization] = await Promise.all([
-      this.sellerRepository.fetchDashboardSummary(sellerId, fromDate, toDate, query.organizationId || null),
-      this.sellerRepository.fetchTopProducts(sellerId, fromDate, toDate, 5, query.organizationId || null),
-      this.sellerRepository.fetchRecentOrders(sellerId, 10, query.organizationId || null),
+      this.sellerRepository.fetchDashboardSummary(sellerId, fromDate, toDate, organizationId),
+      this.sellerRepository.fetchTopProducts(sellerId, fromDate, toDate, 5, organizationId),
+      this.sellerRepository.fetchRecentOrders(sellerId, 10, organizationId),
       this.sellerRepository.findSellerById(sellerId),
       this.sellerRepository.findKycBySellerId(sellerId),
-      query.organizationId
-        ? sellerOrganizationService.assertOrganizationForSeller(sellerId, query.organizationId)
+      organizationId
+        ? sellerOrganizationService.assertOrganizationForSeller(sellerId, organizationId)
         : sellerOrganizationService.getDefaultOrOnlyOrganization(sellerId),
     ]);
 
     const totalOrders = Number(summary?.total_orders || 0);
     const gmv = Number(summary?.gmv || 0);
+    const organizationBackedProfile = sellerOrganizationService.buildSellerProfileMirror(
+      seller?.sellerProfile || {},
+      organization,
+    );
     const onboardingState = makeSellerOnboardingState({
-      sellerProfile: seller?.sellerProfile || {},
+      sellerProfile: organizationBackedProfile,
       user: seller || {},
       kyc,
     });
@@ -706,18 +717,7 @@ class SellerService {
           String(organization?.approvalStatus || "").toLowerCase(),
         ),
       },
-      organization: organization
-        ? {
-            id: organization.id,
-            legalBusinessName: organization.legalBusinessName,
-            storeDisplayName: organization.storeDisplayName,
-            approvalStatus: organization.approvalStatus,
-            kycStatus: organization.kycStatus,
-            bankVerificationStatus: organization.bankVerificationStatus,
-            rejectionReason: organization.rejectionReason || null,
-            requiredChanges: organization.requiredChanges || [],
-          }
-        : null,
+      organization: sellerOrganizationService.buildPublicSummary(organization),
       metrics: {
         totalOrders,
         unitsSold: Number(summary?.units_sold || 0),

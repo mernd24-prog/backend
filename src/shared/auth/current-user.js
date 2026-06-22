@@ -9,6 +9,7 @@ function getActor(auth = {}) {
     isSuperAdmin: auth.isSuperAdmin === true || auth.role === "super-admin",
     ownerAdminId: auth.ownerAdminId || null,
     ownerSellerId: auth.ownerSellerId || null,
+    organizationId: auth.selectedOrganizationId || null,
     allowedModules: Array.isArray(auth.allowedModules) ? auth.allowedModules : [],
     permissions: Array.isArray(auth.permissions) ? auth.permissions : [],
   };

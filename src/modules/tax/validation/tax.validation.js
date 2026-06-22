@@ -150,6 +150,7 @@ const taxExportSchema = (type) => {
     invoices: {
       ...common,
       sellerId: Joi.string(),
+      organizationId: uuid,
       buyerId: Joi.string(),
       invoiceType: Joi.string().valid("order_customer", "seller_customer", "platform_commission"),
       referenceType: Joi.string().max(64),
@@ -163,6 +164,7 @@ const taxExportSchema = (type) => {
       ...common,
       orderId: uuid,
       buyerId: Joi.string().max(64),
+      organizationId: uuid,
       referenceType: Joi.string().valid("cancellation", "return", "refund", "manual", "cancellation_seller", "return_seller", "cancellation_commission", "return_commission"),
       sortBy: listCreditNotesSchema.extract("query").extract("sortBy"),
       sortDir: listCreditNotesSchema.extract("query").extract("sortDir"),
@@ -171,6 +173,7 @@ const taxExportSchema = (type) => {
       fromDate: Joi.date().iso(),
       toDate: Joi.date().iso(),
       taxComponent: Joi.string().valid("cgst", "sgst", "igst", "tcs"),
+      organizationId: uuid,
       format: exportFormat,
       limit: Joi.number().integer().min(1).max(1000).default(500),
       offset: Joi.number().integer().min(0).default(0),

@@ -155,7 +155,7 @@ const MODULE_CATALOG = [
     apiPath: "/orders",
   },
   {
-    tab: "Orders Management",
+    tab: "Returns & Cancellations",
     slug: "cancellations",
     name: "Cancellation Management",
     description: "Order cancellations, retry, and manual refund resolution",
@@ -167,7 +167,7 @@ const MODULE_CATALOG = [
     apiAliases: ["/cancellations"],
   },
   {
-    tab: "Orders Management",
+    tab: "Returns & Cancellations",
     slug: "returns",
     name: "Return Management",
     description: "Returns, refunds, and reverse logistics",
@@ -178,7 +178,7 @@ const MODULE_CATALOG = [
     apiPath: "/returns",
   },
   {
-    tab: "Orders Management",
+    tab: "Payments & Finance",
     slug: "payments",
     name: "Payment Management",
     description: "Payments, refunds, and payment operations",
@@ -189,7 +189,7 @@ const MODULE_CATALOG = [
     apiPath: "/payments",
   },
   {
-    tab: "Orders Management",
+    tab: "Commerce Settings",
     slug: "cod-config",
     name: "COD Configuration",
     description: "Cash on delivery rules, charges, and eligibility settings",
@@ -200,7 +200,7 @@ const MODULE_CATALOG = [
     apiPath: "/admin/payments/admin/cod-config",
   },
   {
-    tab: "Orders Management",
+    tab: "Payments & Finance",
     slug: "chargebacks",
     name: "Chargeback Management",
     description: "Payment chargebacks and dispute resolution",
@@ -211,7 +211,7 @@ const MODULE_CATALOG = [
     apiPath: "/admin/chargebacks",
   },
   {
-    tab: "Orders Management",
+    tab: "Payments & Finance",
     slug: "wallets",
     name: "Wallet Management",
     description: "Wallet balances and wallet transactions",
@@ -222,7 +222,7 @@ const MODULE_CATALOG = [
     apiPath: "/wallets",
   },
   {
-    tab: "Orders Management",
+    tab: "Payments & Finance",
     slug: "wallet-management",
     name: "Wallet Admin",
     description: "Customer wallet balances, credits, debits, and transaction audit",
@@ -256,7 +256,7 @@ const MODULE_CATALOG = [
     apiPath: "/subscriptions",
   },
   {
-    tab: "Orders Management",
+    tab: "Commerce Settings",
     slug: "subscription-plans",
     name: "Subscription Plan Management",
     description: "Platform subscription plans and plan configuration",
@@ -337,7 +337,7 @@ const MODULE_CATALOG = [
     apiPath: "/admin/sellers/:sellerId/bank",
   },
   {
-    tab: "Users & Access",
+    tab: "Seller Finance & Payouts",
     slug: "sellers/commissions",
     name: "Seller Commission Management",
     description: "Seller commissions, settlements, and payouts",
@@ -348,7 +348,7 @@ const MODULE_CATALOG = [
     apiPath: "/sellers/commissions",
   },
   {
-    tab: "Users & Access",
+    tab: "Seller Finance & Payouts",
     slug: "seller-payouts",
     name: "Seller Payout Management",
     description: "Seller payout batches, approvals, and settlement tracking",
@@ -361,7 +361,7 @@ const MODULE_CATALOG = [
 
   // ── Marketing ─────────────────────────────────────────────────────────────
   {
-    tab: "Marketing",
+    tab: "Commerce Settings",
     slug: "coupons",
     name: "Coupon Management",
     description: "Coupons and discount codes",
@@ -485,9 +485,9 @@ const MODULE_CATALOG = [
     apiPath: "/admin/notifications",
   },
 
-  // ── Tax & Compliance ──────────────────────────────────────────────────────
+  // ── Invoices & Taxation ───────────────────────────────────────────────────
   {
-    tab: "Tax & Compliance",
+    tab: "Invoices & Taxation",
     slug: "tax",
     name: "Tax Management",
     description: "Tax invoices, HSN codes, GST, tax reports, and filings",
@@ -498,7 +498,7 @@ const MODULE_CATALOG = [
     apiPath: "/tax",
   },
   {
-    tab: "Tax & Compliance",
+    tab: "Invoices & Taxation",
     slug: "tax-invoices",
     name: "Tax Invoice Management",
     description: "GST tax invoices generated from orders",
@@ -509,7 +509,7 @@ const MODULE_CATALOG = [
     apiPath: "/admin/tax/invoices",
   },
   {
-    tab: "Tax & Compliance",
+    tab: "Invoices & Taxation",
     slug: "credit-notes",
     name: "Credit Note Management",
     description: "Tax credit notes issued on refunds and returns",
@@ -520,9 +520,9 @@ const MODULE_CATALOG = [
     apiPath: "/admin/tax/credit-notes",
   },
 
-  // ── Delivery & Shipping ───────────────────────────────────────────────────
+  // ── Shipping & Fulfilment ─────────────────────────────────────────────────
   {
-    tab: "Delivery & Shipping",
+    tab: "Shipping & Fulfilment",
     slug: "delivery",
     name: "Delivery Management",
     description: "Delivery serviceability, shipping rules, manifests, and tracking",
@@ -646,7 +646,7 @@ const MODULE_CATALOG = [
     apiAliases: ["/cms", "/pricing/promotion-banners"],
   },
   {
-    tab: "Settings",
+    tab: "Payments & Finance",
     slug: "fraud",
     name: "Fraud Management",
     description: "Fraud detection and risk review",

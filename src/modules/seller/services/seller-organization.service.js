@@ -1,6 +1,8 @@
 const { AppError } = require("../../../shared/errors/app-error");
 const { SellerOrganizationRepository } = require("../repositories/seller-organization.repository");
 const { UserModel } = require("../../user/models/user.model");
+const { storageService: defaultStorageService } = require("../../../shared/storage/storage-service");
+const { v4: uuidv4 } = require("uuid");
 
 const SELLER_ROLES = ["seller", "seller-admin", "seller-sub-admin"];
 const ADMIN_ROLES = ["admin", "sub-admin", "super-admin"];
@@ -10,8 +12,10 @@ const RESUBMITTABLE_STATUSES = new Set(["rejected", "blocked"]);
 class SellerOrganizationService {
   constructor({
     organizationRepository = new SellerOrganizationRepository(),
+    storageService = defaultStorageService,
   } = {}) {
     this.organizationRepository = organizationRepository;
+    this.storageService = storageService;
   }
 
   isSellerActor(actor = {}) {
@@ -60,6 +64,14 @@ class SellerOrganizationService {
       ...(legalBusinessName ? { legalBusinessName } : {}),
       ...(storeDisplayName ? { storeDisplayName } : {}),
       ...(payload.businessType !== undefined ? { businessType: payload.businessType || null } : {}),
+      ...(payload.description !== undefined ? { description: this.normalizeText(payload.description) || null } : {}),
+      ...(payload.supportEmail !== undefined ? { supportEmail: this.normalizeText(payload.supportEmail).toLowerCase() } : {}),
+      ...(payload.supportPhone !== undefined ? { supportPhone: this.normalizeText(payload.supportPhone) } : {}),
+      ...(payload.registrationNumber !== undefined ? { registrationNumber: this.normalizeText(payload.registrationNumber) || null } : {}),
+      ...(payload.aadhaarNumber !== undefined ? { aadhaarNumber: this.normalizeText(payload.aadhaarNumber) || null } : {}),
+      ...(payload.dateOfBirth !== undefined ? { dateOfBirth: payload.dateOfBirth || null } : {}),
+      ...(payload.businessWebsite !== undefined ? { businessWebsite: this.normalizeText(payload.businessWebsite) || null } : {}),
+      ...(payload.primaryContactName !== undefined ? { primaryContactName: this.normalizeText(payload.primaryContactName) } : {}),
       ...(payload.gstin !== undefined || payload.gstNumber !== undefined
         ? { gstin: this.normalizeCode(payload.gstin || payload.gstNumber) }
         : {}),
@@ -78,23 +90,24 @@ class SellerOrganizationService {
       ...(payload.taxSettings !== undefined ? { taxSettings: payload.taxSettings || {} } : {}),
       ...(payload.invoiceSettings !== undefined ? { invoiceSettings: payload.invoiceSettings || {} } : {}),
       ...(payload.payoutSettings !== undefined ? { payoutSettings: payload.payoutSettings || {} } : {}),
+      ...(payload.complianceSettings !== undefined ? { complianceSettings: payload.complianceSettings || {} } : {}),
       ...(payload.metadata !== undefined ? { metadata: payload.metadata || {} } : {}),
       updatedBy: actor.userId || actor.sub || null,
     };
 
     if (create) {
-      normalized.kycStatus = payload.kycStatus || "submitted";
-      normalized.bankVerificationStatus = payload.bankVerificationStatus || "submitted";
-      normalized.approvalStatus = admin
-        ? payload.approvalStatus || "pending_review"
-        : "pending_review";
+      normalized.kycStatus = "submitted";
+      normalized.bankVerificationStatus = "submitted";
+      normalized.goLiveStatus = "pending";
+      normalized.approvalStatus = "pending_review";
       normalized.createdBy = actor.userId || actor.sub || null;
       if (payload.isDefault !== undefined) normalized.isDefault = Boolean(payload.isDefault);
     }
 
-    if (admin) {
+    if (admin && !create) {
       if (payload.kycStatus !== undefined) normalized.kycStatus = payload.kycStatus;
       if (payload.bankVerificationStatus !== undefined) normalized.bankVerificationStatus = payload.bankVerificationStatus;
+      if (payload.goLiveStatus !== undefined) normalized.goLiveStatus = payload.goLiveStatus;
       if (payload.approvalStatus !== undefined) normalized.approvalStatus = payload.approvalStatus;
       if (payload.rejectionReason !== undefined) normalized.rejectionReason = payload.rejectionReason || null;
       if (payload.requiredChanges !== undefined) normalized.requiredChanges = payload.requiredChanges || [];
@@ -114,6 +127,7 @@ class SellerOrganizationService {
         updates.bankVerificationStatus ||
         existing.bankVerificationStatus ||
         "not_submitted",
+      goLiveStatus: updates.goLiveStatus || existing.goLiveStatus || "pending",
       rejectionReason:
         updates.rejectionReason !== undefined
           ? updates.rejectionReason || null
@@ -206,14 +220,138 @@ class SellerOrganizationService {
     const missing = [];
     if (!payload.legalBusinessName) missing.push("legalBusinessName");
     if (!payload.storeDisplayName) missing.push("storeDisplayName");
+    if (!payload.businessType) missing.push("businessType");
+    if (!payload.supportEmail) missing.push("supportEmail");
+    if (!payload.supportPhone) missing.push("supportPhone");
+    if (!payload.primaryContactName) missing.push("primaryContactName");
+    if (!payload.gstin) missing.push("gstin");
     if (!payload.pan) missing.push("pan");
-    if (!payload.billingAddress?.state) missing.push("billingAddress.state");
-    if (!payload.pickupAddress?.state) missing.push("pickupAddress.state");
+    if (!payload.aadhaarNumber) missing.push("aadhaarNumber");
+    if (!payload.dateOfBirth) missing.push("dateOfBirth");
+    ["line1", "city", "state", "postalCode"].forEach((field) => {
+      if (!payload.billingAddress?.[field]) missing.push(`billingAddress.${field}`);
+      if (!payload.pickupAddress?.[field]) missing.push(`pickupAddress.${field}`);
+    });
+    if (!payload.bankDetails?.accountHolderName) missing.push("bankDetails.accountHolderName");
     if (!payload.bankDetails?.accountNumber) missing.push("bankDetails.accountNumber");
     if (!payload.bankDetails?.ifscCode) missing.push("bankDetails.ifscCode");
+    if (!payload.bankDetails?.bankName) missing.push("bankDetails.bankName");
+    const requiredDocuments = [
+      "panDocumentUrl",
+      "gstCertificateUrl",
+      "aadhaarFrontUrl",
+      "aadhaarBackUrl",
+      "bankProofUrl",
+      "addressProofUrl",
+    ];
+    requiredDocuments.forEach((key) => {
+      if (!payload.documents?.[key]) missing.push(`documents.${key}`);
+    });
     if (missing.length) {
       throw new AppError(`Organization is missing required fields: ${missing.join(", ")}`, 400, { missing });
     }
+  }
+
+  async uploadOrganizationDocuments(organizationId, documents = {}, existingDocuments = {}) {
+    if (!documents || !Object.keys(documents).length) return existingDocuments || {};
+    const uploaded = await this.storageService.uploadKycDocuments(documents, {
+      ownerType: "seller-organizations",
+      ownerId: organizationId,
+      folder: `ecommerce/kyc/seller-organizations/${organizationId}`,
+    });
+    return { ...(existingDocuments || {}), ...uploaded };
+  }
+
+  assertBankDetailsComplete(organization = {}) {
+    const missing = ["accountHolderName", "accountNumber", "ifscCode", "bankName"]
+      .filter((key) => !String(organization.bankDetails?.[key] || "").trim());
+    if (missing.length) {
+      throw new AppError("Complete organization bank details before bank verification", 400, {
+        missingFields: missing.map((key) => `bankDetails.${key}`),
+      });
+    }
+  }
+
+  buildStageReviewPatch(existing = {}, payload = {}, actor = {}) {
+    const now = new Date();
+    const actorId = actor.userId || actor.sub || null;
+    const patch = {};
+
+    if (payload.kycStatus !== undefined) {
+      patch.kycStatus = payload.kycStatus;
+      patch.kycReviewedAt = now;
+      patch.kycReviewedBy = actorId;
+      if (payload.kycStatus !== "verified") {
+        patch.bankVerificationStatus = existing.bankVerificationStatus === "verified"
+          ? "submitted"
+          : existing.bankVerificationStatus;
+        patch.goLiveStatus = "pending";
+        patch.approvalStatus = payload.kycStatus === "rejected" ? "rejected" : "pending_review";
+      }
+    }
+
+    const effectiveKycStatus = patch.kycStatus || existing.kycStatus;
+    if (payload.bankVerificationStatus !== undefined) {
+      if (payload.bankVerificationStatus === "verified" && effectiveKycStatus !== "verified") {
+        throw new AppError("Organization KYC must be verified before bank approval", 409);
+      }
+      if (payload.bankVerificationStatus === "verified") this.assertBankDetailsComplete(existing);
+      patch.bankVerificationStatus = payload.bankVerificationStatus;
+      patch.bankReviewedAt = now;
+      patch.bankReviewedBy = actorId;
+      if (payload.bankVerificationStatus !== "verified") {
+        patch.goLiveStatus = "pending";
+        patch.approvalStatus = payload.bankVerificationStatus === "rejected" ? "rejected" : "pending_review";
+      } else if (effectiveKycStatus === "verified") {
+        patch.goLiveStatus = "ready";
+        patch.approvalStatus = "pending_review";
+      }
+    }
+
+    const effectiveBankStatus = patch.bankVerificationStatus || existing.bankVerificationStatus;
+    const requestedApprovalStatus = payload.approvalStatus || payload.status;
+    if (["approved", "active"].includes(requestedApprovalStatus)) {
+      if (effectiveKycStatus !== "verified" || effectiveBankStatus !== "verified") {
+        throw new AppError("KYC and bank must be verified before organization approval", 409, {
+          kycStatus: effectiveKycStatus,
+          bankVerificationStatus: effectiveBankStatus,
+        });
+      }
+      this.validateCreatePayload(existing);
+      patch.approvalStatus = requestedApprovalStatus;
+      if (!patch.goLiveStatus && existing.goLiveStatus !== "live") {
+        patch.goLiveStatus = "ready";
+      }
+    }
+
+    if (payload.goLiveStatus !== undefined) {
+      if (payload.goLiveStatus === "live") {
+        const effectiveApprovalStatus = patch.approvalStatus || existing.approvalStatus;
+        if (!APPROVED_STATUSES.has(String(effectiveApprovalStatus || ""))) {
+          throw new AppError("Organization must be approved before go-live", 409, {
+            approvalStatus: effectiveApprovalStatus || "pending_review",
+          });
+        }
+        if (effectiveKycStatus !== "verified" || effectiveBankStatus !== "verified") {
+          throw new AppError("KYC and bank must be verified before organization go-live", 409, {
+            kycStatus: effectiveKycStatus,
+            bankVerificationStatus: effectiveBankStatus,
+          });
+        }
+        this.validateCreatePayload(existing);
+        patch.goLiveStatus = "live";
+        patch.approvalStatus = effectiveApprovalStatus;
+        patch.goLiveApprovedAt = now;
+        patch.goLiveApprovedBy = actorId;
+      } else {
+        patch.goLiveStatus = payload.goLiveStatus;
+        if (["blocked", "rejected"].includes(payload.goLiveStatus)) {
+          patch.approvalStatus = payload.goLiveStatus === "blocked" ? "blocked" : "rejected";
+        }
+      }
+    }
+
+    return patch;
   }
 
   buildSnapshot(organization = {}) {
@@ -224,6 +362,9 @@ class SellerOrganizationService {
       legalBusinessName: organization.legalBusinessName,
       storeDisplayName: organization.storeDisplayName,
       businessType: organization.businessType || null,
+      registrationNumber: organization.registrationNumber || null,
+      supportEmail: organization.supportEmail || null,
+      supportPhone: organization.supportPhone || null,
       gstin: organization.gstin || null,
       pan: organization.pan || null,
       billingAddress: organization.billingAddress || {},
@@ -231,9 +372,11 @@ class SellerOrganizationService {
       taxSettings: organization.taxSettings || {},
       invoiceSettings: organization.invoiceSettings || {},
       payoutSettings: organization.payoutSettings || {},
+      complianceSettings: organization.complianceSettings || {},
       approvalStatus: organization.approvalStatus || null,
       kycStatus: organization.kycStatus || null,
       bankVerificationStatus: organization.bankVerificationStatus || null,
+      goLiveStatus: organization.goLiveStatus || "pending",
     };
   }
 
@@ -268,6 +411,14 @@ class SellerOrganizationService {
       displayName: organization.storeDisplayName || profile.displayName,
       legalBusinessName: organization.legalBusinessName || profile.legalBusinessName,
       businessType: organization.businessType || profile.businessType,
+      description: organization.description || profile.description,
+      supportEmail: organization.supportEmail || profile.supportEmail,
+      supportPhone: organization.supportPhone || profile.supportPhone,
+      registrationNumber: organization.registrationNumber || profile.registrationNumber,
+      aadhaarNumber: organization.aadhaarNumber || profile.aadhaarNumber,
+      dateOfBirth: organization.dateOfBirth || profile.dateOfBirth,
+      businessWebsite: organization.businessWebsite || profile.businessWebsite,
+      primaryContactName: organization.primaryContactName || profile.primaryContactName,
       gstNumber: organization.gstin || profile.gstNumber,
       panNumber: organization.pan || profile.panNumber,
       bankDetails,
@@ -279,6 +430,7 @@ class SellerOrganizationService {
       rejectionReason: organization.rejectionReason || profile.rejectionReason,
       organizationId: organization.id,
       organizationApprovalStatus: organization.approvalStatus,
+      organizationGoLiveStatus: organization.goLiveStatus || "pending",
       organizationRejectionReason: organization.rejectionReason || null,
       organizationRequiredChanges: organization.requiredChanges || [],
       organizationVerificationHistory: organization.verificationHistory || [],
@@ -292,11 +444,15 @@ class SellerOrganizationService {
       legalBusinessName: organization.legalBusinessName,
       storeDisplayName: organization.storeDisplayName,
       businessType: organization.businessType || null,
+      supportEmail: organization.supportEmail || null,
+      supportPhone: organization.supportPhone || null,
+      registrationNumber: organization.registrationNumber || null,
       gstin: organization.gstin || null,
       pan: organization.pan || null,
       approvalStatus: organization.approvalStatus || "draft",
       kycStatus: organization.kycStatus || "not_submitted",
       bankVerificationStatus: organization.bankVerificationStatus || "not_submitted",
+      goLiveStatus: organization.goLiveStatus || "pending",
       rejectionReason: organization.rejectionReason || null,
       requiredChanges: organization.requiredChanges || [],
       approvedAt: organization.approvedAt || null,
@@ -324,6 +480,12 @@ class SellerOrganizationService {
       throw new AppError("Organization bank details must be verified before products can be listed", 403, {
         organizationId: organization.id,
         bankVerificationStatus: organization.bankVerificationStatus,
+      });
+    }
+    if (organization.goLiveStatus !== "live") {
+      throw new AppError("Organization must receive go-live approval before selling", 403, {
+        organizationId: organization.id,
+        goLiveStatus: organization.goLiveStatus || "pending",
       });
     }
   }
@@ -405,11 +567,20 @@ class SellerOrganizationService {
       legalBusinessName,
       storeDisplayName: sellerProfile.displayName || sellerProfile.businessName || legalBusinessName,
       businessType: sellerProfile.businessType || null,
+      description: sellerProfile.description || null,
+      supportEmail: sellerProfile.supportEmail || null,
+      supportPhone: sellerProfile.supportPhone || null,
+      registrationNumber: sellerProfile.registrationNumber || null,
+      aadhaarNumber: sellerProfile.aadhaarNumber || null,
+      dateOfBirth: sellerProfile.dateOfBirth || null,
+      businessWebsite: sellerProfile.businessWebsite || null,
+      primaryContactName: sellerProfile.primaryContactName || null,
       gstin: this.normalizeCode(sellerProfile.gstNumber),
       pan: this.normalizeCode(sellerProfile.panNumber),
       kycStatus: sellerProfile.kycStatus === "verified" ? "verified" : "submitted",
       bankVerificationStatus: sellerProfile.bankVerificationStatus || "submitted",
       approvalStatus: "pending_review",
+      goLiveStatus: "pending",
       documents: {},
       bankDetails: sellerProfile.bankDetails || {},
       billingAddress: this.normalizeAddress(sellerProfile.businessAddress || {}),
@@ -465,10 +636,16 @@ class SellerOrganizationService {
       throw new AppError("Only seller accounts can create organizations", 403);
     }
     const normalized = this.normalizeOrganizationPayload(payload, actor, { create: true });
+    const organizationId = uuidv4();
+    normalized.documents = await this.uploadOrganizationDocuments(
+      organizationId,
+      normalized.documents || {},
+    );
     this.validateCreatePayload(normalized);
     const existing = await this.organizationRepository.listBySeller(sellerId);
     const organizationPayload = {
       ...normalized,
+      id: organizationId,
       sellerId,
       isDefault: existing.length === 0 || payload.isDefault === true,
     };
@@ -494,6 +671,13 @@ class SellerOrganizationService {
       throw new AppError("Approved organizations require admin review for legal/KYC changes", 409);
     }
     const normalized = this.normalizeOrganizationPayload(payload, actor, { create: false });
+    if (payload.documents !== undefined || payload.kycDocuments !== undefined) {
+      normalized.documents = await this.uploadOrganizationDocuments(
+        organizationId,
+        normalized.documents || {},
+        existing.documents || {},
+      );
+    }
     const approvalStatus = RESUBMITTABLE_STATUSES.has(existing.approvalStatus)
       ? "resubmitted"
       : "pending_review";
@@ -501,6 +685,8 @@ class SellerOrganizationService {
       ...normalized,
       approvalStatus,
       kycStatus: "submitted",
+      bankVerificationStatus: "submitted",
+      goLiveStatus: "pending",
     };
     const lifecyclePatch = this.buildLifecyclePatch(
       existing,
@@ -516,7 +702,7 @@ class SellerOrganizationService {
 
   async setMineDefault(organizationId, actor = {}) {
     const sellerId = this.getSellerId(actor);
-    await this.assertOrganizationForSeller(sellerId, organizationId);
+    await this.assertOrganizationForSeller(sellerId, organizationId, { requireApproved: true });
     return this.organizationRepository.setDefault(sellerId, organizationId, actor.userId || actor.sub || null);
   }
 
@@ -603,10 +789,16 @@ class SellerOrganizationService {
     if (!seller) throw AppError.notFound("Seller");
 
     const normalized = this.normalizeOrganizationPayload(payload, actor, { admin: true, create: true });
+    const organizationId = uuidv4();
+    normalized.documents = await this.uploadOrganizationDocuments(
+      organizationId,
+      normalized.documents || {},
+    );
     this.validateCreatePayload(normalized);
     const existing = await this.organizationRepository.listBySeller(sellerId);
     const organizationPayload = {
       ...normalized,
+      id: organizationId,
       sellerId,
       isDefault: existing.length === 0 || payload.isDefault === true,
     };
@@ -632,17 +824,31 @@ class SellerOrganizationService {
     return organization;
   }
 
-  async adminUpdate(sellerId, organizationId, payload = {}, actor = {}) {
+  async adminUpdate(sellerId, organizationId, payload = {}, actor = {}, { review = false } = {}) {
     if (!this.isAdminActor(actor)) {
       throw new AppError("Only admins can update seller organizations", 403);
     }
     const existing = await this.organizationRepository.findByIdForSeller(sellerId, organizationId);
     if (!existing) throw AppError.notFound("Seller organization");
+    const statusFields = ["approvalStatus", "status", "kycStatus", "bankVerificationStatus", "goLiveStatus"];
+    if (!review && statusFields.some((field) => payload[field] !== undefined)) {
+      throw new AppError("Use the organization review endpoint for approval status changes", 409);
+    }
     const normalized = this.normalizeOrganizationPayload(payload, actor, { admin: true });
+    if (payload.documents !== undefined || payload.kycDocuments !== undefined) {
+      normalized.documents = await this.uploadOrganizationDocuments(
+        organizationId,
+        normalized.documents || {},
+        existing.documents || {},
+      );
+    }
     if (normalized.approvalStatus === "rejected" && !normalized.rejectionReason) {
       throw new AppError("Rejection reason is required when organization is rejected", 400);
     }
-    const action = payload.approvalStatus || payload.status || payload.kycStatus || payload.bankVerificationStatus
+    if (!review && ["approved", "active"].includes(normalized.approvalStatus) && normalized.goLiveStatus !== "live") {
+      throw new AppError("Use organization go-live approval after KYC and bank verification", 409);
+    }
+    const action = payload.approvalStatus || payload.status || payload.kycStatus || payload.bankVerificationStatus || payload.goLiveStatus
       ? "admin_organization_review"
       : "admin_organization_update";
     return this.organizationRepository.update(organizationId, {
@@ -653,22 +859,25 @@ class SellerOrganizationService {
 
   async adminReview(sellerId, organizationId, payload = {}, actor = {}) {
     const status = payload.approvalStatus || payload.status;
-    if (status === "rejected" && !payload.rejectionReason) {
+    const hasRejection = status === "rejected" ||
+      payload.kycStatus === "rejected" ||
+      payload.bankVerificationStatus === "rejected" ||
+      payload.goLiveStatus === "rejected";
+    if (hasRejection && !payload.rejectionReason) {
       throw new AppError("Rejection reason is required when organization is rejected", 400);
     }
-    const kycStatus = payload.kycStatus;
-    const bankVerificationStatus = payload.bankVerificationStatus;
+    const existing = await this.adminGet(sellerId, organizationId, actor);
+    const stagePatch = this.buildStageReviewPatch(existing, payload, actor);
     return this.adminUpdate(sellerId, organizationId, {
-      ...(status ? { approvalStatus: status } : {}),
-      ...(kycStatus ? { kycStatus } : {}),
-      ...(bankVerificationStatus ? { bankVerificationStatus } : {}),
+      ...stagePatch,
+      ...(status && !stagePatch.approvalStatus ? { approvalStatus: status } : {}),
       ...(payload.rejectionReason !== undefined ? { rejectionReason: payload.rejectionReason || null } : {}),
       ...(payload.requiredChanges !== undefined ? { requiredChanges: payload.requiredChanges || [] } : {}),
       ...(status === "suspended" ? { suspendedAt: new Date() } : {}),
       ...(status && status !== "suspended" ? { suspendedAt: null } : {}),
       metadata: payload.metadata || {},
       notes: payload.notes || null,
-    }, actor);
+    }, actor, { review: true });
   }
 }
 

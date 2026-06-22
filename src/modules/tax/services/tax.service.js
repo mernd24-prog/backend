@@ -1410,6 +1410,12 @@ class TaxService {
     const invoiceType = this.invoiceType(invoice);
     const sellerId = this.getActorSellerId(actor);
     if (sellerId && invoice.seller_id && String(invoice.seller_id) === String(sellerId)) {
+      if (
+        actor.organizationId &&
+        String(invoice.organization_id || "") !== String(actor.organizationId)
+      ) {
+        throw new AppError("This tax document belongs to another organization", 403);
+      }
       return;
     }
 
