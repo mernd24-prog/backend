@@ -164,13 +164,12 @@
  * ADVANCED OPTIONS
  * ============================================================
  * 
- * --reset              Reset tables before seeding
- * --append             Append to existing data (default)
+ * --reset              Reset all databases when used with the all profile
  * --stop-on-error      Exit if any module fails
  * --log-level debug    Set logging level (info|debug|error)
  * 
  * Examples:
- * node scripts/seed/master-seed.js products --reset
+ * node scripts/seed/master-seed.js products orders
  * node scripts/seed/master-seed.js all --stop-on-error
  * LOG_LEVEL=debug npm run seed:categories
  * 
@@ -259,8 +258,7 @@
  *          Check connection strings in .env
  * 
  * Issue: Duplicate key errors
- * Solution: Run with --reset flag
- *          Truncate tables manually: npm run seed:all -- --reset
+ * Solution: Run the full reset seed: npm run seed:all
  * 
  * Issue: Memory errors
  * Solution: Increase Node.js memory: node --max-old-space-size=4096
@@ -269,7 +267,7 @@
  * Issue: Slow execution
  * Solution: Disable logging: LOG_LEVEL=warn npm run seed:all
  *          Run on SSD for better I/O
- *          Increase batch size in config
+ *          Run fewer scoped modules in one command
  * 
  * ============================================================
  * EXTENDING THE SEED SYSTEM
@@ -279,8 +277,7 @@
  * 
  * 1. Create file: scripts/seed/modules/my-feature.seed.js
  * 
- * 2. Implement class extending base or QuickSeedModule:
- *    class MyFeatureSeed extends QuickSeedModule { ... }
+ * 2. Implement a module class with an async execute() method.
  * 
  * 3. Add to master-seed.js seedModules map:
  *    'my-feature': 'my-feature.seed.js'
@@ -297,8 +294,6 @@
  * ├── master-seed.js              [Main orchestrator]
  * ├── utils/
  * │   ├── db-connection.js         [Database connectivity]
- * │   ├── data-generator.js        [Realistic data generation]
- * │   ├── batch-processor.js       [Efficient batch operations]
  * │   └── seed-logger.js           [Logging & statistics]
  * ├── modules/                     [Individual seed modules]
  * │   ├── countries.seed.js

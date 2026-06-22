@@ -18,7 +18,6 @@ const fs = require('fs');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const dbConnection = require('./utils/db-connection');
-const SeedLogger = require('./utils/seed-logger');
 
 // Initialize master logger
 const masterLogger = pino({
@@ -31,10 +30,10 @@ const masterLogger = pino({
 
 // Parse command line arguments
 const args = process.argv.slice(2);
-const command = args[0] || 'all';
-const flags = args.slice(1);
+const commands = args.filter((arg) => !arg.startsWith('-'));
+const requestedCommands = commands.length ? commands : ['all'];
+const flags = args.filter((arg) => arg.startsWith('-'));
 const shouldReset = flags.includes('--reset') || flags.includes('-r');
-const shouldAppend = flags.includes('--append') || flags.includes('-a');
 
 // Module execution map
 const seedModules = {
@@ -98,6 +97,31 @@ const fullSeedOrder = [
   'notifications',
 ];
 
+const seedProfiles = {
+  all: fullSeedOrder,
+  catalog: [
+    'countries',
+    'locations',
+    'categories',
+    'brands',
+    'options',
+    'gst',
+    'hsn',
+    'tax-classes',
+    'attributes',
+    'families',
+    'commissions',
+    'platform-fees',
+    'badges',
+    'tags',
+    'collections',
+  ],
+};
+
+const resolveRequestedModules = () => Array.from(new Set(
+  requestedCommands.flatMap((name) => seedProfiles[name] || [name]),
+));
+
 class MasterSeed {
   constructor() {
     this.logger = masterLogger;
@@ -108,13 +132,13 @@ class MasterSeed {
   async initialize() {
     try {
       this.logger.info('🚀 Master Seed Initialization');
-      this.logger.info(`Command: ${command}`);
-      this.logger.info(`Reset: ${shouldReset}, Append: ${shouldAppend}`);
+      this.logger.info(`Commands: ${requestedCommands.join(', ')}`);
+      this.logger.info(`Full reset: ${shouldReset && requestedCommands.includes('all')}`);
 
       await dbConnection.connect();
       this.logger.info('✓ Database connections established');
 
-      if (shouldReset && command === 'all') {
+      if (shouldReset && requestedCommands.includes('all')) {
         await this.resetDatabase();
       }
 
@@ -200,21 +224,17 @@ class MasterSeed {
 
   async executeSeed() {
     try {
-      if (command === 'all') {
-        this.logger.info('🎯 Running FULL SEED');
-        for (const moduleName of fullSeedOrder) {
-          try {
-            this.results[moduleName] = await this.executeModule(moduleName);
-          } catch (error) {
-            this.logger.error({ error }, `Failed to execute ${moduleName}`);
-            if (args.includes('--stop-on-error')) {
-              throw error;
-            }
+      const modules = resolveRequestedModules();
+      this.logger.info(`🎯 Running SEED MODULES: ${modules.join(', ')}`);
+      for (const moduleName of modules) {
+        try {
+          this.results[moduleName] = await this.executeModule(moduleName);
+        } catch (error) {
+          this.logger.error({ error }, `Failed to execute ${moduleName}`);
+          if (args.includes('--stop-on-error')) {
+            throw error;
           }
         }
-      } else {
-        this.logger.info(`🎯 Running SELECTIVE SEED: ${command}`);
-        this.results[command] = await this.executeModule(command);
       }
 
       return true;

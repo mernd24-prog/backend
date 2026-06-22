@@ -395,7 +395,8 @@ Seed commands currently available:
 npm run db:setup
 npm run db:seed:commerce
 npm run db:seed:commerce:append
-npm run db:seed:commerce:qa
+npm run seed:sellers
+npm run seed:orders
 npm run seed:all
 npm run seed:all:append
 npm run seed:catalog
@@ -426,7 +427,6 @@ npm run seed:recommendations
 npm run seed:analytics
 npm run seed:search
 npm run seed:notifications
-npm run seed:warranty-templates
 ```
 
 Suggested fresh local setup:

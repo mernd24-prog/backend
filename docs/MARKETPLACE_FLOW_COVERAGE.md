@@ -341,8 +341,7 @@ Remaining:
 
 5. Run live seed/tooling smoke in the real DB environment:
    - `npm run db:seed:commerce`,
-   - `npm run db:seed:commerce:qa`,
-   - `npm run db:seed:seller-finance`,
+   - scoped seeds such as `npm run seed:sellers` and `npm run seed:orders`,
    - `npm run postman:sync`.
 
 ## Completed Implementation Log
@@ -351,11 +350,8 @@ Remaining:
 
 Completed:
 
-- Restored missing package script targets:
-  - `scripts/db/seed-commerce-demo.js`
-  - `scripts/db/seed-commerce-qa.js`
-  - `scripts/db/seed-seller-finance-demo.js`
-  - `scripts/postman/sync-postman-collection.js`
+- Consolidated commerce seed execution through `scripts/seed/master-seed.js`.
+- Retained `scripts/postman/sync-postman-collection.js` as the route-driven API collection generator.
 - Added missing master seed modules:
   - `scripts/seed/modules/sellers.seed.js`
   - `scripts/seed/modules/customers.seed.js`

@@ -133,16 +133,13 @@ webhook_subscriptions
 | AuditLog | auditlogs | `src/shared/logger/audit-log.model.js` |
 | Cart | carts | `src/modules/cart/models/cart.model.js` |
 | CategoryTree | categorytrees | `src/modules/platform/models/category-tree.model.js` |
-| CmsStaticPage | cmsstaticpages | `src/modules/cms/models/static-page.model.js` |
 | CommissionRule | commissionrules | `src/modules/seller/models/commission-rule.model.js` |
 | ContentPage | contentpages | `src/modules/platform/models/content-page.model.js` |
 | Coupon | coupons | `src/modules/pricing/models/coupon.model.js` |
 | DomainEventLog | domaineventlogs | `src/shared/logger/domain-event-log.model.js` |
 | DynamicPricing | dynamicpricings | `src/modules/pricing/models/dynamic-pricing.model.js` |
-| FeatureRequest | featurerequests | `src/modules/platform/models/feature-request.model.js` |
 | FraudDetection | frauddetections | `src/modules/fraud/models/fraud-detection.model.js` |
 | Geography | geographies | `src/modules/platform/models/geography.model.js` |
-| HelpCenterArticle | helpcenterarticles | `src/modules/platform/models/help-center-article.model.js` |
 | HsnCode | hsncodes | `src/modules/platform/models/hsn-code.model.js` |
 | InfluencerPayoutRequest | influencerpayoutrequests | `src/modules/referral/models/referral.model.js` |
 | InfluencerProfile | influencerprofiles | `src/modules/referral/models/referral.model.js` |
@@ -165,7 +162,6 @@ webhook_subscriptions
 | ProductFamily | productfamilies | `src/modules/platform/models/product-family.model.js` |
 | ProductReview | productreviews | `src/modules/platform/models/product-review.model.js` |
 | ProductRevision | productrevisions | `src/modules/product/models/product-revision.model.js` |
-| ProductSpecification | productspecifications | `src/modules/platform/models/product-specification.model.js` |
 | ProductVariant | productvariants | `src/modules/platform/models/product-variant.model.js` |
 | Recommendation | recommendations | `src/modules/recommendation/models/recommendation.model.js` |
 | Referral | referrals | `src/modules/referral/models/referral.model.js` |
@@ -175,12 +171,9 @@ webhook_subscriptions
 | ReferralFraudReview | referralfraudreviews | `src/modules/referral/models/referral.model.js` |
 | ReferralOrder | referralorders | `src/modules/referral/models/referral.model.js` |
 | Return | returns | `src/modules/returns/models/return.model.js` |
-| SearchSynonym | searchsynonyms | `src/modules/platform/models/search-synonym.model.js` |
 | SecurityEvent | securityevents | `src/shared/security/security-event.model.js` |
-| SellerHoliday | sellerholidays | `src/modules/platform/models/seller-holiday.model.js` |
 | ShippingPackage | shippingpackages | `src/modules/delivery/models/shipping-admin.model.js` |
 | User | users | `src/modules/user/models/user.model.js` |
-| UserPreference | userpreferences | `src/modules/platform/models/user-preference.model.js` |
 | Warehouse | warehouses | `src/modules/inventory/models/warehouse.model.js` |
 | Warranty | warranties | `src/modules/warranty/repositories/warranty.repository.js` |
 | WarrantyTemplate | warrantytemplates | `src/modules/platform/models/warranty-template.model.js` |
