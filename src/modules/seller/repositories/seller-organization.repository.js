@@ -241,6 +241,19 @@ class SellerOrganizationRepository {
     return rows.map((row) => this.rowToOrganization(row));
   }
 
+  async listBySellerIds(sellerIds = []) {
+    const ids = Array.from(new Set(sellerIds.map((id) => String(id || "")).filter(Boolean)));
+    if (!ids.length) return [];
+    const rows = await knex("seller_organizations")
+      .whereIn("seller_id", ids)
+      .orderBy([
+        { column: "seller_id", order: "asc" },
+        { column: "is_default", order: "desc" },
+        { column: "created_at", order: "desc" },
+      ]);
+    return rows.map((row) => this.rowToOrganization(row));
+  }
+
   async list(filters = {}) {
     const limit = Math.min(Math.max(Number(filters.limit || 50), 1), 200);
     const offset = Math.max(Number(filters.offset || 0), 0);

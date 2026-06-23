@@ -303,8 +303,13 @@ class SellerOrganizationService {
         patch.goLiveStatus = "pending";
         patch.approvalStatus = payload.bankVerificationStatus === "rejected" ? "rejected" : "pending_review";
       } else if (effectiveKycStatus === "verified") {
-        patch.goLiveStatus = "ready";
-        patch.approvalStatus = "pending_review";
+        if (APPROVED_STATUSES.has(String(existing.approvalStatus || ""))) {
+          patch.approvalStatus = existing.approvalStatus;
+          patch.goLiveStatus = existing.goLiveStatus === "live" ? "live" : "ready";
+        } else {
+          patch.goLiveStatus = "ready";
+          patch.approvalStatus = "pending_review";
+        }
       }
     }
 
@@ -522,6 +527,18 @@ class SellerOrganizationService {
     return new Map(rows.map((organization) => [String(organization.sellerId), organization]));
   }
 
+  async getOrganizationGroupsMap(sellerIds = []) {
+    const ids = Array.from(new Set(sellerIds.map((id) => String(id || "")).filter(Boolean)));
+    if (!ids.length) return new Map();
+    const rows = await this.organizationRepository.listBySellerIds(ids);
+    return rows.reduce((map, organization) => {
+      const sellerId = String(organization.sellerId || "");
+      if (!map.has(sellerId)) map.set(sellerId, []);
+      map.get(sellerId).push(organization);
+      return map;
+    }, new Map());
+  }
+
   async ensureDefaultOrganizationForSeller(sellerId, sellerProfile = {}, actor = {}) {
     const targetGstin = this.normalizeCode(sellerProfile.gstNumber);
 
@@ -534,10 +551,11 @@ class SellerOrganizationService {
       );
       if (gstinOwner) {
         if (!gstinOwner.isDefault) {
-          await this.organizationRepository.update(gstinOwner.id, {
-            isDefault: true,
-            updatedBy: actor.userId || actor.sub || sellerId,
-          });
+          return this.organizationRepository.setDefault(
+            sellerId,
+            gstinOwner.id,
+            actor.userId || actor.sub || sellerId,
+          );
         }
         return this.organizationRepository.findById(gstinOwner.id);
       }
@@ -550,11 +568,11 @@ class SellerOrganizationService {
     // This prevents duplicate orgs when is_default was not set correctly on older records.
     const anyExisting = await this.organizationRepository.findLatestBySeller(sellerId);
     if (anyExisting) {
-      await this.organizationRepository.update(anyExisting.id, {
-        isDefault: true,
-        updatedBy: actor.userId || actor.sub || sellerId,
-      });
-      return this.organizationRepository.findById(anyExisting.id);
+      return this.organizationRepository.setDefault(
+        sellerId,
+        anyExisting.id,
+        actor.userId || actor.sub || sellerId,
+      );
     }
 
     const legalBusinessName =
@@ -643,11 +661,12 @@ class SellerOrganizationService {
     );
     this.validateCreatePayload(normalized);
     const existing = await this.organizationRepository.listBySeller(sellerId);
+    const shouldSetDefault = existing.length === 0 || payload.isDefault === true;
     const organizationPayload = {
       ...normalized,
       id: organizationId,
       sellerId,
-      isDefault: existing.length === 0 || payload.isDefault === true,
+      isDefault: existing.length === 0,
     };
     const lifecyclePatch = this.buildLifecyclePatch(
       {},
@@ -655,10 +674,18 @@ class SellerOrganizationService {
       actor,
       { action: "seller_organization_created" },
     );
-    return this.organizationRepository.create({
+    const organization = await this.organizationRepository.create({
       ...organizationPayload,
       ...lifecyclePatch,
     });
+    if (shouldSetDefault && !organization.isDefault) {
+      return this.organizationRepository.setDefault(
+        sellerId,
+        organization.id,
+        actor.userId || actor.sub || sellerId,
+      );
+    }
+    return organization;
   }
 
   async updateMine(organizationId, payload = {}, actor = {}) {
@@ -796,11 +823,12 @@ class SellerOrganizationService {
     );
     this.validateCreatePayload(normalized);
     const existing = await this.organizationRepository.listBySeller(sellerId);
+    const shouldSetDefault = existing.length === 0 || payload.isDefault === true;
     const organizationPayload = {
       ...normalized,
       id: organizationId,
       sellerId,
-      isDefault: existing.length === 0 || payload.isDefault === true,
+      isDefault: existing.length === 0,
     };
     const lifecyclePatch = this.buildLifecyclePatch(
       {},
@@ -809,10 +837,18 @@ class SellerOrganizationService {
       { action: "admin_organization_created" },
     );
 
-    return this.organizationRepository.create({
+    const organization = await this.organizationRepository.create({
       ...organizationPayload,
       ...lifecyclePatch,
     });
+    if (shouldSetDefault && !organization.isDefault) {
+      return this.organizationRepository.setDefault(
+        sellerId,
+        organization.id,
+        actor.userId || actor.sub || sellerId,
+      );
+    }
+    return organization;
   }
 
   async adminGet(sellerId, organizationId, actor = {}) {
@@ -842,6 +878,10 @@ class SellerOrganizationService {
         existing.documents || {},
       );
     }
+    const shouldSetDefault = normalized.isDefault === true && !existing.isDefault;
+    if (normalized.isDefault !== undefined) {
+      delete normalized.isDefault;
+    }
     if (normalized.approvalStatus === "rejected" && !normalized.rejectionReason) {
       throw new AppError("Rejection reason is required when organization is rejected", 400);
     }
@@ -851,10 +891,18 @@ class SellerOrganizationService {
     const action = payload.approvalStatus || payload.status || payload.kycStatus || payload.bankVerificationStatus || payload.goLiveStatus
       ? "admin_organization_review"
       : "admin_organization_update";
-    return this.organizationRepository.update(organizationId, {
+    const updated = await this.organizationRepository.update(organizationId, {
       ...normalized,
       ...this.buildLifecyclePatch(existing, normalized, actor, { action, notes: payload.notes || null }),
     });
+    if (shouldSetDefault) {
+      return this.organizationRepository.setDefault(
+        sellerId,
+        organizationId,
+        actor.userId || actor.sub || null,
+      );
+    }
+    return updated;
   }
 
   async adminReview(sellerId, organizationId, payload = {}, actor = {}) {

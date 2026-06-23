@@ -21,15 +21,42 @@ const PERMISSION_CACHE_TTL_MS = Math.max(
   Number(env.rbacPermissionCacheTtlMs ?? 0) || 0,
   0,
 );
+const ORGANIZATION_CONTEXT_OPTIONAL_PREFIXES = [
+  "/sellers/me/status",
+  "/sellers/me/profile",
+  "/sellers/me/organizations",
+  "/sellers/me/business-address",
+  "/sellers/me/pickup-address",
+  "/sellers/me/return-address",
+  "/sellers/me/bank-details",
+  "/sellers/me/more-info",
+  "/sellers/me/settings",
+  "/sellers/me/kyc",
+  "/sellers/onboarding",
+];
 
 function isSuperAdminPayload(payload = {}) {
   return payload.isSuperAdmin === true || payload.role === ROLES.SUPER_ADMIN;
+}
+
+function getRequestPath(req = {}) {
+  const mountedPath = [req.baseUrl, req.path].filter(Boolean).join("");
+  const rawPath = String(req.originalUrl || mountedPath || req.url || "").split("?")[0];
+  return rawPath.replace(/^\/api\/v\d+/i, "").replace(/\/+$/, "") || "/";
+}
+
+function isOrganizationContextOptional(req = {}) {
+  const path = getRequestPath(req);
+  return ORGANIZATION_CONTEXT_OPTIONAL_PREFIXES.some(
+    (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+  );
 }
 
 async function attachOrganizationContext(req, auth = {}) {
   const organizationId = String(req.headers["x-organization-id"] || "").trim();
   if (
     auth.isOnboarding === true ||
+    isOrganizationContextOptional(req) ||
     !organizationId ||
     ![ROLES.SELLER, "seller-admin", "seller-sub-admin"].includes(auth.role)
   ) {

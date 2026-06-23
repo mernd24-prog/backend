@@ -304,11 +304,131 @@ class AdminService {
     };
   }
 
-  enrichSellerForAdmin(seller, kyc = null, organization = null) {
+  getPrimaryOrganization(organizations = []) {
+    if (!Array.isArray(organizations) || !organizations.length) return null;
+    return organizations.find((organization) => organization.isDefault) || organizations[0];
+  }
+
+  isOrganizationApprovedForSelling(organization = {}) {
+    return ["approved", "active"].includes(String(organization.approvalStatus || "").toLowerCase());
+  }
+
+  isOrganizationLiveForSelling(organization = {}) {
+    return (
+      this.isOrganizationApprovedForSelling(organization) &&
+      organization.kycStatus === "verified" &&
+      organization.bankVerificationStatus === "verified" &&
+      organization.goLiveStatus === "live"
+    );
+  }
+
+  getOrganizationGoLiveStatus(organization = {}) {
+    if (this.isOrganizationLiveForSelling(organization)) return "live";
+    if (organization.goLiveStatus === "blocked" || organization.approvalStatus === "blocked") return "blocked";
+    if (
+      organization.goLiveStatus === "rejected" ||
+      organization.approvalStatus === "rejected" ||
+      organization.kycStatus === "rejected" ||
+      organization.bankVerificationStatus === "rejected"
+    ) {
+      return "rejected";
+    }
+    if (organization.goLiveStatus === "live" && !this.isOrganizationApprovedForSelling(organization)) {
+      return "approval_pending";
+    }
+    if (
+      organization.goLiveStatus === "ready" ||
+      this.isOrganizationApprovedForSelling(organization) ||
+      (organization.kycStatus === "verified" && organization.bankVerificationStatus === "verified")
+    ) {
+      return "ready";
+    }
+    return organization.goLiveStatus || "pending";
+  }
+
+  getOrganizationGoLiveLabel(organization = {}) {
+    const status = this.getOrganizationGoLiveStatus(organization);
+    if (status === "approval_pending") return "Approval pending";
+    return organization.goLiveStatus || status;
+  }
+
+  buildOrganizationSummary(organizations = []) {
+    const items = Array.isArray(organizations) ? organizations.filter(Boolean) : [];
+    const total = items.length;
+    const countWhere = (predicate) => items.filter(predicate).length;
+    const approvedCount = countWhere((organization) =>
+      ["approved", "active"].includes(String(organization.approvalStatus || "").toLowerCase()),
+    );
+    const kycVerifiedCount = countWhere((organization) => organization.kycStatus === "verified");
+    const bankVerifiedCount = countWhere((organization) => organization.bankVerificationStatus === "verified");
+    const liveCount = countWhere((organization) => this.isOrganizationLiveForSelling(organization));
+    const rawGoLiveCount = countWhere((organization) => organization.goLiveStatus === "live");
+    const approvalPendingCount = countWhere(
+      (organization) => this.getOrganizationGoLiveStatus(organization) === "approval_pending",
+    );
+    const readyCount = countWhere((organization) => organization.goLiveStatus === "ready");
+    const blockedCount = countWhere((organization) =>
+      organization.goLiveStatus === "blocked" || organization.approvalStatus === "blocked",
+    );
+    const rejectedCount = countWhere((organization) =>
+      organization.goLiveStatus === "rejected" ||
+      organization.approvalStatus === "rejected" ||
+      organization.kycStatus === "rejected" ||
+      organization.bankVerificationStatus === "rejected",
+    );
+    const defaultOrganization = this.getPrimaryOrganization(items);
+    const goLiveStatus =
+      total === 0
+        ? "not_created"
+        : liveCount === total
+          ? "live"
+          : liveCount > 0
+            ? "partially_live"
+            : blockedCount === total
+              ? "blocked"
+              : rejectedCount === total
+                ? "rejected"
+                : approvalPendingCount > 0
+                  ? "approval_pending"
+                : readyCount > 0 || approvedCount > 0
+                  ? "ready"
+                  : "pending";
+
+    return {
+      total,
+      defaultOrganizationId: defaultOrganization?.id || null,
+      approvedCount,
+      kycVerifiedCount,
+      bankVerifiedCount,
+      liveCount,
+      rawGoLiveCount,
+      approvalPendingCount,
+      readyCount,
+      blockedCount,
+      rejectedCount,
+      goLiveStatus,
+      goLiveLabel: total > 1 ? `${liveCount}/${total} live` : this.getOrganizationGoLiveLabel(items[0] || {}),
+      kycLabel: total > 1 ? `${kycVerifiedCount}/${total} verified` : (items[0]?.kycStatus || "not_submitted"),
+      bankLabel: total > 1 ? `${bankVerifiedCount}/${total} verified` : (items[0]?.bankVerificationStatus || "not_submitted"),
+      approvedLabel: total > 1 ? `${approvedCount}/${total} approved` : (items[0]?.approvalStatus || "not_created"),
+      allLive: total > 0 && liveCount === total,
+      hasLive: liveCount > 0,
+      requiresPerOrganizationReview: total > 1,
+    };
+  }
+
+  enrichSellerForAdmin(seller, kyc = null, organization = null, organizations = null) {
     const plainSeller = this.toPlainObject(seller);
+    const organizationList = Array.isArray(organizations)
+      ? organizations
+      : organization
+        ? [organization]
+        : [];
+    const organizationSummary = this.buildOrganizationSummary(organizationList);
+    const primaryOrganization = organization || this.getPrimaryOrganization(organizationList);
     const sellerProfile = this.sellerOrganizationService.buildSellerProfileMirror(
       this.toPlainObject(plainSeller.sellerProfile || {}),
-      organization,
+      primaryOrganization,
     );
     const onboardingState = makeSellerOnboardingState({
       sellerProfile,
@@ -316,10 +436,13 @@ class AdminService {
       kyc,
     });
     const bankVerificationStatus = sellerProfile.bankVerificationStatus || "not_submitted";
+    const organizationGoLiveStatus = organizationSummary.total
+      ? organizationSummary.goLiveStatus
+      : null;
     const goLiveStatus =
-      plainSeller.accountStatus === "active"
-        ? "live"
-        : sellerProfile.goLiveStatus || "pending";
+      organizationGoLiveStatus ||
+      sellerProfile.goLiveStatus ||
+      (plainSeller.accountStatus === "active" ? "live" : "pending");
 
     return {
       ...plainSeller,
@@ -341,12 +464,15 @@ class AdminService {
         kycSubmittedAt: kyc?.submitted_at || null,
         kycReviewedAt: kyc?.reviewed_at || null,
         requirements: onboardingState.requirements,
-        organizationStatus: organization?.approvalStatus || "not_created",
+        organizationStatus: primaryOrganization?.approvalStatus || "not_created",
+        organizationGoLiveStatus,
+        organizationSummary,
         organizationApproved: ["approved", "active"].includes(
-          String(organization?.approvalStatus || "").toLowerCase(),
+          String(primaryOrganization?.approvalStatus || "").toLowerCase(),
         ),
       },
-      organization: this.sellerOrganizationService.buildPublicSummary(organization),
+      organization: this.sellerOrganizationService.buildPublicSummary(primaryOrganization),
+      organizationSummary,
       kyc: this.formatKycForAdmin(kyc),
     };
   }
@@ -370,16 +496,18 @@ class AdminService {
       .map((item) => this.getRecordId(item))
       .filter(Boolean);
     const kycBySellerId = await this.getSellerKycByIdMap(sellerIds);
-    const organizationBySellerId = await this.sellerOrganizationService.getDefaultOrganizationMap(sellerIds);
+    const organizationsBySellerId = await this.sellerOrganizationService.getOrganizationGroupsMap(sellerIds);
 
     return plainItems.map((item) => {
       if (item.role && item.role !== ROLES.SELLER) {
         return item;
       }
+      const organizations = organizationsBySellerId.get(this.getRecordId(item)) || [];
       return this.enrichSellerForAdmin(
         item,
         kycBySellerId.get(this.getRecordId(item)) || null,
-        organizationBySellerId.get(this.getRecordId(item)) || null,
+        this.getPrimaryOrganization(organizations),
+        organizations,
       );
     });
   }
@@ -639,14 +767,15 @@ class AdminService {
     }
     this.assertActorCanSeeUser(user, actor);
     if (user.role === ROLES.SELLER) {
-      const [kycBySellerId, organization] = await Promise.all([
+      const [kycBySellerId, organizations] = await Promise.all([
         this.getSellerKycByIdMap([userId]),
-        this.sellerOrganizationService.getDefaultOrOnlyOrganization(userId),
+        this.sellerOrganizationService.organizationRepository.listBySeller(userId),
       ]);
       return this.enrichSellerForAdmin(
         user,
         kycBySellerId.get(String(userId)) || null,
-        organization,
+        this.getPrimaryOrganization(organizations),
+        organizations,
       );
     }
     return user;
@@ -687,8 +816,13 @@ class AdminService {
       throw new AppError("User not found", 404);
     }
     if (user.role === ROLES.SELLER) {
-      const organization = await this.sellerOrganizationService.getDefaultOrOnlyOrganization(userId);
-      return this.enrichSellerForAdmin(user, kyc, organization);
+      const organizations = await this.sellerOrganizationService.organizationRepository.listBySeller(userId);
+      return this.enrichSellerForAdmin(
+        user,
+        kyc,
+        this.getPrimaryOrganization(organizations),
+        organizations,
+      );
     }
     return user;
   }
@@ -731,8 +865,13 @@ class AdminService {
     if (!seller) {
       throw new AppError("Seller not found", 404);
     }
-    const organization = await this.sellerOrganizationService.getDefaultOrOnlyOrganization(sellerId);
-    return this.enrichSellerForAdmin(seller, kyc, organization);
+    const organizations = await this.sellerOrganizationService.organizationRepository.listBySeller(sellerId);
+    return this.enrichSellerForAdmin(
+      seller,
+      kyc,
+      this.getPrimaryOrganization(organizations),
+      organizations,
+    );
   }
 
   async getSeller(sellerId) {
@@ -740,14 +879,15 @@ class AdminService {
     if (!user || user.role !== ROLES.SELLER) {
       throw new AppError("Seller not found", 404);
     }
-    const [kycBySellerId, organization] = await Promise.all([
+    const [kycBySellerId, organizations] = await Promise.all([
       this.getSellerKycByIdMap([sellerId]),
-      this.sellerOrganizationService.getDefaultOrOnlyOrganization(sellerId),
+      this.sellerOrganizationService.organizationRepository.listBySeller(sellerId),
     ]);
     return this.enrichSellerForAdmin(
       user,
       kycBySellerId.get(String(sellerId)) || null,
-      organization,
+      this.getPrimaryOrganization(organizations),
+      organizations,
     );
   }
 
@@ -763,6 +903,13 @@ class AdminService {
       profile,
       actor,
     );
+    const nextStatusUpdates = { ...statusUpdates };
+    if (
+      nextStatusUpdates.approvalStatus === "pending_review" &&
+      this.isOrganizationApprovedForSelling(organization)
+    ) {
+      delete nextStatusUpdates.approvalStatus;
+    }
     const normalizeAddress = (address) => this.sellerOrganizationService.normalizeAddress(address || {});
     const updatePayload = {
       legalBusinessName: fallbackName,
@@ -802,7 +949,7 @@ class AdminService {
         source: "admin_seller_profile_bridge",
         lastSyncedAt: new Date().toISOString(),
       },
-      ...statusUpdates,
+      ...nextStatusUpdates,
       updatedBy: actor.userId || actor.sub || null,
     };
 
@@ -1000,9 +1147,30 @@ class AdminService {
     const bankReady =
       bankVerificationStatus === "verified" ||
       (bankVerificationStatus === "submitted" && bankDetailsComplete);
-    const organization =
-      await this.sellerOrganizationService.getDefaultOrOnlyOrganization(sellerId) ||
-      await this.syncDefaultSellerOrganization(sellerId, profile, {}, actor);
+    let organizations = await this.sellerOrganizationService.organizationRepository.listBySeller(sellerId);
+    let organization = this.getPrimaryOrganization(organizations);
+    if (!organization) {
+      organization = await this.syncDefaultSellerOrganization(sellerId, profile, {}, actor);
+      organizations = organization ? [organization] : [];
+    }
+    if (payload.goLiveStatus === "live" && organizations.length > 1) {
+      throw new AppError(
+        "Use organization go-live approval for sellers with multiple organizations",
+        409,
+        {
+          organizationCount: organizations.length,
+          organizations: organizations.map((item) => ({
+            organizationId: item.id,
+            legalBusinessName: item.legalBusinessName,
+            approvalStatus: item.approvalStatus,
+            kycStatus: item.kycStatus,
+            bankVerificationStatus: item.bankVerificationStatus,
+            goLiveStatus: item.goLiveStatus,
+            isDefault: item.isDefault,
+          })),
+        },
+      );
+    }
     const organizationApproved = ["approved", "active"].includes(
       String(organization?.approvalStatus || "").toLowerCase(),
     );
@@ -1067,6 +1235,14 @@ class AdminService {
       kycStatus,
       bankVerificationStatus:
         payload.goLiveStatus === "live" && bankReady ? "verified" : bankVerificationStatus,
+      goLiveStatus: payload.goLiveStatus,
+      ...(payload.goLiveStatus === "live"
+        ? {
+            goLiveApprovedBy: actor.userId || null,
+            goLiveApprovedAt: new Date(),
+          }
+        : {}),
+      ...(payload.goLiveStatus === "blocked" ? { approvalStatus: "blocked" } : {}),
     }, actor);
     return this.getSeller(sellerId);
   }
