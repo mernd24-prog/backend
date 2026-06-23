@@ -183,7 +183,7 @@ sellerRoutes.get(
   catchErrors(async (req, res) => {
     const actor = getCurrentUser(req);
     const sellerId = sellerChargeSettingsService.resolveSellerId(actor);
-    const settings = await sellerChargeSettingsService.getSettings(sellerId);
+    const settings = await sellerChargeSettingsService.getSettings(sellerId, actor.organizationId);
     res.json(okResponse(settings));
   }),
 );
@@ -195,7 +195,7 @@ sellerRoutes.put(
   catchErrors(async (req, res) => {
     const actor = getCurrentUser(req);
     const sellerId = sellerChargeSettingsService.resolveSellerId(actor);
-    const settings = await sellerChargeSettingsService.updateSettings(sellerId, req.body, actor);
+    const settings = await sellerChargeSettingsService.updateSettings(sellerId, req.body, actor, actor.organizationId);
     res.json(okResponse(settings, { message: "Seller charge settings updated" }));
   }),
 );

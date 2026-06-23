@@ -53,7 +53,10 @@ commerceSettingsRoutes.get(
   authenticate,
   allowActions(ACTIONS.ADMIN_CONTROL),
   catchErrors(async (req, res) => {
-    const settings = await sellerChargeSettingsService.getSettings(req.params.sellerId);
+    const settings = await sellerChargeSettingsService.getSettings(
+      req.params.sellerId,
+      req.query?.organizationId || req.query?.organization_id || null,
+    );
     res.json(okResponse(settings));
   }),
 );
@@ -68,6 +71,7 @@ commerceSettingsRoutes.put(
       req.params.sellerId,
       req.body,
       actor,
+      req.body?.organizationId || req.body?.organization_id || req.query?.organizationId || req.query?.organization_id || null,
     );
     await auditService.update(req, {
       module: "commerce-settings",

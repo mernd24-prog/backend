@@ -851,6 +851,9 @@ class OrderRepository {
       metadata.pricingSummary?.deliveryChargeAmount,
     );
     const sellerPayoutAmount = sellerSettlements.reduce((sum, seller) => sum + this.money(seller.sellerPayoutAmount), 0);
+    const sellerPlatformFeeAmount = this.money(metadata.pricingSummary?.sellerPlatformFeeAmount ?? platformFeeAmount);
+    const customerPlatformFeeAmount = this.money(metadata.pricingSummary?.customerPlatformFeeAmount);
+    const customerPlatformFeeTaxAmount = this.money(metadata.pricingSummary?.customerPlatformFeeTaxAmount);
 
     return {
       itemAmount: Number(itemAmount.toFixed(2)),
@@ -861,13 +864,16 @@ class OrderRepository {
       taxIncludedAmount: this.money(taxBreakup.taxIncludedAmount),
       taxPayableAmount: this.money(taxBreakup.taxPayableAmount),
       platformFeeAmount,
+      sellerPlatformFeeAmount,
+      customerPlatformFeeAmount,
+      customerPlatformFeeTaxAmount,
       codChargeAmount: this.money(order.cod_charge_amount),
       deliveryChargeAmount: shippingFeeAmount,
       shippingFeeAmount,
       customerTotalAmount: this.money(order.total_amount),
       customerPayableAmount: this.money(order.payable_amount),
       sellerPayoutAmount: Number(sellerPayoutAmount.toFixed(2)),
-      platformFeeChargedToCustomer: false,
+      platformFeeChargedToCustomer: customerPlatformFeeAmount > 0,
     };
   }
 

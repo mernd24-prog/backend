@@ -16,6 +16,8 @@ const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { env } = require("../../../config/env");
 const { logger } = require("../../../shared/logger/logger");
+const { ProductModel } = require("../../product/models/product.model");
+const { sellerChargeSettingsService } = require("../../seller/services/seller-charge-settings.service");
 
 const SHIPMENT_TRANSITIONS = {
   initiated: ["manifested", "picked_up", "in_transit", "cancelled", "failed"],
@@ -50,9 +52,9 @@ class DeliveryService {
     this.commissionService = commissionService;
   }
 
-  async getServiceability(pincode) {
+  async getServiceability(pincode, options = {}) {
     const result = await this.deliveryRepository.getServiceability(pincode);
-    return {
+    const response = {
       pincode,
       serviceable: Boolean(result.serviceability?.serviceable) && result.exclusions.length === 0,
       codAvailable: Boolean(result.serviceability?.cod_available),
@@ -62,6 +64,54 @@ class DeliveryService {
       zoneCode: result.serviceability?.zone_code || null,
       exclusions: result.exclusions,
     };
+
+    if (!options.productId) return response;
+
+    const product = await ProductModel.findById(options.productId)
+      .select("_id title sellerId organizationId category sku price salePrice shipping")
+      .lean()
+      .catch(() => null);
+    if (!product?.sellerId) return response;
+
+    try {
+      const delivery = await sellerChargeSettingsService.calculateDeliveryCharges([
+        {
+          productId: String(product._id),
+          title: product.title,
+          sku: product.sku || "",
+          sellerId: product.sellerId,
+          organizationId: product.organizationId || null,
+          category: product.category,
+          quantity: 1,
+          lineTotal: Number(product.salePrice ?? product.price ?? 0),
+          discountedLineTotal: Number(product.salePrice ?? product.price ?? 0),
+          shipping: product.shipping || {},
+        },
+      ], {
+        postalCode: pincode,
+        pincode,
+        city: response.city,
+        state: response.state,
+        region: response.zoneCode,
+        country: "India",
+      });
+      return {
+        ...response,
+        serviceable: response.serviceable && delivery.amount >= 0,
+        sellerDeliveryChargeAmount: delivery.amount,
+        deliveryChargeBreakup: delivery.breakup,
+      };
+    } catch (error) {
+      return {
+        ...response,
+        serviceable: false,
+        sellerRuleBlocked: true,
+        exclusions: [
+          ...(response.exclusions || []),
+          { reason: error.message || "Seller delivery rule blocked this pincode" },
+        ],
+      };
+    }
   }
 
   async calculateRate(payload) {

@@ -144,7 +144,23 @@ const shippingSchema = Joi.object({
   freeShippingMinOrder: optionalNonNegativeNumber(),
   shippingClass: optionalString(),
   additionalCost: optionalNonNegativeNumber().default(0),
+  shippingCharge: optionalNonNegativeNumber(),
+  handlingCharge: optionalNonNegativeNumber().default(0),
   processingDays: optionalNonNegativeInteger().default(1),
+  serviceabilityMode: Joi.string()
+    .valid("inherit", "all_pincodes", "allowlist", "blocklist", "regions", "disabled")
+    .default("inherit"),
+  serviceablePincodes: Joi.array().items(Joi.string().trim()).default([]),
+  allowPincodes: Joi.array().items(Joi.string().trim()).default([]),
+  blockPincodes: Joi.array().items(Joi.string().trim()).default([]),
+  regions: Joi.array().items(Joi.string().trim()).default([]),
+  states: Joi.array().items(Joi.string().trim()).default([]),
+  cities: Joi.array().items(Joi.string().trim()).default([]),
+  codAvailable: Joi.boolean(),
+  estimatedDaysMin: optionalNonNegativeInteger(),
+  estimatedDaysMax: optionalNonNegativeInteger(),
+  shippingPartner: optionalString(),
+  shippingMethod: optionalString().default("standard"),
   dangerousGoods: Joi.boolean().default(false),
   requiresColdChain: Joi.boolean().default(false),
 });

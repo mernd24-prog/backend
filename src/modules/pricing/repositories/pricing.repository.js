@@ -1,5 +1,7 @@
 const { CouponModel } = require("../models/coupon.model");
 const { postgresPool } = require("../../../infrastructure/postgres/postgres-client");
+const { CommissionRuleModel } = require("../../seller/models/commission-rule.model");
+const { PlatformFeeRuleModel } = require("../../seller/models/platform-fee-rule.model");
 
 class PricingRepository {
   async createCoupon(payload) {
@@ -63,6 +65,42 @@ class PricingRepository {
         [lookup],
       );
       return rows;
+    } catch (error) {
+      return [];
+    }
+  }
+
+  async listActiveCommissionRules() {
+    try {
+      const now = new Date();
+      return CommissionRuleModel.find({
+        isActive: { $ne: false },
+        status: { $ne: "inactive" },
+        $and: [
+          { $or: [{ effectiveFrom: null }, { effectiveFrom: { $exists: false } }, { effectiveFrom: { $lte: now } }] },
+          { $or: [{ effectiveTo: null }, { effectiveTo: { $exists: false } }, { effectiveTo: { $gte: now } }] },
+        ],
+      })
+        .sort({ priority: -1, updatedAt: -1 })
+        .lean();
+    } catch (error) {
+      return [];
+    }
+  }
+
+  async listActiveCustomerPlatformFeeRules() {
+    try {
+      const now = new Date();
+      return PlatformFeeRuleModel.find({
+        isActive: { $ne: false },
+        status: { $ne: "inactive" },
+        $and: [
+          { $or: [{ effectiveFrom: null }, { effectiveFrom: { $exists: false } }, { effectiveFrom: { $lte: now } }] },
+          { $or: [{ effectiveTo: null }, { effectiveTo: { $exists: false } }, { effectiveTo: { $gte: now } }] },
+        ],
+      })
+        .sort({ priority: -1, updatedAt: -1 })
+        .lean();
     } catch (error) {
       return [];
     }

@@ -42,6 +42,8 @@ class TaxService {
 
     const taxBreakup = this.normalizeJson(order.tax_breakup, {});
     const shippingAddress = this.normalizeJson(order.shipping_address, {});
+    const orderMetadata = this.normalizeJson(order.metadata, {});
+    const pricingSummary = orderMetadata.pricingSummary || {};
     const taxableAmount = Number(taxBreakup.taxableAmount || 0);
     const taxAmount = Number(order.tax_amount || taxBreakup.totalTaxAmount || 0);
     const cgstAmount = Number(taxBreakup.cgstAmount || 0);
@@ -88,6 +90,18 @@ class TaxService {
           taxAmount: Number(item.tax_amount || 0),
           taxBreakup: this.normalizeJson(item.tax_breakup, {}),
         })),
+        amounts: {
+          productTaxableAmount: taxableAmount,
+          discountAmount: Number(order.discount_amount || 0),
+          shippingChargeAmount: Number(order.shipping_fee_amount || pricingSummary.shippingFeeAmount || pricingSummary.deliveryChargeAmount || 0),
+          sellerPlatformFeeAmount: Number(pricingSummary.sellerPlatformFeeAmount || order.platform_fee_amount || 0),
+          customerPlatformFeeAmount: Number(pricingSummary.customerPlatformFeeAmount || 0),
+          customerPlatformFeeTaxAmount: Number(pricingSummary.customerPlatformFeeTaxAmount || 0),
+          codChargeAmount: Number(order.cod_charge_amount || 0),
+          walletDiscountAmount: Number(order.wallet_discount_amount || 0),
+          finalPayableAmount: Number(order.payable_amount || order.total_amount || 0),
+          sellerOrganizationDetails: (order.items || []).map((item) => this.normalizeJson(item.organization_snapshot, {})).filter(Boolean),
+        },
         generatedBy: actor.userId || "tax-service",
         generatedByRole: actor.role || "system",
       },
@@ -1478,6 +1492,12 @@ class TaxService {
             { label: "TCS", value: this.renderMoney(invoice.tcs_amount, currency) },
             { label: "Tax Amount", value: this.renderMoney(invoice.tax_amount, currency) },
             { label: "Delivery Charge", value: this.renderMoney(amounts.deliveryChargeAmount, currency) },
+            { label: "Shipping Charge", value: this.renderMoney(amounts.shippingChargeAmount, currency) },
+            { label: "Customer Platform Fee", value: this.renderMoney(amounts.customerPlatformFeeAmount, currency) },
+            { label: "Platform Fee GST", value: this.renderMoney(amounts.customerPlatformFeeTaxAmount, currency) },
+            { label: "COD Charge", value: this.renderMoney(amounts.codChargeAmount, currency) },
+            { label: "Wallet Discount", value: this.renderMoney(amounts.walletDiscountAmount, currency) },
+            { label: "Final Payable", value: this.renderMoney(amounts.finalPayableAmount, currency) },
             { label: "Total Amount", value: this.renderMoney(invoice.total_amount, currency) },
           ],
         },

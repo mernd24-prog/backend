@@ -12,6 +12,7 @@ const serviceabilitySchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
     pincode: Joi.string().min(5).max(12).required(),
+    productId: Joi.string().allow("", null),
   }).required(),
   params: Joi.object({}).required(),
 });

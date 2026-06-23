@@ -45,15 +45,139 @@ Content-Type: application/json
 
 ### Screens
 - **Login Screen** — email + password login
-- **Register Screen** — name, email, phone, password
+- **Register Screen** — first name, last name, email, phone, password
 
-### APIs
-| Method | Endpoint | Body |
-|--------|----------|------|
-| POST | `/auth/login` | `{ email, password }` |
-| POST | `/auth/register` | `{ name, email, phone, password }` |
-| POST | `/auth/refresh` | `{ refreshToken }` |
-| GET | `/auth/status` | — (Bearer token) |
+---
+
+### POST `/auth/register`
+
+```json
+{
+  "email": "buyer@example.com",
+  "phone": "9876543210",
+  "password": "MyPass@123",
+  "profile": {
+    "firstName": "Rahul",
+    "lastName": "Sharma"
+  }
+}
+```
+
+| Field | Type | Rules |
+|-------|------|-------|
+| `email` | string | required · valid email format |
+| `phone` | string | required · min 10, max 15 chars |
+| `password` | string | required · min 8, max 64 chars |
+| `profile.firstName` | string | required · min 2, max 50 chars |
+| `profile.lastName` | string | required · min 2, max 50 chars |
+
+**On success:** returns `{ accessToken, refreshToken, user }`. Store tokens in secure storage.
+
+> **Note:** Registration may require OTP verification. After register, call `POST /auth/verify-otp` with `{ email, otp, purpose: "registration" }`. Dev OTP is `123456`.
+
+---
+
+### POST `/auth/login`
+
+```json
+{
+  "email": "buyer@test.com",
+  "password": "Test@1234"
+}
+```
+
+| Field | Type | Rules |
+|-------|------|-------|
+| `email` | string | required · valid email format |
+| `password` | string | required |
+
+**On success:** returns `{ accessToken, refreshToken, user }`.
+
+---
+
+### POST `/auth/refresh`
+
+```json
+{
+  "refreshToken": "<your_refresh_token>"
+}
+```
+
+| Field | Type | Rules |
+|-------|------|-------|
+| `refreshToken` | string | required |
+
+**On success:** returns new `{ accessToken, refreshToken }`.
+
+---
+
+### GET `/auth/status`
+
+No body. Requires `Authorization: Bearer <accessToken>` header.
+
+---
+
+### POST `/auth/send-otp`
+
+```json
+{
+  "email": "buyer@example.com",
+  "purpose": "registration"
+}
+```
+
+| Field | Type | Rules |
+|-------|------|-------|
+| `email` | string | required · valid email |
+| `purpose` | string | `"registration"` \| `"forgot_password"` \| `"login"` · default `"registration"` |
+
+---
+
+### POST `/auth/verify-otp`
+
+```json
+{
+  "email": "buyer@example.com",
+  "otp": "123456",
+  "purpose": "registration"
+}
+```
+
+| Field | Type | Rules |
+|-------|------|-------|
+| `email` | string | required · valid email |
+| `otp` | string | required · exactly 6 characters |
+| `purpose` | string | `"registration"` \| `"forgot_password"` \| `"login"` |
+
+---
+
+### POST `/auth/forgot-password`
+
+```json
+{
+  "email": "buyer@example.com"
+}
+```
+
+---
+
+### POST `/auth/reset-password`
+
+```json
+{
+  "email": "buyer@example.com",
+  "otp": "123456",
+  "newPassword": "NewPass@456"
+}
+```
+
+| Field | Type | Rules |
+|-------|------|-------|
+| `email` | string | required · valid email |
+| `otp` | string | required · exactly 6 characters |
+| `newPassword` | string | required · min 8, max 64 chars |
+
+---
 
 ### Requirements
 - Store `accessToken` and `refreshToken` in secure storage (`expo-secure-store` or `react-native-keychain`)
@@ -69,16 +193,27 @@ Content-Type: application/json
 Display a discoverable product feed with category navigation and search.
 
 ### APIs
-| Method | Endpoint | Notes |
-|--------|----------|-------|
-| GET | `/products?page=1&limit=20` | Product listing with pagination |
-| GET | `/products/search?q=<term>` | Search products by keyword |
-| GET | `/platform/categories` | Category tree for filter chips |
 
-### Key Query Params for `/products`
-```
-page, limit, category, brand, minPrice, maxPrice, sort (price_asc / price_desc / newest)
-```
+#### GET `/products?page=1&limit=20`
+No body. Query params:
+
+| Param | Type | Notes |
+|-------|------|-------|
+| `page` | number | default 1 |
+| `limit` | number | default 20 |
+| `category` | string | category ID |
+| `brand` | string | brand ID |
+| `minPrice` | number | minimum price filter |
+| `maxPrice` | number | maximum price filter |
+| `sort` | string | `price_asc` \| `price_desc` \| `newest` |
+
+#### GET `/products/search?q=<term>`
+No body. Pass search keyword as `q` query param.
+
+#### GET `/platform/categories`
+No body. Returns category tree for filter chips.
+
+---
 
 ### Requirements
 - **Category chips** — horizontally scrollable, tap to filter the product list
@@ -101,24 +236,35 @@ page, limit, category, brand, minPrice, maxPrice, sort (price_asc / price_desc /
 
 ### Cart Screen
 
-**API:**
-```
-GET  /carts/me               — fetch current user's cart
-PUT  /carts/me               — upsert (add/update/remove items)
-```
+#### GET `/carts/me`
+No body. Returns the current user's cart.
 
-**PUT /carts/me body:**
+#### PUT `/carts/me` — Add / Update / Remove Items
+
 ```json
 {
   "items": [
-    { "productId": "abc123", "variantId": "v1", "quantity": 2 }
+    {
+      "productId": "64f1a2b3c4d5e6f7a8b9c0d1",
+      "variantId": "64f1a2b3c4d5e6f7a8b9c0d2",
+      "quantity": 2
+    }
   ]
 }
 ```
 
+| Field | Type | Rules |
+|-------|------|-------|
+| `items` | array | required · replaces the entire cart |
+| `items[].productId` | string | required · 24-char MongoDB ObjectId |
+| `items[].variantId` | string | optional · 24-char MongoDB ObjectId |
+| `items[].variantSku` | string | optional |
+| `items[].quantity` | number | required · integer · min 1 |
+
+> **Remove an item:** exclude it from the `items` array entirely (do not send `quantity: 0`).
+
 **Requirements:**
 - List cart items with image, name, quantity stepper (+/−), unit price, line total
-- Remove item (set quantity to 0)
 - Show cart subtotal at the bottom
 - Empty cart state with CTA to browse products
 - "Proceed to Checkout" button
@@ -130,45 +276,185 @@ PUT  /carts/me               — upsert (add/update/remove items)
 **Flow:** Address → Payment Method → Review → Place Order → Payment → Confirmation
 
 #### Step 1 — Address
-```
-GET  /users/me/addresses          — list saved addresses
-POST /users/me/addresses          — add new address
-```
 
-Address fields: `name, phone, line1, line2, city, state, pincode, country`
+##### GET `/users/me/addresses`
+No body. Returns saved addresses.
 
-#### Step 2 — Order Quote (price summary before placing)
-```
-POST /orders/quote
-Body: { items: [{ productId, variantId, quantity }], addressId, couponCode? }
-```
-Display: subtotal, discount, shipping, tax, total
+##### POST `/users/me/addresses`
 
-#### Step 3 — Payment Options
-```
-GET /payments/options            — list available payment methods
-```
-Show: Razorpay (online), COD (if available)
-
-#### Step 4 — Place Order
-```
-POST /orders
-Body: {
-  items: [...],
-  addressId: "...",
-  paymentMethod: "razorpay" | "cod",
-  couponCode?: "...",
-  quoteId?: "..."
+```json
+{
+  "label": "home",
+  "fullName": "Rahul Sharma",
+  "phone": "9876543210",
+  "line1": "Flat 4B, Sunrise Apartments",
+  "line2": "MG Road",
+  "city": "Bangalore",
+  "state": "Karnataka",
+  "country": "India",
+  "postalCode": "560001",
+  "isDefault": true
 }
 ```
-Response: `{ orderId, paymentRequired, paymentDetails }`
 
-#### Step 5 — Payment (for online payment)
+| Field | Type | Rules |
+|-------|------|-------|
+| `label` | string | `"home"` \| `"work"` \| `"other"` · default `"home"` |
+| `fullName` | string | required |
+| `phone` | string | required · min 10, max 15 chars |
+| `line1` | string | required |
+| `line2` | string | optional |
+| `city` | string | required |
+| `state` | string | required |
+| `country` | string | default `"India"` |
+| `postalCode` | string | required · min 5, max 10 chars |
+| `isDefault` | boolean | default `false` |
+
+---
+
+#### Step 2 — Order Quote
+
+##### POST `/orders/quote`
+
+```json
+{
+  "items": [
+    {
+      "productId": "64f1a2b3c4d5e6f7a8b9c0d1",
+      "variantId": "64f1a2b3c4d5e6f7a8b9c0d2",
+      "quantity": 1
+    }
+  ],
+  "shippingAddress": {
+    "line1": "Flat 4B, Sunrise Apartments",
+    "line2": "MG Road",
+    "city": "Bangalore",
+    "state": "Karnataka",
+    "postalCode": "560001",
+    "country": "India"
+  },
+  "couponCode": "SAVE10",
+  "paymentProvider": "razorpay"
+}
 ```
-POST /payments/initiate   Body: { orderId }
-POST /payments/verify     Body: { orderId, razorpayPaymentId, razorpaySignature }
+
+| Field | Type | Rules |
+|-------|------|-------|
+| `items` | array | required · min 1 item |
+| `items[].productId` | string | required · 24-char ObjectId |
+| `items[].variantId` | string | optional |
+| `items[].quantity` | number | required · integer · min 1 |
+| `shippingAddress.line1` | string | required |
+| `shippingAddress.city` | string | required |
+| `shippingAddress.state` | string | required |
+| `shippingAddress.postalCode` | string | required |
+| `shippingAddress.country` | string | required |
+| `couponCode` | string | optional · auto-uppercased |
+| `paymentProvider` | string | `"razorpay"` \| `"cod"` \| `"wallet_only"` |
+
+**Response:** `{ subtotal, discount, shipping, tax, total, quoteId }`
+
+---
+
+#### Step 3 — Payment Options
+
+##### GET `/payments/options?orderAmount=999&postalCode=560001`
+No body. Query params:
+
+| Param | Type | Notes |
+|-------|------|-------|
+| `orderAmount` | number | used to check COD eligibility |
+| `postalCode` | string | used for serviceability check |
+
+**Response:** list of available payment methods (Razorpay, COD, etc.)
+
+---
+
+#### Step 4 — Place Order
+
+##### POST `/orders`
+
+```json
+{
+  "items": [
+    {
+      "productId": "64f1a2b3c4d5e6f7a8b9c0d1",
+      "variantId": "64f1a2b3c4d5e6f7a8b9c0d2",
+      "quantity": 1
+    }
+  ],
+  "shippingAddress": {
+    "line1": "Flat 4B, Sunrise Apartments",
+    "line2": "MG Road",
+    "city": "Bangalore",
+    "state": "Karnataka",
+    "postalCode": "560001",
+    "country": "India"
+  },
+  "paymentProvider": "razorpay",
+  "couponCode": "SAVE10",
+  "walletAmount": 0,
+  "currency": "INR"
+}
 ```
-Integrate **Razorpay React Native SDK** for the payment sheet.
+
+| Field | Type | Rules |
+|-------|------|-------|
+| `items` | array | required · min 1 item (same structure as quote) |
+| `shippingAddress` | object | required · same fields as quote |
+| `paymentProvider` | string | `"razorpay"` \| `"cod"` \| `"manual_bank_transfer"` \| `"manual_upi"` \| `"wallet_only"` · default `"razorpay"` |
+| `couponCode` | string | optional |
+| `walletAmount` | number | optional · min 0 · default 0 |
+| `currency` | string | default `"INR"` |
+
+**Response:** `{ orderId, paymentRequired, paymentDetails }`
+
+---
+
+#### Step 5 — Payment (online only)
+
+##### POST `/payments/initiate`
+
+```json
+{
+  "orderId": "550e8400-e29b-41d4-a716-446655440000",
+  "provider": "razorpay",
+  "currency": "INR"
+}
+```
+
+| Field | Type | Rules |
+|-------|------|-------|
+| `orderId` | string | required · UUID v4 format |
+| `provider` | string | required · `"razorpay"` \| `"cod"` \| `"manual_bank_transfer"` \| `"manual_upi"` \| `"wallet_only"` |
+| `currency` | string | default `"INR"` |
+| `amount` | number | optional · positive number |
+
+**Response:** Razorpay order details needed to open the SDK payment sheet.
+
+##### POST `/payments/verify`
+
+Call this after the Razorpay SDK returns a successful payment callback.
+
+```json
+{
+  "provider": "razorpay",
+  "orderId": "550e8400-e29b-41d4-a716-446655440000",
+  "razorpayOrderId": "order_ABC123xyz",
+  "razorpayPaymentId": "pay_XYZ789abc",
+  "razorpaySignature": "abc123def456..."
+}
+```
+
+| Field | Type | Rules |
+|-------|------|-------|
+| `provider` | string | required · must be `"razorpay"` |
+| `orderId` | string | required · UUID v4 (your internal order ID) |
+| `razorpayOrderId` | string | required · from Razorpay response |
+| `razorpayPaymentId` | string | required · from Razorpay callback |
+| `razorpaySignature` | string | required · from Razorpay callback |
+
+---
 
 #### Step 6 — Confirmation Screen
 - Success/failure state
@@ -180,55 +466,109 @@ Integrate **Razorpay React Native SDK** for the payment sheet.
 ## Task 4 — Orders Screen
 
 ### Orders List
-```
-GET /orders/me?page=1&limit=10
-```
 
-Display each order: order ID, date, status badge, item count, total amount
+#### GET `/orders/me?page=1&limit=10`
+No body. Query params:
 
-**Order status values:** `pending`, `confirmed`, `processing`, `shipped`, `delivered`, `cancelled`
+| Param | Type | Notes |
+|-------|------|-------|
+| `page` | number | pagination page |
+| `limit` | number | items per page · max 200 |
+| `status` | string | filter by order status (see values below) |
+| `fromDate` | string | ISO date string |
+| `toDate` | string | ISO date string |
+
+Display each order: order ID, date, status badge, item count, total amount.
+
+**Order status values:** `pending_payment`, `confirmed`, `packed`, `shipped`, `delivered`, `fulfilled`, `return_requested`, `partially_returned`, `returned`, `cancelled`
+
+---
 
 ### Order Detail Screen
-```
-GET /orders/:orderId
-```
+
+#### GET `/orders/:orderId`
+No body. Pass `orderId` as path param.
 
 Display:
 - Order header (ID, date, status, timeline/stepper)
 - Items list with image, name, quantity, price
 - Delivery address
 - Payment summary (subtotal, tax, shipping, total)
-- **Cancel Order** button (only if status is `pending` or `confirmed`)
-  ```
-  POST /orders/:orderId/cancel   Body: { reason }
-  ```
+- **Cancel Order** button (only if status is `pending_payment` or `confirmed`)
 - **Request Return** button (only if status is `delivered`)
+
+---
+
+### Cancel Order
+
+#### POST `/orders/:orderId/cancel`
+
+```json
+{
+  "reason": "I ordered by mistake and no longer need this item",
+  "reasonCode": "ordered_by_mistake"
+}
+```
+
+| Field | Type | Rules |
+|-------|------|-------|
+| `reason` | string | required · min 3, max 500 chars |
+| `reasonCode` | string | `"changed_mind"` \| `"ordered_by_mistake"` \| `"address_issue"` \| `"payment_issue"` \| `"delivery_delay"` \| `"pricing_issue"` \| `"other"` · default `"other"` |
+| `refundMethod` | string | optional · `"auto"` \| `"original_source"` \| `"wallet"` \| `"manual"` · default `"auto"` |
 
 ---
 
 ## Task 5 — Returns Screen
 
 ### Return Request
-```
-POST /returns
-Body: {
-  orderId: "...",
-  items: [{ orderItemId: "...", quantity: 1, reason: "..." }],
-  reason: "defective" | "wrong_item" | "not_needed" | "other",
-  description: "...",
-  resolution: "refund" | "replacement",
-  photos: []
+
+#### POST `/returns`
+
+```json
+{
+  "orderId": "550e8400-e29b-41d4-a716-446655440000",
+  "items": [
+    {
+      "productId": "64f1a2b3c4d5e6f7a8b9c0d1",
+      "orderItemId": "64f1a2b3c4d5e6f7a8b9c0d3",
+      "variantId": "64f1a2b3c4d5e6f7a8b9c0d2",
+      "quantity": 1
+    }
+  ],
+  "reason": "defective",
+  "resolution": "refund",
+  "description": "The product stopped working after one day of use."
 }
 ```
 
+| Field | Type | Rules |
+|-------|------|-------|
+| `orderId` | string | required |
+| `items` | array | required · min 1 item |
+| `items[].productId` | string | required |
+| `items[].orderItemId` | string | optional (include if available from order detail) |
+| `items[].variantId` | string | optional |
+| `items[].quantity` | number | required · positive integer |
+| `reason` | string | required · one of the enum values below |
+| `resolution` | string | `"refund"` \| `"replacement"` \| `"exchange"` \| `"store_credit"` · default `"refund"` |
+| `description` | string | optional · max 1000 chars |
+| `photos` | string[] | optional · array of image URLs |
+
+**Reason enum values:**
+`"defective"` · `"damaged_in_transit"` · `"wrong_item"` · `"missing_parts"` · `"size_issue"` · `"quality_issue"` · `"not_as_described"` · `"changed_mind"` · `"other"`
+
+---
+
 ### My Returns List
-```
-GET /returns/my-returns
-```
+
+#### GET `/returns/my-returns`
+No body. Returns all return requests for the logged-in buyer.
+
+**Return status values:** `requested`, `approved`, `rejected`, `reverse_pickup_scheduled`, `shipped_back`, `received`, `qc_passed`, `qc_failed`, `refund_pending`, `refunded`, `replaced`, `closed`
 
 ### Screens
 1. **Return Request Form** — item selector from delivered order, reason dropdown, description, resolution choice (Refund / Replacement)
-2. **My Returns List** — status badge (requested, approved, rejected, completed), return ID, date
+2. **My Returns List** — status badge, return ID, date
 
 ---
 
@@ -251,8 +591,6 @@ GET /returns/my-returns
 - Unit tests for at least one reducer/service using Jest
 
 ---
-
-
 
 ## Evaluation Criteria
 

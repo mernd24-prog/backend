@@ -11,7 +11,9 @@ class DeliveryController {
   }
 
   serviceability = async (req, res) => {
-    const result = await this.deliveryService.getServiceability(req.query.pincode);
+    const result = await this.deliveryService.getServiceability(req.query.pincode, {
+      productId: req.query.productId,
+    });
     res.json(okResponse(result));
   };
 
