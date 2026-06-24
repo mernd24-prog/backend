@@ -102,7 +102,36 @@ class AdminRepository {
     );
   }
 
-  async getOverviewStats() {
+  async getOverviewStats({ fromDate = null, toDate = null, limit = 10 } = {}) {
+    const buildDateRange = (column) => {
+      const values = [];
+      const clauses = [];
+      if (fromDate) {
+        values.push(fromDate);
+        clauses.push(`${column} >= $${values.length}::date`);
+      }
+      if (toDate) {
+        values.push(toDate);
+        clauses.push(`${column} < ($${values.length}::date + INTERVAL '1 day')`);
+      }
+      return {
+        values,
+        where: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+        and: clauses.length ? `AND ${clauses.join(" AND ")}` : "",
+      };
+    };
+    const ordersRange = buildDateRange("o.created_at");
+    const paymentsRange = buildDateRange("created_at");
+    const statusRange = buildDateRange("created_at");
+    const recentRange = buildDateRange("created_at");
+    const topProductRange = buildDateRange("o.created_at");
+    const payoutRange = buildDateRange("created_at");
+    const recentLimit = Math.min(Math.max(Number(limit || 10), 1), 50);
+    const performanceStart = fromDate || "CURRENT_DATE - INTERVAL '6 days'";
+    const performanceEnd = toDate || "CURRENT_DATE";
+    const performanceValues = fromDate || toDate ? [fromDate || toDate, toDate || fromDate] : [];
+    const performanceStartSql = fromDate || toDate ? "$1::date" : performanceStart;
+    const performanceEndSql = fromDate || toDate ? "$2::date" : performanceEnd;
     const [
       totalUsers,
       totalSellers,
@@ -134,22 +163,28 @@ class AdminRepository {
            SELECT order_id, SUM(quantity)::INT AS units_sold
            FROM order_items
            GROUP BY order_id
-         ) oi ON oi.order_id = o.id`,
+         ) oi ON oi.order_id = o.id
+         ${ordersRange.where}`,
+        ordersRange.values,
       ),
       this.safePostgresQuery(
         `SELECT
            COUNT(*)::INT AS total_payments,
            COALESCE(SUM(amount), 0)::NUMERIC AS total_collected
          FROM payments
-         WHERE status = 'captured'`,
+         WHERE status = 'captured'
+         ${paymentsRange.and}`,
+        paymentsRange.values,
       ),
       this.safePostgresQuery(
         `SELECT
            LOWER(COALESCE(NULLIF(status, ''), 'pending')) AS status,
            COUNT(*)::INT AS count
          FROM orders
+         ${statusRange.where}
          GROUP BY LOWER(COALESCE(NULLIF(status, ''), 'pending'))
          ORDER BY count DESC`,
+        statusRange.values,
       ),
       this.safePostgresQuery(
         `SELECT
@@ -162,19 +197,24 @@ class AdminRepository {
            COALESCE(payable_amount, total_amount, 0)::NUMERIC AS total,
            created_at
          FROM orders
+         ${recentRange.where}
          ORDER BY created_at DESC
-         LIMIT 10`,
+         LIMIT $${recentRange.values.length + 1}`,
+        [...recentRange.values, recentLimit],
       ),
       this.safePostgresQuery(
         `SELECT
-           product_id,
-           COALESCE(MAX(NULLIF(product_title, '')), MAX(NULLIF(product_sku, '')), product_id) AS name,
-           SUM(quantity)::INT AS units_sold,
-           COALESCE(SUM(line_total), 0)::NUMERIC AS revenue
-         FROM order_items
-         GROUP BY product_id
+           oi.product_id,
+           COALESCE(MAX(NULLIF(oi.product_title, '')), MAX(NULLIF(oi.product_sku, '')), oi.product_id) AS name,
+           SUM(oi.quantity)::INT AS units_sold,
+           COALESCE(SUM(oi.line_total), 0)::NUMERIC AS revenue
+         FROM order_items oi
+         LEFT JOIN orders o ON o.id = oi.order_id
+         ${topProductRange.where}
+         GROUP BY oi.product_id
          ORDER BY revenue DESC, units_sold DESC
-         LIMIT 10`,
+         LIMIT $${topProductRange.values.length + 1}`,
+        [...topProductRange.values, recentLimit],
       ),
       this.safePostgresQuery(
         `SELECT
@@ -182,7 +222,7 @@ class AdminRepository {
            COALESCE(order_count, 0)::INT AS value,
            COALESCE(revenue, 0)::NUMERIC AS revenue
          FROM (
-           SELECT generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, INTERVAL '1 day')::DATE AS day_bucket
+           SELECT generate_series(${performanceStartSql}, ${performanceEndSql}, INTERVAL '1 day')::DATE AS day_bucket
          ) days
          LEFT JOIN (
            SELECT
@@ -190,10 +230,12 @@ class AdminRepository {
              COUNT(*)::INT AS order_count,
              SUM(COALESCE(payable_amount, total_amount, 0)) AS revenue
            FROM orders
-           WHERE created_at >= CURRENT_DATE - INTERVAL '6 days'
+           WHERE created_at >= ${performanceStartSql}
+             AND created_at < (${performanceEndSql} + INTERVAL '1 day')
            GROUP BY created_at::DATE
          ) orders_by_day ON orders_by_day.order_day = days.day_bucket
          ORDER BY day_bucket`,
+        performanceValues,
       ),
       this.safePostgresQuery(
         `SELECT
@@ -227,7 +269,9 @@ class AdminRepository {
            COALESCE(SUM(net_amount), 0)::NUMERIC AS pending_amount,
            COUNT(*)::INT AS pending_count
          FROM seller_payouts
-         WHERE status IN ('pending', 'on_hold', 'processing')`,
+         WHERE status IN ('pending', 'on_hold', 'processing')
+         ${payoutRange.and}`,
+        payoutRange.values,
       ),
     ]);
 

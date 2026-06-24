@@ -39,7 +39,11 @@ const sellerGoLiveStatuses = ["pending", "ready", "live", "blocked"];
 
 const adminOverviewSchema = Joi.object({
   body: Joi.object({}).required(),
-  query: Joi.object({}).required(),
+  query: Joi.object({
+    fromDate: Joi.date().iso(),
+    toDate: Joi.date().iso(),
+    limit: Joi.number().integer().min(1).max(50),
+  }).required(),
   params: Joi.object({}).required(),
 });
 
