@@ -54,6 +54,8 @@ class WarehouseService {
     if (query.countryId) filter.countryId = query.countryId;
     if (query.stateId) filter.stateId = query.stateId;
     if (query.cityId) filter.cityId = query.cityId;
+    if (query.sellerId) filter.sellerId = query.sellerId;
+    if (query.organizationId) filter.organizationId = query.organizationId;
     if (q) {
       filter.$or = [
         { name: regex(q) },
@@ -110,6 +112,8 @@ class WarehouseService {
     const derived = await this.assertLocation(payload);
     const warehouse = await WarehouseModel.create({
       name: payload.name,
+      sellerId: payload.sellerId || actor.ownerSellerId || actor.userId || "",
+      organizationId: payload.organizationId || actor.organizationId || "",
       code: String(payload.code || "").toUpperCase(),
       managerName: payload.managerName || "",
       managerPhone: payload.managerPhone || "",
@@ -170,6 +174,8 @@ class WarehouseService {
       "skuCount",
       "active",
       "metadata",
+      "sellerId",
+      "organizationId",
     ].forEach((field) => {
       if (payload[field] !== undefined) updates[field] = payload[field];
     });

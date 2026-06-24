@@ -15,6 +15,7 @@ const reportExportSchema = Joi.object({
     createdFrom: Joi.date(),
     createdTo: Joi.date(),
     sellerId: Joi.string().allow("", null),
+    organizationId: Joi.string().guid({ version: "uuidv4" }).allow("", null),
     buyerId: Joi.string().allow("", null),
     orderId: Joi.string().allow("", null),
     productId: Joi.string().allow("", null),

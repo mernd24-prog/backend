@@ -316,6 +316,10 @@ class OrderRepository {
       const [existing] = await trx("shipments")
         .where("order_id", payload.orderId)
         .where("seller_id", String(payload.sellerId))
+        .modify((builder) => {
+          if (payload.organizationId) builder.where("organization_id", payload.organizationId);
+          else builder.whereNull("organization_id");
+        })
         .where((builder) => {
           builder.where("direction", "forward").orWhereNull("direction");
         })
@@ -339,6 +343,8 @@ class OrderRepository {
             courier_name: courierName || existing.courier_name,
             awb_number: trackingNumber || existing.awb_number,
             tracking_number: trackingNumber || existing.tracking_number,
+            organization_snapshot:
+              payload.organizationSnapshot || existing.organization_snapshot || {},
             ship_to_snapshot: payload.shipToSnapshot || existing.ship_to_snapshot || {},
             verification_required:
               payload.verificationRequired === undefined
@@ -389,6 +395,8 @@ class OrderRepository {
           id,
           order_id: payload.orderId,
           seller_id: String(payload.sellerId),
+          organization_id: payload.organizationId || null,
+          organization_snapshot: payload.organizationSnapshot || {},
           provider: payload.provider || "manual",
           courier_name: courierName,
           awb_number: trackingNumber,

@@ -156,6 +156,15 @@ class SellerController {
     res.json(okResponse(organization));
   };
 
+  deleteOrganization = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await sellerOrganizationService.deleteMineDraft(
+      req.params.organizationId,
+      actor,
+    );
+    res.json(okResponse(result, { message: "Draft organization deleted" }));
+  };
+
   setDefaultOrganization = async (req, res) => {
     const actor = getCurrentUser(req);
     const organization = await sellerOrganizationService.setMineDefault(

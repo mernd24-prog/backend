@@ -17,6 +17,8 @@ const listWarehousesSchema = Joi.object({
     countryId: Joi.string(),
     stateId: Joi.string(),
     cityId: Joi.string(),
+    sellerId: Joi.string().allow("", null),
+    organizationId: Joi.string().allow("", null),
     active: Joi.boolean(),
     sortBy: Joi.string().valid("createdAt", "updatedAt", "name", "code", "skuCount", "capacity", "active"),
     sortDir: Joi.string().valid("asc", "desc"),
@@ -31,6 +33,7 @@ const listInventoryTransactionsSchema = Joi.object({
     status: Joi.string(),
     productId: Joi.string(),
     sellerId: Joi.string(),
+    organizationId: Joi.string(),
     orderId: Joi.string(),
     returnId: Joi.string(),
     shipmentId: Joi.string(),
@@ -62,6 +65,8 @@ const warehouseBody = {
   active: Joi.boolean(),
   isDisable: Joi.boolean(),
   metadata: Joi.object(),
+  sellerId: Joi.string().allow("", null),
+  organizationId: Joi.string().allow("", null),
 };
 
 const warehouseUpdateBody = {

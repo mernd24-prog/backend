@@ -408,11 +408,20 @@ class AuthService {
     const isSeller = user.role === ROLES.SELLER;
     let kyc = null;
     let organization = null;
+    let organizationState = {
+      organizations: [],
+      approvedOrganizations: [],
+      selectedOrganization: null,
+      selectedOrganizationId: null,
+      hasApprovedOrganization: false,
+      requiresSelection: false,
+    };
     if (isSeller) {
-      [kyc, organization] = await Promise.all([
+      [kyc, organizationState] = await Promise.all([
         this.authRepository.findSellerKycBySellerId(user.id),
-        sellerOrganizationService.getDefaultOrOnlyOrganization(user.id),
+        sellerOrganizationService.getSellerOrganizationState(user.id),
       ]);
+      organization = organizationState.selectedOrganization;
     }
 
     let sellerProfile = isSeller ? this.toPlainObject(user?.sellerProfile || {}) : {};
@@ -461,20 +470,16 @@ class AuthService {
       : user?.sellerProfile?.onboardingStatus || "initiated";
     const bankVerificationStatus = sellerProfile.bankVerificationStatus || "not_submitted";
     const goLiveStatus = sellerProfile.goLiveStatus || "pending";
-    const organizationApproved = ["approved", "active"].includes(
-      String(organization?.approvalStatus || "").toLowerCase(),
-    );
-    const organizationVerificationReady =
-      organization?.kycStatus === "verified" &&
-      organization?.bankVerificationStatus === "verified";
+    const organizationApproved = organizationState.hasApprovedOrganization;
+    const organizationVerificationReady = organizationApproved;
     const sellerOnboardingComplete =
-      kycStatus === "verified" &&
-      onboardingState?.requirements?.profile?.completed === true &&
-      onboardingState?.requirements?.bankDetails?.completed === true &&
-      bankVerificationStatus !== "rejected" &&
-      organizationApproved &&
-      organizationVerificationReady &&
-      user.accountStatus === "active";
+      organizationApproved && organizationVerificationReady;
+    const organizationSummaries = organizationState.organizations.map((item) =>
+      sellerOrganizationService.buildPublicSummary(item),
+    );
+    const approvedOrganizationSummaries = organizationState.approvedOrganizations.map((item) =>
+      sellerOrganizationService.buildPublicSummary(item),
+    );
     const flowState = {
       user: {
         id: user.id,
@@ -489,7 +494,7 @@ class AuthService {
       role: user.role,
       emailVerified: Boolean(user.emailVerified),
       accountStatus: user.accountStatus || "active",
-      requiresOnboarding: isSeller && (user.accountStatus !== "active" || !sellerOnboardingComplete),
+      requiresOnboarding: isSeller && !sellerOnboardingComplete,
       onboardingStatus,
       checklist: onboardingChecklist,
       kycStatus,
@@ -498,6 +503,11 @@ class AuthService {
       bankRejectionReason: sellerProfile.bankRejectionReason || null,
       goLiveStatus,
       organization: sellerOrganizationService.buildPublicSummary(organization),
+      organizations: organizationSummaries,
+      approvedOrganizations: approvedOrganizationSummaries,
+      selectedOrganizationId: organizationState.selectedOrganizationId,
+      hasApprovedOrganization: organizationState.hasApprovedOrganization,
+      requiresOrganizationSelection: organizationState.requiresSelection,
       organizationApproved,
       sellerProfile: isSeller ? sellerProfile : null,
       kyc: isSeller ? this.formatSellerKycForStatus(kyc) : null,
@@ -550,7 +560,7 @@ class AuthService {
       return this.makeOnboardingResponse(user);
     }
 
-    if (user.accountStatus !== "active") {
+    if (user.accountStatus !== "active" && user.role !== ROLES.SELLER) {
       await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
         userId: user.id,
         email: user.email,

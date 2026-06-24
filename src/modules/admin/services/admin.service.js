@@ -1025,7 +1025,6 @@ class AdminService {
     };
     await this.adminRepository.updateUserById(sellerId, {
       sellerProfile: nextSellerProfile,
-      ...(kycRejected ? { accountStatus: "pending_approval" } : {}),
     });
     await this.syncDefaultSellerOrganization(sellerId, nextSellerProfile, {
       kycStatus: payload.kycStatus,
@@ -1096,9 +1095,6 @@ class AdminService {
     };
     await this.adminRepository.updateUserById(sellerId, {
       sellerProfile: nextSellerProfile,
-      ...(bankRejected
-        ? { accountStatus: "pending_approval" }
-        : {}),
     });
     await this.syncDefaultSellerOrganization(sellerId, nextSellerProfile, {
       bankVerificationStatus: payload.bankVerificationStatus,

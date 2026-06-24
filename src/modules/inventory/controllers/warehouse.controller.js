@@ -25,11 +25,34 @@ class WarehouseController {
     }));
   }
 
-  list = async (req, res) => this.sendList(res, await this.warehouseService.list(req.query));
+  list = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const isAdmin = ["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin;
+    const query = {
+      ...req.query,
+      ...(!isAdmin
+        ? {
+            sellerId: actor.ownerSellerId || actor.userId,
+            organizationId: actor.organizationId || undefined,
+          }
+        : {}),
+    };
+    this.sendList(res, await this.warehouseService.list(query));
+  };
   listTransactions = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const isAdmin = ["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin;
     const limit = Math.min(Number(req.query.limit || 100), 200);
     const offset = Number(req.query.offset || 0);
-    res.json(okResponse(await this.inventoryService.listTransactions(req.query, { limit, offset })));
+    res.json(okResponse(await this.inventoryService.listTransactions({
+      ...req.query,
+      ...(!isAdmin
+        ? {
+            sellerId: actor.ownerSellerId || actor.userId,
+            organizationId: actor.organizationId || undefined,
+          }
+        : {}),
+    }, { limit, offset })));
   };
 
   releaseExpiredReservations = async (req, res) => {
@@ -99,20 +122,29 @@ class WarehouseController {
   };
 
   getStats = async (req, res) => {
-    const sellerId = req.query.sellerId || null;
-    const stats = await this.productService.getInventoryStats(sellerId);
+    const actor = getCurrentUser(req);
+    const isAdmin = ["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin;
+    const sellerId = isAdmin ? req.query.sellerId || null : actor.ownerSellerId || actor.userId;
+    const stats = await this.productService.getInventoryStats(
+      sellerId,
+      req.query.organizationId || actor.organizationId || null,
+    );
     res.json(okResponse(stats));
   };
 
   getLowStock = async (req, res) => {
     const pagination = getPage(req.query);
-    const sellerId = req.query.sellerId || null;
+    const actor = getCurrentUser(req);
+    const isAdmin = ["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin;
+    const sellerId = isAdmin ? req.query.sellerId || null : actor.ownerSellerId || actor.userId;
+    const organizationId = req.query.organizationId || actor.organizationId || null;
     const result = await this.productService.listProducts(
       {
         ...req.query,
         stockStatus: "low_stock",
         includeAllStatuses: true,
         ...(sellerId ? { sellerId } : {}),
+        ...(organizationId ? { organizationId } : {}),
         page: pagination.page,
         limit: pagination.limit,
       },

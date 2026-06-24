@@ -4,6 +4,7 @@ const dashboardQuerySchema = Joi.object({
   fromDate: Joi.date().iso(),
   toDate: Joi.date().iso(),
   sellerId: Joi.string().max(64),
+  organizationId: Joi.string().guid({ version: "uuidv4" }),
   limit: Joi.number().integer().min(1).max(100).default(10),
   walletLimit: Joi.number().integer().min(1).max(50).default(5),
 });

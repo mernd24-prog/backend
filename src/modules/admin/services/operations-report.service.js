@@ -110,6 +110,7 @@ class OperationsReportService {
     if (filters.deliveryStatus) query.where("o.delivery_status", filters.deliveryStatus);
     if (filters.buyerId) query.where("o.buyer_id", filters.buyerId);
     if (filters.sellerId) query.where("oi.seller_id", filters.sellerId);
+    if (filters.organizationId) query.where("oi.organization_id", filters.organizationId);
     if (filters.search) {
       query.where((builder) => builder
         .whereILike("o.order_number", `%${filters.search}%`)
@@ -271,6 +272,7 @@ class OperationsReportService {
       ...this.mongoDateFilter(filters),
     };
     if (filters.sellerId) filter.sellerId = String(filters.sellerId);
+    if (filters.organizationId) filter.organizationId = String(filters.organizationId);
     if (filters.productId) filter.productId = String(filters.productId);
     if (filters.variantSku) filter.variantSku = String(filters.variantSku);
     if (filters.orderId) filter.orderId = String(filters.orderId);
@@ -390,6 +392,7 @@ class OperationsReportService {
       .groupBy("da.id");
 
     if (filters.sellerId) query.where("da.seller_id", filters.sellerId);
+    if (filters.organizationId) query.where("da.organization_id", filters.organizationId);
     if (filters.status) query.where("da.verification_status", filters.status);
     if (filters.active !== undefined) query.where("da.active", filters.active === true || filters.active === "true");
     if (filters.search) {
@@ -735,6 +738,7 @@ class OperationsReportService {
       ...this.mongoDateFilter(filters),
     };
     if (filters.sellerId) filter.sellerId = String(filters.sellerId);
+    if (filters.organizationId) filter.organizationId = String(filters.organizationId);
     if (filters.status) filter.status = String(filters.status);
     if (filters.category) filter.category = String(filters.category);
     if (filters.brand) filter.brand = String(filters.brand);
@@ -771,6 +775,7 @@ class OperationsReportService {
     if (filters.orderId) query.where("order_id", filters.orderId);
     if (filters.returnId) query.where("return_id", filters.returnId);
     if (filters.sellerId) query.where("seller_id", filters.sellerId);
+    if (filters.organizationId) query.where("organization_id", filters.organizationId);
     if (filters.deliveryAgentId) query.where("delivery_agent_id", filters.deliveryAgentId);
     if (filters.status) query.where("status", filters.status);
     if (filters.shipmentType) query.where("shipment_type", filters.shipmentType);
@@ -797,6 +802,15 @@ class OperationsReportService {
         $or: [
         { sellerId: String(filters.sellerId) },
         { "items.sellerId": String(filters.sellerId) },
+        ],
+      });
+    }
+    if (filters.organizationId) {
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { organizationId: String(filters.organizationId) },
+          { "items.organizationId": String(filters.organizationId) },
         ],
       });
     }
@@ -831,6 +845,11 @@ class OperationsReportService {
     if (filters.scope) query.where("scope", filters.scope);
     if (filters.sellerId) {
       query.whereRaw("items @> ?::jsonb", [JSON.stringify([{ sellerId: String(filters.sellerId) }])]);
+    }
+    if (filters.organizationId) {
+      query.whereRaw("items @> ?::jsonb", [
+        JSON.stringify([{ organizationId: String(filters.organizationId) }]),
+      ]);
     }
     if (filters.search) {
       query.where((builder) => builder

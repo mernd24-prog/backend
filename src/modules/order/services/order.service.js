@@ -56,8 +56,12 @@ class OrderService {
     return items.reduce((groups, item) => {
       const sellerId = String(item.seller_id || item.sellerId || "");
       if (!sellerId) return groups;
-      if (!groups.has(sellerId)) groups.set(sellerId, []);
-      groups.get(sellerId).push(item);
+      const organizationId = String(item.organization_id || item.organizationId || "");
+      const key = `${sellerId}:${organizationId || "default"}`;
+      if (!groups.has(key)) {
+        groups.set(key, { sellerId, organizationId: organizationId || null, items: [] });
+      }
+      groups.get(key).items.push(item);
       return groups;
     }, new Map());
   }
@@ -113,11 +117,14 @@ class OrderService {
     const tracking = trackingInfo || metadata.tracking || {};
     const itemsBySeller = this.groupOrderItemsBySeller(order.items || []);
 
-    for (const [sellerId, sellerItems] of itemsBySeller.entries()) {
+    for (const { sellerId, organizationId, items: sellerItems } of itemsBySeller.values()) {
       const fulfillment = this.getFulfillmentSnapshotForItems(sellerItems);
       await this.orderRepository.createShipment({
         orderId,
         sellerId,
+        organizationId,
+        organizationSnapshot:
+          this.normalizeJson(sellerItems[0]?.organization_snapshot, {}),
         status: shipmentStatus,
         orderStatus: nextStatus,
         trackingNumber: tracking.trackingNumber || null,

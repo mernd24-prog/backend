@@ -36,6 +36,7 @@ class InventoryRepository {
           variantId: item.variantId || "",
           variantSku: item.variantSku || "",
           sellerId: item.sellerId || "",
+          organizationId: item.organizationId || item.organization_id || "",
           quantity: Number(item.quantity || 0),
           orderId: reference.orderId || "",
           returnId: reference.returnId || "",
@@ -484,7 +485,7 @@ class InventoryRepository {
 
   async listTransactions(filter = {}, { limit = 100, offset = 0 } = {}) {
     const query = {};
-    ["type", "status", "productId", "sellerId", "orderId", "returnId", "shipmentId", "referenceType", "referenceId"].forEach((key) => {
+    ["type", "status", "productId", "sellerId", "organizationId", "orderId", "returnId", "shipmentId", "referenceType", "referenceId"].forEach((key) => {
       if (filter[key]) query[key] = filter[key];
     });
     const sortMap = {

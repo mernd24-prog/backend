@@ -57,6 +57,30 @@ sellerRoutes.patch(
   checkInput(updateSellerProfileSchema),
   catchErrors(sellerController.updateProfile),
 );
+sellerRoutes.get(
+  "/onboarding/organizations",
+  authenticatePendingSeller,
+  checkInput(listSellerOrganizationsSchema),
+  catchErrors(sellerController.listOrganizations),
+);
+sellerRoutes.post(
+  "/onboarding/organizations",
+  authenticatePendingSeller,
+  checkInput(createSellerOrganizationSchema),
+  catchErrors(sellerController.createOrganization),
+);
+sellerRoutes.patch(
+  "/onboarding/organizations/:organizationId",
+  authenticatePendingSeller,
+  checkInput(updateSellerOrganizationSchema),
+  catchErrors(sellerController.updateOrganization),
+);
+sellerRoutes.delete(
+  "/onboarding/organizations/:organizationId",
+  authenticatePendingSeller,
+  checkInput(sellerOrganizationParamSchema),
+  catchErrors(sellerController.deleteOrganization),
+);
 
 // Admin routes
 sellerRoutes.patch(
@@ -119,6 +143,13 @@ sellerRoutes.patch(
   allowActions(ACTIONS.SELLER_PROFILE_MANAGE),
   checkInput(updateSellerOrganizationSchema),
   catchErrors(sellerController.updateOrganization),
+);
+sellerRoutes.delete(
+  "/me/organizations/:organizationId",
+  authenticate,
+  allowActions(ACTIONS.SELLER_PROFILE_MANAGE),
+  checkInput(sellerOrganizationParamSchema),
+  catchErrors(sellerController.deleteOrganization),
 );
 sellerRoutes.patch(
   "/me/organizations/:organizationId/default",

@@ -122,6 +122,11 @@ class CancellationRepository {
       if (query.sellerId) {
         builder.whereRaw("items @> ?::jsonb", [JSON.stringify([{ sellerId: String(query.sellerId) }])]);
       }
+      if (query.organizationId) {
+        builder.whereRaw("items @> ?::jsonb", [
+          JSON.stringify([{ organizationId: String(query.organizationId) }]),
+        ]);
+      }
       if (query.status) builder.where("status", query.status);
       if (query.refundStatus) builder.where("refund_status", query.refundStatus);
       if (query.scope) builder.where("scope", query.scope);

@@ -23,6 +23,7 @@ const inventoryTransactionSchema = new mongoose.Schema(
     variantId: { type: String, default: "" },
     variantSku: { type: String, default: "", index: true },
     sellerId: { type: String, default: "", index: true },
+    organizationId: { type: String, default: "", index: true },
     quantity: { type: Number, required: true },
     orderId: { type: String, default: "", index: true },
     returnId: { type: String, default: "", index: true },

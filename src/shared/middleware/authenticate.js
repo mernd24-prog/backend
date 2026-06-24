@@ -22,6 +22,8 @@ const PERMISSION_CACHE_TTL_MS = Math.max(
   0,
 );
 const ORGANIZATION_CONTEXT_OPTIONAL_PREFIXES = [
+  "/auth/status",
+  "/auth/change-password",
   "/sellers/me/status",
   "/sellers/me/profile",
   "/sellers/me/organizations",
@@ -33,6 +35,18 @@ const ORGANIZATION_CONTEXT_OPTIONAL_PREFIXES = [
   "/sellers/me/settings",
   "/sellers/me/kyc",
   "/sellers/onboarding",
+];
+const ORGANIZATION_CONTEXT_REQUIRED_PREFIXES = [
+  "/products",
+  "/orders",
+  "/tax",
+  "/delivery",
+  "/inventory",
+  "/sellers/commissions",
+  "/sellers/me/dashboard",
+  "/sellers/me/tracking",
+  "/sellers/me/charge-settings",
+  "/analytics/seller",
 ];
 
 function isSuperAdminPayload(payload = {}) {
@@ -52,14 +66,31 @@ function isOrganizationContextOptional(req = {}) {
   );
 }
 
+function isOrganizationContextRequired(req = {}) {
+  const path = getRequestPath(req);
+  return ORGANIZATION_CONTEXT_REQUIRED_PREFIXES.some(
+    (prefix) => path === prefix || path.startsWith(`${prefix}/`),
+  );
+}
+
 async function attachOrganizationContext(req, auth = {}) {
   const organizationId = String(req.headers["x-organization-id"] || "").trim();
   if (
     auth.isOnboarding === true ||
     isOrganizationContextOptional(req) ||
-    !organizationId ||
     ![ROLES.SELLER, "seller-admin", "seller-sub-admin"].includes(auth.role)
   ) {
+    return auth;
+  }
+  if (!organizationId) {
+    if (isOrganizationContextRequired(req)) {
+      throw new AppError(
+        "Select an approved organization to continue",
+        400,
+        null,
+        "ORGANIZATION_CONTEXT_REQUIRED",
+      );
+    }
     return auth;
   }
 
@@ -239,11 +270,6 @@ async function authenticatePendingSeller(req, res, next) {
     if (statusError && status !== "pending_approval") {
       return next(statusError);
     }
-    const onboardingComplete = user?.sellerProfile?.onboardingStatus === "ready_for_go_live";
-    if (onboardingComplete) {
-      return next(authError(AUTH_ERROR_CODES.TOKEN_INVALID, 401));
-    }
-
     return next();
   } catch (error) {
     return next(

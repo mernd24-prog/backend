@@ -38,6 +38,7 @@ const listShipmentsSchema = Joi.object({
     shipmentType: Joi.string().valid("forward", "return"),
     direction: Joi.string().valid("forward", "reverse"),
     sellerId: Joi.string().max(64),
+    organizationId: uuid,
     deliveryAgentId: uuid,
     status: Joi.string().valid(...Object.values(DELIVERY_STATUS)),
     courierName: Joi.string(),
@@ -71,6 +72,7 @@ const createShipmentSchema = Joi.object({
     orderId: uuid.required(),
     dealId: uuid.allow(null),
     sellerId: Joi.string().max(64).allow("", null),
+    organizationId: uuid.allow("", null),
     deliveryAgentId: uuid.allow("", null),
     provider: Joi.string().default("manual"),
     courierName: Joi.string().allow("", null),
@@ -111,6 +113,7 @@ const deliveryAgentStatusValues = ["pending", "verified", "rejected"];
 
 const deliveryAgentBody = {
   sellerId: Joi.string().max(64).allow("", null),
+  organizationId: uuid.allow("", null),
   name: Joi.string().trim().min(2).max(160).required(),
   phone: Joi.string().trim().min(7).max(32).required(),
   email: Joi.string().email().max(180).allow("", null),
@@ -125,6 +128,7 @@ const deliveryAgentBody = {
 
 const deliveryAgentUpdateBody = {
   sellerId: Joi.string().max(64).allow("", null),
+  organizationId: uuid.allow("", null),
   name: Joi.string().trim().min(2).max(160),
   phone: Joi.string().trim().min(7).max(32),
   email: Joi.string().email().max(180).allow("", null),
@@ -141,6 +145,7 @@ const listDeliveryAgentsSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
     sellerId: Joi.string().max(64),
+    organizationId: uuid,
     active: Joi.boolean(),
     verificationStatus: Joi.string().valid(...deliveryAgentStatusValues),
     search: Joi.string().trim().max(160).allow("", null),

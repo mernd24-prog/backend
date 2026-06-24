@@ -161,6 +161,7 @@ class DeliveryService {
     return {
       id: agent.id,
       sellerId: agent.seller_id,
+      organizationId: agent.organization_id || null,
       name: agent.name,
       phone: agent.phone,
       email: agent.email || null,
@@ -176,6 +177,7 @@ class DeliveryService {
     const filters = { ...query };
     if (!this.isAdmin(actor)) {
       filters.sellerId = this.resolveSellerIdForAgent({}, actor);
+      filters.organizationId = actor.organizationId || null;
     }
     return this.deliveryRepository.listDeliveryAgents(filters);
   }
@@ -185,6 +187,7 @@ class DeliveryService {
     return this.deliveryRepository.createDeliveryAgent({
       ...payload,
       sellerId,
+      organizationId: payload.organizationId || actor.organizationId || null,
       createdBy: actor.userId,
       updatedBy: actor.userId,
     });
@@ -215,12 +218,18 @@ class DeliveryService {
     return updated;
   }
 
-  async resolveAssignableDeliveryAgent(agentId, sellerId, actor = {}) {
+  async resolveAssignableDeliveryAgent(agentId, sellerId, actor = {}, organizationId = null) {
     if (!agentId) return null;
     const agent = await this.deliveryRepository.findDeliveryAgentById(agentId);
     this.assertCanManageDeliveryAgent(agent, actor);
     if (String(agent.seller_id) !== String(sellerId)) {
       throw new AppError("Delivery agent must belong to the shipment seller", 400);
+    }
+    if (
+      organizationId &&
+      String(agent.organization_id || "") !== String(organizationId)
+    ) {
+      throw new AppError("Delivery agent must belong to the shipment organization", 400);
     }
     if (agent.active === false) {
       throw new AppError("Inactive delivery agents cannot be assigned", 409);
@@ -235,7 +244,12 @@ class DeliveryService {
     const shipment = await this.deliveryRepository.findShipmentById(shipmentId);
     if (!shipment) throw new AppError("Shipment not found", 404);
     await this.assertCanManageOrder(shipment.order_id, actor);
-    const agent = await this.resolveAssignableDeliveryAgent(deliveryAgentId, shipment.seller_id, actor);
+    const agent = await this.resolveAssignableDeliveryAgent(
+      deliveryAgentId,
+      shipment.seller_id,
+      actor,
+      shipment.organization_id,
+    );
     return this.deliveryRepository.assignDeliveryAgentToShipment(shipmentId, agent, {
       deliveryAgentSnapshot: this.buildDeliveryAgentSnapshot(agent),
       updatedBy: actor.userId,
@@ -269,8 +283,36 @@ class DeliveryService {
     if (!isAdmin && String(sellerId) !== String(actorSellerId)) {
       throw new AppError("You can create shipments only for your seller account", 403);
     }
+    const sellerItems = (order.items || []).filter(
+      (item) => String(item.seller_id || item.sellerId || "") === String(sellerId),
+    );
+    const orderOrganizationIds = Array.from(new Set(
+      sellerItems
+        .map((item) => String(item.organization_id || item.organizationId || ""))
+        .filter(Boolean),
+    ));
+    let organizationId = payload.organizationId || actor.organizationId || null;
+    if (!organizationId && orderOrganizationIds.length === 1) {
+      [organizationId] = orderOrganizationIds;
+    }
+    if (organizationId && !orderOrganizationIds.includes(String(organizationId))) {
+      throw new AppError("Selected organization does not own items in this order", 400);
+    }
+    if (!organizationId && orderOrganizationIds.length > 1) {
+      throw new AppError("Organization ID is required for this shipment", 400);
+    }
+    const organizationItem = sellerItems.find(
+      (item) =>
+        String(item.organization_id || item.organizationId || "") ===
+        String(organizationId || ""),
+    );
     const deliveryAgent = payload.deliveryAgentId
-      ? await this.resolveAssignableDeliveryAgent(payload.deliveryAgentId, sellerId, actor)
+      ? await this.resolveAssignableDeliveryAgent(
+          payload.deliveryAgentId,
+          sellerId,
+          actor,
+          organizationId,
+        )
       : null;
     const dealFulfillment = this.resolveDealFulfillment(order, sellerId, payload);
     const verificationRequired = Boolean(payload.verificationRequired || dealFulfillment.deliveryVerificationRequired);
@@ -287,6 +329,11 @@ class DeliveryService {
     const shipment = await this.deliveryRepository.createShipment({
       ...payload,
       sellerId,
+      organizationId,
+      organizationSnapshot: this.normalizeJson(
+        organizationItem?.organization_snapshot || organizationItem?.organizationSnapshot,
+        {},
+      ),
       provider: payload.provider || providerResult.provider || "manual",
       awbNumber: providerResult.awbNumber || payload.awbNumber,
       trackingNumber: providerResult.trackingNumber || payload.trackingNumber || payload.awbNumber,
@@ -372,6 +419,7 @@ class DeliveryService {
   async listShipments(query, actor) {
     if (!["admin", "sub-admin", "super-admin"].includes(actor.role) && !actor.isSuperAdmin) {
       query.sellerId = actor.ownerSellerId || actor.userId;
+      query.organizationId = actor.organizationId || null;
     }
     return this.deliveryRepository.listShipments(query);
   }

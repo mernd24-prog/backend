@@ -13,6 +13,7 @@ const inventoryReservationSchema = new mongoose.Schema(
         variantTitle: { type: String, default: "" },
         attributes: { type: Object, default: {} },
         sellerId: { type: String, required: true },
+        organizationId: { type: String, default: "" },
         quantity: { type: Number, required: true },
         unitPrice: { type: Number, required: true },
       },

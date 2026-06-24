@@ -18,7 +18,13 @@ class AnalyticsRepository {
     return AnalyticsModel.find({}).sort({ createdAt: -1 }).limit(limit);
   }
 
-  async getSellerDashboard({ sellerId, fromDate = null, toDate = null, recentLimit = 10 } = {}) {
+  async getSellerDashboard({
+    sellerId,
+    organizationId = null,
+    fromDate = null,
+    toDate = null,
+    recentLimit = 10,
+  } = {}) {
     const [
       orderSummary,
       financeSummary,
@@ -27,12 +33,17 @@ class AnalyticsRepository {
       returnSummary,
       recentOrders,
     ] = await Promise.all([
-      this.getSellerOrderSummary(sellerId, { fromDate, toDate }),
-      this.getSellerFinanceSummary(sellerId, { fromDate, toDate }),
-      this.getSellerPayoutSummary(sellerId, { fromDate, toDate }),
-      this.getSellerDeliverySummary(sellerId, { fromDate, toDate }),
-      this.getReturnSummary({ sellerId, fromDate, toDate }),
-      this.getSellerRecentOrders(sellerId, { fromDate, toDate, limit: recentLimit }),
+      this.getSellerOrderSummary(sellerId, { organizationId, fromDate, toDate }),
+      this.getSellerFinanceSummary(sellerId, { organizationId, fromDate, toDate }),
+      this.getSellerPayoutSummary(sellerId, { organizationId, fromDate, toDate }),
+      this.getSellerDeliverySummary(sellerId, { organizationId, fromDate, toDate }),
+      this.getReturnSummary({ sellerId, organizationId, fromDate, toDate }),
+      this.getSellerRecentOrders(sellerId, {
+        organizationId,
+        fromDate,
+        toDate,
+        limit: recentLimit,
+      }),
     ]);
 
     const returnRate = this.rate(returnSummary.returnCount, orderSummary.orderCount);
@@ -40,6 +51,7 @@ class AnalyticsRepository {
 
     return {
       sellerId,
+      organizationId,
       currency: orderSummary.currency || financeSummary.currency || "INR",
       window: this.buildWindow(fromDate, toDate),
       orders: orderSummary,
@@ -104,6 +116,9 @@ class AnalyticsRepository {
     const row = await knex("order_items as oi")
       .join("orders as o", "o.id", "oi.order_id")
       .where("oi.seller_id", sellerId)
+      .modify((builder) => {
+        if (range.organizationId) builder.where("oi.organization_id", range.organizationId);
+      })
       .modify((builder) => this.applyDateRange(builder, range, "o.created_at"))
       .select(knex.raw(`
         COUNT(DISTINCT o.id)::INT AS order_count,
@@ -137,6 +152,9 @@ class AnalyticsRepository {
   async getSellerFinanceSummary(sellerId, range = {}) {
     const row = await knex("seller_commissions")
       .where("seller_id", sellerId)
+      .modify((builder) => {
+        if (range.organizationId) builder.where("organization_id", range.organizationId);
+      })
       .modify((builder) => this.applyDateRange(builder, range, "created_at"))
       .select(knex.raw(`
         COUNT(*)::INT AS commission_count,
@@ -167,6 +185,9 @@ class AnalyticsRepository {
   async getSellerPayoutSummary(sellerId, range = {}) {
     const rows = await knex("seller_payouts")
       .where("seller_id", sellerId)
+      .modify((builder) => {
+        if (range.organizationId) builder.where("organization_id", range.organizationId);
+      })
       .modify((builder) => this.applyDateRange(builder, range, "created_at"))
       .select("status")
       .count({ count: "*" })
@@ -180,6 +201,9 @@ class AnalyticsRepository {
   async getSellerDeliverySummary(sellerId, range = {}) {
     const row = await knex("shipments")
       .where("seller_id", sellerId)
+      .modify((builder) => {
+        if (range.organizationId) builder.where("organization_id", range.organizationId);
+      })
       .modify((builder) => this.applyDateRange(builder, range, "created_at"))
       .select(knex.raw(`
         COUNT(*)::INT AS total_shipments,
@@ -197,10 +221,16 @@ class AnalyticsRepository {
     };
   }
 
-  async getSellerRecentOrders(sellerId, { fromDate = null, toDate = null, limit = 10 } = {}) {
+  async getSellerRecentOrders(
+    sellerId,
+    { organizationId = null, fromDate = null, toDate = null, limit = 10 } = {},
+  ) {
     const rows = await knex("order_items as oi")
       .join("orders as o", "o.id", "oi.order_id")
       .where("oi.seller_id", sellerId)
+      .modify((builder) => {
+        if (organizationId) builder.where("oi.organization_id", organizationId);
+      })
       .modify((builder) => this.applyDateRange(builder, { fromDate, toDate }, "o.created_at"))
       .select(
         "o.id",
@@ -383,12 +413,28 @@ class AnalyticsRepository {
     }));
   }
 
-  async getReturnSummary({ sellerId = null, fromDate = null, toDate = null } = {}) {
+  async getReturnSummary({
+    sellerId = null,
+    organizationId = null,
+    fromDate = null,
+    toDate = null,
+  } = {}) {
     const filter = {};
     if (sellerId) {
       filter.$or = [
         { sellerId: String(sellerId) },
         { "items.sellerId": String(sellerId) },
+      ];
+    }
+    if (organizationId) {
+      filter.$and = [
+        ...(filter.$and || []),
+        {
+          $or: [
+            { organizationId: String(organizationId) },
+            { "items.organizationId": String(organizationId) },
+          ],
+        },
       ];
     }
 

@@ -206,6 +206,15 @@ class SellerOrganizationRepository {
     }
   }
 
+  async deleteByIdForSeller(sellerId, organizationId) {
+    const [row] = await knex("seller_organizations")
+      .where("id", organizationId)
+      .where("seller_id", sellerId)
+      .delete()
+      .returning("*");
+    return this.rowToOrganization(row);
+  }
+
   async findById(organizationId) {
     const [row] = await knex("seller_organizations")
       .where("id", organizationId)
@@ -238,6 +247,20 @@ class SellerOrganizationRepository {
         }
       })
       .orderBy([{ column: "is_default", order: "desc" }, { column: "created_at", order: "desc" }]);
+    return rows.map((row) => this.rowToOrganization(row));
+  }
+
+  async listLiveBySeller(sellerId) {
+    const rows = await knex("seller_organizations")
+      .where("seller_id", sellerId)
+      .whereIn("approval_status", ["approved", "active"])
+      .where("kyc_status", "verified")
+      .where("bank_verification_status", "verified")
+      .where("go_live_status", "live")
+      .orderBy([
+        { column: "is_default", order: "desc" },
+        { column: "created_at", order: "asc" },
+      ]);
     return rows.map((row) => this.rowToOrganization(row));
   }
 

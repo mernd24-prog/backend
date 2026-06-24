@@ -38,20 +38,21 @@ const sellerOrganizationBankSchema = Joi.object({
 });
 
 const sellerOrganizationBodySchema = Joi.object({
-  legalBusinessName: Joi.string().min(2).max(180),
-  legalName: Joi.string().min(2).max(180),
-  storeDisplayName: Joi.string().min(2).max(180),
-  displayName: Joi.string().min(2).max(180),
-  businessName: Joi.string().min(2).max(180),
+  submissionAction: Joi.string().valid("draft", "submit"),
+  legalBusinessName: Joi.string().min(2).max(180).allow("", null),
+  legalName: Joi.string().min(2).max(180).allow("", null),
+  storeDisplayName: Joi.string().min(2).max(180).allow("", null),
+  displayName: Joi.string().min(2).max(180).allow("", null),
+  businessName: Joi.string().min(2).max(180).allow("", null),
   businessType: Joi.string().valid("individual", "proprietorship", "partnership", "private_limited", "llp", "public_limited").allow("", null),
   description: Joi.string().max(2000).allow("", null),
-  supportEmail: Joi.string().email(),
-  supportPhone: Joi.string().pattern(/^\d{10,15}$/),
+  supportEmail: Joi.string().email().allow("", null),
+  supportPhone: Joi.string().pattern(/^\d{10,15}$/).allow("", null),
   registrationNumber: Joi.string().max(128).allow("", null),
   aadhaarNumber: Joi.string().pattern(aadhaarPattern).allow("", null),
   dateOfBirth: Joi.date().iso().allow("", null),
   businessWebsite: Joi.string().uri().allow("", null),
-  primaryContactName: Joi.string().min(2).max(180),
+  primaryContactName: Joi.string().min(2).max(180).allow("", null),
   gstin: Joi.string().pattern(gstPattern).allow("", null),
   gstNumber: Joi.string().pattern(gstPattern).allow("", null),
   pan: Joi.string().pattern(panPattern).allow("", null),
@@ -72,24 +73,7 @@ const sellerOrganizationBodySchema = Joi.object({
 });
 
 const createSellerOrganizationSchema = Joi.object({
-  body: sellerOrganizationBodySchema
-    .fork([
-      "legalBusinessName",
-      "storeDisplayName",
-      "businessType",
-      "supportEmail",
-      "supportPhone",
-      "gstin",
-      "pan",
-      "aadhaarNumber",
-      "dateOfBirth",
-      "primaryContactName",
-      "documents",
-      "bankDetails",
-      "billingAddress",
-      "pickupAddress",
-    ], (schema) => schema.required())
-    .required(),
+  body: sellerOrganizationBodySchema.min(1).required(),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),
 });

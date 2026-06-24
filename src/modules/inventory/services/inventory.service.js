@@ -35,6 +35,7 @@ class InventoryService {
                 productId: item.productId,
                 variantSku: item.variantSku || null,
                 sellerId: item.sellerId || product.sellerId || null,
+                organizationId: item.organizationId || product.organizationId || null,
                 available,
                 threshold,
               },
@@ -341,6 +342,7 @@ class InventoryService {
         productId: String(productId),
         variantSku,
         sellerId: product.sellerId || "",
+        organizationId: product.organizationId || "",
         quantity: adjustment,
       },
       {
@@ -356,6 +358,7 @@ class InventoryService {
         productId: String(productId),
         variantSku,
         sellerId: product.sellerId || "",
+        organizationId: product.organizationId || "",
       },
     ]);
 

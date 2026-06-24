@@ -3,6 +3,8 @@ const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
 const warehouseSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, index: true },
+    sellerId: { type: String, default: "", trim: true, index: true },
+    organizationId: { type: String, default: "", trim: true, index: true },
     code: { type: String, required: true, trim: true, uppercase: true, unique: true, index: true },
     managerName: { type: String, default: "", trim: true },
     managerPhone: { type: String, default: "", trim: true },

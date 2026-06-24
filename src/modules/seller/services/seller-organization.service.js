@@ -51,7 +51,29 @@ class SellerOrganizationService {
     };
   }
 
-  normalizeOrganizationPayload(payload = {}, actor = {}, { admin = false, create = false } = {}) {
+  mergeAddress(primary = {}, fallback = {}) {
+    return this.normalizeAddress({
+      ...(fallback || {}),
+      ...(primary || {}),
+      line1: primary?.line1 || fallback?.line1 || "",
+      line2: primary?.line2 || fallback?.line2 || "",
+      city: primary?.city || fallback?.city || "",
+      state: primary?.state || fallback?.state || "",
+      country: primary?.country || fallback?.country || "India",
+      postalCode:
+        primary?.postalCode ||
+        primary?.pincode ||
+        fallback?.postalCode ||
+        fallback?.pincode ||
+        "",
+    });
+  }
+
+  normalizeOrganizationPayload(
+    payload = {},
+    actor = {},
+    { admin = false, create = false, submit = true } = {},
+  ) {
     const legalBusinessName = this.normalizeText(
       payload.legalBusinessName || payload.legalName || payload.businessName,
     );
@@ -59,6 +81,10 @@ class SellerOrganizationService {
       payload.storeDisplayName || payload.displayName || payload.storeName,
       legalBusinessName,
     );
+    const billingSource = payload.billingAddress || payload.businessAddress || {};
+    const pickupSource = payload.pickupAddress || {};
+    const billingAddress = this.mergeAddress(billingSource, pickupSource);
+    const pickupAddress = this.mergeAddress(pickupSource, billingAddress);
 
     const normalized = {
       ...(legalBusinessName ? { legalBusinessName } : {}),
@@ -82,10 +108,12 @@ class SellerOrganizationService {
         ? { documents: payload.documents || payload.kycDocuments || {} }
         : {}),
       ...(payload.bankDetails !== undefined ? { bankDetails: payload.bankDetails || {} } : {}),
-      ...(payload.billingAddress !== undefined || payload.businessAddress !== undefined
-        ? { billingAddress: this.normalizeAddress(payload.billingAddress || payload.businessAddress || {}) }
+      ...(payload.billingAddress !== undefined || payload.businessAddress !== undefined || payload.pickupAddress !== undefined
+        ? { billingAddress }
         : {}),
-      ...(payload.pickupAddress !== undefined ? { pickupAddress: this.normalizeAddress(payload.pickupAddress || {}) } : {}),
+      ...(payload.pickupAddress !== undefined || payload.billingAddress !== undefined || payload.businessAddress !== undefined
+        ? { pickupAddress }
+        : {}),
       ...(payload.returnAddress !== undefined ? { returnAddress: this.normalizeAddress(payload.returnAddress || {}) } : {}),
       ...(payload.taxSettings !== undefined ? { taxSettings: payload.taxSettings || {} } : {}),
       ...(payload.invoiceSettings !== undefined ? { invoiceSettings: payload.invoiceSettings || {} } : {}),
@@ -96,10 +124,10 @@ class SellerOrganizationService {
     };
 
     if (create) {
-      normalized.kycStatus = "submitted";
-      normalized.bankVerificationStatus = "submitted";
+      normalized.kycStatus = submit ? "submitted" : "not_submitted";
+      normalized.bankVerificationStatus = submit ? "submitted" : "not_submitted";
       normalized.goLiveStatus = "pending";
-      normalized.approvalStatus = "pending_review";
+      normalized.approvalStatus = submit ? "pending_review" : "draft";
       normalized.createdBy = actor.userId || actor.sub || null;
       if (payload.isDefault !== undefined) normalized.isDefault = Boolean(payload.isDefault);
     }
@@ -218,6 +246,11 @@ class SellerOrganizationService {
 
   validateCreatePayload(payload = {}) {
     const missing = [];
+    const billingAddress = this.mergeAddress(
+      payload.billingAddress || payload.businessAddress || {},
+      payload.pickupAddress || {},
+    );
+    const pickupAddress = this.mergeAddress(payload.pickupAddress || {}, billingAddress);
     if (!payload.legalBusinessName) missing.push("legalBusinessName");
     if (!payload.storeDisplayName) missing.push("storeDisplayName");
     if (!payload.businessType) missing.push("businessType");
@@ -229,8 +262,8 @@ class SellerOrganizationService {
     if (!payload.aadhaarNumber) missing.push("aadhaarNumber");
     if (!payload.dateOfBirth) missing.push("dateOfBirth");
     ["line1", "city", "state", "postalCode"].forEach((field) => {
-      if (!payload.billingAddress?.[field]) missing.push(`billingAddress.${field}`);
-      if (!payload.pickupAddress?.[field]) missing.push(`pickupAddress.${field}`);
+      if (!billingAddress?.[field]) missing.push(`businessAddress.${field}`);
+      if (!pickupAddress?.[field]) missing.push(`pickupAddress.${field}`);
     });
     if (!payload.bankDetails?.accountHolderName) missing.push("bankDetails.accountHolderName");
     if (!payload.bankDetails?.accountNumber) missing.push("bankDetails.accountNumber");
@@ -241,8 +274,6 @@ class SellerOrganizationService {
       "gstCertificateUrl",
       "aadhaarFrontUrl",
       "aadhaarBackUrl",
-      "bankProofUrl",
-      "addressProofUrl",
     ];
     requiredDocuments.forEach((key) => {
       if (!payload.documents?.[key]) missing.push(`documents.${key}`);
@@ -287,6 +318,14 @@ class SellerOrganizationService {
           : existing.bankVerificationStatus;
         patch.goLiveStatus = "pending";
         patch.approvalStatus = payload.kycStatus === "rejected" ? "rejected" : "pending_review";
+      } else if (existing.bankVerificationStatus === "verified") {
+        if (APPROVED_STATUSES.has(String(existing.approvalStatus || ""))) {
+          patch.approvalStatus = existing.approvalStatus;
+          patch.goLiveStatus = existing.goLiveStatus === "live" ? "live" : "ready";
+        } else {
+          patch.approvalStatus = "pending_review";
+          patch.goLiveStatus = "ready";
+        }
       }
     }
 
@@ -345,7 +384,7 @@ class SellerOrganizationService {
         }
         this.validateCreatePayload(existing);
         patch.goLiveStatus = "live";
-        patch.approvalStatus = effectiveApprovalStatus;
+        patch.approvalStatus = "active";
         patch.goLiveApprovedAt = now;
         patch.goLiveApprovedBy = actorId;
       } else {
@@ -465,6 +504,51 @@ class SellerOrganizationService {
       resubmittedAt: organization.resubmittedAt || null,
       blockedAt: organization.blockedAt || null,
       isDefault: Boolean(organization.isDefault),
+    };
+  }
+
+  isLiveForSelling(organization = {}) {
+    return (
+      APPROVED_STATUSES.has(String(organization.approvalStatus || "").toLowerCase()) &&
+      organization.kycStatus === "verified" &&
+      organization.bankVerificationStatus === "verified" &&
+      organization.goLiveStatus === "live"
+    );
+  }
+
+  selectOrganization(organizations = [], requestedOrganizationId = null) {
+    const items = Array.isArray(organizations) ? organizations.filter(Boolean) : [];
+    const requested = requestedOrganizationId
+      ? items.find((item) => String(item.id) === String(requestedOrganizationId))
+      : null;
+    if (requested && this.isLiveForSelling(requested)) return requested;
+
+    const liveOrganizations = items.filter((item) => this.isLiveForSelling(item));
+    return (
+      liveOrganizations.find((item) => item.isDefault) ||
+      liveOrganizations[0] ||
+      items.find((item) => item.isDefault) ||
+      items[0] ||
+      null
+    );
+  }
+
+  async getSellerOrganizationState(sellerId, requestedOrganizationId = null) {
+    const organizations = await this.organizationRepository.listBySeller(sellerId);
+    const approvedOrganizations = organizations.filter((organization) =>
+      this.isLiveForSelling(organization),
+    );
+    const selectedOrganization = this.selectOrganization(
+      organizations,
+      requestedOrganizationId,
+    );
+    return {
+      organizations,
+      approvedOrganizations,
+      selectedOrganization,
+      selectedOrganizationId: selectedOrganization?.id || null,
+      hasApprovedOrganization: approvedOrganizations.length > 0,
+      requiresSelection: approvedOrganizations.length > 1,
     };
   }
 
@@ -639,12 +723,20 @@ class SellerOrganizationService {
       throw new AppError("Only seller accounts can view organizations", 403);
     }
     const organizations = await this.organizationRepository.listBySeller(sellerId, query);
+    const approvedOrganizations = organizations.filter((organization) =>
+      this.isLiveForSelling(organization),
+    );
+    const selectedOrganization = this.selectOrganization(
+      organizations,
+      query.organizationId,
+    );
     return {
       sellerId,
       organizations,
-      selectedOrganizationId:
-        organizations.length === 1 ? organizations[0].id : query.organizationId || null,
-      requiresSelection: organizations.length > 1,
+      approvedOrganizations,
+      selectedOrganizationId: selectedOrganization?.id || null,
+      hasApprovedOrganization: approvedOrganizations.length > 0,
+      requiresSelection: approvedOrganizations.length > 1,
     };
   }
 
@@ -653,13 +745,23 @@ class SellerOrganizationService {
     if (!this.isSellerActor(actor) || !sellerId) {
       throw new AppError("Only seller accounts can create organizations", 403);
     }
-    const normalized = this.normalizeOrganizationPayload(payload, actor, { create: true });
+    const submit = payload.submissionAction !== "draft";
+    const normalized = this.normalizeOrganizationPayload(payload, actor, {
+      create: true,
+      submit,
+    });
+    if (!normalized.legalBusinessName) {
+      normalized.legalBusinessName = "Draft organization";
+    }
+    if (!normalized.storeDisplayName) {
+      normalized.storeDisplayName = normalized.legalBusinessName;
+    }
     const organizationId = uuidv4();
     normalized.documents = await this.uploadOrganizationDocuments(
       organizationId,
       normalized.documents || {},
     );
-    this.validateCreatePayload(normalized);
+    if (submit) this.validateCreatePayload(normalized);
     const existing = await this.organizationRepository.listBySeller(sellerId);
     const shouldSetDefault = existing.length === 0 || payload.isDefault === true;
     const organizationPayload = {
@@ -667,12 +769,16 @@ class SellerOrganizationService {
       id: organizationId,
       sellerId,
       isDefault: existing.length === 0,
+      metadata: {
+        ...(normalized.metadata || {}),
+        submissionAction: submit ? "submit" : "draft",
+      },
     };
     const lifecyclePatch = this.buildLifecyclePatch(
       {},
       organizationPayload,
       actor,
-      { action: "seller_organization_created" },
+      { action: submit ? "seller_organization_submitted" : "seller_organization_draft_created" },
     );
     const organization = await this.organizationRepository.create({
       ...organizationPayload,
@@ -697,6 +803,7 @@ class SellerOrganizationService {
     if (APPROVED_STATUSES.has(String(existing.approvalStatus || ""))) {
       throw new AppError("Approved organizations require admin review for legal/KYC changes", 409);
     }
+    const submit = payload.submissionAction !== "draft";
     const normalized = this.normalizeOrganizationPayload(payload, actor, { create: false });
     if (payload.documents !== undefined || payload.kycDocuments !== undefined) {
       normalized.documents = await this.uploadOrganizationDocuments(
@@ -705,21 +812,49 @@ class SellerOrganizationService {
         existing.documents || {},
       );
     }
-    const approvalStatus = RESUBMITTABLE_STATUSES.has(existing.approvalStatus)
-      ? "resubmitted"
-      : "pending_review";
+    const candidate = {
+      ...existing,
+      ...normalized,
+      documents: normalized.documents || existing.documents || {},
+      bankDetails: normalized.bankDetails || existing.bankDetails || {},
+      billingAddress: normalized.billingAddress || existing.billingAddress || {},
+      pickupAddress: normalized.pickupAddress || existing.pickupAddress || {},
+    };
+    if (submit) this.validateCreatePayload(candidate);
+    const approvalStatus = submit
+      ? RESUBMITTABLE_STATUSES.has(existing.approvalStatus)
+        ? "resubmitted"
+        : "pending_review"
+      : existing.approvalStatus === "draft"
+        ? "draft"
+        : existing.approvalStatus;
     const updates = {
       ...normalized,
       approvalStatus,
-      kycStatus: "submitted",
-      bankVerificationStatus: "submitted",
+      ...(submit
+        ? {
+            kycStatus: "submitted",
+            bankVerificationStatus: "submitted",
+          }
+        : {}),
       goLiveStatus: "pending",
+      metadata: {
+        ...(existing.metadata || {}),
+        ...(normalized.metadata || {}),
+        submissionAction: submit ? "submit" : "draft",
+      },
     };
     const lifecyclePatch = this.buildLifecyclePatch(
       existing,
       updates,
       actor,
-      { action: approvalStatus === "resubmitted" ? "seller_organization_resubmitted" : "seller_organization_updated" },
+      {
+        action: submit
+          ? approvalStatus === "resubmitted"
+            ? "seller_organization_resubmitted"
+            : "seller_organization_submitted"
+          : "seller_organization_draft_saved",
+      },
     );
     return this.organizationRepository.update(organizationId, {
       ...updates,
@@ -731,6 +866,36 @@ class SellerOrganizationService {
     const sellerId = this.getSellerId(actor);
     await this.assertOrganizationForSeller(sellerId, organizationId, { requireApproved: true });
     return this.organizationRepository.setDefault(sellerId, organizationId, actor.userId || actor.sub || null);
+  }
+
+  async deleteMineDraft(organizationId, actor = {}) {
+    const sellerId = this.getSellerId(actor);
+    if (!this.isSellerActor(actor) || !sellerId) {
+      throw new AppError("Only seller accounts can delete draft organizations", 403);
+    }
+    const existing = await this.assertOrganizationForSeller(sellerId, organizationId);
+    if (existing.approvalStatus !== "draft") {
+      throw new AppError("Only draft organizations can be deleted", 409, {
+        organizationId,
+        approvalStatus: existing.approvalStatus,
+      });
+    }
+    if (existing.isDefault) {
+      const liveOrganizations = await this.organizationRepository.listLiveBySeller(sellerId);
+      const replacement = liveOrganizations.find((organization) => organization.id !== organizationId);
+      if (replacement) {
+        await this.organizationRepository.setDefault(
+          sellerId,
+          replacement.id,
+          actor.userId || actor.sub || sellerId,
+        );
+      }
+    }
+    const deleted = await this.organizationRepository.deleteByIdForSeller(sellerId, organizationId);
+    return {
+      deleted: Boolean(deleted),
+      organizationId,
+    };
   }
 
   async adminList(query = {}, actor = {}) {

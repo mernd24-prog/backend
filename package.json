@@ -17,6 +17,7 @@
     "db:seed:rbac": "node scripts/db/seed-rbac.js",
     "db:repair:rbac-role-assignments": "node scripts/db/repair-rbac-role-assignments.js",
     "db:backfill:shipments": "node scripts/db/backfill-missing-order-shipments.js",
+    "db:backfill:organizations": "node scripts/db/backfill-organization-ownership.js",
     "db:update-super-admin": "node scripts/db/update-super-admin.js",
     "db:reset": "node scripts/db/reset-all-databases.js",
     "postman:sync": "node scripts/postman/sync-postman-collection.js",

@@ -116,6 +116,7 @@ class CancellationService {
         variantId: orderItem.variant_id || "",
         variantSku: orderItem.variant_sku || "",
         sellerId: orderItem.seller_id,
+        organizationId: orderItem.organization_id || null,
         quantity,
         orderedQuantity: Number(orderItem.quantity || 0),
         itemAmount,
@@ -560,7 +561,10 @@ class CancellationService {
 
   async list(query = {}, actor = {}) {
     if (!this.isAdmin(actor)) {
-      if (this.isSeller(actor)) query.sellerId = actor.ownerSellerId || actor.userId;
+      if (this.isSeller(actor)) {
+        query.sellerId = actor.ownerSellerId || actor.userId;
+        query.organizationId = actor.organizationId || null;
+      }
       else query.buyerId = actor.userId;
     }
     return this.cancellationRepository.list(query);

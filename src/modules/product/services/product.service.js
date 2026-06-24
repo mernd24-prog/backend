@@ -1967,8 +1967,12 @@ class ProductService {
     return updatedProduct;
   }
 
-  async getInventoryStats(sellerId = null, createdBy = null) {
-    const [stats] = await this.productRepository.getInventoryStats(sellerId, createdBy);
+  async getInventoryStats(sellerId = null, organizationId = null, createdBy = null) {
+    const [stats] = await this.productRepository.getInventoryStats(
+      sellerId,
+      createdBy,
+      organizationId,
+    );
     return stats || {
       totalProducts: 0,
       totalStock: 0,

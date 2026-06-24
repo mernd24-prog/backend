@@ -471,6 +471,7 @@ class ReturnServiceClass {
         productSku: orderItem.product_sku || "",
         productImage: orderItem.product_image || "",
         sellerId: orderItem.seller_id || "",
+        organizationId: orderItem.organization_id || "",
         variantId: item.variantId || orderItem.variant_id || "",
         variantSku: item.variantSku || orderItem.variant_sku || "",
         quantity,
@@ -489,14 +490,18 @@ class ReturnServiceClass {
     const grouped = new Map();
     normalizedItems.forEach((item) => {
       const sellerId = String(item.sellerId || "platform");
-      if (!grouped.has(sellerId)) grouped.set(sellerId, []);
-      grouped.get(sellerId).push(item);
+      const organizationId = String(item.organizationId || "");
+      const key = `${sellerId}:${organizationId || "default"}`;
+      if (!grouped.has(key)) {
+        grouped.set(key, { sellerId, organizationId: organizationId || null, items: [] });
+      }
+      grouped.get(key).items.push(item);
     });
 
     const buyerSnapshot = order.relations?.buyer || { id: buyerId };
     const shippingAddress = this.parseJson(order.shipping_address, {});
     const createdReturns = [];
-    for (const [sellerId, sellerItems] of grouped.entries()) {
+    for (const { sellerId, organizationId, items: sellerItems } of grouped.values()) {
       const refundBreakup = this.calculateRefundBreakup(sellerItems, order);
       this.allocateItemRefunds(sellerItems, refundBreakup.totalRefundAmount, { setEligible: true });
       const returnRequest = await ReturnModel.create({
@@ -504,6 +509,7 @@ class ReturnServiceClass {
         orderId,
         buyerId,
         sellerId,
+        organizationId,
         items: sellerItems,
         reason,
         resolution: extra.resolution || "refund",
@@ -676,6 +682,10 @@ class ReturnServiceClass {
         orderId: returnRequest.orderId,
         returnId: String(returnRequest._id),
         sellerId: returnRequest.sellerId || returnRequest.items[0]?.sellerId || "platform",
+        organizationId:
+          returnRequest.organizationId ||
+          returnRequest.items[0]?.organizationId ||
+          null,
         shipmentType: "return",
         direction: "reverse",
         provider: payload.provider || providerResult.provider || "manual",

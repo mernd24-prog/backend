@@ -107,6 +107,8 @@ class DeliveryRepository {
           id,
           order_id: payload.orderId,
           seller_id: payload.sellerId,
+          organization_id: payload.organizationId || null,
+          organization_snapshot: payload.organizationSnapshot || {},
           provider: payload.provider || "manual",
           courier_name: payload.courierName || null,
           awb_number: payload.awbNumber || null,
@@ -166,6 +168,7 @@ class DeliveryRepository {
     direction = null,
     dealId = null,
     sellerId = null,
+    organizationId = null,
     deliveryAgentId = null,
     status = null,
     courierName = null,
@@ -186,6 +189,7 @@ class DeliveryRepository {
     if (direction) query.where("direction", direction);
     if (dealId) query.where("deal_id", dealId);
     if (sellerId) query.where("seller_id", sellerId);
+    if (organizationId) query.where("organization_id", organizationId);
     if (deliveryAgentId) query.where("delivery_agent_id", deliveryAgentId);
     if (status) query.where("status", status);
     if (courierName) query.whereILike("courier_name", `%${courierName}%`);
@@ -600,6 +604,7 @@ class DeliveryRepository {
 
   async listDeliveryAgents({
     sellerId = null,
+    organizationId = null,
     active = null,
     verificationStatus = null,
     search = null,
@@ -608,6 +613,7 @@ class DeliveryRepository {
   } = {}) {
     const query = knex("delivery_agents");
     if (sellerId) query.where("seller_id", sellerId);
+    if (organizationId) query.where("organization_id", organizationId);
     if (active !== null && active !== undefined) query.where("active", active === true || active === "true");
     if (verificationStatus) query.where("verification_status", verificationStatus);
     if (search) {
@@ -644,6 +650,7 @@ class DeliveryRepository {
       .insert({
         id: uuidv4(),
         seller_id: payload.sellerId,
+        organization_id: payload.organizationId || null,
         name: payload.name,
         phone: payload.phone,
         email: payload.email || null,
@@ -664,6 +671,7 @@ class DeliveryRepository {
   async updateDeliveryAgent(agentId, payload = {}) {
     const next = {};
     if (payload.sellerId !== undefined) next.seller_id = payload.sellerId;
+    if (payload.organizationId !== undefined) next.organization_id = payload.organizationId || null;
     if (payload.name !== undefined) next.name = payload.name;
     if (payload.phone !== undefined) next.phone = payload.phone;
     if (payload.email !== undefined) next.email = payload.email || null;

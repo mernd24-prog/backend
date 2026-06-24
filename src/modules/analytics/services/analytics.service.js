@@ -51,14 +51,17 @@ class AnalyticsService {
 
   async getSellerDashboard(query = {}, actor = {}) {
     const sellerId = this.resolveSellerId(query.sellerId, actor);
+    const organizationId = query.organizationId || actor.organizationId || null;
     const [dashboard, wallet] = await Promise.all([
       this.analyticsRepository.getSellerDashboard({
         sellerId,
+        organizationId,
         fromDate: query.fromDate || null,
         toDate: query.toDate || null,
         recentLimit: Number(query.limit || 10),
       }),
       this.commissionService.getSellerWalletSummary(sellerId, {
+        organizationId,
         fromDate: query.fromDate || null,
         toDate: query.toDate || null,
         limit: Number(query.walletLimit || 5),
