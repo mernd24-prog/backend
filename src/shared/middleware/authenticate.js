@@ -70,7 +70,7 @@ async function attachOrganizationContext(req, auth = {}) {
     !["approved", "active"].includes(organization.approvalStatus) ||
     organization.kycStatus !== "verified" ||
     organization.bankVerificationStatus !== "verified" ||
-    organization.goLiveStatus !== "live"
+    ["blocked", "rejected"].includes(String(organization.goLiveStatus || ""))
   ) {
     throw new AppError(
       "Selected organization is not approved for selling",
@@ -222,14 +222,12 @@ async function authenticatePendingSeller(req, res, next) {
 
   try {
     const payload = jwt.verify(token, env.jwtAccessSecret);
-    req.auth = await attachOrganizationContext(req, payload);
-
-    // Check if this is an onboarding token for a pending seller
-    if (!payload.isOnboarding || payload.role !== ROLES.SELLER) {
+    // Both onboarding tokens (isOnboarding=true) and regular seller access tokens are accepted.
+    // Regular tokens are used by sellers who log back in to complete onboarding.
+    if (payload.role !== ROLES.SELLER) {
       return next(authError(AUTH_ERROR_CODES.TOKEN_INVALID, 403));
     }
 
-    // Verify user exists and is still in onboarding state.
     const user = await UserModel.findById(payload.sub);
     if (!user) {
       return next(authError(AUTH_ERROR_CODES.USER_NOT_FOUND, 401));
@@ -239,11 +237,8 @@ async function authenticatePendingSeller(req, res, next) {
     if (statusError && status !== "pending_approval") {
       return next(statusError);
     }
-    const onboardingComplete = user?.sellerProfile?.onboardingStatus === "ready_for_go_live";
-    if (onboardingComplete) {
-      return next(authError(AUTH_ERROR_CODES.TOKEN_INVALID, 401));
-    }
 
+    req.auth = await attachOrganizationContext(req, payload);
     return next();
   } catch (error) {
     return next(

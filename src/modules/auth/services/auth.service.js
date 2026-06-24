@@ -408,11 +408,22 @@ class AuthService {
     const isSeller = user.role === ROLES.SELLER;
     let kyc = null;
     let organization = null;
+    let organizations = [];
+    let organizationSummary = null;
     if (isSeller) {
-      [kyc, organization] = await Promise.all([
+      [kyc, organizations] = await Promise.all([
         this.authRepository.findSellerKycBySellerId(user.id),
-        sellerOrganizationService.getDefaultOrOnlyOrganization(user.id),
+        sellerOrganizationService.organizationRepository.listBySeller(user.id),
       ]);
+      organizationSummary = sellerOrganizationService.buildOrganizationCollectionSummary(organizations);
+      const selectedOrganizationId =
+        organizationSummary.selectedOrganizationId ||
+        organizationSummary.onboardingTargetOrganizationId;
+      organization =
+        organizations.find((item) => String(item.id) === String(selectedOrganizationId)) ||
+        organizations.find((item) => item.isDefault) ||
+        organizations[0] ||
+        null;
     }
 
     let sellerProfile = isSeller ? this.toPlainObject(user?.sellerProfile || {}) : {};
@@ -461,20 +472,9 @@ class AuthService {
       : user?.sellerProfile?.onboardingStatus || "initiated";
     const bankVerificationStatus = sellerProfile.bankVerificationStatus || "not_submitted";
     const goLiveStatus = sellerProfile.goLiveStatus || "pending";
-    const organizationApproved = ["approved", "active"].includes(
-      String(organization?.approvalStatus || "").toLowerCase(),
-    );
-    const organizationVerificationReady =
-      organization?.kycStatus === "verified" &&
-      organization?.bankVerificationStatus === "verified";
+    const organizationApproved = organizationSummary?.hasApprovedOrganization || false;
     const sellerOnboardingComplete =
-      kycStatus === "verified" &&
-      onboardingState?.requirements?.profile?.completed === true &&
-      onboardingState?.requirements?.bankDetails?.completed === true &&
-      bankVerificationStatus !== "rejected" &&
-      organizationApproved &&
-      organizationVerificationReady &&
-      user.accountStatus === "active";
+      organizationSummary?.hasApprovedOrganization === true;
     const flowState = {
       user: {
         id: user.id,
@@ -489,7 +489,7 @@ class AuthService {
       role: user.role,
       emailVerified: Boolean(user.emailVerified),
       accountStatus: user.accountStatus || "active",
-      requiresOnboarding: isSeller && (user.accountStatus !== "active" || !sellerOnboardingComplete),
+      requiresOnboarding: isSeller && !sellerOnboardingComplete,
       onboardingStatus,
       checklist: onboardingChecklist,
       kycStatus,
@@ -498,10 +498,32 @@ class AuthService {
       bankRejectionReason: sellerProfile.bankRejectionReason || null,
       goLiveStatus,
       organization: sellerOrganizationService.buildPublicSummary(organization),
+      organizations: isSeller
+        ? organizations.map((item) => sellerOrganizationService.buildPublicSummary(item))
+        : [],
+      organizationSummary: organizationSummary || {
+        total: 0,
+        approvedCount: 0,
+        liveCount: 0,
+        rejectedCount: 0,
+        incompleteCount: 0,
+        hasApprovedOrganization: false,
+        hasLiveOrganization: false,
+        requiresOrganizationOnboarding: true,
+        requiresSelection: false,
+        selectedOrganizationId: null,
+        onboardingTargetOrganizationId: null,
+        approvedOrganizationIds: [],
+        incompleteOrganizationIds: [],
+      },
       organizationApproved,
       sellerProfile: isSeller ? sellerProfile : null,
       kyc: isSeller ? this.formatSellerKycForStatus(kyc) : null,
       requirements: onboardingState?.requirements || {},
+      hasApprovedOrganization: organizationSummary?.hasApprovedOrganization || false,
+      hasLiveOrganization: organizationSummary?.hasLiveOrganization || false,
+      selectedOrganizationId: organizationSummary?.selectedOrganizationId || null,
+      onboardingTargetOrganizationId: organizationSummary?.onboardingTargetOrganizationId || null,
     };
 
     return flowState;
@@ -550,7 +572,7 @@ class AuthService {
       return this.makeOnboardingResponse(user);
     }
 
-    if (user.accountStatus !== "active") {
+    if (user.accountStatus !== "active" && !sellerFlowState?.hasApprovedOrganization) {
       await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
         userId: user.id,
         email: user.email,
@@ -739,7 +761,7 @@ class AuthService {
       if (sellerFlowState?.requiresOnboarding) {
         return this.makeOnboardingResponse(user);
       }
-      if (user.accountStatus !== "active") {
+      if (user.accountStatus !== "active" && !sellerFlowState?.hasApprovedOrganization) {
         throw new AppError("Account is not active. Please complete onboarding or contact support.", 403);
       }
 

@@ -8,6 +8,17 @@ const SELLER_ROLES = ["seller", "seller-admin", "seller-sub-admin"];
 const ADMIN_ROLES = ["admin", "sub-admin", "super-admin"];
 const APPROVED_STATUSES = new Set(["approved", "active"]);
 const RESUBMITTABLE_STATUSES = new Set(["rejected", "blocked"]);
+const BUSINESS_BLOCKING_GO_LIVE_STATUSES = new Set(["blocked", "rejected"]);
+const REQUIRED_ADDRESS_FIELDS = ["line1", "city", "state", "postalCode"];
+const REQUIRED_BANK_FIELDS = ["accountHolderName", "accountNumber", "ifscCode", "bankName"];
+const REQUIRED_DOCUMENT_FIELDS = [
+  "panDocumentUrl",
+  "gstCertificateUrl",
+  "aadhaarFrontUrl",
+  "aadhaarBackUrl",
+  "bankProofUrl",
+  "addressProofUrl",
+];
 
 class SellerOrganizationService {
   constructor({
@@ -48,6 +59,88 @@ class SellerOrganizationService {
       state: address.state || "",
       country: address.country || "India",
       postalCode: address.postalCode || address.pincode || "",
+    };
+  }
+
+  isOrganizationApprovedForBusiness(organization = {}) {
+    return (
+      APPROVED_STATUSES.has(String(organization.approvalStatus || "")) &&
+      organization.kycStatus === "verified" &&
+      organization.bankVerificationStatus === "verified" &&
+      !BUSINESS_BLOCKING_GO_LIVE_STATUSES.has(String(organization.goLiveStatus || ""))
+    );
+  }
+
+  isOrganizationLiveForBusiness(organization = {}) {
+    return (
+      this.isOrganizationApprovedForBusiness(organization) &&
+      organization.goLiveStatus === "live"
+    );
+  }
+
+  getOrganizationMissingRequiredFields(organization = {}) {
+    const missing = [];
+    if (!this.normalizeText(organization.legalBusinessName)) missing.push("legalBusinessName");
+    if (!this.normalizeText(organization.storeDisplayName)) missing.push("storeDisplayName");
+    if (!this.normalizeText(organization.businessType)) missing.push("businessType");
+    if (!this.normalizeText(organization.supportEmail)) missing.push("supportEmail");
+    if (!this.normalizeText(organization.supportPhone)) missing.push("supportPhone");
+    if (!this.normalizeText(organization.primaryContactName)) missing.push("primaryContactName");
+    if (!this.normalizeText(organization.gstin)) missing.push("gstin");
+    if (!this.normalizeText(organization.pan)) missing.push("pan");
+    if (!this.normalizeText(organization.aadhaarNumber)) missing.push("aadhaarNumber");
+    if (!organization.dateOfBirth) missing.push("dateOfBirth");
+
+    REQUIRED_ADDRESS_FIELDS.forEach((field) => {
+      if (!this.normalizeText(organization.billingAddress?.[field])) {
+        missing.push(`billingAddress.${field}`);
+      }
+      if (!this.normalizeText(organization.pickupAddress?.[field])) {
+        missing.push(`pickupAddress.${field}`);
+      }
+    });
+
+    REQUIRED_BANK_FIELDS.forEach((field) => {
+      if (!this.normalizeText(organization.bankDetails?.[field])) {
+        missing.push(`bankDetails.${field}`);
+      }
+    });
+
+    REQUIRED_DOCUMENT_FIELDS.forEach((field) => {
+      if (!this.normalizeText(organization.documents?.[field])) {
+        missing.push(`documents.${field}`);
+      }
+    });
+
+    return missing;
+  }
+
+  assertOrganizationRequiredFields(organization = {}) {
+    const missing = this.getOrganizationMissingRequiredFields(organization);
+    if (missing.length) {
+      throw new AppError(`Organization is missing required fields: ${missing.join(", ")}`, 400, { missing });
+    }
+  }
+
+  mergeOrganizationPatch(existing = {}, patch = {}) {
+    const mergeObject = (key) =>
+      patch[key] !== undefined
+        ? { [key]: { ...(existing[key] || {}), ...(patch[key] || {}) } }
+        : {};
+
+    return {
+      ...existing,
+      ...patch,
+      ...mergeObject("documents"),
+      ...mergeObject("bankDetails"),
+      ...mergeObject("billingAddress"),
+      ...mergeObject("pickupAddress"),
+      ...mergeObject("returnAddress"),
+      ...mergeObject("taxSettings"),
+      ...mergeObject("invoiceSettings"),
+      ...mergeObject("payoutSettings"),
+      ...mergeObject("complianceSettings"),
+      ...mergeObject("metadata"),
     };
   }
 
@@ -217,39 +310,7 @@ class SellerOrganizationService {
   }
 
   validateCreatePayload(payload = {}) {
-    const missing = [];
-    if (!payload.legalBusinessName) missing.push("legalBusinessName");
-    if (!payload.storeDisplayName) missing.push("storeDisplayName");
-    if (!payload.businessType) missing.push("businessType");
-    if (!payload.supportEmail) missing.push("supportEmail");
-    if (!payload.supportPhone) missing.push("supportPhone");
-    if (!payload.primaryContactName) missing.push("primaryContactName");
-    if (!payload.gstin) missing.push("gstin");
-    if (!payload.pan) missing.push("pan");
-    if (!payload.aadhaarNumber) missing.push("aadhaarNumber");
-    if (!payload.dateOfBirth) missing.push("dateOfBirth");
-    ["line1", "city", "state", "postalCode"].forEach((field) => {
-      if (!payload.billingAddress?.[field]) missing.push(`billingAddress.${field}`);
-      if (!payload.pickupAddress?.[field]) missing.push(`pickupAddress.${field}`);
-    });
-    if (!payload.bankDetails?.accountHolderName) missing.push("bankDetails.accountHolderName");
-    if (!payload.bankDetails?.accountNumber) missing.push("bankDetails.accountNumber");
-    if (!payload.bankDetails?.ifscCode) missing.push("bankDetails.ifscCode");
-    if (!payload.bankDetails?.bankName) missing.push("bankDetails.bankName");
-    const requiredDocuments = [
-      "panDocumentUrl",
-      "gstCertificateUrl",
-      "aadhaarFrontUrl",
-      "aadhaarBackUrl",
-      "bankProofUrl",
-      "addressProofUrl",
-    ];
-    requiredDocuments.forEach((key) => {
-      if (!payload.documents?.[key]) missing.push(`documents.${key}`);
-    });
-    if (missing.length) {
-      throw new AppError(`Organization is missing required fields: ${missing.join(", ")}`, 400, { missing });
-    }
+    this.assertOrganizationRequiredFields(payload);
   }
 
   async uploadOrganizationDocuments(organizationId, documents = {}, existingDocuments = {}) {
@@ -430,6 +491,8 @@ class SellerOrganizationService {
       businessAddress: billingAddress,
       pickupAddress,
       returnAddress,
+      billingAddress,
+      documents: organization.documents || profile.documents || profile.kycDocuments || {},
       kycStatus: organization.kycStatus || profile.kycStatus,
       bankVerificationStatus: organization.bankVerificationStatus || profile.bankVerificationStatus,
       rejectionReason: organization.rejectionReason || profile.rejectionReason,
@@ -444,6 +507,7 @@ class SellerOrganizationService {
 
   buildPublicSummary(organization = null) {
     if (!organization?.id) return null;
+    const canSell = this.isOrganizationApprovedForBusiness(organization);
     return {
       id: organization.id,
       legalBusinessName: organization.legalBusinessName,
@@ -458,8 +522,12 @@ class SellerOrganizationService {
       kycStatus: organization.kycStatus || "not_submitted",
       bankVerificationStatus: organization.bankVerificationStatus || "not_submitted",
       goLiveStatus: organization.goLiveStatus || "pending",
+      businessStatus: canSell ? "approved" : organization.approvalStatus || "draft",
+      canSell,
+      canOperate: canSell,
       rejectionReason: organization.rejectionReason || null,
       requiredChanges: organization.requiredChanges || [],
+      missingRequiredFields: this.getOrganizationMissingRequiredFields(organization),
       approvedAt: organization.approvedAt || null,
       rejectedAt: organization.rejectedAt || null,
       resubmittedAt: organization.resubmittedAt || null,
@@ -487,8 +555,8 @@ class SellerOrganizationService {
         bankVerificationStatus: organization.bankVerificationStatus,
       });
     }
-    if (organization.goLiveStatus !== "live") {
-      throw new AppError("Organization must receive go-live approval before selling", 403, {
+    if (BUSINESS_BLOCKING_GO_LIVE_STATUSES.has(String(organization.goLiveStatus || ""))) {
+      throw new AppError("Organization is not enabled for selling", 403, {
         organizationId: organization.id,
         goLiveStatus: organization.goLiveStatus || "pending",
       });
@@ -537,6 +605,52 @@ class SellerOrganizationService {
       map.get(sellerId).push(organization);
       return map;
     }, new Map());
+  }
+
+  buildOrganizationCollectionSummary(organizations = []) {
+    const items = Array.isArray(organizations) ? organizations.filter(Boolean) : [];
+    const approvedOrganizations = items.filter((organization) =>
+      this.isOrganizationApprovedForBusiness(organization),
+    );
+    const liveOrganizations = items.filter((organization) =>
+      this.isOrganizationLiveForBusiness(organization),
+    );
+    const rejectedOrganizations = items.filter((organization) =>
+      ["rejected", "blocked", "suspended"].includes(String(organization.approvalStatus || "")) ||
+      organization.kycStatus === "rejected" ||
+      organization.bankVerificationStatus === "rejected" ||
+      organization.goLiveStatus === "rejected",
+    );
+    const incompleteOrganizations = items.filter((organization) =>
+      !this.isOrganizationApprovedForBusiness(organization),
+    );
+    const selected =
+      approvedOrganizations.find((organization) => organization.isDefault) ||
+      approvedOrganizations[0] ||
+      items.find((organization) => organization.isDefault) ||
+      items[0] ||
+      null;
+    const onboardingTarget =
+      incompleteOrganizations.find((organization) => organization.isDefault) ||
+      incompleteOrganizations.find((organization) => ["rejected", "blocked"].includes(organization.approvalStatus)) ||
+      incompleteOrganizations[0] ||
+      null;
+
+    return {
+      total: items.length,
+      approvedCount: approvedOrganizations.length,
+      liveCount: liveOrganizations.length,
+      rejectedCount: rejectedOrganizations.length,
+      incompleteCount: incompleteOrganizations.length,
+      hasApprovedOrganization: approvedOrganizations.length > 0,
+      hasLiveOrganization: liveOrganizations.length > 0,
+      requiresOrganizationOnboarding: approvedOrganizations.length === 0,
+      requiresSelection: approvedOrganizations.length > 1,
+      selectedOrganizationId: selected?.id || null,
+      onboardingTargetOrganizationId: onboardingTarget?.id || null,
+      approvedOrganizationIds: approvedOrganizations.map((organization) => organization.id),
+      incompleteOrganizationIds: incompleteOrganizations.map((organization) => organization.id),
+    };
   }
 
   async ensureDefaultOrganizationForSeller(sellerId, sellerProfile = {}, actor = {}) {
@@ -639,12 +753,17 @@ class SellerOrganizationService {
       throw new AppError("Only seller accounts can view organizations", 403);
     }
     const organizations = await this.organizationRepository.listBySeller(sellerId, query);
+    const organizationSummary = this.buildOrganizationCollectionSummary(organizations);
     return {
       sellerId,
       organizations,
+      organizationSummary,
       selectedOrganizationId:
-        organizations.length === 1 ? organizations[0].id : query.organizationId || null,
-      requiresSelection: organizations.length > 1,
+        query.organizationId || organizationSummary.selectedOrganizationId,
+      requiresSelection: organizationSummary.requiresSelection,
+      hasApprovedOrganization: organizationSummary.hasApprovedOrganization,
+      hasLiveOrganization: organizationSummary.hasLiveOrganization,
+      onboardingTargetOrganizationId: organizationSummary.onboardingTargetOrganizationId,
     };
   }
 
@@ -715,6 +834,8 @@ class SellerOrganizationService {
       bankVerificationStatus: "submitted",
       goLiveStatus: "pending",
     };
+    const mergedForReview = this.mergeOrganizationPatch(existing, updates);
+    this.validateCreatePayload(mergedForReview);
     const lifecyclePatch = this.buildLifecyclePatch(
       existing,
       updates,
@@ -895,6 +1016,12 @@ class SellerOrganizationService {
       ...normalized,
       ...this.buildLifecyclePatch(existing, normalized, actor, { action, notes: payload.notes || null }),
     });
+    if (
+      this.isOrganizationApprovedForBusiness(updated) &&
+      (await UserModel.findById(sellerId).select("accountStatus").lean())?.accountStatus !== "active"
+    ) {
+      await UserModel.findByIdAndUpdate(sellerId, { $set: { accountStatus: "active" } });
+    }
     if (shouldSetDefault) {
       return this.organizationRepository.setDefault(
         sellerId,

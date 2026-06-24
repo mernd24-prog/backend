@@ -290,6 +290,14 @@ const updateSellerProfileSchema = Joi.object({
       country: Joi.string().default("India"),
       postalCode: Joi.string().min(5).max(10).allow("", null),
     }).default({}),
+    billingAddress: Joi.object({
+      line1: Joi.string().allow("", null),
+      line2: Joi.string().allow("", null),
+      city: Joi.string().allow("", null),
+      state: Joi.string().allow("", null),
+      country: Joi.string().default("India"),
+      postalCode: Joi.string().min(5).max(10).allow("", null),
+    }).default({}),
     pickupAddress: Joi.object({
       line1: Joi.string().required(),
       line2: Joi.string().allow("", null),

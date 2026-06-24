@@ -696,6 +696,7 @@ class PlatformService {
       searchFields:["name"],
     });
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
+    if (query.slug) filter.slug = query.slug;
     return this.platformRepository.listProductOptions(filter, pagination);
   }
 

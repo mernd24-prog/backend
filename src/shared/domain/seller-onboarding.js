@@ -11,8 +11,14 @@ const SELLER_ONBOARDING_STATUS = Object.freeze({
 const SELLER_PROFILE_REQUIRED_FIELDS = Object.freeze([
   "displayName",
   "legalBusinessName",
+  "businessType",
   "supportEmail",
   "supportPhone",
+  "primaryContactName",
+  "gstNumber",
+  "panNumber",
+  "aadhaarNumber",
+  "dateOfBirth",
 ]);
 
 const SELLER_BANK_REQUIRED_FIELDS = Object.freeze([
@@ -22,11 +28,29 @@ const SELLER_BANK_REQUIRED_FIELDS = Object.freeze([
   "bankName",
 ]);
 
+const SELLER_BILLING_ADDRESS_REQUIRED_FIELDS = Object.freeze([
+  "line1",
+  "city",
+  "state",
+  "postalCode",
+]);
+
+const SELLER_DOCUMENT_REQUIRED_FIELDS = Object.freeze([
+  "panDocumentUrl",
+  "gstCertificateUrl",
+  "aadhaarFrontUrl",
+  "aadhaarBackUrl",
+  "bankProofUrl",
+  "addressProofUrl",
+]);
+
 const DEFAULT_SELLER_CHECKLIST = Object.freeze({
   profileCompleted: false,
   kycSubmitted: false,
   gstVerified: false,
   bankLinked: false,
+  billingAddressCompleted: false,
+  documentsSubmitted: false,
   firstProductPublished: false,
 });
 
@@ -61,8 +85,18 @@ function getSellerProfileFieldValue(sellerProfile = {}, field, { user = {}, kyc 
       sellerProfile.legalName,
       kyc?.legal_name,
     ],
+    businessType: [sellerProfile.businessType, kyc?.business_type],
     supportEmail: [sellerProfile.supportEmail, sellerProfile.email, user?.email],
     supportPhone: [sellerProfile.supportPhone, sellerProfile.phone, user?.phone],
+    primaryContactName: [
+      sellerProfile.primaryContactName,
+      sellerProfile.contactName,
+      getNameFromUserProfile(userProfile),
+    ],
+    gstNumber: [sellerProfile.gstNumber, sellerProfile.gstin, kyc?.gst_number],
+    panNumber: [sellerProfile.panNumber, sellerProfile.pan, kyc?.pan_number],
+    aadhaarNumber: [sellerProfile.aadhaarNumber, sellerProfile.aadhaar, kyc?.aadhaar_number],
+    dateOfBirth: [sellerProfile.dateOfBirth, kyc?.date_of_birth],
   };
 
   return firstNonEmpty(...(fallbackMap[field] || [sellerProfile?.[field]]));
@@ -100,6 +134,34 @@ function getMissingSellerBankFields(bankDetails = {}) {
   return SELLER_BANK_REQUIRED_FIELDS.filter((field) => !getSellerBankFieldValue(bankDetails, field));
 }
 
+function getMissingBillingAddressFields(sellerProfile = {}) {
+  const billing = sellerProfile.billingAddress || {};
+  return SELLER_BILLING_ADDRESS_REQUIRED_FIELDS.filter(
+    (field) => !cleanText(billing[field]),
+  );
+}
+
+function parseDocuments(value = {}) {
+  if (!value) return {};
+  if (typeof value === "object") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+}
+
+function getMissingDocumentFields(sellerProfile = {}, kyc = null) {
+  const docs = {
+    ...parseDocuments(kyc?.documents),
+    ...parseDocuments(sellerProfile.kycDocuments),
+    ...parseDocuments(sellerProfile.documents),
+  };
+  return SELLER_DOCUMENT_REQUIRED_FIELDS.filter(
+    (field) => !cleanText(docs[field]),
+  );
+}
+
 function hasCompleteSellerProfile(sellerProfile = {}, context = {}) {
   return getMissingSellerProfileFields(sellerProfile, context).length === 0;
 }
@@ -121,6 +183,8 @@ function makeSellerOnboardingChecklist({
   const profile = sellerProfile || {};
   const storedChecklist = existingChecklist || profile.onboardingChecklist || {};
   const storedKycStatus = profile.kycStatus || profile.verificationStatus;
+  const missingBillingFields = getMissingBillingAddressFields(profile);
+  const missingDocumentFields = getMissingDocumentFields(profile, kyc);
 
   return {
     ...DEFAULT_SELLER_CHECKLIST,
@@ -130,6 +194,8 @@ function makeSellerOnboardingChecklist({
     bankLinked:
       profile.bankVerificationStatus !== "rejected" &&
       hasCompleteSellerBankDetails(profile.bankDetails),
+    billingAddressCompleted: missingBillingFields.length === 0,
+    documentsSubmitted: missingDocumentFields.length === 0,
     firstProductPublished: storedChecklist.firstProductPublished === true,
   };
 }
@@ -137,6 +203,8 @@ function makeSellerOnboardingChecklist({
 function makeSellerOnboardingRequirements({ sellerProfile = {}, user = {}, kyc = null } = {}) {
   const missingProfileFields = getMissingSellerProfileFields(sellerProfile, { user, kyc });
   const missingBankFields = getMissingSellerBankFields(sellerProfile?.bankDetails || {});
+  const missingBillingFields = getMissingBillingAddressFields(sellerProfile);
+  const missingDocumentFields = getMissingDocumentFields(sellerProfile, kyc);
 
   return {
     profile: {
@@ -144,10 +212,20 @@ function makeSellerOnboardingRequirements({ sellerProfile = {}, user = {}, kyc =
       missingFields: missingProfileFields,
       completed: missingProfileFields.length === 0,
     },
+    billingAddress: {
+      requiredFields: SELLER_BILLING_ADDRESS_REQUIRED_FIELDS,
+      missingFields: missingBillingFields,
+      completed: missingBillingFields.length === 0,
+    },
     bankDetails: {
       requiredFields: SELLER_BANK_REQUIRED_FIELDS,
       missingFields: missingBankFields,
       completed: missingBankFields.length === 0,
+    },
+    documents: {
+      requiredFields: SELLER_DOCUMENT_REQUIRED_FIELDS,
+      missingFields: missingDocumentFields,
+      completed: missingDocumentFields.length === 0,
     },
   };
 }
@@ -176,7 +254,9 @@ function getSellerOnboardingStatus(
   const baseComplete =
     checklist.profileCompleted === true &&
     checklist.kycSubmitted === true &&
-    checklist.bankLinked === true;
+    checklist.bankLinked === true &&
+    checklist.billingAddressCompleted === true &&
+    checklist.documentsSubmitted === true;
 
   if (baseComplete && kycStatus === KYC_STATUS.VERIFIED) {
     return SELLER_ONBOARDING_STATUS.READY_FOR_GO_LIVE;

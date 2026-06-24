@@ -87,6 +87,13 @@ const SYSTEM_DROPDOWNS = {
   "referral-override-modes": valuesToOptions(["nearest_only", "stacked"]),
   "referral-override-scopes": valuesToOptions(["promoted_subtree", "direct_sales_only"]),
   "shipping-modes": valuesToOptions(SHIPPING_MODES),
+  "shipping-methods": [
+    { label: "Standard Delivery", value: "standard", id: "standard", meta: {} },
+    { label: "Express Delivery", value: "express", id: "express", meta: {} },
+    { label: "Same Day Delivery", value: "same_day", id: "same_day", meta: {} },
+    { label: "Store Pickup", value: "store_pickup", id: "store_pickup", meta: {} },
+    { label: "Hyperlocal", value: "hyperlocal", id: "hyperlocal", meta: {} },
+  ],
   "subscription-billing-cycles": valuesToOptions(Object.values(SUBSCRIPTION_BILLING_CYCLE)),
   "warranty-units": valuesToOptions(["days", "weeks", "months", "years"]),
   "wallet-transaction-types": valuesToOptions(Object.values(WALLET_TRANSACTION_TYPE)),
@@ -245,6 +252,51 @@ metaRoutes.get(
           meta: { optionId: String(item.optionId || item.option_id || "") },
         }));
         break;
+      case "warranty-templates": {
+        const warrantyOptionsResult = await platformService.listProductOptions({ ...query, slug: "warranty", limit: 1 });
+        const warrantyOption = warrantyOptionsResult.items?.[0];
+        if (!warrantyOption) {
+          options = [];
+          result = { total: 0 };
+          break;
+        }
+        const warrantyValuesResult = await platformService.listProductOptionValues({
+          optionId: String(warrantyOption._id || warrantyOption.id),
+          limit: 100,
+          active: true,
+        });
+        options = warrantyValuesResult.items.map((item) => {
+          const valueCode = String(item.valueCode || "");
+          const name = String(item.name || "");
+          let durationValue = 0;
+          let durationUnit = "months";
+
+          if (valueCode === "no-warranty" || name.toLowerCase().includes("no warranty")) {
+            durationValue = 0;
+            durationUnit = "months";
+          } else if (valueCode === "lifetime" || name.toLowerCase().includes("lifetime")) {
+            durationValue = 999;
+            durationUnit = "years";
+          } else {
+            const match = name.match(/(\d+)\s*(day|days|week|weeks|month|months|year|years)/i);
+            if (match) {
+              durationValue = Number(match[1]);
+              const unitRaw = match[2].toLowerCase();
+              const unitMap = { day: "days", days: "days", week: "weeks", weeks: "weeks", month: "months", months: "months", year: "years", years: "years" };
+              durationUnit = unitMap[unitRaw] || "months";
+            }
+          }
+
+          return {
+            label: name,
+            value: `${durationValue}:${durationUnit}`,
+            id: itemId(item),
+            meta: { durationValue, durationUnit, valueCode, sortOrder: item.sortOrder ?? 999 },
+          };
+        }).sort((a, b) => (a.meta.sortOrder - b.meta.sortOrder) || a.label.localeCompare(b.label));
+        result = warrantyValuesResult;
+        break;
+      }
       default:
         return res.status(404).json({ success: false, message: "Dropdown resource not found" });
     }

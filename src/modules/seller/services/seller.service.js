@@ -72,10 +72,11 @@ class SellerService {
   mergeSellerProfile(existingProfile = {}, payload = {}) {
     const profile = this.toPlainObject(existingProfile);
     const profileFields = { ...payload };
-    const { bankDetails, businessAddress, pickupAddress, returnAddress } = profileFields;
+    const { bankDetails, businessAddress, billingAddress, pickupAddress, returnAddress } = profileFields;
     delete profileFields.onboardingChecklist;
     delete profileFields.bankDetails;
     delete profileFields.businessAddress;
+    delete profileFields.billingAddress;
     delete profileFields.pickupAddress;
     delete profileFields.returnAddress;
 
@@ -87,6 +88,9 @@ class SellerService {
         : {}),
       ...(businessAddress
         ? { businessAddress: { ...(profile.businessAddress || {}), ...businessAddress } }
+        : {}),
+      ...(billingAddress
+        ? { billingAddress: { ...(profile.billingAddress || {}), ...billingAddress } }
         : {}),
       ...(pickupAddress
         ? { pickupAddress: { ...(profile.pickupAddress || {}), ...pickupAddress } }
@@ -188,7 +192,14 @@ class SellerService {
       gstin: sellerProfile.gstNumber || organization.gstin || null,
       pan: sellerProfile.panNumber || organization.pan || null,
       bankDetails: sellerProfile.bankDetails || organization.bankDetails || {},
-      billingAddress: sellerProfile.businessAddress || organization.billingAddress || {},
+      billingAddress: (() => {
+        const hasContent = (addr) => addr && (addr.line1 || addr.city || addr.state || addr.postalCode);
+        return hasContent(sellerProfile.billingAddress)
+          ? sellerProfile.billingAddress
+          : hasContent(sellerProfile.businessAddress)
+            ? sellerProfile.businessAddress
+            : organization.billingAddress || {};
+      })(),
       pickupAddress: sellerProfile.pickupAddress || organization.pickupAddress || {},
       returnAddress: sellerProfile.returnAddress || organization.returnAddress || {},
       taxSettings: {
@@ -398,6 +409,8 @@ class SellerService {
       profileCompleted: "Complete seller profile",
       kycSubmitted: "Submit seller KYC",
       bankLinked: "Complete bank details",
+      billingAddressCompleted: "Complete billing address",
+      documentsSubmitted: "Upload required organization documents",
       gstVerified: "Verify GST details if applicable",
       firstProductPublished: "Publish first product from seller panel",
     };
@@ -427,16 +440,25 @@ class SellerService {
 
   async getWebStatus(actor) {
     const sellerId = this.assertSellerWebActor(actor);
-    const [seller, kyc, organization] = await Promise.all([
+    const [seller, kyc, organizations] = await Promise.all([
       this.sellerRepository.findSellerById(sellerId),
       this.sellerRepository.findKycBySellerId(sellerId),
-      sellerOrganizationService.getDefaultOrOnlyOrganization(sellerId),
+      sellerOrganizationService.organizationRepository.listBySeller(sellerId),
     ]);
 
     if (!seller) {
       throw AppError.notFound("Seller profile");
     }
 
+    const organizationSummary = sellerOrganizationService.buildOrganizationCollectionSummary(organizations);
+    const selectedOrganizationId =
+      organizationSummary.selectedOrganizationId ||
+      organizationSummary.onboardingTargetOrganizationId;
+    const organization =
+      organizations.find((item) => String(item.id) === String(selectedOrganizationId)) ||
+      organizations.find((item) => item.isDefault) ||
+      organizations[0] ||
+      null;
     const organizationBackedProfile = sellerOrganizationService.buildSellerProfileMirror(
       seller.sellerProfile || {},
       organization,
@@ -447,9 +469,7 @@ class SellerService {
       kyc,
     });
     const profile = this.withOnboardingState(organizationBackedProfile, kyc, seller);
-    const organizationApproved = ["approved", "active"].includes(
-      String(organization?.approvalStatus || "").toLowerCase(),
-    );
+    const organizationApproved = organizationSummary.hasApprovedOrganization;
 
     return {
       sellerId,
@@ -469,15 +489,18 @@ class SellerService {
       onboarding: {
         status: onboardingState.onboardingStatus,
         complete:
-          onboardingState.onboardingStatus === SELLER_ONBOARDING_STATUS.READY_FOR_GO_LIVE &&
           organizationApproved,
         checklist: onboardingState.checklist,
         kycStatus: onboardingState.kycStatus,
         organizationStatus: organization?.approvalStatus || "not_created",
         organizationApproved,
+        hasApprovedOrganization: organizationSummary.hasApprovedOrganization,
+        hasLiveOrganization: organizationSummary.hasLiveOrganization,
+        organizationSummary,
         nextSteps: this.getSellerWebNextSteps(onboardingState.checklist, onboardingState.kycStatus, organization),
       },
       organization: sellerOrganizationService.buildPublicSummary(organization),
+      organizations: organizations.map((item) => sellerOrganizationService.buildPublicSummary(item)),
       kyc: kyc
         ? {
             status: kyc.verification_status,
