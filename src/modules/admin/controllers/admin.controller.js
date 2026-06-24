@@ -9,7 +9,7 @@ class AdminController {
   }
 
   overview = async (req, res) => {
-    const data = await this.adminService.getOverview();
+    const data = await this.adminService.getOverview(req.query);
     res.json(okResponse(data));
   };
 

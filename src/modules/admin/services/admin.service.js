@@ -87,8 +87,8 @@ class AdminService {
     };
   }
 
-  async getOverview() {
-    return this.adminRepository.getOverviewStats();
+  async getOverview(query = {}) {
+    return this.adminRepository.getOverviewStats(query);
   }
 
   inferActivityAction(log = {}) {
