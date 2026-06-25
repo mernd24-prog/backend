@@ -104,6 +104,12 @@ class SellerController {
     res.json(okResponse(modules));
   };
 
+  listSidebarModules = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const modules = await this.sellerService.listSidebarModules(req.query, actor);
+    res.json(okResponse(modules));
+  };
+
   createSubAdmin = async (req, res) => {
     const actor = getCurrentUser(req);
     const user = await this.sellerService.createSellerSubAdmin(req.body, { ...actor, _req: req });

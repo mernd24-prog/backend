@@ -883,14 +883,31 @@ class AuthService {
       throw sessionError;
     }
 
-    const currentSession = await this.findMatchingRefreshSession(user.refreshSessions || [], refreshToken);
-    if (!currentSession || currentSession.sessionId !== payload.sessionId) {
+    // Look up by sessionId first (bcrypt truncates at 72 bytes, making hash-only
+    // lookup unreliable for JWTs — all tokens from the same user share the same
+    // first ~72 chars, so bcrypt.compare would return true for any session).
+    const currentSession = (user.refreshSessions || []).find(
+      (s) => s.sessionId === payload.sessionId,
+    );
+    if (!currentSession) {
       await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_REFRESH_FAILED, "failed", {
         userId: user.id,
         email: user.email,
         provider: "session",
         ...requestContext,
         metadata: { reason: "session_not_found" },
+      });
+      throw authError(AUTH_ERROR_CODES.SESSION_INVALID, 401);
+    }
+    // Verify the hash as a secondary integrity check.
+    const tokenValid = await checkHash(refreshToken, currentSession.tokenHash);
+    if (!tokenValid) {
+      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_REFRESH_FAILED, "failed", {
+        userId: user.id,
+        email: user.email,
+        provider: "session",
+        ...requestContext,
+        metadata: { reason: "token_hash_mismatch" },
       });
       throw authError(AUTH_ERROR_CODES.SESSION_INVALID, 401);
     }

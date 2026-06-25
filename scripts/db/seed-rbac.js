@@ -122,10 +122,11 @@ function makeSidebarModuleList() {
     isVisibleInSidebar: module.isVisibleInSidebar !== false,
     order: Number(module.order || 0),
     metadata: {
+      ...(module.metadata || {}),
       requiredModule: module.requiredModule || module.moduleKey,
       routeKey: module.moduleKey,
       tab: module.tab || null,
-      allowedRoles: ["super-admin", "admin", "sub-admin"],
+      allowedRoles: module.allowedRoles || ["super-admin", "admin", "sub-admin"],
       source: "sidebar-seed",
     },
   }));
@@ -187,12 +188,21 @@ function slugsForModules(moduleSlugs, actions = CANONICAL_ACTIONS) {
 }
 
 async function upsertModule(module, transaction) {
-  // Sidebar modules use a prefixed slug (sidebar-*). Never look them up by name,
-  // since sidebar display names can legitimately collide with platform module names.
+  // Sidebar modules use prefixed slugs, but the modules table also has a unique
+  // name constraint. Prefer slug/key and fall back to name so partial seeds can
+  // repair old rows instead of failing on a duplicate display name.
   const isSidebarModule = module.slug?.startsWith("sidebar-");
 
   const lookupSql = isSidebarModule
-    ? `SELECT id FROM modules WHERE slug = :slug OR module_key = :moduleKey LIMIT 1`
+    ? `SELECT id FROM modules
+       WHERE slug = :slug
+          OR module_key = :moduleKey
+          OR name = :name
+       ORDER BY CASE
+         WHEN slug = :slug OR module_key = :moduleKey THEN 0
+         ELSE 1
+       END
+       LIMIT 1`
     : `SELECT id FROM modules
        WHERE slug = :slug
           OR module_key = :moduleKey

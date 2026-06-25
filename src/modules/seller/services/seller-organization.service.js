@@ -78,6 +78,64 @@ class SellerOrganizationService {
     );
   }
 
+  hasApprovedOrganization(organizations = []) {
+    return (Array.isArray(organizations) ? organizations : []).some((organization) =>
+      this.isOrganizationApprovedForBusiness(organization),
+    );
+  }
+
+  canUseAsDefaultOrganization(organization = {}, organizations = []) {
+    if (this.isOrganizationApprovedForBusiness(organization)) return true;
+    return !this.hasApprovedOrganization(organizations);
+  }
+
+  getOrganizationBusinessStatus(organization = {}, missingFields = null) {
+    if (this.isOrganizationApprovedForBusiness(organization)) return "approved";
+
+    const approvalStatus = String(organization.approvalStatus || "draft");
+    if (["rejected", "blocked", "suspended"].includes(approvalStatus)) return approvalStatus;
+    if (
+      organization.kycStatus === "rejected" ||
+      organization.bankVerificationStatus === "rejected" ||
+      organization.goLiveStatus === "rejected"
+    ) {
+      return "rejected";
+    }
+    if (["pending_review", "resubmitted"].includes(approvalStatus)) return "pending";
+    if (["submitted", "under_review"].includes(String(organization.kycStatus || ""))) return "pending";
+    if (String(organization.bankVerificationStatus || "") === "submitted") return "pending";
+
+    const missing = Array.isArray(missingFields)
+      ? missingFields
+      : this.getOrganizationMissingRequiredFields(organization);
+    if (missing.length) return "incomplete";
+    return approvalStatus || "draft";
+  }
+
+  getOperationDisabledReason(organization = {}, missingFields = null) {
+    if (this.isOrganizationApprovedForBusiness(organization)) return null;
+
+    const approvalStatus = String(organization.approvalStatus || "draft");
+    if (["rejected", "blocked", "suspended"].includes(approvalStatus)) {
+      return organization.rejectionReason || `Organization is ${approvalStatus}`;
+    }
+    if (organization.kycStatus === "rejected") return organization.rejectionReason || "KYC was rejected";
+    if (organization.bankVerificationStatus === "rejected") return organization.rejectionReason || "Bank verification was rejected";
+    if (organization.goLiveStatus === "rejected") return organization.rejectionReason || "Go-live approval was rejected";
+    if (!APPROVED_STATUSES.has(approvalStatus)) return "Organization approval is pending";
+    if (organization.kycStatus !== "verified") return "KYC must be verified";
+    if (organization.bankVerificationStatus !== "verified") return "Bank details must be verified";
+    if (BUSINESS_BLOCKING_GO_LIVE_STATUSES.has(String(organization.goLiveStatus || ""))) {
+      return "Organization is not enabled for selling";
+    }
+
+    const missing = Array.isArray(missingFields)
+      ? missingFields
+      : this.getOrganizationMissingRequiredFields(organization);
+    if (missing.length) return `Missing required fields: ${missing.join(", ")}`;
+    return "Organization is not approved for selling";
+  }
+
   getOrganizationMissingRequiredFields(organization = {}) {
     const missing = [];
     if (!this.normalizeText(organization.legalBusinessName)) missing.push("legalBusinessName");
@@ -508,8 +566,11 @@ class SellerOrganizationService {
   buildPublicSummary(organization = null) {
     if (!organization?.id) return null;
     const canSell = this.isOrganizationApprovedForBusiness(organization);
+    const missingRequiredFields = this.getOrganizationMissingRequiredFields(organization);
+    const businessStatus = this.getOrganizationBusinessStatus(organization, missingRequiredFields);
     return {
       id: organization.id,
+      organizationId: organization.id,
       legalBusinessName: organization.legalBusinessName,
       storeDisplayName: organization.storeDisplayName,
       businessType: organization.businessType || null,
@@ -522,17 +583,38 @@ class SellerOrganizationService {
       kycStatus: organization.kycStatus || "not_submitted",
       bankVerificationStatus: organization.bankVerificationStatus || "not_submitted",
       goLiveStatus: organization.goLiveStatus || "pending",
-      businessStatus: canSell ? "approved" : organization.approvalStatus || "draft",
+      businessStatus,
       canSell,
       canOperate: canSell,
+      canSwitch: canSell,
+      operationDisabledReason: this.getOperationDisabledReason(organization, missingRequiredFields),
       rejectionReason: organization.rejectionReason || null,
       requiredChanges: organization.requiredChanges || [],
-      missingRequiredFields: this.getOrganizationMissingRequiredFields(organization),
+      missingRequiredFields,
       approvedAt: organization.approvedAt || null,
       rejectedAt: organization.rejectedAt || null,
       resubmittedAt: organization.resubmittedAt || null,
       blockedAt: organization.blockedAt || null,
       isDefault: Boolean(organization.isDefault),
+    };
+  }
+
+  enrichOrganization(organization = null) {
+    if (!organization?.id) return organization || null;
+    return {
+      ...organization,
+      ...this.buildPublicSummary(organization),
+      documents: organization.documents || {},
+      bankDetails: organization.bankDetails || {},
+      billingAddress: organization.billingAddress || {},
+      pickupAddress: organization.pickupAddress || {},
+      returnAddress: organization.returnAddress || {},
+      taxSettings: organization.taxSettings || {},
+      invoiceSettings: organization.invoiceSettings || {},
+      payoutSettings: organization.payoutSettings || {},
+      complianceSettings: organization.complianceSettings || {},
+      metadata: organization.metadata || {},
+      verificationHistory: organization.verificationHistory || [],
     };
   }
 
@@ -655,6 +737,7 @@ class SellerOrganizationService {
 
   async ensureDefaultOrganizationForSeller(sellerId, sellerProfile = {}, actor = {}) {
     const targetGstin = this.normalizeCode(sellerProfile.gstNumber);
+    const existingOrganizations = await this.organizationRepository.listBySeller(sellerId);
 
     // If the profile has a GSTIN, prefer the org that already owns it — avoids
     // updating a different org row with a GSTIN that the first row already holds.
@@ -664,7 +747,10 @@ class SellerOrganizationService {
         targetGstin,
       );
       if (gstinOwner) {
-        if (!gstinOwner.isDefault) {
+        if (
+          !gstinOwner.isDefault &&
+          this.canUseAsDefaultOrganization(gstinOwner, existingOrganizations)
+        ) {
           return this.organizationRepository.setDefault(
             sellerId,
             gstinOwner.id,
@@ -675,12 +761,28 @@ class SellerOrganizationService {
       }
     }
 
-    const existing = await this.organizationRepository.findDefaultBySeller(sellerId);
+    const approvedDefault = existingOrganizations.find((organization) =>
+      organization.isDefault && this.isOrganizationApprovedForBusiness(organization),
+    );
+    if (approvedDefault) return approvedDefault;
+
+    const approved = existingOrganizations.find((organization) =>
+      this.isOrganizationApprovedForBusiness(organization),
+    );
+    if (approved) {
+      return this.organizationRepository.setDefault(
+        sellerId,
+        approved.id,
+        actor.userId || actor.sub || sellerId,
+      );
+    }
+
+    const existing = existingOrganizations.find((organization) => organization.isDefault);
     if (existing) return existing;
 
     // No default org — check if any org exists at all before creating a new one.
     // This prevents duplicate orgs when is_default was not set correctly on older records.
-    const anyExisting = await this.organizationRepository.findLatestBySeller(sellerId);
+    const anyExisting = existingOrganizations[0] || null;
     if (anyExisting) {
       return this.organizationRepository.setDefault(
         sellerId,
@@ -756,7 +858,7 @@ class SellerOrganizationService {
     const organizationSummary = this.buildOrganizationCollectionSummary(organizations);
     return {
       sellerId,
-      organizations,
+      organizations: organizations.map((organization) => this.enrichOrganization(organization)),
       organizationSummary,
       selectedOrganizationId:
         query.organizationId || organizationSummary.selectedOrganizationId,
@@ -780,7 +882,9 @@ class SellerOrganizationService {
     );
     this.validateCreatePayload(normalized);
     const existing = await this.organizationRepository.listBySeller(sellerId);
-    const shouldSetDefault = existing.length === 0 || payload.isDefault === true;
+    const shouldSetDefault =
+      existing.length === 0 ||
+      (payload.isDefault === true && !this.hasApprovedOrganization(existing));
     const organizationPayload = {
       ...normalized,
       id: organizationId,
@@ -798,13 +902,14 @@ class SellerOrganizationService {
       ...lifecyclePatch,
     });
     if (shouldSetDefault && !organization.isDefault) {
-      return this.organizationRepository.setDefault(
+      const defaultOrganization = await this.organizationRepository.setDefault(
         sellerId,
         organization.id,
         actor.userId || actor.sub || sellerId,
       );
+      return this.enrichOrganization(defaultOrganization);
     }
-    return organization;
+    return this.enrichOrganization(organization);
   }
 
   async updateMine(organizationId, payload = {}, actor = {}) {
@@ -842,16 +947,18 @@ class SellerOrganizationService {
       actor,
       { action: approvalStatus === "resubmitted" ? "seller_organization_resubmitted" : "seller_organization_updated" },
     );
-    return this.organizationRepository.update(organizationId, {
+    const updated = await this.organizationRepository.update(organizationId, {
       ...updates,
       ...lifecyclePatch,
     });
+    return this.enrichOrganization(updated);
   }
 
   async setMineDefault(organizationId, actor = {}) {
     const sellerId = this.getSellerId(actor);
     await this.assertOrganizationForSeller(sellerId, organizationId, { requireApproved: true });
-    return this.organizationRepository.setDefault(sellerId, organizationId, actor.userId || actor.sub || null);
+    const updated = await this.organizationRepository.setDefault(sellerId, organizationId, actor.userId || actor.sub || null);
+    return this.enrichOrganization(updated);
   }
 
   async adminList(query = {}, actor = {}) {
@@ -867,7 +974,7 @@ class SellerOrganizationService {
     return {
       ...result,
       items: result.items.map((item) => ({
-        ...item,
+        ...this.enrichOrganization(item),
         seller: sellerMap.get(String(item.sellerId)) || null,
       })),
     };
@@ -925,7 +1032,8 @@ class SellerOrganizationService {
     return {
       sellerId,
       seller,
-      organizations,
+      organizations: organizations.map((organization) => this.enrichOrganization(organization)),
+      organizationSummary: this.buildOrganizationCollectionSummary(organizations),
     };
   }
 
@@ -944,7 +1052,9 @@ class SellerOrganizationService {
     );
     this.validateCreatePayload(normalized);
     const existing = await this.organizationRepository.listBySeller(sellerId);
-    const shouldSetDefault = existing.length === 0 || payload.isDefault === true;
+    const shouldSetDefault =
+      existing.length === 0 ||
+      (payload.isDefault === true && !this.hasApprovedOrganization(existing));
     const organizationPayload = {
       ...normalized,
       id: organizationId,
@@ -963,13 +1073,14 @@ class SellerOrganizationService {
       ...lifecyclePatch,
     });
     if (shouldSetDefault && !organization.isDefault) {
-      return this.organizationRepository.setDefault(
+      const defaultOrganization = await this.organizationRepository.setDefault(
         sellerId,
         organization.id,
         actor.userId || actor.sub || sellerId,
       );
+      return this.enrichOrganization(defaultOrganization);
     }
-    return organization;
+    return this.enrichOrganization(organization);
   }
 
   async adminGet(sellerId, organizationId, actor = {}) {
@@ -978,7 +1089,7 @@ class SellerOrganizationService {
     }
     const organization = await this.organizationRepository.findByIdForSeller(sellerId, organizationId);
     if (!organization) throw AppError.notFound("Seller organization");
-    return organization;
+    return this.enrichOrganization(organization);
   }
 
   async adminUpdate(sellerId, organizationId, payload = {}, actor = {}, { review = false } = {}) {
@@ -1003,6 +1114,27 @@ class SellerOrganizationService {
     if (normalized.isDefault !== undefined) {
       delete normalized.isDefault;
     }
+    if (shouldSetDefault) {
+      const mergedForDefault = this.mergeOrganizationPatch(existing, normalized);
+      const sellerOrganizations = await this.organizationRepository.listBySeller(sellerId);
+      const hasApprovedOrganizationAfterUpdate = sellerOrganizations.some((organization) =>
+        String(organization.id) === String(organizationId)
+          ? this.isOrganizationApprovedForBusiness(mergedForDefault)
+          : this.isOrganizationApprovedForBusiness(organization),
+      );
+      if (
+        hasApprovedOrganizationAfterUpdate &&
+        !this.isOrganizationApprovedForBusiness(mergedForDefault)
+      ) {
+        throw new AppError("Only approved organizations can be set as default when the seller already has an approved organization", 409, {
+          organizationId,
+          approvalStatus: mergedForDefault.approvalStatus || "draft",
+          kycStatus: mergedForDefault.kycStatus || "not_submitted",
+          bankVerificationStatus: mergedForDefault.bankVerificationStatus || "not_submitted",
+          goLiveStatus: mergedForDefault.goLiveStatus || "pending",
+        });
+      }
+    }
     if (normalized.approvalStatus === "rejected" && !normalized.rejectionReason) {
       throw new AppError("Rejection reason is required when organization is rejected", 400);
     }
@@ -1016,20 +1148,39 @@ class SellerOrganizationService {
       ...normalized,
       ...this.buildLifecyclePatch(existing, normalized, actor, { action, notes: payload.notes || null }),
     });
-    if (
-      this.isOrganizationApprovedForBusiness(updated) &&
-      (await UserModel.findById(sellerId).select("accountStatus").lean())?.accountStatus !== "active"
-    ) {
-      await UserModel.findByIdAndUpdate(sellerId, { $set: { accountStatus: "active" } });
+    const updatedCanOperate = this.isOrganizationApprovedForBusiness(updated);
+    if (updatedCanOperate) {
+      const sellerAccount = await UserModel.findById(sellerId).select("accountStatus").lean();
+      if (sellerAccount?.accountStatus !== "active") {
+        await UserModel.findByIdAndUpdate(sellerId, { $set: { accountStatus: "active" } });
+      }
     }
     if (shouldSetDefault) {
-      return this.organizationRepository.setDefault(
+      const defaultOrganization = await this.organizationRepository.setDefault(
         sellerId,
         organizationId,
         actor.userId || actor.sub || null,
       );
+      return this.enrichOrganization(defaultOrganization);
     }
-    return updated;
+
+    if (updatedCanOperate && !updated.isDefault) {
+      const sellerOrganizations = await this.organizationRepository.listBySeller(sellerId);
+      const hasOtherApprovedDefault = sellerOrganizations.some((organization) =>
+        String(organization.id) !== String(organizationId) &&
+        organization.isDefault &&
+        this.isOrganizationApprovedForBusiness(organization),
+      );
+      if (!hasOtherApprovedDefault) {
+        const defaultOrganization = await this.organizationRepository.setDefault(
+          sellerId,
+          organizationId,
+          actor.userId || actor.sub || null,
+        );
+        return this.enrichOrganization(defaultOrganization);
+      }
+    }
+    return this.enrichOrganization(updated);
   }
 
   async adminReview(sellerId, organizationId, payload = {}, actor = {}) {

@@ -76,6 +76,13 @@ sellerRoutes.get(
   catchErrors(sellerController.listAccessModules),
 );
 sellerRoutes.get(
+  "/me/sidebar/modules",
+  authenticate,
+  allowRoles(ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN),
+  checkInput(listSellerAccessModulesSchema),
+  catchErrors(sellerController.listSidebarModules),
+);
+sellerRoutes.get(
   "/me/status",
   authenticate,
   checkInput(sellerWebStatusSchema),

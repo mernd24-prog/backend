@@ -18,6 +18,9 @@ const { env } = require("../../../config/env");
 const { logger } = require("../../../shared/logger/logger");
 const { ProductModel } = require("../../product/models/product.model");
 const { sellerChargeSettingsService } = require("../../seller/services/seller-charge-settings.service");
+const { ShippingProfilesService } = require("./shipping-profiles.service");
+
+const shippingProfilesService = new ShippingProfilesService();
 
 const SHIPMENT_TRANSITIONS = {
   initiated: ["manifested", "picked_up", "in_transit", "cancelled", "failed"],
@@ -33,6 +36,14 @@ const SHIPMENT_TRANSITIONS = {
   lost: [],
   damaged: [],
 };
+
+const ASSIGNABLE_SHIPMENT_STATUSES = new Set([
+  DELIVERY_STATUS.INITIATED,
+  DELIVERY_STATUS.MANIFESTED,
+  DELIVERY_STATUS.PICKED_UP,
+  DELIVERY_STATUS.IN_TRANSIT,
+  DELIVERY_STATUS.OUT_FOR_DELIVERY,
+]);
 
 const DELIVERY_OTP_TTL_MINUTES = 10;
 const DELIVERY_OTP_MAX_ATTEMPTS = 5;
@@ -72,6 +83,74 @@ class DeliveryService {
       .lean()
       .catch(() => null);
     if (!product?.sellerId) return response;
+
+    // Apply shipping profile rules when the product has one assigned
+    const profileId = product.shipping?.shippingProfileId;
+    if (profileId) {
+      try {
+        const profile = await shippingProfilesService.getById(profileId);
+        if (profile) {
+          const check = shippingProfilesService.checkPincodeAgainstProfile(
+            profile,
+            pincode,
+            response.city,
+            response.state
+          );
+
+          if (!check.allowed) {
+            return {
+              ...response,
+              serviceable: false,
+              sellerRuleBlocked: true,
+              shippingProfileId: profileId,
+              shippingProfileName: profile.name,
+              exclusions: [
+                ...(response.exclusions || []),
+                { reason: check.reason || "Not in seller's delivery area" },
+              ],
+            };
+          }
+
+          // Profile-level COD override
+          const codAvailable = response.codAvailable && profile.codAvailable;
+
+          // Use profile's ETA over pincode table value
+          const etaMin = profile.etaMin ?? null;
+          const etaMax = profile.etaMax ?? null;
+
+          // Shipping charge: free threshold check
+          const lineTotal = Number(product.salePrice ?? product.price ?? 0);
+          let shippingCharge = Number(profile.shippingCharge ?? 0);
+          if (profile.freeShippingThreshold != null && lineTotal >= Number(profile.freeShippingThreshold)) {
+            shippingCharge = 0;
+          }
+
+          return {
+            ...response,
+            serviceable: true,
+            codAvailable,
+            shippingProfileId: profileId,
+            shippingProfileName: profile.name,
+            shippingMethod: profile.shippingMethod,
+            sellerDeliveryChargeAmount: shippingCharge,
+            estimatedDeliveryDays: etaMin != null || etaMax != null
+              ? { minDays: etaMin, maxDays: etaMax }
+              : response.estimatedDeliveryDays,
+            deliveryChargeBreakup: {
+              sellers: [{
+                sellerId: product.sellerId,
+                shippingProfileId: profileId,
+                chargeAmount: shippingCharge,
+                isFree: shippingCharge === 0,
+                estimatedDeliveryDays: { minDays: etaMin, maxDays: etaMax },
+              }],
+            },
+          };
+        }
+      } catch {
+        // Fall through to seller charge settings
+      }
+    }
 
     try {
       const delivery = await sellerChargeSettingsService.calculateDeliveryCharges([
@@ -235,6 +314,15 @@ class DeliveryService {
     const shipment = await this.deliveryRepository.findShipmentById(shipmentId);
     if (!shipment) throw new AppError("Shipment not found", 404);
     await this.assertCanManageOrder(shipment.order_id, actor);
+    if (!this.isForwardShipment(shipment)) {
+      throw new AppError("Delivery agent assignment is only available for forward shipments", 409);
+    }
+    if (!ASSIGNABLE_SHIPMENT_STATUSES.has(shipment.status)) {
+      throw new AppError(`Delivery agent cannot be assigned when shipment is '${shipment.status}'`, 409, {
+        shipmentId,
+        status: shipment.status,
+      });
+    }
     const agent = await this.resolveAssignableDeliveryAgent(deliveryAgentId, shipment.seller_id, actor);
     return this.deliveryRepository.assignDeliveryAgentToShipment(shipmentId, agent, {
       deliveryAgentSnapshot: this.buildDeliveryAgentSnapshot(agent),

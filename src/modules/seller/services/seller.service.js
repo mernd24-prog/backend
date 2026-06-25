@@ -128,8 +128,8 @@ class SellerService {
     return {
       ...profile,
       displayName: profile.displayName || profileName || undefined,
-      supportEmail: profile.supportEmail || user?.email || undefined,
-      supportPhone: profile.supportPhone || user?.phone || undefined,
+      supportEmail: profile.supportEmail || undefined,
+      supportPhone: profile.supportPhone || undefined,
     };
   }
 
@@ -182,8 +182,8 @@ class SellerService {
         organization.storeDisplayName,
       businessType: sellerProfile.businessType || organization.businessType || null,
       description: sellerProfile.description || organization.description || null,
-      supportEmail: sellerProfile.supportEmail || organization.supportEmail || user?.email || null,
-      supportPhone: sellerProfile.supportPhone || organization.supportPhone || user?.phone || null,
+      supportEmail: sellerProfile.supportEmail || organization.supportEmail || null,
+      supportPhone: sellerProfile.supportPhone || organization.supportPhone || null,
       registrationNumber: sellerProfile.registrationNumber || organization.registrationNumber || null,
       aadhaarNumber: sellerProfile.aadhaarNumber || organization.aadhaarNumber || null,
       dateOfBirth: sellerProfile.dateOfBirth || organization.dateOfBirth || null,
@@ -1099,6 +1099,14 @@ class SellerService {
       },
       actions: permissionMatrix.actions,
     };
+  }
+
+  async listSidebarModules(query = {}, actor = {}) {
+    if (![ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(actor.role)) {
+      throw new AppError("Forbidden: seller access required", 403);
+    }
+
+    return this.rbacService.listSidebarModules(query, actor);
   }
 
   sanitizeModules(modules) {

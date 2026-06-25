@@ -171,6 +171,9 @@ const shippingSchema = new mongoose.Schema(
     shippingMethod: { type: String, trim: true, default: "standard" },
     dangerousGoods: { type: Boolean, default: false },
     requiresColdChain: { type: Boolean, default: false },
+    // References a ShippingProfile (PostgreSQL UUID). When set, the profile
+    // rules override the inline fields for serviceability, charges, and ETA.
+    shippingProfileId: { type: String, trim: true, default: null },
   },
   { _id: false },
 );

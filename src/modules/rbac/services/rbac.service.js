@@ -179,6 +179,12 @@ class RbacService {
     });
 
     const moduleAllowed = (item = {}) => {
+      const allowedRoles = Array.isArray(item.metadata?.allowedRoles)
+        ? item.metadata.allowedRoles
+        : [];
+      if (allowedRoles.length && !allowedRoles.includes(actor.role)) {
+        return false;
+      }
       if (isSuperAdmin) return true;
       const candidates = [
         item.metadata?.requiredModule,

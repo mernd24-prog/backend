@@ -157,6 +157,8 @@ const MODULE_ALIASES = {
   shipping_company_users: "delivery",
   "shipping-fulfilment": "delivery",
   shipping_fulfilment: "delivery",
+  "shipping-profiles": "delivery",
+  shipping_profiles: "delivery",
   "shipment-tracking": "delivery",
   shipment_tracking: "delivery",
   "delivery-agents": "delivery",
