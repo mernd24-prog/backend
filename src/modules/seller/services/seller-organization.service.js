@@ -422,6 +422,9 @@ class SellerOrganizationService {
         approvedAt: null,
         approvedBy: null,
       });
+      if (updates.stepRejections) {
+        patch.metadata = { ...patch.metadata, stepRejections: updates.stepRejections };
+      }
     } else if (hasStatusUpdate && status === "resubmitted") {
       Object.assign(patch, {
         resubmittedAt: now,
@@ -429,6 +432,7 @@ class SellerOrganizationService {
         rejectionReason: null,
         requiredChanges: [],
       });
+      patch.metadata = { ...patch.metadata, stepRejections: null };
     } else if (hasStatusUpdate && (status === "blocked" || status === "suspended")) {
       Object.assign(patch, {
         blockedAt: now,
@@ -1295,6 +1299,7 @@ class SellerOrganizationService {
       ...(status && !stagePatch.approvalStatus ? { approvalStatus: status } : {}),
       ...(payload.rejectionReason !== undefined ? { rejectionReason: payload.rejectionReason || null } : {}),
       ...(payload.requiredChanges !== undefined ? { requiredChanges: payload.requiredChanges || [] } : {}),
+      ...(payload.stepRejections !== undefined ? { stepRejections: payload.stepRejections || null } : {}),
       ...(status === "suspended" ? { suspendedAt: new Date() } : {}),
       ...(status && status !== "suspended" ? { suspendedAt: null } : {}),
       metadata: payload.metadata || {},

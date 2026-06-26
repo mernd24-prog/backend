@@ -208,6 +208,13 @@ const adminReviewSellerOrganizationSchema = Joi.object({
     goLiveStatus: Joi.string().valid(...organizationGoLiveStatuses),
     rejectionReason: Joi.string().max(2000).allow("", null),
     requiredChanges: Joi.array().items(Joi.string().max(200)).default([]),
+    stepRejections: Joi.object({
+      kyc: Joi.string().max(500).allow("", null),
+      gst: Joi.string().max(500).allow("", null),
+      bank: Joi.string().max(500).allow("", null),
+      address: Joi.string().max(500).allow("", null),
+      documents: Joi.string().max(500).allow("", null),
+    }).allow(null).default(null),
     notes: Joi.string().allow("", null),
     metadata: Joi.object().default({}),
   }).or("approvalStatus", "status", "kycStatus", "bankVerificationStatus", "goLiveStatus").required(),

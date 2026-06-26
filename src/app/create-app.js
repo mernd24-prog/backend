@@ -33,6 +33,10 @@ async function createApp() {
     cors({
       origin: env.cors.origin === "*" ? true : env.cors.origin,
       credentials: true,
+      exposedHeaders: [
+        "X-Selected-Organization-Id",
+        "X-Organization-Context-Changed",
+      ],
     })
   );
 

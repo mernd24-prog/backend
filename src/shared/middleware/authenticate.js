@@ -17,6 +17,15 @@ const {
 const rbacService = new RbacService();
 const sellerOrganizationRepository = new SellerOrganizationRepository();
 const permissionCache = new Map();
+const SELLER_ORGANIZATION_ROLES = new Set([
+  ROLES.SELLER,
+  ROLES.SELLER_ADMIN,
+  ROLES.SELLER_SUB_ADMIN,
+]);
+const APPROVED_ORGANIZATION_STATUSES = new Set(["approved", "active"]);
+const BUSINESS_BLOCKING_GO_LIVE_STATUSES = new Set(["blocked", "rejected"]);
+const SELECTED_ORGANIZATION_HEADER = "X-Selected-Organization-Id";
+const ORGANIZATION_CONTEXT_CHANGED_HEADER = "X-Organization-Context-Changed";
 const PERMISSION_CACHE_TTL_MS = Math.max(
   Number(env.rbacPermissionCacheTtlMs ?? 0) || 0,
   0,
@@ -52,26 +61,88 @@ function isOrganizationContextOptional(req = {}) {
   );
 }
 
+function isSellerOrganizationRole(role) {
+  return SELLER_ORGANIZATION_ROLES.has(role);
+}
+
+function isOrganizationApprovedForSelling(organization = {}) {
+  return (
+    APPROVED_ORGANIZATION_STATUSES.has(String(organization.approvalStatus || "")) &&
+    organization.kycStatus === "verified" &&
+    organization.bankVerificationStatus === "verified" &&
+    !BUSINESS_BLOCKING_GO_LIVE_STATUSES.has(String(organization.goLiveStatus || ""))
+  );
+}
+
+async function makeOrganizationDefault(sellerId, organization, actorId = null) {
+  if (!sellerId || !organization?.id || organization.isDefault) {
+    return organization;
+  }
+
+  return sellerOrganizationRepository
+    .setDefault(sellerId, organization.id, actorId || sellerId)
+    .catch(() => organization);
+}
+
+async function resolveApprovedOrganizationContext(auth = {}, requestedOrganizationId = "") {
+  const sellerId = auth.ownerSellerId || auth.sub;
+  if (!sellerId) {
+    return { organization: null, requestedOrganization: null, changed: false };
+  }
+
+  const requestedId = String(requestedOrganizationId || "").trim();
+  const organizations = await sellerOrganizationRepository.listBySeller(sellerId);
+  const requestedOrganization = requestedId
+    ? organizations.find((organization) => String(organization.id) === requestedId) || null
+    : null;
+  const approvedOrganizations = organizations.filter(isOrganizationApprovedForSelling);
+  const approvedDefault =
+    approvedOrganizations.find((organization) => organization.isDefault) || null;
+
+  if (requestedOrganization && isOrganizationApprovedForSelling(requestedOrganization)) {
+    const selected = approvedDefault
+      ? requestedOrganization
+      : await makeOrganizationDefault(sellerId, requestedOrganization, auth.sub);
+    return {
+      organization: selected,
+      requestedOrganization,
+      changed: false,
+      defaultRepaired: !approvedDefault && !requestedOrganization.isDefault,
+    };
+  }
+
+  const fallback = approvedDefault || approvedOrganizations[0] || null;
+  if (!fallback) {
+    return {
+      organization: null,
+      requestedOrganization,
+      changed: false,
+      defaultRepaired: false,
+    };
+  }
+
+  const selected = await makeOrganizationDefault(sellerId, fallback, auth.sub);
+  return {
+    organization: selected,
+    requestedOrganization,
+    changed: !requestedId || String(selected.id) !== requestedId,
+    defaultRepaired: !fallback.isDefault,
+  };
+}
+
 async function attachOrganizationContext(req, auth = {}) {
   const organizationId = String(req.headers["x-organization-id"] || "").trim();
   if (
     auth.isOnboarding === true ||
     isOrganizationContextOptional(req) ||
-    !organizationId ||
-    ![ROLES.SELLER, "seller-admin", "seller-sub-admin"].includes(auth.role)
+    !isSellerOrganizationRole(auth.role)
   ) {
     return auth;
   }
 
-  const sellerId = auth.ownerSellerId || auth.sub;
-  const organization = await sellerOrganizationRepository.findByIdForSeller(sellerId, organizationId);
-  if (
-    !organization ||
-    !["approved", "active"].includes(organization.approvalStatus) ||
-    organization.kycStatus !== "verified" ||
-    organization.bankVerificationStatus !== "verified" ||
-    ["blocked", "rejected"].includes(String(organization.goLiveStatus || ""))
-  ) {
+  const context = await resolveApprovedOrganizationContext(auth, organizationId);
+  if (!context.organization) {
+    if (!organizationId) return auth;
     throw new AppError(
       "Selected organization is not approved for selling",
       403,
@@ -80,7 +151,20 @@ async function attachOrganizationContext(req, auth = {}) {
     );
   }
 
-  return { ...auth, selectedOrganizationId: organizationId };
+  return {
+    ...auth,
+    selectedOrganizationId: String(context.organization.id),
+    selectedOrganizationContextChanged:
+      context.changed || context.defaultRepaired || String(context.organization.id) !== organizationId,
+  };
+}
+
+function setOrganizationContextHeaders(res, auth = {}) {
+  if (!auth.selectedOrganizationId) return;
+  res.setHeader(SELECTED_ORGANIZATION_HEADER, auth.selectedOrganizationId);
+  if (auth.selectedOrganizationContextChanged) {
+    res.setHeader(ORGANIZATION_CONTEXT_CHANGED_HEADER, "true");
+  }
 }
 
 async function validateAuthUser(payload = {}) {
@@ -195,6 +279,7 @@ async function authenticate(req, res, next) {
   try {
     const payload = jwt.verify(token, env.jwtAccessSecret);
     req.auth = await attachOrganizationContext(req, await hydrateAuthPermissions(payload));
+    setOrganizationContextHeaders(res, req.auth);
     return next();
   } catch (error) {
     if (error?.statusCode) {
@@ -239,6 +324,7 @@ async function authenticatePendingSeller(req, res, next) {
     }
 
     req.auth = await attachOrganizationContext(req, payload);
+    setOrganizationContextHeaders(res, req.auth);
     return next();
   } catch (error) {
     return next(
@@ -284,10 +370,12 @@ async function authenticateForStatus(req, res, next) {
       }
 
       req.auth = await attachOrganizationContext(req, { ...payload, sub: String(payload.sub), user });
+      setOrganizationContextHeaders(res, req.auth);
       return next();
     }
 
     req.auth = await attachOrganizationContext(req, await hydrateAuthPermissions(payload));
+    setOrganizationContextHeaders(res, req.auth);
     return next();
   } catch (error) {
     if (error?.statusCode) {
