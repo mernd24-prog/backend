@@ -732,6 +732,7 @@ class OrderRepository {
       eWayBills,
       walletTransactions,
       cancellations,
+      sellerCommissions,
     ] = await Promise.all([
       includeItems
         ? knex("order_items").whereIn("order_id", orderIds).orderBy("id", "asc")
@@ -758,6 +759,7 @@ class OrderRepository {
         ? this.optionalTableRows("wallet_transactions", (query) => query.where("reference_type", "order").whereIn("reference_id", orderIds).orderBy("created_at", "desc"))
         : Promise.resolve([]),
       this.optionalTableRows("order_cancellations", (query) => query.whereIn("order_id", orderIds).orderBy("created_at", "desc")),
+      this.optionalTableRows("seller_commissions", (query) => query.whereIn("order_id", orderIds).orderBy("created_at", "desc")),
     ]);
 
     const trackingEvents = includeDelivery && shipments.length
@@ -780,6 +782,7 @@ class OrderRepository {
       eWayBills: this.groupBy(eWayBills, "order_id"),
       walletTransactions: this.groupBy(walletTransactions, "reference_id"),
       cancellations: this.groupBy(cancellations, "order_id"),
+      sellerCommissions: this.groupBy(sellerCommissions, "order_id"),
       trackingEvents: this.groupBy(trackingEvents, "shipment_id"),
     };
 
@@ -791,7 +794,11 @@ class OrderRepository {
       }));
       const sellerIds = [...new Set(orderItems.map((item) => item.seller_id).filter(Boolean))];
       const sellers = sellerIds.map((sellerId) => usersById.get(String(sellerId)) || { id: sellerId }).filter(Boolean);
-      const sellerSettlements = this.buildSellerSettlements(orderItems, sellers, order);
+      const orderSellerCommissions = grouped.sellerCommissions.get(order.id) || [];
+      const sellerSettlements = this.attachCommissionStatusToSettlements(
+        this.buildSellerSettlements(orderItems, sellers, order),
+        orderSellerCommissions,
+      );
       const summary = this.buildOrderSummary(order, orderItems, sellerSettlements);
       const sellerFulfillmentGroups = this.buildSellerFulfillmentGroups(
         order,
@@ -811,6 +818,7 @@ class OrderRepository {
           buyer: usersById.get(String(order.buyer_id)) || { id: order.buyer_id },
           sellers,
           sellerSettlements,
+          sellerCommissions: orderSellerCommissions,
           payments: grouped.payments.get(order.id) || [],
           invoice: (grouped.invoices.get(order.id) || [])[0] || null,
           invoices: grouped.invoices.get(order.id) || [],
@@ -875,6 +883,32 @@ class OrderRepository {
       sellerPayoutAmount: Number(sellerPayoutAmount.toFixed(2)),
       platformFeeChargedToCustomer: customerPlatformFeeAmount > 0,
     };
+  }
+
+  attachCommissionStatusToSettlements(settlements = [], commissions = []) {
+    if (!Array.isArray(settlements) || !settlements.length || !Array.isArray(commissions) || !commissions.length) {
+      return settlements;
+    }
+
+    return settlements.map((settlement) => {
+      const match = commissions.find((commission) =>
+        String(commission.seller_id || "") === String(settlement.sellerId || settlement.seller_id || "") &&
+        String(commission.organization_id || "default") === String(settlement.organizationId || settlement.organization_id || "default")
+      );
+      if (!match) return settlement;
+
+      return {
+        ...settlement,
+        commissionId: match.id,
+        commissionStatus: match.status || null,
+        payoutId: match.payout_id || null,
+        payoutStatus: match.payout_id ? match.status : null,
+        commissionAmount: this.money(match.commission_amount),
+        commissionTaxAmount: this.money(match.tax_amount),
+        refundAmount: this.money(match.refund_amount),
+        netCommissionAmount: this.money(match.net_amount),
+      };
+    });
   }
 
   buildSellerSettlements(items = [], sellers = [], order = {}) {
