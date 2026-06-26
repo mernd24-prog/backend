@@ -3,6 +3,21 @@ const { v4: uuidv4 } = require("uuid");
 const { AppError } = require("../../../shared/errors/app-error");
 
 class SellerOrganizationRepository {
+  normalizeCode(value) {
+    const text = String(value || "").trim().toUpperCase();
+    return text || null;
+  }
+
+  isDifferentSeller(rowSellerId, sellerId) {
+    if (!sellerId) return true;
+    return String(rowSellerId || "") !== String(sellerId);
+  }
+
+  isDifferentOrganization(rowOrganizationId, organizationId) {
+    if (!organizationId) return true;
+    return String(rowOrganizationId || "") !== String(organizationId);
+  }
+
   jsonb(value, fallback = {}) {
     let normalized = value;
     if (normalized === undefined || normalized === null || normalized === "") {
@@ -322,6 +337,138 @@ class SellerOrganizationRepository {
       .where("gstin", gstin)
       .limit(1);
     return this.rowToOrganization(row);
+  }
+
+  async findIdentityConflicts(values = {}, options = {}) {
+    const criteria = {
+      gstin: this.normalizeCode(values.gstin || values.gstNumber),
+      pan: this.normalizeCode(values.pan || values.panNumber),
+      aadhaarNumber: String(values.aadhaarNumber || "").trim() || null,
+      registrationNumber: this.normalizeCode(values.registrationNumber),
+    };
+    const hasCriteria = Object.values(criteria).some(Boolean);
+    if (!hasCriteria) return [];
+
+    const conflicts = [];
+    const excludeSellerId = options.excludeSellerId || null;
+    const excludeOrganizationId = options.excludeOrganizationId || null;
+
+    const organizationRows = await knex("seller_organizations")
+      .select(
+        "id",
+        "seller_id",
+        "legal_business_name",
+        "store_display_name",
+        "gstin",
+        "pan",
+        "aadhaar_number",
+        "registration_number",
+      )
+      .where((builder) => {
+        if (criteria.gstin) builder.orWhereRaw("UPPER(gstin) = ?", [criteria.gstin]);
+        if (criteria.pan) builder.orWhereRaw("UPPER(pan) = ?", [criteria.pan]);
+        if (criteria.aadhaarNumber) builder.orWhere("aadhaar_number", criteria.aadhaarNumber);
+        if (criteria.registrationNumber) {
+          builder.orWhereRaw("UPPER(registration_number) = ?", [criteria.registrationNumber]);
+        }
+      });
+
+    organizationRows.forEach((row) => {
+      if (!this.isDifferentOrganization(row.id, excludeOrganizationId)) return;
+      if (criteria.gstin && this.normalizeCode(row.gstin) === criteria.gstin) {
+        conflicts.push({
+          source: "seller_organizations",
+          field: "gstin",
+          value: criteria.gstin,
+          sellerId: row.seller_id,
+          organizationId: row.id,
+          label: row.store_display_name || row.legal_business_name || row.id,
+        });
+      }
+      if (
+        criteria.pan &&
+        this.normalizeCode(row.pan) === criteria.pan &&
+        this.isDifferentSeller(row.seller_id, excludeSellerId)
+      ) {
+        conflicts.push({
+          source: "seller_organizations",
+          field: "pan",
+          value: criteria.pan,
+          sellerId: row.seller_id,
+          organizationId: row.id,
+          label: row.store_display_name || row.legal_business_name || row.id,
+        });
+      }
+      if (
+        criteria.aadhaarNumber &&
+        String(row.aadhaar_number || "") === criteria.aadhaarNumber &&
+        this.isDifferentSeller(row.seller_id, excludeSellerId)
+      ) {
+        conflicts.push({
+          source: "seller_organizations",
+          field: "aadhaarNumber",
+          value: criteria.aadhaarNumber,
+          sellerId: row.seller_id,
+          organizationId: row.id,
+          label: row.store_display_name || row.legal_business_name || row.id,
+        });
+      }
+      if (
+        criteria.registrationNumber &&
+        this.normalizeCode(row.registration_number) === criteria.registrationNumber &&
+        this.isDifferentSeller(row.seller_id, excludeSellerId)
+      ) {
+        conflicts.push({
+          source: "seller_organizations",
+          field: "registrationNumber",
+          value: criteria.registrationNumber,
+          sellerId: row.seller_id,
+          organizationId: row.id,
+          label: row.store_display_name || row.legal_business_name || row.id,
+        });
+      }
+    });
+
+    const kycRows = await knex("seller_kyc")
+      .select("seller_id", "legal_name", "pan_number", "gst_number", "aadhaar_number")
+      .where((builder) => {
+        if (criteria.gstin) builder.orWhereRaw("UPPER(gst_number) = ?", [criteria.gstin]);
+        if (criteria.pan) builder.orWhereRaw("UPPER(pan_number) = ?", [criteria.pan]);
+        if (criteria.aadhaarNumber) builder.orWhere("aadhaar_number", criteria.aadhaarNumber);
+      });
+
+    kycRows.forEach((row) => {
+      if (!this.isDifferentSeller(row.seller_id, excludeSellerId)) return;
+      if (criteria.gstin && this.normalizeCode(row.gst_number) === criteria.gstin) {
+        conflicts.push({
+          source: "seller_kyc",
+          field: "gstin",
+          value: criteria.gstin,
+          sellerId: row.seller_id,
+          label: row.legal_name || row.seller_id,
+        });
+      }
+      if (criteria.pan && this.normalizeCode(row.pan_number) === criteria.pan) {
+        conflicts.push({
+          source: "seller_kyc",
+          field: "pan",
+          value: criteria.pan,
+          sellerId: row.seller_id,
+          label: row.legal_name || row.seller_id,
+        });
+      }
+      if (criteria.aadhaarNumber && String(row.aadhaar_number || "") === criteria.aadhaarNumber) {
+        conflicts.push({
+          source: "seller_kyc",
+          field: "aadhaarNumber",
+          value: criteria.aadhaarNumber,
+          sellerId: row.seller_id,
+          label: row.legal_name || row.seller_id,
+        });
+      }
+    });
+
+    return conflicts;
   }
 
   async findOnlyBySeller(sellerId) {

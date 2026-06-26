@@ -953,6 +953,14 @@ class AdminService {
       updatedBy: actor.userId || actor.sub || null,
     };
 
+    await this.sellerOrganizationService.assertNoIdentityConflicts(updatePayload, {
+      sellerId,
+      organizationId: organization.id,
+      fieldMap: {
+        gstin: "gstNumber",
+        pan: "panNumber",
+      },
+    });
     return this.sellerOrganizationService.organizationRepository.update(organization.id, {
       ...updatePayload,
       ...this.sellerOrganizationService.buildLifecyclePatch(

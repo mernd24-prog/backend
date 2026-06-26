@@ -19,6 +19,14 @@ const REQUIRED_DOCUMENT_FIELDS = [
   "bankProofUrl",
   "addressProofUrl",
 ];
+const IDENTITY_FIELDS = ["gstin", "pan", "aadhaarNumber", "registrationNumber"];
+const APPROVING_STATUSES = new Set(["verified", "approved", "active", "live"]);
+const IDENTITY_FIELD_LABELS = {
+  gstin: "GSTIN",
+  pan: "PAN",
+  aadhaarNumber: "Aadhaar number",
+  registrationNumber: "Registration number",
+};
 
 class SellerOrganizationService {
   constructor({
@@ -49,6 +57,76 @@ class SellerOrganizationService {
   normalizeCode(value) {
     const text = String(value || "").trim().toUpperCase();
     return text || null;
+  }
+
+  normalizeIdentityValues(payload = {}) {
+    return {
+      gstin: this.normalizeCode(payload.gstin || payload.gstNumber),
+      pan: this.normalizeCode(payload.pan || payload.panNumber),
+      aadhaarNumber: this.normalizeText(payload.aadhaarNumber) || null,
+      registrationNumber: this.normalizeCode(payload.registrationNumber),
+    };
+  }
+
+  duplicateMessage(field, value) {
+    const label = IDENTITY_FIELD_LABELS[field] || "Document number";
+    if (field === "aadhaarNumber") {
+      return "This Aadhaar number is already linked to another seller account.";
+    }
+    return `${label}${value ? ` ${value}` : ""} is already linked to another seller account or organization.`;
+  }
+
+  makeDuplicateFieldErrors(conflicts = [], fieldMap = {}) {
+    const byField = new Map();
+    conflicts.forEach((conflict) => {
+      const field = conflict.field;
+      if (!field || byField.has(field)) return;
+      const mappedField = fieldMap[field] || field;
+      byField.set(field, {
+        field: mappedField,
+        path: ["body", mappedField],
+        message: this.duplicateMessage(field, conflict.value),
+      });
+    });
+    return Array.from(byField.values());
+  }
+
+  async assertNoIdentityConflicts(payload = {}, options = {}) {
+    const identityValues = this.normalizeIdentityValues(payload);
+    if (!Object.values(identityValues).some(Boolean)) return;
+
+    const conflicts = await this.organizationRepository.findIdentityConflicts(
+      identityValues,
+      {
+        excludeSellerId: options.sellerId || null,
+        excludeOrganizationId: options.organizationId || null,
+      },
+    );
+    if (!conflicts.length) return;
+
+    const fields = this.makeDuplicateFieldErrors(conflicts, options.fieldMap || {});
+    throw new AppError(
+      fields.length === 1
+        ? fields[0].message
+        : "One or more KYC or organization identity details are already in use.",
+      409,
+      fields,
+      "DUPLICATE_ENTRY",
+    );
+  }
+
+  hasIdentityPayload(payload = {}) {
+    return IDENTITY_FIELDS.some((field) =>
+      Object.prototype.hasOwnProperty.call(payload, field),
+    );
+  }
+
+  requiresIdentityApprovalCheck(payload = {}) {
+    return (
+      APPROVING_STATUSES.has(String(payload.kycStatus || "")) ||
+      APPROVING_STATUSES.has(String(payload.approvalStatus || payload.status || "")) ||
+      APPROVING_STATUSES.has(String(payload.goLiveStatus || ""))
+    );
   }
 
   normalizeAddress(address = {}) {
@@ -837,6 +915,7 @@ class SellerOrganizationService {
       createdBy: actor.userId || actor.sub || sellerId,
       updatedBy: actor.userId || actor.sub || sellerId,
     };
+    await this.assertNoIdentityConflicts(organizationPayload, { sellerId });
     const organization = await this.organizationRepository.create({
       ...organizationPayload,
       ...this.buildLifecyclePatch(
@@ -876,6 +955,7 @@ class SellerOrganizationService {
     }
     const normalized = this.normalizeOrganizationPayload(payload, actor, { create: true });
     const organizationId = uuidv4();
+    await this.assertNoIdentityConflicts(normalized, { sellerId });
     normalized.documents = await this.uploadOrganizationDocuments(
       organizationId,
       normalized.documents || {},
@@ -922,6 +1002,11 @@ class SellerOrganizationService {
       throw new AppError("Approved organizations require admin review for legal/KYC changes", 409);
     }
     const normalized = this.normalizeOrganizationPayload(payload, actor, { create: false });
+    const identityCandidate = this.mergeOrganizationPatch(existing, normalized);
+    await this.assertNoIdentityConflicts(identityCandidate, {
+      sellerId,
+      organizationId,
+    });
     if (payload.documents !== undefined || payload.kycDocuments !== undefined) {
       normalized.documents = await this.uploadOrganizationDocuments(
         organizationId,
@@ -1046,6 +1131,7 @@ class SellerOrganizationService {
 
     const normalized = this.normalizeOrganizationPayload(payload, actor, { admin: true, create: true });
     const organizationId = uuidv4();
+    await this.assertNoIdentityConflicts(normalized, { sellerId });
     normalized.documents = await this.uploadOrganizationDocuments(
       organizationId,
       normalized.documents || {},
@@ -1103,6 +1189,16 @@ class SellerOrganizationService {
       throw new AppError("Use the organization review endpoint for approval status changes", 409);
     }
     const normalized = this.normalizeOrganizationPayload(payload, actor, { admin: true });
+    const identityCandidate = this.mergeOrganizationPatch(existing, normalized);
+    if (
+      this.hasIdentityPayload(normalized) ||
+      this.requiresIdentityApprovalCheck(normalized)
+    ) {
+      await this.assertNoIdentityConflicts(identityCandidate, {
+        sellerId,
+        organizationId,
+      });
+    }
     if (payload.documents !== undefined || payload.kycDocuments !== undefined) {
       normalized.documents = await this.uploadOrganizationDocuments(
         organizationId,

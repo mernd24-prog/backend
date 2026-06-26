@@ -233,6 +233,14 @@ class SellerService {
       ...effectiveStatus,
       updatedBy: actor.userId || actor.sub || sellerId,
     };
+    await sellerOrganizationService.assertNoIdentityConflicts(updatePayload, {
+      sellerId,
+      organizationId: organization.id,
+      fieldMap: {
+        gstin: "gstNumber",
+        pan: "panNumber",
+      },
+    });
     return sellerOrganizationService.organizationRepository.update(organization.id, {
       ...updatePayload,
       ...sellerOrganizationService.buildLifecyclePatch(
@@ -246,6 +254,20 @@ class SellerService {
 
   async submitKyc(payload, actor) {
     const sellerId = this.getSellerId(actor);
+    await sellerOrganizationService.assertNoIdentityConflicts(
+      {
+        gstin: payload.gstNumber,
+        pan: payload.panNumber,
+        aadhaarNumber: payload.aadhaarNumber,
+      },
+      {
+        sellerId,
+        fieldMap: {
+          gstin: "gstNumber",
+          pan: "panNumber",
+        },
+      },
+    );
     const documents = await this.uploadKycDocuments(payload.documents || {}, actor);
     const record = await this.sellerRepository.upsertKyc({
       ...payload,
@@ -320,6 +342,15 @@ class SellerService {
 
     const kycRecord = await this.sellerRepository.findKycBySellerId(sellerId);
     const nextProfile = this.mergeSellerProfile(existingSeller.sellerProfile || {}, payload);
+    const existingOrg = await sellerOrganizationService.getDefaultOrOnlyOrganization(sellerId);
+    await sellerOrganizationService.assertNoIdentityConflicts(nextProfile, {
+      sellerId,
+      organizationId: existingOrg?.id || null,
+      fieldMap: {
+        gstin: "gstNumber",
+        pan: "panNumber",
+      },
+    });
     if (
       this.hasCompleteBankDetails(nextProfile.bankDetails) &&
       !["verified", "submitted"].includes(nextProfile.bankVerificationStatus)
@@ -652,6 +683,15 @@ class SellerService {
     }
 
     const nextProfile = this.mergeSellerProfile(existingSeller.sellerProfile || {}, payload);
+    const existingOrgMoreInfo = await sellerOrganizationService.getDefaultOrOnlyOrganization(sellerId);
+    await sellerOrganizationService.assertNoIdentityConflicts(nextProfile, {
+      sellerId,
+      organizationId: existingOrgMoreInfo?.id || null,
+      fieldMap: {
+        gstin: "gstNumber",
+        pan: "panNumber",
+      },
+    });
     const updatedSeller = await this.sellerRepository.updateSellerProfile(
       sellerId,
       this.withOnboardingState(nextProfile, kycRecord, existingSeller),
