@@ -196,7 +196,7 @@ const MODULE_CATALOG = [
     icon: "truck",
     order: 7.1,
     forPlatform: true,
-    forSeller: false,
+    forSeller: true,
     apiPath: "/admin/payments/admin/cod-config",
   },
   {
@@ -494,7 +494,7 @@ const MODULE_CATALOG = [
     icon: "receipt",
     order: 21,
     forPlatform: true,
-    forSeller: false,
+    forSeller: true,
     apiPath: "/tax",
   },
   {

@@ -112,8 +112,8 @@ const MODULE_ALIASES = {
   platform_fee_config: "admin",
   "commission-rules": "sellers/commissions",
   commission_rules: "sellers/commissions",
-  "cod-config": "payments",
-  cod_config: "payments",
+  "cod-config": "cod-config",
+  cod_config: "cod-config",
   payments: "payments",
   payment: "payments",
   "payments-finance": "payments",
@@ -238,8 +238,8 @@ const MODULE_ALIASES = {
   subscription_plans: "subscriptions",
 
   // Payment sub-modules
-  "cod-config": "payments",
-  cod_config: "payments",
+  "cod-config": "cod-config",
+  cod_config: "cod-config",
 
   // Seller payouts (already has "seller-payouts" but adding slug variants)
   "seller-payout": "sellers/commissions",
@@ -297,6 +297,8 @@ const MODULE_ALIASES = {
   seller_status: "sellers",
   "seller-sub-admins": "sellers",
   seller_sub_admins: "sellers",
+  "charge-settings": "cod-config",
+  charge_settings: "cod-config",
 
 };
 
@@ -465,6 +467,12 @@ function getRequestModule(req) {
 
   if (first === "sellers" && second === "commissions") {
     return "sellers/commissions";
+  }
+  if (first === "sellers" && second === "me" && third === "charge-settings") {
+    return "cod-config";
+  }
+  if (first === "payments" && second === "admin" && third === "cod-config") {
+    return "cod-config";
   }
   if (first === "rbac" && second === "modules" && third === "sidebar") {
     return null;

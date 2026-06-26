@@ -34,13 +34,13 @@ paymentRoutes.get(
 paymentRoutes.get(
   "/admin/cod-config",
   authenticate,
-  allowPermissions("payments:view"),
+  allowPermissions("cod-config:view"),
   catchErrors(paymentController.getCodConfig),
 );
 paymentRoutes.put(
   "/admin/cod-config",
   authenticate,
-  allowPermissions("payments:update"),
+  allowPermissions("cod-config:update"),
   checkInput(codConfigSchema),
   catchErrors(paymentController.updateCodConfig),
 );

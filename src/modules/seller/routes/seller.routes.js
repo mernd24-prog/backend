@@ -186,7 +186,7 @@ sellerRoutes.patch(
 sellerRoutes.get(
   "/me/charge-settings",
   authenticate,
-  allowActions(ACTIONS.SELLER_PROFILE_MANAGE),
+  allowPermissions("cod-config:view"),
   catchErrors(async (req, res) => {
     const actor = getCurrentUser(req);
     const sellerId = sellerChargeSettingsService.resolveSellerId(actor);
@@ -197,7 +197,7 @@ sellerRoutes.get(
 sellerRoutes.put(
   "/me/charge-settings",
   authenticate,
-  allowActions(ACTIONS.SELLER_PROFILE_MANAGE),
+  allowPermissions("cod-config:update"),
   checkInput(updateSellerChargeSettingsSchema),
   catchErrors(async (req, res) => {
     const actor = getCurrentUser(req);

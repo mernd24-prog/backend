@@ -26,7 +26,7 @@ function sellerOrganizationQuery(req) {
 // ==============================
 // Seller: View commission breakdown
 // ==============================
-router.get("/my-commissions", authenticate, async (req, res, next) => {
+router.get("/my-commissions", authenticate, financeView, async (req, res, next) => {
   try {
     const userId = req.auth?.ownerSellerId || req.auth?.sub;
 
@@ -51,7 +51,7 @@ router.get("/my-commissions", authenticate, async (req, res, next) => {
 // ==============================
 // Seller: Export commission breakdown
 // ==============================
-router.get("/my-commissions/export", authenticate, async (req, res, next) => {
+router.get("/my-commissions/export", authenticate, financeView, async (req, res, next) => {
   try {
     const userId = req.auth?.ownerSellerId || req.auth?.sub;
 
@@ -72,7 +72,7 @@ router.get("/my-commissions/export", authenticate, async (req, res, next) => {
 // ==============================
 // Seller: View payout history
 // ==============================
-router.get("/my-payouts", authenticate, async (req, res, next) => {
+router.get("/my-payouts", authenticate, financeView, async (req, res, next) => {
   try {
     const userId = req.auth?.ownerSellerId || req.auth?.sub;
 
@@ -97,7 +97,7 @@ router.get("/my-payouts", authenticate, async (req, res, next) => {
 // ==============================
 // Seller: Export payout history
 // ==============================
-router.get("/my-payouts/export", authenticate, async (req, res, next) => {
+router.get("/my-payouts/export", authenticate, financeView, async (req, res, next) => {
   try {
     const userId = req.auth?.ownerSellerId || req.auth?.sub;
 
@@ -118,7 +118,7 @@ router.get("/my-payouts/export", authenticate, async (req, res, next) => {
 // ==============================
 // Seller: Wallet summary
 // ==============================
-router.get("/my-wallet", authenticate, async (req, res, next) => {
+router.get("/my-wallet", authenticate, financeView, async (req, res, next) => {
   try {
     const userId = req.auth?.ownerSellerId || req.auth?.sub;
 
@@ -143,7 +143,7 @@ router.get("/my-wallet", authenticate, async (req, res, next) => {
 // ==============================
 // Seller: Settlement history
 // ==============================
-router.get("/my-settlements", authenticate, async (req, res, next) => {
+router.get("/my-settlements", authenticate, financeView, async (req, res, next) => {
   try {
     const userId = req.auth?.ownerSellerId || req.auth?.sub;
 
@@ -168,7 +168,7 @@ router.get("/my-settlements", authenticate, async (req, res, next) => {
 // ==============================
 // Seller: Export settlement history
 // ==============================
-router.get("/my-settlements/export", authenticate, async (req, res, next) => {
+router.get("/my-settlements/export", authenticate, financeView, async (req, res, next) => {
   try {
     const userId = req.auth?.ownerSellerId || req.auth?.sub;
 
@@ -189,7 +189,7 @@ router.get("/my-settlements/export", authenticate, async (req, res, next) => {
 // ==============================
 // Seller: Download settlement statement
 // ==============================
-router.get("/my-settlements/:settlementId/statement", authenticate, async (req, res, next) => {
+router.get("/my-settlements/:settlementId/statement", authenticate, financeView, async (req, res, next) => {
   try {
     const document = await CommissionService.getSettlementStatement(
       req.params.settlementId,
