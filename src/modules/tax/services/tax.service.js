@@ -44,6 +44,7 @@ class TaxService {
     const shippingAddress = this.normalizeJson(order.shipping_address, {});
     const orderMetadata = this.normalizeJson(order.metadata, {});
     const pricingSummary = orderMetadata.pricingSummary || {};
+    const grossSalesAmount = Number(order.subtotal_amount || 0);
     const taxableAmount = Number(taxBreakup.taxableAmount || 0);
     const taxAmount = Number(order.tax_amount || taxBreakup.totalTaxAmount || 0);
     const cgstAmount = Number(taxBreakup.cgstAmount || 0);
@@ -78,21 +79,20 @@ class TaxService {
         orderStatus: order.status,
         orderNumber: order.order_number,
         items: (order.items || []).map((item) => ({
+          ...this.buildInvoiceItem(item),
           productId: item.product_id,
           productTitle: item.product_title,
           sellerId: item.seller_id,
           organizationId: item.organization_id || null,
           storeId: item.store_id || null,
           warehouseId: item.warehouse_id || null,
-          hsnCode: item.hsn_code,
-          gstRate: Number(item.gst_rate || 0),
-          taxableAmount: Number(item.line_total || 0) - Number(item.discount_amount || 0),
-          taxAmount: Number(item.tax_amount || 0),
           taxBreakup: this.normalizeJson(item.tax_breakup, {}),
         })),
         amounts: {
+          grossSalesAmount,
           productTaxableAmount: taxableAmount,
           discountAmount: Number(order.discount_amount || 0),
+          deliveryChargeAmount: Number(order.shipping_fee_amount || pricingSummary.deliveryChargeAmount || pricingSummary.shippingFeeAmount || 0),
           shippingChargeAmount: Number(order.shipping_fee_amount || pricingSummary.shippingFeeAmount || pricingSummary.deliveryChargeAmount || 0),
           sellerPlatformFeeAmount: Number(pricingSummary.sellerPlatformFeeAmount || order.platform_fee_amount || 0),
           customerPlatformFeeAmount: Number(pricingSummary.customerPlatformFeeAmount || 0),

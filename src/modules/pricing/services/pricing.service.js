@@ -510,6 +510,19 @@ class PricingService {
     const percentage = this.getRulePercentage(rule);
     const fixedFeeAmount = this.getRuleFixedFee(rule);
     const feeBaseAmount = this.getFeeBaseAmount(rule, item, context);
+    const orderAmount = Number(context.customerItemsAmount ?? context.subtotalAmount ?? feeBaseAmount);
+    const minOrderAmount = Number(rule.minOrderAmount || 0);
+    if (minOrderAmount > 0 && orderAmount < minOrderAmount) {
+      return {
+        feeBaseAmount,
+        commissionPercent: percentage,
+        commissionFee: 0,
+        fixedFee: 0,
+        closingFee: 0,
+        feeTaxAmount: 0,
+        total: 0,
+      };
+    }
     const includePercentage = type === "percentage" || type === "mixed" || (!type && percentage > 0);
     const includeFixed = type === "fixed" || type === "flat" || type === "mixed";
     const commissionFee = includePercentage
@@ -583,7 +596,7 @@ class PricingService {
 
       const sellerPlatformFee = platformFeeRule?.chargeToCustomer ? 0 : platformFee.total;
       const customerPlatformFee = platformFeeRule?.chargeToCustomer ? platformFee.total : 0;
-      const customerPlatformFeeTax = platformFeeRule?.chargeToCustomer ? platformFee.feeTaxAmount : 0;
+      const customerPlatformFeeTax = 0;
       const sellerFeeTotal = Number((commission.total + sellerPlatformFee).toFixed(2));
       const itemCustomerFeeTotal = Number(customerPlatformFee.toFixed(2));
 
