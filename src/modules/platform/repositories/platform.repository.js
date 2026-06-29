@@ -232,13 +232,22 @@ class PlatformRepository {
   async listProductReviews(filter = {}, pagination = {}) {
     const sort = {};
     if (pagination.sortBy === "rating") sort.rating = pagination.sortDir === "asc" ? 1 : -1;
-    else sort.createdAt = -1;
+    else if (pagination.sortBy === "helpfulVotes") sort.helpfulVotes = pagination.sortDir === "asc" ? 1 : -1;
+    else sort.createdAt = pagination.sortDir === "asc" ? 1 : -1;
 
     const [items, total] = await Promise.all([
       ProductReviewModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
       ProductReviewModel.countDocuments(filter),
     ]);
     return { items, total };
+  }
+
+  async bulkUpdateProductReviews(reviewIds = [], payload = {}) {
+    if (!reviewIds.length) return { matchedCount: 0, modifiedCount: 0 };
+    return ProductReviewModel.updateMany(
+      { _id: { $in: reviewIds } },
+      { $set: payload },
+    );
   }
 
   async updateProductReview(reviewId, payload) {

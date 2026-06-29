@@ -5,6 +5,9 @@ const { AppError } = require("../../../shared/errors/app-error");
 const { auditService } = require("../../../shared/logger/audit.service");
 const { forget } = require("../../../shared/tools/cache");
 const { ProductModel } = require("../../product/models/product.model");
+const { OrderRepository } = require("../../order/repositories/order.repository");
+const { UserModel } = require("../../user/models/user.model");
+const { ORDER_STATUS, PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const {
   AdminTaxModel,
   AdminSubTaxModel,
@@ -28,9 +31,31 @@ function withUpdateActor(payload, req) {
   return { ...payload, updatedBy: String(actorId) };
 }
 
+function buyerNameFromUser(user = {}) {
+  const first = user.profile?.firstName || user.firstName || "";
+  const last = user.profile?.lastName || user.lastName || "";
+  const fullName = [first, last].filter(Boolean).join(" ").trim();
+  return (
+    fullName ||
+    user.profile?.fullName ||
+    user.displayName ||
+    user.name ||
+    user.email ||
+    ""
+  );
+}
+
+function isMongoObjectId(value = "") {
+  return /^[a-f\d]{24}$/i.test(String(value || ""));
+}
+
 class PlatformService {
-  constructor({ platformRepository = new PlatformRepository() } = {}) {
+  constructor({
+    platformRepository = new PlatformRepository(),
+    orderRepository = new OrderRepository(),
+  } = {}) {
     this.platformRepository = platformRepository;
+    this.orderRepository = orderRepository;
   }
 
   invalidateCatalogCaches() {
@@ -499,6 +524,26 @@ class PlatformService {
 
   async createProductReview(productId, payload, actor) {
     const buyerId = actor.userId || actor.sub || actor.id;
+    const buyerName = buyerNameFromUser(actor.user || actor);
+    const orderItem = await this.orderRepository.findReviewableOrderItem({
+      buyerId,
+      productId,
+      orderId: payload.orderId,
+      orderItemId: payload.orderItemId,
+    });
+
+    if (!orderItem) {
+      throw new AppError("Only purchased products can be reviewed", 403);
+    }
+
+    const deliveredStatuses = new Set([ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED, "completed"]);
+    const paidStatuses = new Set([PAYMENT_STATUS.CAPTURED, PAYMENT_STATUS.AUTHORIZED, "paid"]);
+    if (!deliveredStatuses.has(orderItem.order_status)) {
+      throw new AppError("Review can be submitted after delivery is complete", 400);
+    }
+    if (!paidStatuses.has(orderItem.payment_status)) {
+      throw new AppError("Review can be submitted after successful payment", 400);
+    }
 
     const existing = await this.platformRepository.getProductReviewByBuyerAndOrder(
       productId,
@@ -509,8 +554,12 @@ class PlatformService {
 
     const review = await this.platformRepository.createProductReview({
       productId,
+      sellerId: orderItem.seller_id || payload.sellerId || "",
+      organizationId: orderItem.organization_id || payload.organizationId || "",
       buyerId,
+      buyerName,
       orderId: payload.orderId,
+      orderItemId: orderItem.order_item_id || payload.orderItemId || "",
       rating: payload.rating,
       title: payload.title || "",
       reviewText: payload.reviewText || "",
@@ -542,23 +591,163 @@ class PlatformService {
     return this.platformRepository.listProductReviews(filter, pagination);
   }
 
+  async listSellerProductReviews(query = {}, actor = {}) {
+    const pagination = getPage(query);
+    const sellerId = actor.ownerSellerId || actor.userId;
+    if (!sellerId) throw AppError.forbidden("Seller context is required");
+
+    const products = await ProductModel.find({
+      sellerId,
+      ...(actor.organizationId ? { organizationId: actor.organizationId } : {}),
+    }).select("_id title slug images sellerId organizationId rating reviewCount");
+    const productIds = products.map((product) => String(product._id));
+    const productById = new Map(products.map((product) => [String(product._id), product]));
+
+    const filter = {
+      $or: [
+        { sellerId },
+        ...(productIds.length ? [{ productId: { $in: productIds } }] : []),
+      ],
+    };
+    if (actor.organizationId) filter.organizationId = actor.organizationId;
+    if (query.productId) filter.productId = query.productId;
+    if (query.buyerId) filter.buyerId = query.buyerId;
+    if (query.orderId) filter.orderId = query.orderId;
+    if (query.status) filter.status = query.status;
+    if (query.rating) filter.rating = Number(query.rating);
+    const q = query.q || query.keyWord || query.search;
+    if (q) {
+      filter.$and = [{
+        $or: [
+          { title: { $regex: q, $options: "i" } },
+          { reviewText: { $regex: q, $options: "i" } },
+          { productId: { $regex: q, $options: "i" } },
+          { buyerId: { $regex: q, $options: "i" } },
+        ],
+      }];
+    }
+
+    const result = await this.platformRepository.listProductReviews(filter, pagination);
+    return {
+      ...result,
+      items: result.items.map((review) => {
+        const plain = typeof review.toObject === "function" ? review.toObject() : review;
+        const product = productById.get(String(plain.productId));
+        return {
+          ...plain,
+          product: product
+            ? {
+                id: String(product._id),
+                title: product.title,
+                slug: product.slug,
+                image: product.images?.[0] || "",
+                rating: product.rating || 0,
+                reviewCount: product.reviewCount || 0,
+              }
+            : null,
+        };
+      }),
+    };
+  }
+
   async listPublicProductReviews(productId, query = {}) {
     const pagination = getPage(query);
+    if (query.sort === "highest") {
+      pagination.sortBy = "rating";
+      pagination.sortDir = "desc";
+    } else if (query.sort === "lowest") {
+      pagination.sortBy = "rating";
+      pagination.sortDir = "asc";
+    } else if (query.sort === "helpful") {
+      pagination.sortBy = "helpfulVotes";
+      pagination.sortDir = "desc";
+    } else if (query.sort === "oldest") {
+      pagination.sortBy = "createdAt";
+      pagination.sortDir = "asc";
+    }
     const filter = { productId, status: "published" };
     if (query.rating) filter.rating = Number(query.rating);
     const reviews = await this.platformRepository.listProductReviews(filter, pagination);
     const stats = await this.platformRepository.getProductRatingStats(productId);
-    return { ...reviews, stats };
+    const buyerIds = [
+      ...new Set(
+        reviews.items
+          .filter((review) => !review.buyerName && review.buyerId)
+          .map((review) => String(review.buyerId)),
+      ),
+    ];
+    const validBuyerIds = buyerIds.filter(isMongoObjectId);
+    const users = validBuyerIds.length
+      ? await UserModel.find({ _id: { $in: validBuyerIds } }).select("email profile displayName")
+      : [];
+    const userById = new Map(users.map((user) => [String(user._id), user]));
+    return {
+      ...reviews,
+      items: reviews.items.map((review) => {
+        const plain = typeof review.toObject === "function" ? review.toObject() : review;
+        return {
+          ...plain,
+          buyerName: plain.buyerName || buyerNameFromUser(userById.get(String(plain.buyerId))) || "Verified Buyer",
+        };
+      }),
+      stats,
+    };
   }
 
-  async updateProductReview(reviewId, payload) {
+  async updateProductReview(reviewId, payload, actor = {}) {
     const item = await this.platformRepository.getProductReview(reviewId);
     if (!item) throw AppError.notFound("Product review");
-    const updated = await this.platformRepository.updateProductReview(reviewId, payload);
+    const updatePayload = { ...payload };
+    if (payload.status) {
+      updatePayload.moderatedBy = actor.userId || actor.sub || actor.id || null;
+      updatePayload.moderatedAt = new Date();
+      if (payload.status === "published") updatePayload.rejectionReason = "";
+    }
+    const updated = await this.platformRepository.updateProductReview(reviewId, updatePayload);
     if (payload.status) {
       this._syncProductRating(item.productId).catch(() => {});
     }
     return updated;
+  }
+
+  async bulkUpdateProductReviews(payload = {}, actor = {}) {
+    const reviewIds = Array.isArray(payload.reviewIds)
+      ? payload.reviewIds.filter(Boolean)
+      : [];
+    if (!reviewIds.length) throw new AppError("Select at least one review", 400);
+
+    const status = payload.status || (payload.action === "approve" ? "published" : payload.action);
+    if (!["pending", "published", "hidden", "rejected"].includes(status)) {
+      throw new AppError("Invalid review status", 400);
+    }
+
+    const reviews = await Promise.all(
+      reviewIds.map((reviewId) => this.platformRepository.getProductReview(reviewId)),
+    );
+    const existingReviews = reviews.filter(Boolean);
+    if (!existingReviews.length) throw AppError.notFound("Product reviews");
+
+    const update = {
+      status,
+      moderatedBy: actor.userId || actor.sub || actor.id || null,
+      moderatedAt: new Date(),
+    };
+    if (status === "rejected") {
+      update.rejectionReason = payload.rejectionReason || payload.reason || "";
+    } else if (status === "published") {
+      update.rejectionReason = "";
+    }
+
+    const result = await this.platformRepository.bulkUpdateProductReviews(
+      existingReviews.map((review) => review._id),
+      update,
+    );
+    const productIds = [...new Set(existingReviews.map((review) => String(review.productId)).filter(Boolean))];
+    productIds.forEach((id) => this._syncProductRating(id).catch(() => {}));
+    return {
+      matchedCount: result.matchedCount ?? result.n ?? existingReviews.length,
+      modifiedCount: result.modifiedCount ?? result.nModified ?? 0,
+    };
   }
 
   async deleteProductReview(reviewId) {

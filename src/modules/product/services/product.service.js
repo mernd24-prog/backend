@@ -2352,10 +2352,16 @@ class ProductService {
     return platformService.deleteOwnReview(reviewId, buyerId);
   }
 
-  async getMyReviewForProduct(productId, actor) {
+  async getMyReviewForProduct(productId, actor, query = {}) {
     const buyerId = actor.userId || actor.sub || actor.id;
     const platformRepo = new PlatformRepository();
-    const reviews = await platformRepo.listProductReviews({ productId, buyerId }, { skip: 0, limit: 1 });
+    const filter = {
+      productId,
+      buyerId,
+      ...(query.orderId ? { orderId: query.orderId } : {}),
+      ...(query.orderItemId ? { orderItemId: query.orderItemId } : {}),
+    };
+    const reviews = await platformRepo.listProductReviews(filter, { skip: 0, limit: 1 });
     return reviews.items[0] || null;
   }
 

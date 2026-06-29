@@ -486,6 +486,7 @@ const updateProductReviewSchema = Joi.object({
     media: Joi.array().items(Joi.string()),
     helpfulVotes: Joi.number().integer().min(0),
     status: Joi.string().valid("pending", "published", "hidden", "rejected"),
+    rejectionReason: Joi.string().trim().max(1000).allow("", null),
     adminReply: Joi.object({
       text: Joi.string().allow("", null),
     }),
@@ -494,6 +495,18 @@ const updateProductReviewSchema = Joi.object({
   params: Joi.object({
     reviewId: Joi.string().required(),
   }).required(),
+});
+
+const bulkUpdateProductReviewsSchema = Joi.object({
+  body: Joi.object({
+    reviewIds: Joi.array().items(Joi.string().required()).min(1).max(100).required(),
+    action: Joi.string().valid("approve", "published", "hidden", "rejected"),
+    status: Joi.string().valid("pending", "published", "hidden", "rejected"),
+    rejectionReason: Joi.string().trim().max(1000).allow("", null),
+    reason: Joi.string().trim().max(1000).allow("", null),
+  }).or("action", "status").required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
 });
 
 const productReviewIdSchema = Joi.object({
@@ -704,6 +717,7 @@ module.exports = {
   geographyCodeSchema: geographyParamSchema,
   listProductReviewsSchema,
   updateProductReviewSchema,
+  bulkUpdateProductReviewsSchema,
   productReviewIdSchema,
   createBrandSchema,
   updateBrandSchema,

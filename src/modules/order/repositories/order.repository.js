@@ -275,11 +275,41 @@ class OrderRepository {
        WHERE o.buyer_id = $1
          AND oi.product_id = $2
          AND o.id = $3
-         AND o.status IN ('delivered', 'completed')
+         AND o.status IN ('delivered', 'fulfilled', 'completed')
        LIMIT 1`,
       [buyerId, productId, orderId],
     );
     return rows.length > 0;
+  }
+
+  async findReviewableOrderItem({ buyerId, productId, orderId, orderItemId = null }) {
+    const values = [buyerId, productId, orderId];
+    const itemClause = orderItemId ? "AND oi.id = $4" : "";
+    if (orderItemId) values.push(orderItemId);
+
+    const { rows } = await postgresPool.query(
+      `SELECT
+         o.id AS order_id,
+         o.buyer_id,
+         o.status AS order_status,
+         o.payment_status,
+         o.delivery_status,
+         oi.id AS order_item_id,
+         oi.product_id,
+         oi.seller_id,
+         oi.organization_id,
+         oi.product_title,
+         oi.product_image
+       FROM orders o
+       JOIN order_items oi ON oi.order_id = o.id
+       WHERE o.buyer_id = $1
+         AND oi.product_id = $2
+         AND o.id = $3
+         ${itemClause}
+       LIMIT 1`,
+      values,
+    );
+    return rows[0] || null;
   }
 
   async hasNonCancellableShipment(orderId) {
