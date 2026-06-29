@@ -172,7 +172,7 @@ const env = {
   jwtAccessSecret: process.env.JWT_ACCESS_SECRET || "access-secret",
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || "refresh-secret",
   jwtAccessTtl: process.env.JWT_ACCESS_TTL || "7d",
-  jwtRefreshTtl: process.env.JWT_REFRESH_TTL || "7d",
+  jwtRefreshTtl: process.env.JWT_REFRESH_TTL || "30d",
   googleClientIds,
   firebase: {
     projectId: process.env.FIREBASE_PROJECT_ID || "",
