@@ -20,6 +20,7 @@ const {
   productParamSchema,
   submitReviewSchema,
   listReviewsSchema,
+  myReviewSchema,
   reviewParamSchema,
 } = require("../validation/product.validation");
 const { ACTIONS } = require("../../../shared/constants/actions");
@@ -184,7 +185,7 @@ productRoutes.delete(
 productRoutes.get(
   "/:productId/my-review",
   authenticate,
-  checkInput(productParamSchema),
+  checkInput(myReviewSchema),
   catchErrors(productController.myReview),
 );
 

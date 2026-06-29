@@ -162,7 +162,12 @@ class PlatformController {
   };
 
   updateProductReview = async (req, res) => {
-    const item = await this.platformService.updateProductReview(req.params.reviewId, req.body);
+    const item = await this.platformService.updateProductReview(req.params.reviewId, req.body, req.auth || {});
+    res.json(okResponse(item));
+  };
+
+  bulkUpdateProductReviews = async (req, res) => {
+    const item = await this.platformService.bulkUpdateProductReviews(req.body, req.auth || {});
     res.json(okResponse(item));
   };
 

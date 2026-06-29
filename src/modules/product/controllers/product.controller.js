@@ -257,7 +257,7 @@ class ProductController {
     const result = await this.productService.listReviews(req.params.productId, req.query);
     res.json(okResponse(result.items, {
       pagination: paginationMeta(page, limit, result.total),
-      stats: result.stats,
+      meta: { stats: result.stats },
     }));
   };
 
@@ -289,7 +289,7 @@ class ProductController {
 
   myReview = async (req, res) => {
     const actor = getCurrentUser(req);
-    const review = await this.productService.getMyReviewForProduct(req.params.productId, actor);
+    const review = await this.productService.getMyReviewForProduct(req.params.productId, actor, req.query);
     res.json(okResponse(review));
   };
 

@@ -44,6 +44,7 @@ const {
   productOptionValueIdSchema,
   listProductReviewsSchema,
   updateProductReviewSchema,
+  bulkUpdateProductReviewsSchema,
   productReviewIdSchema,
 } = require("../validation/platform.validation");
 
@@ -225,6 +226,13 @@ platformRoutes.get(
   allowActions(ACTIONS.CATALOG_REVIEW),
   checkInput(listProductReviewsSchema),
   catchErrors(platformController.listProductReviews),
+);
+platformRoutes.post(
+  "/product-reviews/bulk-action",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_REVIEW),
+  checkInput(bulkUpdateProductReviewsSchema),
+  catchErrors(platformController.bulkUpdateProductReviews),
 );
 platformRoutes.patch(
   "/product-reviews/:reviewId",

@@ -1,11 +1,18 @@
 const { okResponse } = require("../../../shared/http/reply");
 const { SellerService } = require("../services/seller.service");
+const { PlatformService } = require("../../platform/services/platform.service");
 const { sellerOrganizationService } = require("../services/seller-organization.service");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
+const { getPage } = require("../../../shared/tools/page");
+const { paginationMeta } = require("../../../shared/http/reply");
 
 class SellerController {
-  constructor({ sellerService = new SellerService() } = {}) {
+  constructor({
+    sellerService = new SellerService(),
+    platformService = new PlatformService(),
+  } = {}) {
     this.sellerService = sellerService;
+    this.platformService = platformService;
   }
 
   submitKyc = async (req, res) => {
@@ -96,6 +103,13 @@ class SellerController {
     const actor = getCurrentUser(req);
     const dashboard = await this.sellerService.getDashboard(req.query, actor);
     res.json(okResponse(dashboard));
+  };
+
+  listProductReviews = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const { page, limit } = getPage(req.query);
+    const result = await this.platformService.listSellerProductReviews(req.query, actor);
+    res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
   };
 
   listAccessModules = async (req, res) => {

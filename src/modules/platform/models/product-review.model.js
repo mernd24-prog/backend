@@ -3,8 +3,12 @@ const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
 const productReviewSchema = new mongoose.Schema(
   {
     productId:      { type: String, required: true, index: true },
+    sellerId:       { type: String, index: true },
+    organizationId: { type: String, index: true },
     buyerId:        { type: String, required: true, index: true },
+    buyerName:      { type: String, default: "" },
     orderId:        { type: String, required: true, index: true },
+    orderItemId:    { type: String, index: true },
     rating:         { type: Number, required: true, min: 1, max: 5 },
     title:          { type: String, default: "" },
     reviewText:     { type: String, default: "" },
@@ -24,11 +28,15 @@ const productReviewSchema = new mongoose.Schema(
       default: "pending",
       index: true,
     },
+    rejectionReason: { type: String, default: "" },
+    moderatedBy:     { type: String },
+    moderatedAt:     { type: Date },
   },
   { timestamps: true },
 );
 
 productReviewSchema.index({ productId: 1, status: 1, createdAt: -1 });
+productReviewSchema.index({ sellerId: 1, status: 1, createdAt: -1 });
 productReviewSchema.index({ productId: 1, buyerId: 1, orderId: 1 }, { unique: true });
 
 const ProductReviewModel = mongoose.model("ProductReview", productReviewSchema);

@@ -139,6 +139,7 @@ const SELLER_SIDEBAR_MODULES = [
   { moduleName: "Seller Catalog", moduleKey: "seller-catalog-management", moduleSlug: "seller-catalog-management", icon: "MdInventory", moduleType: "group", order: 10, parentModule: null, requiredModule: "products" },
   { moduleName: "Seller Products", moduleKey: "seller-product-catalog", moduleSlug: "seller-product-catalog", icon: "MdViewList", routePath: "/app/product-catalog", moduleType: "page", order: 11, parentModule: "seller-catalog-management", requiredModule: "products" },
   { moduleName: "Add Product", moduleKey: "seller-add-product", moduleSlug: "seller-add-product", icon: "MdAddBox", routePath: "/app/product-catalog/form", moduleType: "page", order: 12, parentModule: "seller-catalog-management", requiredModule: "products" },
+  { moduleName: "Product Reviews", moduleKey: "seller-product-reviews", moduleSlug: "seller-product-reviews", icon: "MdReviews", routePath: "/app/product-reviews", moduleType: "page", order: 13, parentModule: "seller-catalog-management", requiredModule: "products" },
 
   { moduleName: "Seller Inventory", moduleKey: "seller-inventory-management", moduleSlug: "seller-inventory-management", icon: "MdWarehouse", moduleType: "group", order: 20, parentModule: null, requiredModule: "inventory" },
   { moduleName: "Inventory", moduleKey: "seller-inventory-overview", moduleSlug: "seller-inventory-overview", icon: "MdDashboard", routePath: "/app/inventory-overview", moduleType: "page", order: 21, parentModule: "seller-inventory-management", requiredModule: "inventory" },

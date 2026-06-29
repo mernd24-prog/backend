@@ -544,6 +544,7 @@ const productParamSchema = Joi.object({
 const submitReviewSchema = Joi.object({
   body: Joi.object({
     orderId:    Joi.string().trim().required(),
+    orderItemId:Joi.string().trim().allow("", null),
     rating:     Joi.number().integer().min(1).max(5).required(),
     title:      Joi.string().trim().max(200).allow("", null),
     reviewText: Joi.string().trim().max(2000).allow("", null),
@@ -577,6 +578,17 @@ const reviewParamSchema = Joi.object({
   }).required(),
 });
 
+const myReviewSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    orderId: Joi.string().trim().allow("", null),
+    orderItemId: Joi.string().trim().allow("", null),
+  }).required(),
+  params: Joi.object({
+    productId: Joi.string().required(),
+  }).required(),
+});
+
 module.exports = {
   createProductSchema,
   updateProductSchema,
@@ -594,5 +606,6 @@ module.exports = {
   productParamSchema,
   submitReviewSchema,
   listReviewsSchema,
+  myReviewSchema,
   reviewParamSchema,
 };
