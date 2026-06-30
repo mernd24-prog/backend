@@ -256,6 +256,16 @@ class AdminService {
     return { ...value };
   }
 
+  parseDocuments(value = {}) {
+    if (!value) return {};
+    if (typeof value === "object") return value;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+
   getRecordId(record = {}) {
     return String(record._id || record.id || "");
   }
@@ -910,7 +920,10 @@ class AdminService {
     ) {
       delete nextStatusUpdates.approvalStatus;
     }
-    const normalizeAddress = (address) => this.sellerOrganizationService.normalizeAddress(address || {});
+    const normalizeAddress = (...addresses) =>
+      this.sellerOrganizationService.normalizeAddress(
+        this.sellerOrganizationService.firstObjectWithValue(...addresses),
+      );
     const updatePayload = {
       legalBusinessName: fallbackName,
       storeDisplayName: profile.displayName || profile.businessName || fallbackName,
@@ -925,10 +938,23 @@ class AdminService {
       primaryContactName: profile.primaryContactName || null,
       gstin: this.sellerOrganizationService.normalizeCode(profile.gstNumber),
       pan: this.sellerOrganizationService.normalizeCode(profile.panNumber),
-      bankDetails: profile.bankDetails || {},
-      billingAddress: normalizeAddress(profile.businessAddress),
-      pickupAddress: normalizeAddress(profile.pickupAddress),
-      returnAddress: normalizeAddress(profile.returnAddress),
+      documents: this.sellerOrganizationService.normalizeDocuments(
+        this.sellerOrganizationService.firstObjectWithValue(
+          profile.documents,
+          profile.kycDocuments,
+          organization.documents,
+        ),
+      ),
+      bankDetails: Object.prototype.hasOwnProperty.call(profile, "bankDetails")
+        ? profile.bankDetails
+        : organization.bankDetails || {},
+      billingAddress: normalizeAddress(
+        profile.billingAddress,
+        profile.businessAddress,
+        organization.billingAddress,
+      ),
+      pickupAddress: normalizeAddress(profile.pickupAddress, organization.pickupAddress),
+      returnAddress: normalizeAddress(profile.returnAddress, organization.returnAddress),
       taxSettings: {
         ...(organization.taxSettings || {}),
         gstin: this.sellerOrganizationService.normalizeCode(profile.gstNumber),
@@ -988,9 +1014,17 @@ class AdminService {
 
     const currentSellerProfile = this.toPlainObject(seller.sellerProfile || {});
     const kycRejected = payload.kycStatus === "rejected";
+    const reviewedDocuments = this.parseDocuments(reviewedKyc?.documents);
     const nextSellerProfileBase = {
       ...currentSellerProfile,
       kycStatus: payload.kycStatus,
+      documents: this.sellerOrganizationService.normalizeDocuments(
+        this.sellerOrganizationService.firstObjectWithValue(
+          currentSellerProfile.documents,
+          currentSellerProfile.kycDocuments,
+          reviewedDocuments,
+        ),
+      ),
       rejectionReason: kycRejected ? payload.rejectionReason || null : null,
       verifiedBy: payload.kycStatus === "verified" ? actor.userId || null : null,
       verifiedAt: payload.kycStatus === "verified" ? new Date() : null,
