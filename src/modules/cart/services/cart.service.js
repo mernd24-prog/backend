@@ -10,7 +10,7 @@ class CartService {
   }
 
   async getCart(userId) {
-    return this.cartRepository.getByUserId(userId);
+    return this.refreshCartAvailability(await this.cartRepository.getByUserId(userId));
   }
 
   async listCarts(filter = {}, pagination = {}) {
@@ -24,7 +24,7 @@ class CartService {
   async getCartById(cartId) {
     const cart = await this.cartRepository.getById(cartId);
     if (!cart) throw new AppError("Cart not found", 404);
-    return cart;
+    return this.refreshCartAvailability(cart);
   }
 
   async clearCart(cartId, actor = {}) {
@@ -133,6 +133,31 @@ class CartService {
     if (available <= 0) return "out_of_stock";
     if (available <= threshold) return "low_stock";
     return "in_stock";
+  }
+
+  refreshCartAvailability(cart = null) {
+    if (!cart || !Array.isArray(cart.items)) return cart;
+
+    return {
+      ...cart,
+      items: cart.items.map((item) => {
+        const product = item.productId && typeof item.productId === "object"
+          ? item.productId
+          : null;
+        if (!product) return item;
+
+        const variant = this.resolveVariant(product, item);
+        const availableStock = this.availableStock(product, variant);
+        const allowBackorder = product.inventorySettings?.allowBackorder === true;
+        return {
+          ...item,
+          availableStock,
+          stockStatus: allowBackorder && Number(item.quantity || 0) > availableStock
+            ? "backorder"
+            : this.stockStatus(product, variant),
+        };
+      }),
+    };
   }
 
   async normalizeWishlist(wishlist = []) {

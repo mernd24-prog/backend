@@ -2,6 +2,7 @@ const { AppError } = require("../../../shared/errors/app-error");
 const { SellerOrganizationRepository } = require("../repositories/seller-organization.repository");
 const { UserModel } = require("../../user/models/user.model");
 const { storageService: defaultStorageService } = require("../../../shared/storage/storage-service");
+const { postgresPool } = require("../../../infrastructure/postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
 
 const SELLER_ROLES = ["seller", "seller-admin", "seller-sub-admin"];
@@ -131,13 +132,46 @@ class SellerOrganizationService {
 
   normalizeAddress(address = {}) {
     return {
-      line1: address.line1 || "",
-      line2: address.line2 || "",
+      line1: address.line1 || address.addressLine1 || address.address_line1 || "",
+      line2: address.line2 || address.addressLine2 || address.address_line2 || "",
       city: address.city || "",
       state: address.state || "",
       country: address.country || "India",
-      postalCode: address.postalCode || address.pincode || "",
+      postalCode: address.postalCode || address.postal_code || address.pincode || address.zip || "",
     };
+  }
+
+  normalizeDocuments(documents = {}) {
+    const source = documents || {};
+    return {
+      ...source,
+      bankProofUrl:
+        source.bankProofUrl ||
+        source.bankStatementUrl ||
+        source.cancelledChequeUrl ||
+        source.cancelledCheque ||
+        source.passbookUrl ||
+        source.bankDocumentUrl ||
+        "",
+      addressProofUrl:
+        source.addressProofUrl ||
+        source.addressDocumentUrl ||
+        source.proofOfAddressUrl ||
+        source.businessAddressProofUrl ||
+        source.utilityBillUrl ||
+        "",
+    };
+  }
+
+  getAddressValue(address = {}, field) {
+    if (field === "postalCode") {
+      return address.postalCode || address.postal_code || address.pincode || address.zip || "";
+    }
+    return address[field] || "";
+  }
+
+  getDocumentValue(documents = {}, field) {
+    return this.normalizeDocuments(documents)[field] || "";
   }
 
   isOrganizationApprovedForBusiness(organization = {}) {
@@ -228,10 +262,10 @@ class SellerOrganizationService {
     if (!organization.dateOfBirth) missing.push("dateOfBirth");
 
     REQUIRED_ADDRESS_FIELDS.forEach((field) => {
-      if (!this.normalizeText(organization.billingAddress?.[field])) {
+      if (!this.normalizeText(this.getAddressValue(organization.billingAddress, field))) {
         missing.push(`billingAddress.${field}`);
       }
-      if (!this.normalizeText(organization.pickupAddress?.[field])) {
+      if (!this.normalizeText(this.getAddressValue(organization.pickupAddress, field))) {
         missing.push(`pickupAddress.${field}`);
       }
     });
@@ -243,7 +277,7 @@ class SellerOrganizationService {
     });
 
     REQUIRED_DOCUMENT_FIELDS.forEach((field) => {
-      if (!this.normalizeText(organization.documents?.[field])) {
+      if (!this.normalizeText(this.getDocumentValue(organization.documents, field))) {
         missing.push(`documents.${field}`);
       }
     });
@@ -308,11 +342,11 @@ class SellerOrganizationService {
         ? { pan: this.normalizeCode(payload.pan || payload.panNumber) }
         : {}),
       ...(payload.documents !== undefined || payload.kycDocuments !== undefined
-        ? { documents: payload.documents || payload.kycDocuments || {} }
+        ? { documents: this.normalizeDocuments(this.firstObjectWithValue(payload.documents, payload.kycDocuments)) }
         : {}),
       ...(payload.bankDetails !== undefined ? { bankDetails: payload.bankDetails || {} } : {}),
       ...(payload.billingAddress !== undefined || payload.businessAddress !== undefined
-        ? { billingAddress: this.normalizeAddress(payload.billingAddress || payload.businessAddress || {}) }
+        ? { billingAddress: this.normalizeAddress(this.firstObjectWithValue(payload.billingAddress, payload.businessAddress)) }
         : {}),
       ...(payload.pickupAddress !== undefined ? { pickupAddress: this.normalizeAddress(payload.pickupAddress || {}) } : {}),
       ...(payload.returnAddress !== undefined ? { returnAddress: this.normalizeAddress(payload.returnAddress || {}) } : {}),
@@ -592,6 +626,29 @@ class SellerOrganizationService {
       if (typeof item === "object") return Object.keys(item).length > 0;
       return String(item).trim().length > 0;
     });
+  }
+
+  firstObjectWithValue(...values) {
+    return values.find((value) => this.hasObjectValue(value)) || {};
+  }
+
+  parseDocuments(value = {}) {
+    if (!value) return {};
+    if (typeof value === "object") return value;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+
+  async getSellerKycDocuments(sellerId) {
+    if (!sellerId) return {};
+    const { rows } = await postgresPool.query(
+      "SELECT documents FROM seller_kyc WHERE seller_id = $1 LIMIT 1",
+      [sellerId],
+    );
+    return this.parseDocuments(rows[0]?.documents);
   }
 
   buildSellerProfileMirror(sellerProfile = {}, organization = null) {
@@ -897,9 +954,15 @@ class SellerOrganizationService {
       bankVerificationStatus: sellerProfile.bankVerificationStatus || "submitted",
       approvalStatus: "pending_review",
       goLiveStatus: "pending",
-      documents: {},
-      bankDetails: sellerProfile.bankDetails || {},
-      billingAddress: this.normalizeAddress(sellerProfile.businessAddress || {}),
+      documents: this.normalizeDocuments(
+        this.firstObjectWithValue(sellerProfile.documents, sellerProfile.kycDocuments),
+      ),
+      bankDetails: Object.prototype.hasOwnProperty.call(sellerProfile, "bankDetails")
+        ? sellerProfile.bankDetails
+        : {},
+      billingAddress: this.normalizeAddress(
+        this.firstObjectWithValue(sellerProfile.billingAddress, sellerProfile.businessAddress),
+      ),
       pickupAddress: this.normalizeAddress(sellerProfile.pickupAddress || {}),
       returnAddress: this.normalizeAddress(sellerProfile.returnAddress || {}),
       taxSettings: {
@@ -1238,6 +1301,9 @@ class SellerOrganizationService {
     if (normalized.approvalStatus === "rejected" && !normalized.rejectionReason) {
       throw new AppError("Rejection reason is required when organization is rejected", 400);
     }
+    if (normalized.bankVerificationStatus === "rejected") {
+      normalized.bankDetails = null;
+    }
     if (!review && ["approved", "active"].includes(normalized.approvalStatus) && normalized.goLiveStatus !== "live") {
       throw new AppError("Use organization go-live approval after KYC and bank verification", 409);
     }
@@ -1293,8 +1359,59 @@ class SellerOrganizationService {
       throw new AppError("Rejection reason is required when organization is rejected", 400);
     }
     const existing = await this.adminGet(sellerId, organizationId, actor);
-    const stagePatch = this.buildStageReviewPatch(existing, payload, actor);
+    const isApprovalAttempt =
+      ["approved", "active"].includes(status) ||
+      payload.goLiveStatus === "live";
+    let repairPayload = {};
+    if (isApprovalAttempt) {
+      const [seller, kycDocuments] = await Promise.all([
+        UserModel.findById(sellerId).select("sellerProfile").lean(),
+        this.getSellerKycDocuments(sellerId),
+      ]);
+      const profile = seller?.sellerProfile || {};
+      const documents = this.firstObjectWithValue(
+        payload.documents,
+        payload.kycDocuments,
+        profile.documents,
+        profile.kycDocuments,
+        kycDocuments,
+        existing.documents,
+      );
+      const billingAddress = this.firstObjectWithValue(
+        payload.billingAddress,
+        payload.businessAddress,
+        profile.billingAddress,
+        profile.businessAddress,
+        profile.pickupAddress,
+        existing.billingAddress,
+        existing.pickupAddress,
+      );
+      repairPayload = {
+        ...(this.hasObjectValue(documents) ? { documents: this.normalizeDocuments(documents) } : {}),
+        ...(this.hasObjectValue(billingAddress)
+          ? { billingAddress: this.normalizeAddress(billingAddress) }
+          : {}),
+        ...(this.hasObjectValue(profile.bankDetails) ? { bankDetails: profile.bankDetails } : {}),
+        ...(profile.legalBusinessName || profile.businessName
+          ? { legalBusinessName: profile.legalBusinessName || profile.businessName }
+          : {}),
+        ...(profile.displayName || profile.businessName
+          ? { storeDisplayName: profile.displayName || profile.businessName }
+          : {}),
+        ...(profile.businessType ? { businessType: profile.businessType } : {}),
+        ...(profile.supportEmail ? { supportEmail: profile.supportEmail } : {}),
+        ...(profile.supportPhone ? { supportPhone: profile.supportPhone } : {}),
+        ...(profile.primaryContactName ? { primaryContactName: profile.primaryContactName } : {}),
+        ...(profile.gstNumber ? { gstin: profile.gstNumber } : {}),
+        ...(profile.panNumber ? { pan: profile.panNumber } : {}),
+        ...(profile.aadhaarNumber ? { aadhaarNumber: profile.aadhaarNumber } : {}),
+        ...(profile.dateOfBirth ? { dateOfBirth: profile.dateOfBirth } : {}),
+      };
+    }
+    const reviewBase = this.mergeOrganizationPatch(existing, repairPayload);
+    const stagePatch = this.buildStageReviewPatch(reviewBase, payload, actor);
     return this.adminUpdate(sellerId, organizationId, {
+      ...repairPayload,
       ...stagePatch,
       ...(status && !stagePatch.approvalStatus ? { approvalStatus: status } : {}),
       ...(payload.rejectionReason !== undefined ? { rejectionReason: payload.rejectionReason || null } : {}),

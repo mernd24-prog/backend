@@ -135,9 +135,11 @@ function getMissingSellerBankFields(bankDetails = {}) {
 }
 
 function getMissingBillingAddressFields(sellerProfile = {}) {
-  const billing = sellerProfile.billingAddress || {};
+  const billing = Object.values(sellerProfile.billingAddress || {}).some(cleanText)
+    ? sellerProfile.billingAddress
+    : sellerProfile.businessAddress || {};
   return SELLER_BILLING_ADDRESS_REQUIRED_FIELDS.filter(
-    (field) => !cleanText(billing[field]),
+    (field) => !cleanText(billing[field] || (field === "postalCode" ? billing.pincode || billing.postal_code : "")),
   );
 }
 

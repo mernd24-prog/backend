@@ -191,15 +191,19 @@ class SellerService {
       primaryContactName: sellerProfile.primaryContactName || organization.primaryContactName || null,
       gstin: sellerProfile.gstNumber || organization.gstin || null,
       pan: sellerProfile.panNumber || organization.pan || null,
+      documents: sellerOrganizationService.normalizeDocuments(
+        sellerOrganizationService.firstObjectWithValue(
+          sellerProfile.documents,
+          sellerProfile.kycDocuments,
+          organization.documents,
+        ),
+      ),
       bankDetails: sellerProfile.bankDetails || organization.bankDetails || {},
-      billingAddress: (() => {
-        const hasContent = (addr) => addr && (addr.line1 || addr.city || addr.state || addr.postalCode);
-        return hasContent(sellerProfile.billingAddress)
-          ? sellerProfile.billingAddress
-          : hasContent(sellerProfile.businessAddress)
-            ? sellerProfile.businessAddress
-            : organization.billingAddress || {};
-      })(),
+      billingAddress: sellerOrganizationService.firstObjectWithValue(
+        sellerProfile.billingAddress,
+        sellerProfile.businessAddress,
+        organization.billingAddress,
+      ),
       pickupAddress: sellerProfile.pickupAddress || organization.pickupAddress || {},
       returnAddress: sellerProfile.returnAddress || organization.returnAddress || {},
       taxSettings: {

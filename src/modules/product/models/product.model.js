@@ -42,6 +42,17 @@ const variantSchema = new mongoose.Schema(
   { _id: true },
 );
 
+variantSchema.virtual("availableStock").get(function () {
+  return Math.max(0, Number(this.stock || 0) - Number(this.reservedStock || 0));
+});
+
+variantSchema.virtual("isInStock").get(function () {
+  return this.status === "active" && this.availableStock > 0;
+});
+
+variantSchema.set("toJSON", { virtuals: true });
+variantSchema.set("toObject", { virtuals: true });
+
 const productOptionSchema = new mongoose.Schema(
   {
     platformOptionId: { type: String, trim: true },
