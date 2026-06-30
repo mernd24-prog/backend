@@ -80,6 +80,7 @@ const paymentOptionsSchema = Joi.object({
       Joi.object().pattern(Joi.string(), Joi.number().min(0)),
       Joi.string().trim().allow("", null),
     ),
+    productCodDisabled: Joi.boolean().default(false),
   }).required(),
   params: Joi.object({}).required(),
 });

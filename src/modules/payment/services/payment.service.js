@@ -146,16 +146,20 @@ class PaymentService {
           shippingAddress,
         )
       : { allowed: true, sellerChargeAmount: 0, sellers: [] };
+    const productCodDisabled = query.productCodDisabled === "true" || query.productCodDisabled === true;
     const codAvailable = cod.enabled &&
       codAllowedByZone &&
       sellerCod.allowed &&
+      !productCodDisabled &&
       (cod.minOrderAmount === null || orderAmount >= cod.minOrderAmount) &&
       (cod.maxOrderAmount === null || orderAmount <= cod.maxOrderAmount);
-    const codDisabledReason = !codAllowedByZone
-      ? "COD is not available for this delivery pincode"
-      : !sellerCod.allowed
-        ? "COD is not available for one or more sellers in this cart"
-        : null;
+    const codDisabledReason = productCodDisabled
+      ? "COD is not available for one or more products in this cart"
+      : !codAllowedByZone
+        ? "COD is not available for this delivery pincode"
+        : !sellerCod.allowed
+          ? "COD is not available for one or more sellers in this cart"
+          : null;
 
     return {
       settings: {
@@ -307,6 +311,18 @@ class PaymentService {
       );
       if (!sellerCod.allowed) {
         throw new AppError("Cash on Delivery is no longer available for one or more sellers in this order", 400);
+      }
+      const productCodBlocker = (hydratedOrder?.items || []).find((item) => {
+        const snapshot = (typeof item.product_snapshot === "object" && item.product_snapshot)
+          ? item.product_snapshot
+          : {};
+        const shipping = (typeof snapshot.shipping === "object" && snapshot.shipping)
+          ? snapshot.shipping
+          : {};
+        return shipping.codAvailable === false;
+      });
+      if (productCodBlocker) {
+        throw new AppError("Cash on Delivery is not available for one or more products in this order", 400);
       }
       const payment = await this.createOfflinePayment({
         ...payload,

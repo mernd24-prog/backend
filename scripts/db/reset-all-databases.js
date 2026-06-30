@@ -30,9 +30,9 @@ function resetSchemaAndSeed() {
 }
 
 async function main() {
-  // await resetMongo();
+  await resetMongo();
   await resetPostgres();
-  // resetSchemaAndSeed();
+  resetSchemaAndSeed();
   process.stdout.write("All databases reset and rebuilt successfully\n");
 }
 

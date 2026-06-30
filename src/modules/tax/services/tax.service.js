@@ -1449,12 +1449,45 @@ class TaxService {
     const amounts = metadata.amounts || {};
     const items = metadata.items || metadata.lineItems || [];
     const currency = invoice.currency || "INR";
+    const seller = metadata.seller || {};
+    const buyer = metadata.buyer || {};
+    const shippingAddress = metadata.shippingAddress || buyer.shippingAddress || {};
 
     return {
+      layout: "invoice",
       title: this.getInvoiceDocumentTitle(invoice),
       subtitle: `Invoice ${invoice.invoice_number || invoice.id}`,
       fileBaseName: invoice.invoice_number || `invoice-${invoice.id}`,
       generatedAt: new Date().toISOString(),
+      data: {
+        invoice: {
+          number: invoice.invoice_number,
+          type: this.invoiceType(invoice),
+          issuedAt: invoice.issued_at || invoice.created_at,
+          orderId: invoice.order_id,
+          orderNumber: metadata.orderNumber || null,
+          currency,
+          placeOfSupply: invoice.place_of_supply,
+          taxMode: invoice.tax_mode || amounts.taxMode,
+          gstinMarketplace: invoice.gstin_marketplace,
+          gstinSeller: invoice.gstin_seller,
+          issuerType: invoice.issuer_type,
+          recipientType: invoice.recipient_type,
+        },
+        seller,
+        buyer,
+        shippingAddress,
+        amounts: {
+          ...amounts,
+          cgstAmount: amounts.cgstAmount ?? invoice.cgst_amount,
+          sgstAmount: amounts.sgstAmount ?? invoice.sgst_amount,
+          igstAmount: amounts.igstAmount ?? invoice.igst_amount,
+          tcsAmount: amounts.tcsAmount ?? invoice.tcs_amount,
+          taxableAmount: amounts.productTaxableAmount ?? invoice.taxable_amount,
+          totalAmount: amounts.finalPayableAmount ?? invoice.total_amount,
+        },
+        items,
+      },
       raw: { invoice },
       sections: [
         {
@@ -1492,7 +1525,6 @@ class TaxService {
             { label: "TCS", value: this.renderMoney(invoice.tcs_amount, currency) },
             { label: "Tax Amount", value: this.renderMoney(invoice.tax_amount, currency) },
             { label: "Delivery Charge", value: this.renderMoney(amounts.deliveryChargeAmount, currency) },
-            { label: "Shipping Charge", value: this.renderMoney(amounts.shippingChargeAmount, currency) },
             { label: "Customer Platform Fee", value: this.renderMoney(amounts.customerPlatformFeeAmount, currency) },
             { label: "Platform Fee GST", value: this.renderMoney(amounts.customerPlatformFeeTaxAmount, currency) },
             { label: "COD Charge", value: this.renderMoney(amounts.codChargeAmount, currency) },
@@ -1514,10 +1546,47 @@ class TaxService {
     const currency = creditNote.currency || invoice?.currency || "INR";
 
     return {
+      layout: "credit_note",
       title: "Marketplace Credit Note",
       subtitle: `Credit Note ${creditNote.credit_note_number || creditNote.id}`,
       fileBaseName: creditNote.credit_note_number || `credit-note-${creditNote.id}`,
       generatedAt: new Date().toISOString(),
+      data: {
+        creditNote: {
+          number: creditNote.credit_note_number,
+          invoiceNumber: invoice?.invoice_number || creditNote.invoice_id || null,
+          orderId: creditNote.order_id,
+          orderNumber: metadata.orderNumber || null,
+          referenceType: creditNote.reference_type,
+          referenceId: creditNote.reference_id,
+          reason: creditNote.reason,
+          issuedAt: creditNote.issued_at || creditNote.created_at,
+          currency,
+          scope: metadata.creditNoteScope || null,
+          sellerId: metadata.sellerId || invoice?.seller_id || null,
+        },
+        seller: metadata.seller || {},
+        buyer: metadata.buyer || {},
+        shippingAddress: metadata.shippingAddress || metadata.buyer?.shippingAddress || {},
+        amounts: {
+          taxableAmount: creditNote.taxable_amount,
+          cgstAmount: creditNote.cgst_amount,
+          sgstAmount: creditNote.sgst_amount,
+          igstAmount: creditNote.igst_amount,
+          taxAmount: creditNote.tax_amount,
+          totalAmount: creditNote.total_amount,
+        },
+        items: metadata.items || [],
+        parentInvoice: invoice ? {
+          number: invoice.invoice_number,
+          gstinSeller: invoice.gstin_seller,
+          gstinMarketplace: invoice.gstin_marketplace,
+          placeOfSupply: invoice.place_of_supply,
+          taxMode: invoice.tax_mode,
+          issuerType: invoice.issuer_type,
+          recipientType: invoice.recipient_type,
+        } : null,
+      },
       raw: { creditNote, invoice },
       sections: [
         {

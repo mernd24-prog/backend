@@ -79,6 +79,7 @@ const PRODUCT_LIST_PROJECTION = {
   stock: 1,
   reservedStock: 1,
   inventorySettings: 1,
+  "shipping.codAvailable": 1,
   origin: 1,
   status: 1,
   visibility: 1,
@@ -86,6 +87,8 @@ const PRODUCT_LIST_PROJECTION = {
   rating: 1,
   reviewCount: 1,
   analytics: 1,
+  "metadata.featured": 1,
+  "metadata.codAvailable": 1,
   revisionStatus: 1,
   pendingRevisionId: 1,
   createdAt: 1,
@@ -871,6 +874,39 @@ class ProductService {
     }
   }
 
+  resolveSellerForOrganizationAssignment(existingProduct, payload = {}, actor = {}) {
+    const currentSellerId = String(existingProduct.sellerId || "");
+    const requestedSellerId = String(payload.sellerId || "");
+
+    if (isSellerRole(actor)) {
+      const actorSellerId = String(actor.ownerSellerId || actor.userId || "");
+      if (requestedSellerId && requestedSellerId !== actorSellerId) {
+        throw new AppError("Product seller cannot be changed", 403);
+      }
+      return currentSellerId || actorSellerId;
+    }
+
+    return requestedSellerId || currentSellerId || String(actor.userId || "");
+  }
+
+  assertSellerChangeAllowed(existingProduct, payload = {}, actor = {}) {
+    if (!Object.prototype.hasOwnProperty.call(payload, "sellerId")) return;
+
+    const currentSellerId = String(existingProduct.sellerId || "");
+    const requestedSellerId = String(payload.sellerId || "");
+    if (!requestedSellerId || !currentSellerId || requestedSellerId === currentSellerId) return;
+
+    if (isSellerRole(actor)) {
+      throw new AppError("Product seller cannot be changed", 403);
+    }
+    if (existingProduct.organizationId) {
+      throw new AppError("Product seller cannot be changed after organization assignment", 409);
+    }
+    if (!payload.organizationId) {
+      throw new AppError("organizationId is required when assigning a product to another seller", 400);
+    }
+  }
+
   // ─── Create ───────────────────────────────────────────────────────────────
 
   async createProduct(payload, actor) {
@@ -976,12 +1012,15 @@ class ProductService {
       throw new AppError("Product does not belong to the selected organization", 403);
     }
     this.assertOrganizationChangeAllowed(existingProduct, payload, actor);
+    this.assertSellerChangeAllowed(existingProduct, payload, actor);
     if (!existingProduct.organizationId && payload.organizationId) {
-      const sellerId = existingProduct.sellerId || (actor.ownerSellerId || actor.userId);
+      const sellerId = this.resolveSellerForOrganizationAssignment(existingProduct, payload, actor);
       const organizationContext = await this.resolveProductOrganization(payload, actor, sellerId, existingProduct);
+      payload.sellerId = sellerId;
       payload.organizationId = organizationContext.organizationId;
       payload.organizationSnapshot = organizationContext.organizationSnapshot;
     } else {
+      delete payload.sellerId;
       delete payload.organizationId;
       delete payload.organizationSnapshot;
     }

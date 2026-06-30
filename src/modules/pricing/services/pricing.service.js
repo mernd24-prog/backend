@@ -362,6 +362,20 @@ class PricingService {
       throw new AppError("Cash on Delivery is currently disabled", 400);
     }
 
+    const productCodBlocker = pricedItems.find((item) => {
+      const shipping = item.shipping && typeof item.shipping === "object"
+        ? item.shipping
+        : {};
+      const snapshotShipping =
+        item.productSnapshot?.shipping && typeof item.productSnapshot.shipping === "object"
+          ? item.productSnapshot.shipping
+          : {};
+      return shipping.codAvailable === false || snapshotShipping.codAvailable === false;
+    });
+    if (productCodBlocker) {
+      throw new AppError("Cash on Delivery is not available for one or more products in this cart", 400);
+    }
+
     const sellerCod = await sellerChargeSettingsService.evaluateCodForItems(
       pricedItems,
       shippingAddress,
