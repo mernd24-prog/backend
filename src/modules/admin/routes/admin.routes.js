@@ -126,6 +126,7 @@ const {
   geographyCodeSchema,
   listProductReviewsSchema,
   updateProductReviewSchema,
+  bulkUpdateProductReviewsSchema,
   productReviewIdSchema,
   createBrandSchema,
   updateBrandSchema,
@@ -1008,6 +1009,11 @@ adminRoutes.get(
   "/platform/product-reviews",
   checkInput(listProductReviewsSchema),
   catchErrors(platformController.listProductReviews),
+);
+adminRoutes.post(
+  "/platform/product-reviews/bulk-action",
+  checkInput(bulkUpdateProductReviewsSchema),
+  catchErrors(platformController.bulkUpdateProductReviews),
 );
 adminRoutes.patch(
   "/platform/product-reviews/:reviewId",
