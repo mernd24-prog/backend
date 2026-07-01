@@ -101,7 +101,7 @@ const SIDEBAR_MODULES = [
 
   // Catalog Masters additions
   { moduleName: "Collections", moduleKey: "collections", moduleSlug: "collections", icon: "MdCollections", routePath: "/app/collections", moduleType: "page", order: 201, parentModule: "catalog-masters", requiredModule: "platform" },
-  { moduleName: "Badges", moduleKey: "badges", moduleSlug: "badges", icon: "MdMilitaryTech", routePath: "/app/badges", moduleType: "page", order: 202, parentModule: "catalog-masters", requiredModule: "platform" },
+  { moduleName: "Badges", moduleKey: "badges", moduleSlug: "badges", icon: "MdMilitaryTech", routePath: "/app/badges", moduleType: "page", order: 202, parentModule: "catalog-masters", requiredModule: "badges" },
 
   // Users & Access additions
   { moduleName: "Seller Sub-Admins", moduleKey: "seller-sub-admins", moduleSlug: "seller-sub-admins", icon: "MdSupervisorAccount", routePath: "/app/seller-sub-admins", moduleType: "page", order: 214, parentModule: "users-access", requiredModule: "sellers" },
@@ -148,8 +148,9 @@ const SELLER_SIDEBAR_MODULES = [
   { moduleName: "Seller Orders", moduleKey: "seller-orders-management", moduleSlug: "seller-orders-management", icon: "MdShoppingCart", moduleType: "group", order: 30, parentModule: null, requiredModule: "orders" },
   { moduleName: "Seller Order List", moduleKey: "seller-orders", moduleSlug: "seller-orders", icon: "MdReceipt", routePath: "/app/orders", moduleType: "page", order: 31, parentModule: "seller-orders-management", requiredModule: "orders" },
   { moduleName: "Seller Shipments", moduleKey: "seller-shipment-tracking", moduleSlug: "seller-shipment-tracking", icon: "MdLocalShipping", routePath: "/app/shipment-tracking", moduleType: "page", order: 32, parentModule: "seller-orders-management", requiredModule: "delivery" },
-  { moduleName: "My Shipping Profiles", moduleKey: "seller-shipping-profiles", moduleSlug: "seller-shipping-profiles", icon: "MdLocalShipping", routePath: "/app/shipping-profiles", moduleType: "page", order: 33, parentModule: "seller-orders-management", requiredModule: "delivery" },
-  { moduleName: "Returns", moduleKey: "seller-returns", moduleSlug: "seller-returns", icon: "MdAssignmentReturn", routePath: "/app/returns", moduleType: "page", order: 34, parentModule: "seller-orders-management", requiredModule: "returns" },
+  { moduleName: "My Delivery Agents", moduleKey: "seller-delivery-agents", moduleSlug: "seller-delivery-agents", icon: "MdPeople", routePath: "/app/delivery-agents", moduleType: "page", order: 33, parentModule: "seller-orders-management", requiredModule: "delivery" },
+  { moduleName: "My Shipping Profiles", moduleKey: "seller-shipping-profiles", moduleSlug: "seller-shipping-profiles", icon: "MdLocalShipping", routePath: "/app/shipping-profiles", moduleType: "page", order: 34, parentModule: "seller-orders-management", requiredModule: "delivery" },
+  { moduleName: "Returns", moduleKey: "seller-returns", moduleSlug: "seller-returns", icon: "MdAssignmentReturn", routePath: "/app/returns", moduleType: "page", order: 35, parentModule: "seller-orders-management", requiredModule: "returns" },
 
   { moduleName: "Seller Commerce", moduleKey: "seller-commerce-settings", moduleSlug: "seller-commerce-settings", icon: "MdSettings", moduleType: "group", order: 35, parentModule: null, requiredModule: "cod-config" },
   { moduleName: "COD Settings", moduleKey: "seller-cod-config", moduleSlug: "seller-cod-config", icon: "MdLocalAtm", routePath: "/app/cod-config", moduleType: "page", order: 36, parentModule: "seller-commerce-settings", requiredModule: "cod-config" },

@@ -131,6 +131,10 @@ const {
   updateBrandSchema,
   listBrandsSchema,
   brandIdSchema,
+  createBadgeSchema,
+  updateBadgeSchema,
+  listBadgesSchema,
+  badgeIdSchema,
   createBatchSchema,
   updateBatchSchema,
   listBatchesSchema,
@@ -240,6 +244,47 @@ adminRoutes.delete(
   checkInput(brandIdSchema),
   catchErrors(platformController.deleteBrand),
 );
+
+// ── Badges ────────────────────────────────────────────────────────────────────
+adminRoutes.get(
+  "/platform/badges",
+  authenticate,
+  checkInput(listBadgesSchema),
+  catchErrors(platformController.listBadges),
+);
+adminRoutes.get(
+  "/platform/badges/active",
+  authenticate,
+  catchErrors(platformController.listActiveBadges),
+);
+adminRoutes.get(
+  "/platform/badges/:badgeId",
+  authenticate,
+  checkInput(badgeIdSchema),
+  catchErrors(platformController.getBadge),
+);
+adminRoutes.post(
+  "/platform/badges",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(createBadgeSchema),
+  catchErrors(platformController.createBadge),
+);
+adminRoutes.patch(
+  "/platform/badges/:badgeId",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(updateBadgeSchema),
+  catchErrors(platformController.updateBadge),
+);
+adminRoutes.delete(
+  "/platform/badges/:badgeId",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(badgeIdSchema),
+  catchErrors(platformController.deleteBadge),
+);
+
 adminRoutes.get(
   "/platform/hsn-codes",
   authenticate,

@@ -123,6 +123,7 @@ class OrderService {
         trackingNumber: tracking.trackingNumber || null,
         carrierName: tracking.carrierName || null,
         carrierUrl: tracking.carrierUrl || null,
+        cod: order.payment_provider === PAYMENT_PROVIDER.COD,
         provider: tracking.carrierName ? "manual" : undefined,
         shipToSnapshot: this.normalizeJson(order.shipping_address, {}),
         dealId: fulfillment.dealId,
@@ -270,7 +271,7 @@ class OrderService {
           ),
         );
       }
-      return this.orderRepository.findByIdWithItems(order.id);
+      return this.filterOrderForBuyer(await this.orderRepository.findByIdWithItems(order.id));
     } catch (error) {
       await this.inventoryService.releaseForOrder(orderId);
       await this.walletService.release(actor.userId, orderId);
@@ -351,7 +352,8 @@ class OrderService {
   }
 
   async listMyOrders(actor, filters = {}) {
-    return this.orderRepository.listOrdersByBuyer(actor.userId, filters);
+    const orders = await this.orderRepository.listOrdersByBuyer(actor.userId, filters);
+    return orders.map((order) => this.filterOrderForBuyer(order));
   }
 
   async listSellerOrders(actor, filters = {}) {
@@ -400,21 +402,128 @@ class OrderService {
       return order;
     }
 
-    const scopedOrder = !isOwner && isSeller
-      ? this.filterOrderForSeller(order, sellerId, actor.organizationId)
-      : order;
+    const scopedOrder = isOwner
+      ? this.filterOrderForBuyer(order)
+      : !isOwner && isSeller
+        ? this.filterOrderForSeller(order, sellerId, actor.organizationId)
+        : order;
 
     if (!isOwner && isSeller && actor.organizationId && !scopedOrder.items?.length) {
       throw new AppError("Order does not belong to the selected organization", 403);
     }
 
-    const visibleNotes = (order.notes || []).filter((note) => {
+    const visibleNotes = (scopedOrder.notes || []).filter((note) => {
       if (isOwner) return note.visibility === "buyer";
       if (isSeller) return ["seller", "internal"].includes(note.visibility);
       return false;
     });
 
     return { ...scopedOrder, notes: visibleNotes };
+  }
+
+  filterOrderForBuyer(order = {}) {
+    const relations = order.relations || {};
+    const sanitizeTrackingEvent = (event = {}) => {
+      const { raw_payload, rawPayload, actor_id, actorId, ...visible } = event;
+      return visible;
+    };
+    const sanitizeShipment = (shipment = {}) => {
+      const {
+        delivery_otp_hash,
+        delivery_otp_attempts,
+        delivery_proof_snapshot,
+        raw_payload,
+        metadata,
+        created_by,
+        updated_by,
+        seller_id,
+        buyer_id,
+        delivery_agent_id,
+        ...visible
+      } = shipment;
+      const agent = shipment.delivery_agent_snapshot || {};
+      return {
+        ...visible,
+        seller: shipment.seller ? {
+          displayName: shipment.seller.displayName || shipment.seller.businessName || shipment.seller.email || "Seller",
+          businessName: shipment.seller.businessName || shipment.seller.sellerProfile?.businessName || null,
+          supportEmail: shipment.seller.sellerProfile?.supportEmail || null,
+          supportPhone: shipment.seller.sellerProfile?.supportPhone || null,
+        } : null,
+        delivery_agent_snapshot: shipment.delivery_agent_id ? {
+          name: agent.name || null,
+          phone: agent.phone || null,
+          vehicleType: agent.vehicleType || null,
+          vehicleNumber: agent.vehicleNumber || null,
+        } : {},
+        trackingEvents: (shipment.trackingEvents || []).map(sanitizeTrackingEvent),
+        verification: {
+          required: Boolean(shipment.verification_required),
+          methods: Array.isArray(shipment.verification_methods) ? shipment.verification_methods : [],
+          verifiedAt: shipment.delivered_verified_at || null,
+          otpExpiresAt: shipment.delivery_otp_expires_at || null,
+        },
+      };
+    };
+    const items = (order.items || []).map((item) => {
+      const {
+        pricing_snapshot,
+        platform_fee_amount,
+        seller_snapshot,
+        organization_snapshot,
+        ...visible
+      } = item;
+      const sellerSnapshot = this.normalizeJson(seller_snapshot, {});
+      const organizationSnapshot = this.normalizeJson(organization_snapshot, {});
+      return {
+        ...visible,
+        seller: {
+          name: sellerSnapshot.displayName || sellerSnapshot.businessName || organizationSnapshot.storeDisplayName || "Seller",
+        },
+      };
+    });
+    const { metadata, platform_fee_breakup, ...visibleOrder } = order;
+
+    return {
+      ...visibleOrder,
+      items,
+      relations: {
+        buyer: relations.buyer || null,
+        sellers: (relations.sellers || []).map((seller) => ({
+          displayName: seller.displayName || seller.businessName || seller.email || "Seller",
+          businessName: seller.businessName || seller.sellerProfile?.businessName || null,
+          supportEmail: seller.sellerProfile?.supportEmail || null,
+          supportPhone: seller.sellerProfile?.supportPhone || null,
+        })),
+        payments: (relations.payments || []).map((payment) => ({
+          provider: payment.provider,
+          status: payment.status,
+          amount: payment.amount,
+          currency: payment.currency,
+          created_at: payment.created_at,
+        })),
+        invoice: relations.invoice || null,
+        invoices: relations.invoices || [],
+        shipments: (relations.shipments || []).map(sanitizeShipment),
+        sellerFulfillmentGroups: (relations.sellerFulfillmentGroups || []).map((group) => ({
+          sellerName: group.sellerName,
+          organizationSnapshot: group.organizationSnapshot,
+          itemCount: group.itemCount,
+          quantity: group.quantity,
+          deliveryStatus: group.deliveryStatus,
+          expectedDeliveryAt: group.expectedDeliveryAt,
+          latestTrackingEvent: group.latestTrackingEvent ? sanitizeTrackingEvent(group.latestTrackingEvent) : null,
+          requiresVerification: group.requiresVerification,
+          verificationComplete: group.verificationComplete,
+        })),
+        eWayBill: relations.eWayBill ? {
+          status: relations.eWayBill.status,
+          e_way_bill_number: relations.eWayBill.e_way_bill_number,
+          valid_until: relations.eWayBill.valid_until,
+        } : null,
+        cancellations: relations.cancellations || [],
+      },
+    };
   }
 
   filterOrderForSeller(order = {}, sellerId, organizationId = null) {
@@ -765,7 +874,11 @@ class OrderService {
       return;
     }
 
-    if ([ORDER_STATUS.DELIVERED, ORDER_STATUS.RETURN_REQUESTED, ORDER_STATUS.PARTIALLY_RETURNED, ORDER_STATUS.RETURNED].includes(nextStatus)) {
+    if (nextStatus === ORDER_STATUS.DELIVERED) {
+      throw new AppError("Delivery must be completed from shipment tracking or delivery verification", 409);
+    }
+
+    if ([ORDER_STATUS.RETURN_REQUESTED, ORDER_STATUS.PARTIALLY_RETURNED, ORDER_STATUS.RETURNED].includes(nextStatus)) {
       if (!isOwner && !isSeller && !isAdmin) {
         throw new AppError("You are not allowed to update this order", 403);
       }

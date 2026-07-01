@@ -29,6 +29,8 @@
     "seed:sellers": "node scripts/seed/master-seed.js sellers && npm run db:repair:rbac-role-assignments -- --roles=seller,seller-admin,seller-sub-admin",
     "seed:warehouses": "node scripts/seed/master-seed.js warehouses",
     "seed:products": "node scripts/seed/master-seed.js products",
+    "seed:shipping-profiles": "node scripts/seed/master-seed.js shipping-profiles",
+    "seed:shipping-profiles:assign": "node scripts/seed/master-seed.js shipping-profiles --assign-products",
     "seed:customers": "node scripts/seed/master-seed.js customers",
     "seed:orders": "node scripts/seed/master-seed.js orders",
     "seed:reviews": "node scripts/seed/master-seed.js reviews",

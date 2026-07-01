@@ -179,47 +179,50 @@ class DeliveryRepository {
     limit = 50,
     offset = 0,
   } = {}) {
-    const query = knex("shipments");
-    if (orderId) query.where("order_id", orderId);
-    if (returnId) query.where("return_id", returnId);
-    if (shipmentType) query.where("shipment_type", shipmentType);
-    if (direction) query.where("direction", direction);
-    if (dealId) query.where("deal_id", dealId);
-    if (sellerId) query.where("seller_id", sellerId);
-    if (deliveryAgentId) query.where("delivery_agent_id", deliveryAgentId);
-    if (status) query.where("status", status);
-    if (courierName) query.whereILike("courier_name", `%${courierName}%`);
-    if (awbNumber) query.where((builder) => builder.whereILike("awb_number", `%${awbNumber}%`).orWhereILike("tracking_number", `%${awbNumber}%`));
+    const query = knex({ s: "shipments" })
+      .leftJoin({ o: "orders" }, "o.id", "s.order_id")
+      .select("s.*", "o.order_number", "o.buyer_id", "o.payment_provider", "o.payment_status");
+    if (orderId) query.where("s.order_id", orderId);
+    if (returnId) query.where("s.return_id", returnId);
+    if (shipmentType) query.where("s.shipment_type", shipmentType);
+    if (direction) query.where("s.direction", direction);
+    if (dealId) query.where("s.deal_id", dealId);
+    if (sellerId) query.where("s.seller_id", sellerId);
+    if (deliveryAgentId) query.where("s.delivery_agent_id", deliveryAgentId);
+    if (status) query.where("s.status", status);
+    if (courierName) query.whereILike("s.courier_name", `%${courierName}%`);
+    if (awbNumber) query.where((builder) => builder.whereILike("s.awb_number", `%${awbNumber}%`).orWhereILike("s.tracking_number", `%${awbNumber}%`));
     if (search) {
       query.where((builder) => builder
-        .whereILike("awb_number", `%${search}%`)
-        .orWhereILike("tracking_number", `%${search}%`)
-        .orWhereILike("courier_name", `%${search}%`)
-        .orWhereRaw("order_id::text ILIKE ?", [`%${search}%`])
-        .orWhereRaw("id::text ILIKE ?", [`%${search}%`]));
+        .whereILike("s.awb_number", `%${search}%`)
+        .orWhereILike("s.tracking_number", `%${search}%`)
+        .orWhereILike("s.courier_name", `%${search}%`)
+        .orWhereILike("o.order_number", `%${search}%`)
+        .orWhereRaw("s.order_id::text ILIKE ?", [`%${search}%`])
+        .orWhereRaw("s.id::text ILIKE ?", [`%${search}%`]));
     }
-    if (cod !== null && cod !== undefined) query.where("cod", cod === true || cod === "true");
-    if (fromDate) query.where("created_at", ">=", fromDate);
-    if (toDate) query.where("created_at", "<=", toDate);
+    if (cod !== null && cod !== undefined) query.where("s.cod", cod === true || cod === "true");
+    if (fromDate) query.where("s.created_at", ">=", fromDate);
+    if (toDate) query.where("s.created_at", "<=", toDate);
 
     const sortColumns = {
-      createdAt: "created_at",
-      created_at: "created_at",
-      status: "status",
-      sellerId: "seller_id",
-      seller_id: "seller_id",
-      courierName: "courier_name",
-      courier_name: "courier_name",
-      expectedDeliveryAt: "expected_delivery_at",
-      expected_delivery_at: "expected_delivery_at",
-      cod: "cod",
+      createdAt: "s.created_at",
+      created_at: "s.created_at",
+      status: "s.status",
+      sellerId: "s.seller_id",
+      seller_id: "s.seller_id",
+      courierName: "s.courier_name",
+      courier_name: "s.courier_name",
+      expectedDeliveryAt: "s.expected_delivery_at",
+      expected_delivery_at: "s.expected_delivery_at",
+      cod: "s.cod",
     };
-    const orderColumn = sortColumns[sortBy] || "created_at";
-    direction = String(sortDir).toLowerCase() === "asc" ? "asc" : "desc";
-    const [{ count }] = await query.clone().clearSelect().clearOrder().count({ count: "*" });
+    const orderColumn = sortColumns[sortBy] || "s.created_at";
+    const sortDirection = String(sortDir).toLowerCase() === "asc" ? "asc" : "desc";
+    const [{ count }] = await query.clone().clearSelect().clearOrder().countDistinct({ count: "s.id" });
     const items = await query.clone()
-      .orderBy(orderColumn, direction)
-      .orderBy("created_at", "desc")
+      .orderBy(orderColumn, sortDirection)
+      .orderBy("s.created_at", "desc")
       .limit(limit)
       .offset(offset);
     return { items, total: Number(count || 0), limit: Number(limit), offset: Number(offset) };
@@ -231,7 +234,18 @@ class DeliveryRepository {
   }
 
   async findShipmentById(shipmentId) {
-    const [shipment] = await knex("shipments").where("id", shipmentId).limit(1);
+    const [shipment] = await knex("shipments as s")
+      .leftJoin("orders as o", "o.id", "s.order_id")
+      .select(
+        "s.*",
+        "o.order_number",
+        "o.buyer_id",
+        "o.payment_provider",
+        "o.payment_status",
+        "o.status as order_status",
+      )
+      .where("s.id", shipmentId)
+      .limit(1);
     if (!shipment) return null;
     const trackingEvents = await knex("shipment_tracking_events")
       .where("shipment_id", shipmentId)

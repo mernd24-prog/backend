@@ -23,7 +23,7 @@ const rateSchema = Joi.object({
     pincode: Joi.string().min(5).max(12).required(),
     weightGrams: Joi.number().integer().min(0).default(0),
     shippingMode: Joi.string().valid(...SHIPPING_MODES).default("standard"),
-    cod: Joi.boolean().default(false),
+    cod: Joi.boolean(),
     provider: Joi.string().default("manual"),
   }).required(),
   params: Joi.object({}).required(),

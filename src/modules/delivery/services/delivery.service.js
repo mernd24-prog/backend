@@ -4,11 +4,12 @@ const crypto = require("crypto");
 const { AppError } = require("../../../shared/errors/app-error");
 const { DeliveryRepository } = require("../repositories/delivery.repository");
 const { OrderRepository } = require("../../order/repositories/order.repository");
-const { NotificationRepository } = require("../../notification/repositories/notification.repository");
+const { NotificationService } = require("../../notification/services/notification.service");
+const { UserModel } = require("../../user/models/user.model");
 const { DealService } = require("../../deal/services/deal.service");
 const { CommissionService } = require("../../seller/services/commission.service");
 const { shippingProviderRegistry } = require("../../../infrastructure/shipping/provider-registry");
-const { ORDER_STATUS } = require("../../../shared/domain/commerce-constants");
+const { ORDER_STATUS, PAYMENT_PROVIDER } = require("../../../shared/domain/commerce-constants");
 const { createOtp } = require("../../../shared/tools/otp");
 const { DELIVERY_STATUS, DELIVERY_VERIFICATION_METHODS } = require("../models/delivery.model");
 const { makeEvent } = require("../../../contracts/events/event");
@@ -52,13 +53,13 @@ class DeliveryService {
   constructor({
     deliveryRepository = new DeliveryRepository(),
     orderRepository = new OrderRepository(),
-    notificationRepository = new NotificationRepository(),
+    notificationService = new NotificationService(),
     dealService = new DealService(),
     commissionService = CommissionService,
   } = {}) {
     this.deliveryRepository = deliveryRepository;
     this.orderRepository = orderRepository;
-    this.notificationRepository = notificationRepository;
+    this.notificationService = notificationService;
     this.dealService = dealService;
     this.commissionService = commissionService;
   }
@@ -256,7 +257,8 @@ class DeliveryService {
     if (!this.isAdmin(actor)) {
       filters.sellerId = this.resolveSellerIdForAgent({}, actor);
     }
-    return this.deliveryRepository.listDeliveryAgents(filters);
+    const result = await this.deliveryRepository.listDeliveryAgents(filters);
+    return { ...result, items: await this.enrichSellerRecords(result.items || []) };
   }
 
   async createDeliveryAgent(payload = {}, actor = {}) {
@@ -264,6 +266,7 @@ class DeliveryService {
     return this.deliveryRepository.createDeliveryAgent({
       ...payload,
       sellerId,
+      verificationStatus: this.isAdmin(actor) ? payload.verificationStatus : "pending",
       createdBy: actor.userId,
       updatedBy: actor.userId,
     });
@@ -286,6 +289,9 @@ class DeliveryService {
         throw new AppError("Seller ID is required when moving a delivery agent", 400);
       }
     }
+    if (!this.isAdmin(actor) && payload.verificationStatus !== undefined) {
+      throw new AppError("Only admin users can verify or reject delivery agents", 403);
+    }
     const updated = await this.deliveryRepository.updateDeliveryAgent(agentId, {
       ...payload,
       updatedBy: actor.userId,
@@ -304,8 +310,8 @@ class DeliveryService {
     if (agent.active === false) {
       throw new AppError("Inactive delivery agents cannot be assigned", 409);
     }
-    if (agent.verification_status === "rejected") {
-      throw new AppError("Rejected delivery agents cannot be assigned", 409);
+    if (agent.verification_status !== "verified") {
+      throw new AppError("Only verified delivery agents can be assigned", 409);
     }
     return agent;
   }
@@ -375,6 +381,7 @@ class DeliveryService {
     const shipment = await this.deliveryRepository.createShipment({
       ...payload,
       sellerId,
+      cod: order.payment_provider === PAYMENT_PROVIDER.COD || Boolean(payload.cod),
       provider: payload.provider || providerResult.provider || "manual",
       awbNumber: providerResult.awbNumber || payload.awbNumber,
       trackingNumber: providerResult.trackingNumber || payload.trackingNumber || payload.awbNumber,
@@ -461,7 +468,8 @@ class DeliveryService {
     if (!["admin", "sub-admin", "super-admin"].includes(actor.role) && !actor.isSuperAdmin) {
       query.sellerId = actor.ownerSellerId || actor.userId;
     }
-    return this.deliveryRepository.listShipments(query);
+    const result = await this.deliveryRepository.listShipments(query);
+    return { ...result, items: await this.enrichShipmentRecords(result.items || []) };
   }
 
   async getShipment(shipmentId, actor) {
@@ -470,7 +478,72 @@ class DeliveryService {
       throw new AppError("Shipment not found", 404);
     }
     await this.assertCanViewOrder({ buyer_id: null }, shipment.order_id, actor);
-    return shipment;
+    return (await this.enrichShipmentRecords([shipment]))[0] || shipment;
+  }
+
+  userDisplayName(user = {}) {
+    return [user.profile?.firstName, user.profile?.lastName].filter(Boolean).join(" ") ||
+      user.sellerProfile?.displayName || user.sellerProfile?.businessName || user.email || "User";
+  }
+
+  async loadUserSummaries(ids = []) {
+    const uniqueIds = [...new Set(ids.map((id) => String(id || "")).filter(Boolean))]
+      .filter((id) => UserModel.db.base.Types.ObjectId.isValid(id));
+    if (!uniqueIds.length) return new Map();
+    const users = await UserModel.find({ _id: { $in: uniqueIds } })
+      .select("email phone profile sellerProfile role accountStatus")
+      .lean()
+      .catch(() => []);
+    return new Map(users.map((user) => [String(user._id), {
+      id: String(user._id),
+      displayName: this.userDisplayName(user),
+      email: user.email || null,
+      phone: user.phone || null,
+      role: user.role || null,
+      accountStatus: user.accountStatus || null,
+      businessName: user.sellerProfile?.businessName || user.sellerProfile?.displayName || null,
+      supportEmail: user.sellerProfile?.supportEmail || null,
+      supportPhone: user.sellerProfile?.supportPhone || null,
+    }]));
+  }
+
+  async enrichSellerRecords(records = []) {
+    const users = await this.loadUserSummaries(records.map((record) => record.seller_id || record.sellerId));
+    return records.map((record) => {
+      const seller = users.get(String(record.seller_id || record.sellerId || "")) || null;
+      return {
+        ...record,
+        seller,
+        sellerName: seller?.businessName || seller?.displayName || null,
+      };
+    });
+  }
+
+  async enrichShipmentRecords(records = []) {
+    const ids = records.flatMap((record) => [
+      record.seller_id || record.sellerId,
+      record.buyer_id || record.buyerId,
+      ...(record.trackingEvents || []).map((event) => event.actor_id || event.actorId),
+      ...(record.verificationEvents || []).map((event) => event.actor_id || event.actorId),
+    ]);
+    const users = await this.loadUserSummaries(ids);
+    return records.map((record) => {
+      const seller = users.get(String(record.seller_id || record.sellerId || "")) || null;
+      const buyer = users.get(String(record.buyer_id || record.buyerId || "")) || null;
+      const withActor = (event = {}) => ({
+        ...event,
+        actor: users.get(String(event.actor_id || event.actorId || "")) || null,
+      });
+      return {
+        ...record,
+        seller,
+        sellerName: seller?.businessName || seller?.displayName || null,
+        buyer,
+        buyerName: buyer?.displayName || null,
+        trackingEvents: (record.trackingEvents || []).map(withActor),
+        verificationEvents: (record.verificationEvents || []).map(withActor),
+      };
+    });
   }
 
   async addTrackingEvent(shipmentId, payload, actor) {
@@ -761,7 +834,7 @@ class DeliveryService {
     });
 
     const order = await this.orderRepository.findById(shipment.order_id);
-    await this.sendDeliveryOtpNotifications({
+    const notificationDelivery = await this.sendDeliveryOtpNotifications({
       order,
       shipment,
       otp,
@@ -790,42 +863,48 @@ class DeliveryService {
       verificationEvent: result.event,
       expiresAt,
       channels: payload.channels || ["in_app"],
-      otp,
+      notificationDelivery,
     };
   }
 
   async sendDeliveryOtpNotifications({ order, shipment, otp, expiresAt, channels = [] }) {
     const buyerId = order?.buyer_id;
-    if (!buyerId) return;
+    if (!buyerId) return [];
 
+    const buyer = await UserModel.findById(buyerId)
+      .select("email phone profile")
+      .lean()
+      .catch(() => null);
     const uniqueChannels = Array.from(new Set(channels.length ? channels : ["in_app"]));
-    await Promise.all(uniqueChannels.map(async (channel) => {
+    return Promise.all(uniqueChannels.map(async (channel) => {
       const normalizedChannel = channel === "app" ? "push" : channel;
-      const notification = await this.notificationRepository.create({
-        userId: buyerId,
-        channel: normalizedChannel,
-        subject: "Delivery OTP",
-        template: `Your delivery OTP for order ${order.order_number || shipment.order_id} is ${otp}. It expires at ${new Date(expiresAt).toISOString()}.`,
-        payload: {
-          shipmentId: shipment.id,
-          orderId: shipment.order_id,
-          expiresAt,
-        },
-        status: "queued",
-        idempotencyKey: `delivery_otp:${shipment.id}:${normalizedChannel}:${new Date(expiresAt).getTime()}`,
-      });
-
-      await eventPublisher.publish(
-        makeEvent(
-          DOMAIN_EVENTS.NOTIFICATION_CREATED_V1,
-          {
-            userId: buyerId,
-            channel: normalizedChannel,
-            subject: notification.subject,
+      if (normalizedChannel === "sms") {
+        return { channel: "sms", status: "not_configured" };
+      }
+      if (normalizedChannel === "email" && !buyer?.email) {
+        return { channel: "email", status: "missing_recipient" };
+      }
+      try {
+        const notification = await this.notificationService.createNotification({
+          userId: buyerId,
+          channel: normalizedChannel,
+          subject: "Delivery OTP",
+          template: `Your delivery OTP for order ${order.order_number || shipment.order_id} is ${otp}. It expires at ${new Date(expiresAt).toISOString()}.`,
+          payload: {
+            eventName: DOMAIN_EVENTS.SHIPMENT_DELIVERY_OTP_GENERATED_V1,
+            shipmentId: shipment.id,
+            orderId: shipment.order_id,
+            expiresAt,
           },
-          { source: "delivery-module", aggregateId: notification.id },
-        ),
-      );
+          status: "queued",
+          ...(normalizedChannel === "email" ? { email: buyer.email } : {}),
+          idempotencyKey: `delivery_otp:${shipment.id}:${normalizedChannel}:${new Date(expiresAt).getTime()}`,
+        });
+        return { channel: normalizedChannel, status: "queued", notificationId: notification.id };
+      } catch (error) {
+        logger.error({ buyerId, shipmentId: shipment.id, channel: normalizedChannel, error: error.message }, "Delivery OTP notification failed");
+        return { channel: normalizedChannel, status: "failed" };
+      }
     }));
   }
 

@@ -14,6 +14,7 @@ const { ReturnService } = require("../../returns/services/return.service");
 const { CancellationService } = require("../../cancellation/services/cancellation.service");
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
 const { sellerChargeSettingsService } = require("../../seller/services/seller-charge-settings.service");
+const { UserModel } = require("../../user/models/user.model");
 
 const PROVIDER_RECEIPT_MAX_LENGTH = 40;
 
@@ -73,6 +74,39 @@ class PaymentService {
       }
     }
     return value;
+  }
+
+  async enrichAdminPayments(payments = []) {
+    if (!payments.length) return payments;
+    const buyerIds = Array.from(new Set(
+      payments.map((payment) => String(payment.buyer_id || payment.buyerId || "")).filter((id) =>
+        UserModel.base.Types.ObjectId.isValid(id)),
+    ));
+    const orderIds = Array.from(new Set(
+      payments.map((payment) => String(payment.order_id || payment.orderId || "")).filter(Boolean),
+    ));
+    const [buyers, orders] = await Promise.all([
+      buyerIds.length
+        ? UserModel.find({ _id: { $in: buyerIds } }).select("email phone profile").lean().catch(() => [])
+        : [],
+      Promise.all(orderIds.map((orderId) => this.orderRepository.findById(orderId).catch(() => null))),
+    ]);
+    const buyersById = new Map(buyers.map((buyer) => {
+      const fullName = [buyer.profile?.firstName, buyer.profile?.lastName].filter(Boolean).join(" ").trim();
+      return [String(buyer._id), {
+        id: String(buyer._id),
+        displayName: fullName || buyer.email || "Customer",
+        email: buyer.email || null,
+        phone: buyer.phone || null,
+      }];
+    }));
+    const orderNumbers = new Map(orders.filter(Boolean).map((order) => [String(order.id), order.order_number]));
+    return payments.map((payment) => ({
+      ...payment,
+      buyer: buyersById.get(String(payment.buyer_id || payment.buyerId || "")) || null,
+      buyerName: buyersById.get(String(payment.buyer_id || payment.buyerId || ""))?.displayName || null,
+      orderNumber: orderNumbers.get(String(payment.order_id || payment.orderId || "")) || null,
+    }));
   }
 
   mapCodConfig(config = {}) {
@@ -820,11 +854,12 @@ class PaymentService {
     if (!["admin", "sub-admin", "super-admin"].includes(actor.role) && !actor.isSuperAdmin) {
       throw new AppError("Only admin users can list payments", 403);
     }
-    return this.paymentRepository.listPaymentsForAdmin({
+    const result = await this.paymentRepository.listPaymentsForAdmin({
       ...query,
       limit: Number(query.limit || 50),
       offset: Number(query.offset || 0),
     });
+    return { ...result, items: await this.enrichAdminPayments(result.items || []) };
   }
 
   async getPaymentForAdmin(paymentId, actor) {
@@ -833,7 +868,7 @@ class PaymentService {
     }
     const payment = await this.paymentRepository.findById(paymentId);
     if (!payment) throw new AppError("Payment not found", 404);
-    return payment;
+    return (await this.enrichAdminPayments([payment]))[0];
   }
 
   async approveManualPayment(paymentId, payload, actor) {

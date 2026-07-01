@@ -118,6 +118,18 @@ const MODULE_CATALOG = [
   },
   {
     tab: "Catalog Management",
+    slug: "badges",
+    name: "Badge Management",
+    description: "Product, seller, and buyer badges for storefront display",
+    icon: "medal",
+    order: 3.75,
+    forPlatform: true,
+    forSeller: false,
+    apiPath: "/admin/platform/badges",
+    apiAliases: ["/platform/badges"],
+  },
+  {
+    tab: "Catalog Management",
     slug: "reviews",
     name: "Review & Rating Management",
     description: "Product reviews and ratings moderation",

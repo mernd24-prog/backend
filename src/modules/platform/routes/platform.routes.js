@@ -46,6 +46,10 @@ const {
   updateProductReviewSchema,
   bulkUpdateProductReviewsSchema,
   productReviewIdSchema,
+  createBadgeSchema,
+  updateBadgeSchema,
+  listBadgesSchema,
+  badgeIdSchema,
 } = require("../validation/platform.validation");
 
 const platformRoutes = express.Router();
@@ -247,6 +251,33 @@ platformRoutes.delete(
   allowActions(ACTIONS.CATALOG_REVIEW),
   checkInput(productReviewIdSchema),
   catchErrors(platformController.deleteProductReview),
+);
+
+// ── Badges (public read, auth for write) ─────────────────────────────────────
+
+platformRoutes.get("/badges", checkInput(listBadgesSchema), catchErrors(platformController.listBadges));
+platformRoutes.get("/badges/active", catchErrors(platformController.listActiveBadges));
+platformRoutes.get("/badges/:badgeId", checkInput(badgeIdSchema), catchErrors(platformController.getBadge));
+platformRoutes.post(
+  "/badges",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(createBadgeSchema),
+  catchErrors(platformController.createBadge),
+);
+platformRoutes.patch(
+  "/badges/:badgeId",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(updateBadgeSchema),
+  catchErrors(platformController.updateBadge),
+);
+platformRoutes.delete(
+  "/badges/:badgeId",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(badgeIdSchema),
+  catchErrors(platformController.deleteBadge),
 );
 
 module.exports = { platformRoutes, cmsRoutes };

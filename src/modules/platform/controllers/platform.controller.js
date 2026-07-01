@@ -279,6 +279,39 @@ class PlatformController {
     const result = await this.platformService.getCatalogPrefillData(req.query);
     res.json(okResponse(result));
   };
+
+  // ── Badges ─────────────────────────────────────────────────────────────────
+
+  createBadge = async (req, res) => {
+    const item = await this.platformService.createBadge(req.body, req);
+    res.status(201).json(okResponse(item, { message: "Badge created successfully." }));
+  };
+
+  updateBadge = async (req, res) => {
+    const item = await this.platformService.updateBadge(req.params.badgeId, req.body, req);
+    res.json(okResponse(item, { message: "Badge updated successfully." }));
+  };
+
+  getBadge = async (req, res) => {
+    const item = await this.platformService.getBadge(req.params.badgeId);
+    res.json(okResponse(item));
+  };
+
+  listBadges = async (req, res) => {
+    const { page, limit } = getPage(req.query);
+    const result = await this.platformService.listBadges(req.query);
+    res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
+  };
+
+  deleteBadge = async (req, res) => {
+    await this.platformService.deleteBadge(req.params.badgeId, req);
+    res.json(okResponse(null, { message: "Badge deleted successfully." }));
+  };
+
+  listActiveBadges = async (req, res) => {
+    const items = await this.platformService.listActiveBadges();
+    res.json(okResponse(items));
+  };
 }
 
 module.exports = { PlatformController };

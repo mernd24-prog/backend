@@ -13,7 +13,7 @@ const FLOWS = {
     pending_payment: ["confirmed", "cancelled", "payment_failed"],
     payment_failed:  ["pending_payment", "cancelled"],
     confirmed:       ["packed",     "cancelled"],
-    packed:          ["shipped"],
+    packed:          ["shipped", "cancelled"],
     shipped:         ["delivered",  "return_requested"],
     delivered:       ["fulfilled", "return_requested"],
     return_requested:["partially_returned", "returned"],

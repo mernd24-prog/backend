@@ -12,8 +12,11 @@ class NotificationRepository {
     return NotificationModel.create(payload);
   }
 
-  async listByUser(userId) {
-    return NotificationModel.find({ userId }).sort({ createdAt: -1 });
+  async listByUser(userId, options = {}) {
+    return NotificationModel.find({
+      userId,
+      ...(options.channel ? { channel: options.channel } : {}),
+    }).sort({ createdAt: -1 });
   }
 
   async listAll({ page = 1, limit = 50, type, userId, search } = {}) {

@@ -124,7 +124,7 @@ class NotificationService {
   }
 
   async listMyNotifications(actor) {
-    return this.notificationRepository.listByUser(actor.userId);
+    return this.notificationRepository.listByUser(actor.userId, { channel: "in_app" });
   }
 
   async getPreferences(userId) {

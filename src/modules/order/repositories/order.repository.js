@@ -798,6 +798,12 @@ class OrderRepository {
         .orderBy("event_time", "asc"))
       : [];
 
+    const payoutIds = [...new Set(sellerCommissions.map((commission) => commission.payout_id).filter(Boolean))];
+    const sellerPayouts = payoutIds.length
+      ? await this.optionalTableRows("seller_payouts", (query) => query.whereIn("id", payoutIds))
+      : [];
+    const payoutsById = new Map(sellerPayouts.map((payout) => [String(payout.id), payout]));
+
     const usersById = includeUsers
       ? await this.findOrderUsers(orders, items)
       : new Map();
@@ -818,16 +824,21 @@ class OrderRepository {
 
     return orders.map((order) => {
       const orderItems = grouped.items.get(order.id) || [];
-      const orderShipments = (grouped.shipments.get(order.id) || []).map((shipment) => ({
-        ...shipment,
-        trackingEvents: grouped.trackingEvents.get(shipment.id) || [],
-      }));
       const sellerIds = [...new Set(orderItems.map((item) => item.seller_id).filter(Boolean))];
       const sellers = sellerIds.map((sellerId) => usersById.get(String(sellerId)) || { id: sellerId }).filter(Boolean);
+      const buyer = usersById.get(String(order.buyer_id)) || { id: order.buyer_id };
+      const orderShipments = (grouped.shipments.get(order.id) || []).map((shipment) => ({
+        ...shipment,
+        order_number: order.order_number,
+        buyer,
+        seller: usersById.get(String(shipment.seller_id)) || { id: shipment.seller_id },
+        trackingEvents: grouped.trackingEvents.get(shipment.id) || [],
+      }));
       const orderSellerCommissions = grouped.sellerCommissions.get(order.id) || [];
       const sellerSettlements = this.attachCommissionStatusToSettlements(
         this.buildSellerSettlements(orderItems, sellers, order),
         orderSellerCommissions,
+        payoutsById,
       );
       const summary = this.buildOrderSummary(order, orderItems, sellerSettlements);
       const sellerFulfillmentGroups = this.buildSellerFulfillmentGroups(
@@ -845,10 +856,13 @@ class OrderRepository {
         ...(includeTimeline ? { timeline: grouped.timeline.get(order.id) || [] } : {}),
         ...(includeNotes ? { notes: grouped.notes.get(order.id) || [] } : {}),
         relations: {
-          buyer: usersById.get(String(order.buyer_id)) || { id: order.buyer_id },
+          buyer,
           sellers,
           sellerSettlements,
           sellerCommissions: orderSellerCommissions,
+          sellerPayouts: orderSellerCommissions
+            .map((commission) => payoutsById.get(String(commission.payout_id || "")))
+            .filter(Boolean),
           payments: grouped.payments.get(order.id) || [],
           invoice: (grouped.invoices.get(order.id) || [])[0] || null,
           invoices: grouped.invoices.get(order.id) || [],
@@ -915,7 +929,7 @@ class OrderRepository {
     };
   }
 
-  attachCommissionStatusToSettlements(settlements = [], commissions = []) {
+  attachCommissionStatusToSettlements(settlements = [], commissions = [], payoutsById = new Map()) {
     if (!Array.isArray(settlements) || !settlements.length || !Array.isArray(commissions) || !commissions.length) {
       return settlements;
     }
@@ -927,16 +941,24 @@ class OrderRepository {
       );
       if (!match) return settlement;
 
+      const payout = match.payout_id ? payoutsById.get(String(match.payout_id)) : null;
+
       return {
         ...settlement,
         commissionId: match.id,
         commissionStatus: match.status || null,
         payoutId: match.payout_id || null,
-        payoutStatus: match.payout_id ? match.status : null,
+        payoutStatus: payout?.status || null,
+        payoutReference: payout?.payment_reference || null,
+        payoutMethod: payout?.payment_method || null,
+        payoutProcessedAt: payout?.processed_at || null,
         commissionAmount: this.money(match.commission_amount),
         commissionTaxAmount: this.money(match.tax_amount),
         refundAmount: this.money(match.refund_amount),
         netCommissionAmount: this.money(match.net_amount),
+        platformFeeAmount: this.money(match.commission_amount),
+        platformFeeTaxAmount: this.money(match.tax_amount),
+        sellerPayoutAmount: this.money(match.net_amount),
       };
     });
   }
@@ -949,7 +971,7 @@ class OrderRepository {
       : [];
     const deliveryBySeller = new Map(
       deliveryChargeSellers.map((seller) => [
-        String(seller.sellerId),
+        `${String(seller.sellerId)}:${seller.organizationId || "default"}`,
         this.money(seller.chargeAmount),
       ]),
     );
@@ -980,6 +1002,10 @@ class OrderRepository {
         grossSalesAmount: 0,
         taxableAmount: 0,
         taxAmount: 0,
+        commissionFeeAmount: 0,
+        fixedFeeAmount: 0,
+        closingFeeAmount: 0,
+        commissionRates: [],
         platformFeeAmount: 0,
         sellerPayoutAmount: 0,
       };
@@ -996,6 +1022,12 @@ class OrderRepository {
       current.grossSalesAmount += lineTotal;
       current.taxableAmount += taxableAmount;
       current.taxAmount += taxAmount;
+      current.commissionFeeAmount += this.money(pricing.commissionFee);
+      current.fixedFeeAmount += this.money(pricing.fixedFee);
+      current.closingFeeAmount += this.money(pricing.closingFee);
+      if (Number(pricing.commissionPercent || 0) > 0) {
+        current.commissionRates.push(Number(pricing.commissionPercent));
+      }
       current.platformFeeAmount += platformFeeAmount;
       current.platformFeeTaxAmount = this.money(current.platformFeeTaxAmount) + platformFeeTaxAmount;
       current.sellerPayoutBaseAmount = this.money(current.sellerPayoutBaseAmount) + sellerPayoutBaseAmount;
@@ -1005,7 +1037,10 @@ class OrderRepository {
     }
 
     return [...grouped.values()].map((seller) => {
-      const sellerDeliveryChargeAmount = this.money(deliveryBySeller.get(String(seller.sellerId)));
+      const sellerDeliveryChargeAmount = this.money(
+        deliveryBySeller.get(`${String(seller.sellerId)}:${seller.organizationId || "default"}`) ??
+        deliveryBySeller.get(`${String(seller.sellerId)}:default`),
+      );
       const shippingReimbursementAmount = shippingPolicy === "reimburse_seller" ? sellerDeliveryChargeAmount : 0;
       const shippingDeductionAmount = shippingPolicy === "deduct_from_seller" ? sellerDeliveryChargeAmount : 0;
       const sellerPayoutAmount = Math.max(
@@ -1019,6 +1054,10 @@ class OrderRepository {
         sellerPayoutBaseAmount: Number(this.money(seller.sellerPayoutBaseAmount).toFixed(2)),
         taxableAmount: Number(seller.taxableAmount.toFixed(2)),
         taxAmount: Number(seller.taxAmount.toFixed(2)),
+        commissionFeeAmount: Number(this.money(seller.commissionFeeAmount).toFixed(2)),
+        fixedFeeAmount: Number(this.money(seller.fixedFeeAmount).toFixed(2)),
+        closingFeeAmount: Number(this.money(seller.closingFeeAmount).toFixed(2)),
+        commissionRates: [...new Set(seller.commissionRates || [])].sort((left, right) => left - right),
         platformFeeAmount: Number(seller.platformFeeAmount.toFixed(2)),
         platformFeeTaxAmount: Number(this.money(seller.platformFeeTaxAmount).toFixed(2)),
         productTaxLiabilityAmount: Number(this.money(seller.productTaxLiabilityAmount).toFixed(2)),
@@ -1246,8 +1285,17 @@ class OrderRepository {
 
   toUserSummary(user) {
     const sellerProfile = user.sellerProfile || {};
+    const firstName = user.profile?.firstName || null;
+    const lastName = user.profile?.lastName || null;
+    const fullName = [firstName, lastName].filter(Boolean).join(" ") ||
+      sellerProfile.displayName || sellerProfile.businessName || user.email || "User";
     return {
       id: String(user._id),
+      displayName: fullName,
+      fullName,
+      firstName,
+      lastName,
+      businessName: sellerProfile.businessName || sellerProfile.displayName || null,
       email: user.email || null,
       phone: user.phone || null,
       role: user.role || null,

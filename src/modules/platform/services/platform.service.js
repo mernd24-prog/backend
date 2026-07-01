@@ -1036,6 +1036,54 @@ class PlatformService {
       optionValues,
     };
   }
+
+  // ── Badges ─────────────────────────────────────────────────────────────────
+
+  async createBadge(payload, req) {
+    const item = await this.platformRepository.createBadge(payload);
+    this.invalidateCatalogCaches();
+    auditService.create(req, { module: "badges", entityId: item?._id, entityType: "Badge", newData: payload });
+    return item;
+  }
+
+  async updateBadge(badgeId, payload, req) {
+    const item = await this.platformRepository.getBadge(badgeId);
+    if (!item) throw AppError.notFound("Badge");
+    const updated = await this.platformRepository.updateBadge(badgeId, payload);
+    this.invalidateCatalogCaches();
+    auditService.update(req, { module: "badges", entityId: badgeId, entityType: "Badge", oldData: item, newData: payload });
+    return updated;
+  }
+
+  async getBadge(badgeId) {
+    const item = await this.platformRepository.getBadge(badgeId);
+    if (!item) throw AppError.notFound("Badge");
+    return item;
+  }
+
+  async listBadges(query) {
+    const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir || query.sortOrder };
+    const filter = buildMongoFilter({
+      search: query.q || query.keyWord || query.search,
+      searchFields: ["name", "label"],
+    });
+    if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
+    if (query.type) filter.type = query.type;
+    return this.platformRepository.listBadges(filter, pagination);
+  }
+
+  async deleteBadge(badgeId, req) {
+    const item = await this.platformRepository.getBadge(badgeId);
+    if (!item) throw AppError.notFound("Badge");
+    const result = await this.platformRepository.deleteBadge(String(item._id));
+    this.invalidateCatalogCaches();
+    auditService.remove(req, { module: "badges", entityId: badgeId, entityType: "Badge", oldData: item });
+    return result;
+  }
+
+  async listActiveBadges() {
+    return this.platformRepository.listActiveBadges();
+  }
 }
 
 module.exports = { PlatformService };

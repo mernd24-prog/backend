@@ -1,4 +1,5 @@
 const { CategoryTreeModel } = require("../models/category-tree.model");
+const { BadgeModel } = require("../models/badge.model");
 const { ProductFamilyModel } = require("../models/product-family.model");
 const { ProductVariantModel } = require("../models/product-variant.model");
 const { HsnCodeModel } = require("../models/hsn-code.model");
@@ -474,6 +475,54 @@ class PlatformRepository {
 
   async listAllProductOptionValues(filter = {}) {
     return PlatformProductOptionValueModel.find(filter).sort({ optionId: 1, sortOrder: 1, name: 1 });
+  }
+
+  // ── Badges ─────────────────────────────────────────────────────────────────
+
+  async createBadge(payload) {
+    return BadgeModel.create(payload);
+  }
+
+  async updateBadge(badgeId, payload) {
+    return BadgeModel.findByIdAndUpdate(badgeId, payload, { new: true });
+  }
+
+  async getBadge(badgeId) {
+    if (mongoose.Types.ObjectId.isValid(String(badgeId))) {
+      return BadgeModel.findOne({ $or: [{ _id: badgeId }, { name: badgeId }] });
+    }
+    return BadgeModel.findOne({ name: badgeId });
+  }
+
+  async listBadges(filter = {}, pagination = {}) {
+    const sort = buildSort(
+      pagination.sortBy,
+      pagination.sortDir,
+      { name: "name", label: "label", priority: "priority", active: "active", createdAt: "createdAt" },
+      { priority: -1, createdAt: -1 },
+    );
+    const [items, total] = await Promise.all([
+      BadgeModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
+      BadgeModel.countDocuments(filter),
+    ]);
+    return { items, total };
+  }
+
+  async deleteBadge(badgeId) {
+    return BadgeModel.findByIdAndDelete(badgeId);
+  }
+
+  async listActiveBadges() {
+    const now = new Date();
+    return BadgeModel.find({
+      active: true,
+      $or: [
+        { validFrom: null, validTo: null },
+        { validFrom: { $lte: now }, validTo: null },
+        { validFrom: null, validTo: { $gte: now } },
+        { validFrom: { $lte: now }, validTo: { $gte: now } },
+      ],
+    }).sort({ priority: -1 });
   }
 }
 

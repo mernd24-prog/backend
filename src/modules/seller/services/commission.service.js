@@ -3,8 +3,13 @@ const { v4: uuidv4 } = require("uuid");
 const { logger } = require("../../../shared/logger/logger");
 const { AppError } = require("../../../shared/errors/app-error");
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
-const { ORDER_STATUS } = require("../../../shared/domain/commerce-constants");
+const {
+  ORDER_STATUS,
+  PAYMENT_PROVIDER,
+  PAYMENT_STATUS,
+} = require("../../../shared/domain/commerce-constants");
 const { documentRendererService } = require("../../../shared/services/document-renderer.service");
+const { UserModel } = require("../../user/models/user.model");
 
 class SellerCommissionService {
   constructor() {
@@ -62,6 +67,46 @@ class SellerCommissionService {
     };
   }
 
+  async enrichFinanceRecords(records = []) {
+    if (!records.length) return records;
+    const sellerIds = Array.from(new Set(
+      records.map((record) => String(record.seller_id || record.sellerId || "")).filter((id) =>
+        UserModel.base.Types.ObjectId.isValid(id)),
+    ));
+    const orderIds = Array.from(new Set(
+      records.map((record) => String(record.order_id || record.orderId || "")).filter(Boolean),
+    ));
+    const [users, orders] = await Promise.all([
+      sellerIds.length
+        ? UserModel.find({ _id: { $in: sellerIds } })
+          .select("email phone profile sellerProfile")
+          .lean()
+          .catch(() => [])
+        : [],
+      orderIds.length
+        ? knex("orders").select("id", "order_number").whereIn("id", orderIds).catch(() => [])
+        : [],
+    ]);
+    const usersById = new Map(users.map((user) => {
+      const fullName = [user.profile?.firstName, user.profile?.lastName].filter(Boolean).join(" ").trim();
+      const displayName = user.sellerProfile?.displayName || user.sellerProfile?.businessName || fullName || user.email || "Seller";
+      return [String(user._id), {
+        id: String(user._id),
+        displayName,
+        businessName: user.sellerProfile?.businessName || null,
+        email: user.email || null,
+        phone: user.phone || null,
+      }];
+    }));
+    const ordersById = new Map(orders.map((order) => [String(order.id), order.order_number]));
+    return records.map((record) => ({
+      ...record,
+      seller: usersById.get(String(record.seller_id || record.sellerId || "")) || null,
+      sellerName: usersById.get(String(record.seller_id || record.sellerId || ""))?.displayName || null,
+      orderNumber: ordersById.get(String(record.order_id || record.orderId || "")) || null,
+    }));
+  }
+
   buildDateRange(periodStart, periodEnd) {
     const now = new Date();
     return {
@@ -78,6 +123,7 @@ class SellerCommissionService {
       schedule: finance.payoutSchedule || "manual",
       manualApprovalRequired: finance.payoutManualApprovalRequired !== false,
       minimumPayoutAmount: this.round(finance.minimumPayoutAmount || 0),
+      codPayoutRequiresCapture: settings.cod?.payoutRequiresCapture !== false,
     };
   }
 
@@ -142,7 +188,7 @@ class SellerCommissionService {
 
     const [orders, releaseRows] = await Promise.all([
       client("orders")
-        .select("id", "status", "payment_status", "created_at", "updated_at")
+        .select("id", "status", "payment_status", "payment_provider", "created_at", "updated_at")
         .whereIn("id", orderIds),
       client("order_status_history")
         .select("order_id")
@@ -207,6 +253,13 @@ class SellerCommissionService {
     }
     if (this.isBlockedOrderStatus(orderStatus)) {
       return { ...base, releaseStatus: "blocked", reason: `order_${orderStatus}` };
+    }
+    if (
+      policy.codPayoutRequiresCapture &&
+      order.payment_provider === PAYMENT_PROVIDER.COD &&
+      order.payment_status !== PAYMENT_STATUS.CAPTURED
+    ) {
+      return { ...base, releaseStatus: "blocked", reason: "waiting_for_cod_collection_confirmation" };
     }
 
     if (policy.releaseMilestone === "confirmed") {
@@ -351,6 +404,7 @@ class SellerCommissionService {
         "oi.pricing_snapshot",
         "o.status as order_status",
         "o.currency",
+        "o.metadata as order_metadata",
       )
       .where("oi.order_id", orderId)
       .modify((query) => {
@@ -375,9 +429,15 @@ class SellerCommissionService {
         orderItemIds: [],
         amount: 0,
         platformFeeAmount: 0,
+        platformFeeTaxAmount: 0,
+        commissionFeeAmount: 0,
+        fixedFeeAmount: 0,
+        closingFeeAmount: 0,
+        hasPricingSnapshot: false,
         quantity: 0,
         currency: row.currency || "INR",
         sourceStatus: row.order_status || "order",
+        orderMetadata: this.parseJson(row.order_metadata, {}),
         products: [],
       };
       const lineTotal = Number(row.line_total || 0);
@@ -396,6 +456,11 @@ class SellerCommissionService {
       current.orderItemIds.push(row.id);
       current.amount += itemGross;
       current.platformFeeAmount += Number(row.platform_fee_amount || 0);
+      current.platformFeeTaxAmount += Number(pricing.platformFeeTaxAmount || 0);
+      current.commissionFeeAmount += Number(pricing.commissionFee || 0);
+      current.fixedFeeAmount += Number(pricing.fixedFee || 0);
+      current.closingFeeAmount += Number(pricing.closingFee || 0);
+      current.hasPricingSnapshot = current.hasPricingSnapshot || Object.keys(pricing).length > 0;
       current.quantity += Number(row.quantity || 0);
       current.products.push({
         productId: row.product_id,
@@ -415,9 +480,25 @@ class SellerCommissionService {
       const rate = this.getCommissionRate(sellerTier);
       const amount = this.round(group.amount);
       const platformFeeAmount = this.round(group.platformFeeAmount);
-      const commissionAmount = platformFeeAmount > 0 ? platformFeeAmount : this.round(amount * rate);
+      const commissionAmount = group.hasPricingSnapshot
+        ? platformFeeAmount
+        : this.round(amount * rate);
       const effectiveRate = amount > 0 ? this.round(commissionAmount / amount) : rate;
-      const taxAmount = this.round(commissionAmount * commissionTaxRate);
+      const taxAmount = group.hasPricingSnapshot
+        ? this.round(group.platformFeeTaxAmount)
+        : this.round(commissionAmount * commissionTaxRate);
+      const financeSnapshot = group.orderMetadata?.commerceSettings?.finance || commerceSettings.finance;
+      const shippingPolicy = financeSnapshot.shippingPolicy || "not_in_seller_payout";
+      const sellerDeliveryCharge = (group.orderMetadata?.deliveryCharge?.sellers || []).find((entry) =>
+        String(entry.sellerId || entry.seller_id || "") === String(group.sellerId) &&
+        String(entry.organizationId || entry.organization_id || "default") === String(group.organizationId || "default"));
+      const sellerDeliveryChargeAmount = this.round(sellerDeliveryCharge?.chargeAmount || 0);
+      const shippingReimbursementAmount = shippingPolicy === "reimburse_seller" ? sellerDeliveryChargeAmount : 0;
+      const shippingDeductionAmount = shippingPolicy === "deduct_from_seller" ? sellerDeliveryChargeAmount : 0;
+      const netAmount = this.round(Math.max(
+        0,
+        amount - commissionAmount - taxAmount + shippingReimbursementAmount - shippingDeductionAmount,
+      ));
       return {
         sellerId: group.sellerId,
         organizationId: group.organizationId || null,
@@ -429,7 +510,7 @@ class SellerCommissionService {
         commissionAmount,
         taxAmount,
         refundAmount: 0,
-        netAmount: this.round(amount - commissionAmount - taxAmount),
+        netAmount,
         currency: group.currency,
         sourceStatus: group.sourceStatus,
         metadata: {
@@ -438,9 +519,18 @@ class SellerCommissionService {
           itemCount: group.orderItemIds.length,
           quantity: group.quantity,
           platformFeeAmount,
-          sellerPayoutBase: commerceSettings.finance.sellerPayoutBase,
-          platformFeeTaxRate: Number(commerceSettings.finance.platformFeeTaxRate || 0),
-          chargePlatformFeeTaxToSeller: Boolean(commerceSettings.finance.chargePlatformFeeTaxToSeller),
+          commissionFeeAmount: this.round(group.commissionFeeAmount),
+          fixedFeeAmount: this.round(group.fixedFeeAmount),
+          closingFeeAmount: this.round(group.closingFeeAmount),
+          platformFeeTaxAmount: taxAmount,
+          sellerPayoutBase: financeSnapshot.sellerPayoutBase,
+          platformFeeTaxRate: Number(financeSnapshot.platformFeeTaxRate || 0),
+          chargePlatformFeeTaxToSeller: Boolean(financeSnapshot.chargePlatformFeeTaxToSeller),
+          shippingPolicy,
+          sellerDeliveryChargeAmount,
+          shippingReimbursementAmount,
+          shippingDeductionAmount,
+          pricingSource: group.hasPricingSnapshot ? "checkout_snapshot" : "legacy_fallback",
           products: group.products,
         },
       };
@@ -503,7 +593,7 @@ class SellerCommissionService {
           calculatedAt: new Date().toISOString(),
         };
         const refundAmount = this.round(existing?.refund_amount || group.refundAmount || 0);
-        const netAmount = this.round(group.amount - group.commissionAmount - group.taxAmount - refundAmount);
+        const netAmount = this.round(group.netAmount - refundAmount);
 
         if (existing?.status === "paid") {
           skipped += 1;
@@ -768,7 +858,7 @@ class SellerCommissionService {
         return payout; // idempotent
       }
 
-      if (!["processing", "pending", "failed"].includes(payout.status)) {
+      if (payout.status !== "processing") {
         throw new AppError(`Payout cannot be completed from ${payout.status}`, 409);
       }
 
@@ -1206,7 +1296,7 @@ class SellerCommissionService {
     ]);
 
     return {
-      items,
+      items: await this.enrichFinanceRecords(items),
       total: Number(countRows?.[0]?.total || 0),
       limit,
       offset,
@@ -1261,7 +1351,7 @@ class SellerCommissionService {
     ]);
 
     return {
-      items,
+      items: await this.enrichFinanceRecords(items),
       total: Number(countRows?.[0]?.total || 0),
       limit,
       offset,
@@ -1281,8 +1371,9 @@ class SellerCommissionService {
       const organizationRows = await knex("seller_commissions")
         .distinct("organization_id")
         .where("seller_id", sellerId)
-        .whereIn("status", ["calculated", "failed"])
-        .whereBetween("created_at", [range.periodStart, range.periodEnd])
+        .whereIn("status", ["pending", "approved"])
+        .whereNull("payout_id")
+        .whereBetween("created_at", [range.periodStart, `${range.periodEnd} 23:59:59`])
         .orderBy("organization_id", "asc");
       const results = [];
       for (const row of organizationRows) {
@@ -1302,7 +1393,7 @@ class SellerCommissionService {
     const payoutId = await this.initiatePayout(sellerId, range.periodStart, range.periodEnd, options);
     const commerceSettings = await commerceSettingsService.getSettings();
     const payoutPolicy = this.getPayoutPolicy(commerceSettings);
-    if (payoutPolicy.manualApprovalRequired && options.autoProcess !== true) {
+    if (payoutPolicy.manualApprovalRequired) {
       const payout = await knex("seller_payouts").where("id", payoutId).first();
       return {
         payout,
@@ -1393,17 +1484,22 @@ class SellerCommissionService {
 
   async getSettlements(query = {}) {
     const { limit, offset } = this.normalizePagination(query);
-    const rows = await knex("seller_settlements")
-      .modify((builder) => {
+    const buildBase = () => knex("seller_settlements").modify((builder) => {
         if (query.sellerId) builder.where("seller_id", query.sellerId);
         if (query.organizationId) builder.where("organization_id", query.organizationId);
         if (query.status) builder.where("status", query.status);
         if (query.payoutId) builder.where("payout_id", query.payoutId);
-      })
-      .orderBy("created_at", "desc")
-      .limit(limit)
-      .offset(offset);
-    return { items: rows, total: rows.length, limit, offset };
+      });
+    const [rows, countRows] = await Promise.all([
+      buildBase().orderBy("created_at", "desc").limit(limit).offset(offset),
+      buildBase().count({ total: "*" }),
+    ]);
+    return {
+      items: await this.enrichFinanceRecords(rows),
+      total: Number(countRows?.[0]?.total || 0),
+      limit,
+      offset,
+    };
   }
 
   async getSellerSettlements(sellerId, query = {}) {
@@ -1438,12 +1534,18 @@ class SellerCommissionService {
         .limit(limit)
         .offset(offset);
     };
-    const [pendingApproval, processing, onHold, failed, negativeBalances] = await Promise.all([
+    const [pendingApprovalRows, processingRows, onHoldRows, failedRows, negativeBalances] = await Promise.all([
       loadPayouts("pending", "created_at", "asc"),
       loadPayouts("processing", "updated_at", "desc"),
       loadPayouts("on_hold", "updated_at", "desc"),
       loadPayouts("failed", "updated_at", "desc"),
       this.listNegativeBalanceRecoveries({ ...query, limit, offset }),
+    ]);
+    const [pendingApproval, processing, onHold, failed] = await Promise.all([
+      this.enrichFinanceRecords(pendingApprovalRows),
+      this.enrichFinanceRecords(processingRows),
+      this.enrichFinanceRecords(onHoldRows),
+      this.enrichFinanceRecords(failedRows),
     ]);
 
     return {
@@ -1893,9 +1995,8 @@ class SellerCommissionService {
 
         const nextRefundAmount = this.round(Number(commission.refund_amount || 0) + amount);
         const nextNetAmount = this.round(
-          Number(commission.amount || 0) -
-          Number(commission.commission_amount || 0) -
-          Number(commission.tax_amount || 0) -
+          Number(commission.net_amount || 0) +
+          Number(commission.refund_amount || 0) -
           nextRefundAmount,
         );
 
@@ -1919,6 +2020,39 @@ class SellerCommissionService {
             }),
             updated_at: knex.fn.now(),
           });
+
+        if (commission.payout_id && commission.status !== "paid") {
+          const payoutCommissions = await trx("seller_commissions")
+            .where("payout_id", commission.payout_id)
+            .select("amount", "commission_amount", "tax_amount", "refund_amount", "adjustment_amount", "net_amount");
+          const payoutTotals = payoutCommissions.reduce((totals, row) => ({
+            totalAmount: totals.totalAmount + Number(row.amount || 0),
+            commissionAmount: totals.commissionAmount + Number(row.commission_amount || 0),
+            taxAmount: totals.taxAmount + Number(row.tax_amount || 0),
+            refundAmount: totals.refundAmount + Number(row.refund_amount || 0),
+            adjustmentAmount: totals.adjustmentAmount + Number(row.adjustment_amount || 0),
+            netAmount: totals.netAmount + Number(row.net_amount || 0),
+          }), {
+            totalAmount: 0,
+            commissionAmount: 0,
+            taxAmount: 0,
+            refundAmount: 0,
+            adjustmentAmount: 0,
+            netAmount: 0,
+          });
+          await trx("seller_payouts")
+            .where("id", commission.payout_id)
+            .whereNot("status", "completed")
+            .update({
+              total_amount: this.round(payoutTotals.totalAmount),
+              commission_amount: this.round(payoutTotals.commissionAmount),
+              tax_amount: this.round(payoutTotals.taxAmount),
+              refund_amount: this.round(payoutTotals.refundAmount),
+              adjustment_amount: this.round(payoutTotals.adjustmentAmount),
+              net_amount: this.round(payoutTotals.netAmount),
+              updated_at: knex.fn.now(),
+            });
+        }
 
         if (commission.status === "paid") {
           await trx("seller_settlements").insert({
