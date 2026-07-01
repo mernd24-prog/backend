@@ -45,6 +45,17 @@ function buyerNameFromUser(user = {}) {
   );
 }
 
+function buyerImageFromUser(user = {}) {
+  return (
+    user.profile?.avatarUrl ||
+    user.avatarUrl ||
+    user.profileImage ||
+    user.user_image ||
+    user.image ||
+    ""
+  );
+}
+
 function isMongoObjectId(value = "") {
   return /^[a-f\d]{24}$/i.test(String(value || ""));
 }
@@ -525,6 +536,7 @@ class PlatformService {
   async createProductReview(productId, payload, actor) {
     const buyerId = actor.userId || actor.sub || actor.id;
     const buyerName = buyerNameFromUser(actor.user || actor);
+    const buyerImage = buyerImageFromUser(actor.user || actor);
     const orderItem = await this.orderRepository.findReviewableOrderItem({
       buyerId,
       productId,
@@ -568,7 +580,42 @@ class PlatformService {
     });
 
     this._syncProductRating(productId).catch(() => {});
-    return review;
+    const plain = typeof review.toObject === "function" ? review.toObject() : review;
+    return {
+      ...plain,
+      buyerImage,
+      buyerAvatarUrl: buyerImage,
+    };
+  }
+
+  async enrichProductReviewItems(items = []) {
+    const plainItems = items.map((review) =>
+      typeof review?.toObject === "function" ? review.toObject() : review,
+    );
+    const buyerIds = [
+      ...new Set(
+        plainItems
+          .map((review) => review?.buyerId)
+          .filter(Boolean)
+          .map((buyerId) => String(buyerId)),
+      ),
+    ];
+    const validBuyerIds = buyerIds.filter(isMongoObjectId);
+    const users = validBuyerIds.length
+      ? await UserModel.find({ _id: { $in: validBuyerIds } }).select("email profile displayName avatarUrl profileImage user_image image")
+      : [];
+    const userById = new Map(users.map((user) => [String(user._id), user]));
+
+    return plainItems.map((review) => {
+      const user = userById.get(String(review?.buyerId));
+      const buyerImage = buyerImageFromUser(user);
+      return {
+        ...review,
+        buyerName: review.buyerName || buyerNameFromUser(user) || "Verified Buyer",
+        buyerImage,
+        buyerAvatarUrl: buyerImage,
+      };
+    });
   }
 
   async listProductReviews(query = {}) {
@@ -588,7 +635,11 @@ class PlatformService {
         { buyerId: { $regex: q, $options: "i" } },
       ];
     }
-    return this.platformRepository.listProductReviews(filter, pagination);
+    const result = await this.platformRepository.listProductReviews(filter, pagination);
+    return {
+      ...result,
+      items: await this.enrichProductReviewItems(result.items),
+    };
   }
 
   async listSellerProductReviews(query = {}, actor = {}) {
@@ -628,10 +679,10 @@ class PlatformService {
     }
 
     const result = await this.platformRepository.listProductReviews(filter, pagination);
+    const enrichedReviews = await this.enrichProductReviewItems(result.items);
     return {
       ...result,
-      items: result.items.map((review) => {
-        const plain = typeof review.toObject === "function" ? review.toObject() : review;
+      items: enrichedReviews.map((plain) => {
         const product = productById.get(String(plain.productId));
         return {
           ...plain,
@@ -669,27 +720,9 @@ class PlatformService {
     if (query.rating) filter.rating = Number(query.rating);
     const reviews = await this.platformRepository.listProductReviews(filter, pagination);
     const stats = await this.platformRepository.getProductRatingStats(productId);
-    const buyerIds = [
-      ...new Set(
-        reviews.items
-          .filter((review) => !review.buyerName && review.buyerId)
-          .map((review) => String(review.buyerId)),
-      ),
-    ];
-    const validBuyerIds = buyerIds.filter(isMongoObjectId);
-    const users = validBuyerIds.length
-      ? await UserModel.find({ _id: { $in: validBuyerIds } }).select("email profile displayName")
-      : [];
-    const userById = new Map(users.map((user) => [String(user._id), user]));
     return {
       ...reviews,
-      items: reviews.items.map((review) => {
-        const plain = typeof review.toObject === "function" ? review.toObject() : review;
-        return {
-          ...plain,
-          buyerName: plain.buyerName || buyerNameFromUser(userById.get(String(plain.buyerId))) || "Verified Buyer",
-        };
-      }),
+      items: await this.enrichProductReviewItems(reviews.items),
       stats,
     };
   }
@@ -707,7 +740,8 @@ class PlatformService {
     if (payload.status) {
       this._syncProductRating(item.productId).catch(() => {});
     }
-    return updated;
+    const [enriched] = await this.enrichProductReviewItems([updated]);
+    return enriched || updated;
   }
 
   async bulkUpdateProductReviews(payload = {}, actor = {}) {
@@ -771,10 +805,14 @@ class PlatformService {
     const item = await this.platformRepository.getProductReview(reviewId);
     if (!item) throw AppError.notFound("Review");
     const alreadyVoted = (item.helpfulVotedBy || []).includes(String(userId));
+    let updated;
     if (alreadyVoted) {
-      return this.platformRepository.removeHelpfulVote(reviewId, userId);
+      updated = await this.platformRepository.removeHelpfulVote(reviewId, userId);
+    } else {
+      updated = await this.platformRepository.addHelpfulVote(reviewId, userId);
     }
-    return this.platformRepository.addHelpfulVote(reviewId, userId);
+    const [enriched] = await this.enrichProductReviewItems([updated]);
+    return enriched || updated;
   }
 
   async _syncProductRating(productId) {

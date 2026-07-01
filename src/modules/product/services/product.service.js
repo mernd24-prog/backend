@@ -2401,7 +2401,10 @@ class ProductService {
       ...(query.orderItemId ? { orderItemId: query.orderItemId } : {}),
     };
     const reviews = await platformRepo.listProductReviews(filter, { skip: 0, limit: 1 });
-    return reviews.items[0] || null;
+    if (!reviews.items[0]) return null;
+    const platformService = new PlatformService();
+    const [review] = await platformService.enrichProductReviewItems(reviews.items);
+    return review || null;
   }
 
   async getRelatedProducts(productId, { limit = 8 } = {}) {
