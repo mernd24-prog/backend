@@ -95,6 +95,12 @@ class ShippingProfilesController {
     res.json({ success: true, data: result });
   };
 
+  bulkDelete = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await service.bulkDelete(req.body.profileIds, actor);
+    res.json({ success: true, data: result });
+  };
+
   setDefault = async (req, res) => {
     const actor = getCurrentUser(req);
     const profile = await service.setDefault(req.params.profileId, actor);

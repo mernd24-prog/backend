@@ -103,7 +103,9 @@ const profileParamSchema = Joi.object({
 const templateParamSchema = Joi.object({
   templateId: Joi.string().uuid().required(),
 });
-
+const bulkDeleteProfilesSchema = Joi.object({
+  profileIds: Joi.array().items(Joi.string().uuid()).min(1).required(),
+});
 module.exports = {
   profileBody,
   updateProfileBody,
@@ -114,6 +116,7 @@ module.exports = {
   listTemplatesSchema,
   profileParamSchema,
   templateParamSchema,
+  bulkDeleteProfilesSchema,
   SERVICEABILITY_MODES,
   SHIPPING_METHODS,
   PROFILE_FIELDS,

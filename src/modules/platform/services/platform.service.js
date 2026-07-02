@@ -60,6 +60,13 @@ function isMongoObjectId(value = "") {
   return /^[a-f\d]{24}$/i.test(String(value || ""));
 }
 
+function reviewBuyerLookupId(value = "") {
+  const raw = String(value || "");
+  if (isMongoObjectId(raw)) return raw;
+  const adminMatch = raw.match(/^admin:([a-f\d]{24})$/i);
+  return adminMatch ? adminMatch[1] : "";
+}
+
 class PlatformService {
   constructor({
     platformRepository = new PlatformRepository(),
@@ -588,6 +595,66 @@ class PlatformService {
     };
   }
 
+  async createProductReviewByAdmin(payload = {}, actor = {}) {
+    const productId = String(payload.productId || "").trim();
+    const product = await ProductModel.findById(productId)
+      .select("_id title sellerId organizationId")
+      .lean();
+    if (!product) throw AppError.notFound("Product");
+
+    const actorId = actor.userId || actor.sub || actor.id || "admin";
+    const actorUser = actor.user || actor;
+    const actorName = buyerNameFromUser(actorUser);
+    const now = new Date();
+    const buyerId = payload.buyerId || actorId;
+    const status = payload.status || "published";
+    const existingReview = await this.platformRepository.getProductReviewByProductAndBuyer(
+      productId,
+      [buyerId, `admin:${buyerId}`],
+    );
+    if (existingReview) {
+      const updated = await this.platformRepository.updateProductReview(existingReview._id, {
+        sellerId: product.sellerId || existingReview.sellerId || "",
+        organizationId: product.organizationId || existingReview.organizationId || "",
+        buyerId,
+        buyerName: payload.buyerName || actorName || existingReview.buyerName || "Admin",
+        rating: payload.rating,
+        title: payload.title || "",
+        reviewText: payload.reviewText || "",
+        media: payload.media || [],
+        status,
+        rejectionReason: status === "published" ? "" : existingReview.rejectionReason || "",
+        moderatedBy: actorId,
+        moderatedAt: now,
+      });
+
+      this._syncProductRating(productId).catch(() => {});
+      const [enriched] = await this.enrichProductReviewItems([updated]);
+      return enriched || updated;
+    }
+
+    const review = await this.platformRepository.createProductReview({
+      productId,
+      sellerId: product.sellerId || "",
+      organizationId: product.organizationId || "",
+      buyerId,
+      buyerName: payload.buyerName || actorName || "Admin",
+      orderId: `admin:${productId}:${now.getTime()}`,
+      orderItemId: `admin:${now.getTime()}`,
+      rating: payload.rating,
+      title: payload.title || "",
+      reviewText: payload.reviewText || "",
+      media: payload.media || [],
+      status,
+      moderatedBy: actorId,
+      moderatedAt: now,
+    });
+
+    this._syncProductRating(productId).catch(() => {});
+    const [enriched] = await this.enrichProductReviewItems([review]);
+    return enriched || review;
+  }
+
   async enrichProductReviewItems(items = []) {
     const plainItems = items.map((review) =>
       typeof review?.toObject === "function" ? review.toObject() : review,
@@ -595,7 +662,7 @@ class PlatformService {
     const buyerIds = [
       ...new Set(
         plainItems
-          .map((review) => review?.buyerId)
+          .map((review) => reviewBuyerLookupId(review?.buyerId))
           .filter(Boolean)
           .map((buyerId) => String(buyerId)),
       ),
@@ -607,11 +674,13 @@ class PlatformService {
     const userById = new Map(users.map((user) => [String(user._id), user]));
 
     return plainItems.map((review) => {
-      const user = userById.get(String(review?.buyerId));
+      const user = userById.get(reviewBuyerLookupId(review?.buyerId));
       const buyerImage = buyerImageFromUser(user);
+      const storedBuyerName = String(review.buyerName || "").trim();
+      const shouldUseUserName = !storedBuyerName || storedBuyerName === "Admin Review";
       return {
         ...review,
-        buyerName: review.buyerName || buyerNameFromUser(user) || "Verified Buyer",
+        buyerName: shouldUseUserName ? buyerNameFromUser(user) || storedBuyerName || "Verified Buyer" : review.buyerName,
         buyerImage,
         buyerAvatarUrl: buyerImage,
       };
@@ -622,7 +691,7 @@ class PlatformService {
     const pagination = getPage(query);
     const filter = {};
     if (query.productId) filter.productId = query.productId;
-    if (query.buyerId) filter.buyerId = query.buyerId;
+    if (query.buyerId) filter.buyerId = { $in: [query.buyerId, `admin:${query.buyerId}`] };
     if (query.orderId) filter.orderId = query.orderId;
     if (query.status) filter.status = query.status;
     if (query.rating) filter.rating = Number(query.rating);

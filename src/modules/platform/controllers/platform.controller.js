@@ -161,6 +161,11 @@ class PlatformController {
     res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
   };
 
+  createProductReviewByAdmin = async (req, res) => {
+    const item = await this.platformService.createProductReviewByAdmin(req.body, req.auth || {});
+    res.status(201).json(okResponse(item, { message: "Product review created successfully." }));
+  };
+
   updateProductReview = async (req, res) => {
     const item = await this.platformService.updateProductReview(req.params.reviewId, req.body, req.auth || {});
     res.json(okResponse(item));
