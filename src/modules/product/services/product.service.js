@@ -33,6 +33,7 @@ const {
   AdminStateModel,
   AdminCityModel,
 } = require("../../admin/models/common-management.model");
+const { ShippingProfilesService } = require("../../delivery/services/shipping-profiles.service");
 
 const SELLER_BLOCKED_COMPLIANCE_FIELDS = [
   "gstRate",
@@ -113,11 +114,13 @@ class ProductService {
     platformRepository = new PlatformRepository(),
     platformService = null,
     inventoryService = null,
+    shippingProfilesService = null,
   } = {}) {
     this.productRepository = productRepository;
     this.platformRepository = platformRepository;
     this.platformService = platformService || new PlatformService({ platformRepository });
     this.inventoryService = inventoryService || new InventoryService({ productRepository });
+    this.shippingProfilesService = shippingProfilesService || new ShippingProfilesService();
   }
 
   // ─── Category & attribute helpers ─────────────────────────────────────────
@@ -732,8 +735,29 @@ class ProductService {
     }
 
     await this.validateProductOptionReferences(payload.options || []);
+    await this.validateShippingProfileReference(payload, existingProduct);
     await this.validateRelatedProductReferences(payload, existingProduct);
     await this.validateCollectionReferences(payload.collectionIds || []);
+  }
+
+  async validateShippingProfileReference(payload = {}, existingProduct = null) {
+    const hasShippingPayload = Object.prototype.hasOwnProperty.call(payload, "shipping");
+    const profileId = hasShippingPayload
+      ? payload.shipping?.shippingProfileId
+      : existingProduct?.shipping?.shippingProfileId;
+    if (!profileId) return;
+
+    const sellerId = payload.sellerId || existingProduct?.sellerId;
+    const organizationId = payload.organizationId || existingProduct?.organizationId || null;
+    const profile = await this.shippingProfilesService.getById(profileId);
+    if (!profile) throw new AppError("Selected shipping profile was not found", 400);
+    this.shippingProfilesService.assertProfileBelongsToSeller(profile, {
+      sellerId,
+      organizationId,
+    });
+    if (profile.active === false) {
+      throw new AppError("Inactive shipping profiles cannot be assigned to products", 400);
+    }
   }
 
   async validateProductOptionReferences(options = []) {

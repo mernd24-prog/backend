@@ -163,6 +163,7 @@ const shippingSchema = Joi.object({
   shippingMethod: optionalString().default("standard"),
   dangerousGoods: Joi.boolean().default(false),
   requiresColdChain: Joi.boolean().default(false),
+  shippingProfileId: Joi.string().uuid().allow("", null).optional(),
 });
 
 const inventorySettingsSchema = Joi.object({

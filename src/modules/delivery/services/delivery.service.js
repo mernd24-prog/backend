@@ -91,6 +91,10 @@ class DeliveryService {
       try {
         const profile = await shippingProfilesService.getById(profileId);
         if (profile) {
+          shippingProfilesService.assertProfileBelongsToSeller(profile, {
+            sellerId: product.sellerId,
+            organizationId: product.organizationId || null,
+          });
           const check = shippingProfilesService.checkPincodeAgainstProfile(
             profile,
             pincode,
@@ -112,6 +116,16 @@ class DeliveryService {
             };
           }
 
+          if (!response.serviceable) {
+            return {
+              ...response,
+              serviceable: false,
+              sellerRuleBlocked: false,
+              shippingProfileId: profileId,
+              shippingProfileName: profile.name,
+            };
+          }
+
           // Profile-level COD override
           const codAvailable = response.codAvailable && profile.codAvailable;
 
@@ -128,7 +142,7 @@ class DeliveryService {
 
           return {
             ...response,
-            serviceable: true,
+            serviceable: response.serviceable,
             codAvailable,
             shippingProfileId: profileId,
             shippingProfileName: profile.name,
@@ -148,8 +162,17 @@ class DeliveryService {
             },
           };
         }
-      } catch {
-        // Fall through to seller charge settings
+      } catch (error) {
+        return {
+          ...response,
+          serviceable: false,
+          sellerRuleBlocked: true,
+          shippingProfileId: profileId,
+          exclusions: [
+            ...(response.exclusions || []),
+            { reason: error.message || "Shipping profile is not valid for this product" },
+          ],
+        };
       }
     }
 
@@ -213,7 +236,7 @@ class DeliveryService {
   }
 
   getActorSellerId(actor = {}) {
-    return actor.ownerSellerId || actor.userId;
+    return actor.ownerSellerId || actor.sellerId || actor.userId;
   }
 
   resolveSellerIdForAgent(payload = {}, actor = {}) {
@@ -319,7 +342,7 @@ class DeliveryService {
   async assignDeliveryAgent(shipmentId, deliveryAgentId, actor = {}) {
     const shipment = await this.deliveryRepository.findShipmentById(shipmentId);
     if (!shipment) throw new AppError("Shipment not found", 404);
-    await this.assertCanManageOrder(shipment.order_id, actor);
+    await this.assertCanManageShipment(shipment, actor);
     if (!this.isForwardShipment(shipment)) {
       throw new AppError("Delivery agent assignment is only available for forward shipments", 409);
     }
@@ -350,7 +373,7 @@ class DeliveryService {
     const orderSellerIds = Array.from(new Set(
       (order.items || []).map((item) => String(item.seller_id || item.sellerId || "")).filter(Boolean),
     ));
-    const actorSellerId = actor.ownerSellerId || actor.userId;
+    const actorSellerId = this.getActorSellerId(actor);
     const isAdmin = ["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin;
     let sellerId = payload.sellerId || (isAdmin ? null : actorSellerId);
     if (!sellerId && orderSellerIds.length === 1) sellerId = orderSellerIds[0];
@@ -466,7 +489,7 @@ class DeliveryService {
 
   async listShipments(query, actor) {
     if (!["admin", "sub-admin", "super-admin"].includes(actor.role) && !actor.isSuperAdmin) {
-      query.sellerId = actor.ownerSellerId || actor.userId;
+      query.sellerId = this.getActorSellerId(actor);
     }
     const result = await this.deliveryRepository.listShipments(query);
     return { ...result, items: await this.enrichShipmentRecords(result.items || []) };
@@ -477,7 +500,7 @@ class DeliveryService {
     if (!shipment) {
       throw new AppError("Shipment not found", 404);
     }
-    await this.assertCanViewOrder({ buyer_id: null }, shipment.order_id, actor);
+    await this.assertCanViewShipment(shipment, actor);
     return (await this.enrichShipmentRecords([shipment]))[0] || shipment;
   }
 
@@ -552,7 +575,7 @@ class DeliveryService {
       throw new AppError("Shipment not found", 404);
     }
 
-    await this.assertCanManageOrder(shipment.order_id, actor);
+    await this.assertCanManageShipment(shipment, actor);
     if (payload.status === DELIVERY_STATUS.DELIVERED && shipment.verification_required) {
       throw new AppError("Delivery verification is required. Use the delivery confirmation endpoint.", 409);
     }
@@ -810,7 +833,7 @@ class DeliveryService {
       throw new AppError("Shipment not found", 404);
     }
 
-    await this.assertCanManageOrder(shipment.order_id, actor);
+    await this.assertCanManageShipment(shipment, actor);
     if (shipment.status !== DELIVERY_STATUS.OUT_FOR_DELIVERY) {
       throw new AppError("Delivery OTP can be generated only when shipment is out for delivery", 409);
     }
@@ -914,7 +937,7 @@ class DeliveryService {
       throw new AppError("Shipment not found", 404);
     }
 
-    await this.assertCanManageOrder(shipment.order_id, actor);
+    await this.assertCanManageShipment(shipment, actor);
     if (shipment.status === DELIVERY_STATUS.DELIVERED_VERIFIED) {
       return { shipment, alreadyVerified: true };
     }
@@ -1107,6 +1130,35 @@ class DeliveryService {
     await this.assertCanManageOrder(orderId, actor);
   }
 
+  async assertCanViewShipment(shipment, actor = {}) {
+    if (this.isAdmin(actor) || shipment.buyer_id === actor.userId) return;
+    await this.assertCanManageShipment(shipment, actor);
+  }
+
+  async assertCanManageShipment(shipment, actor = {}) {
+    if (this.isAdmin(actor)) return;
+
+    if (!["seller", "seller-admin", "seller-sub-admin"].includes(actor.role)) {
+      throw new AppError("You are not allowed to manage delivery for this shipment", 403);
+    }
+
+    const sellerId = String(this.getActorSellerId(actor) || "");
+    if (!sellerId || String(shipment.seller_id || shipment.sellerId || "") !== sellerId) {
+      throw new AppError("You are not allowed to manage delivery for this shipment", 403);
+    }
+
+    if (actor.organizationId) {
+      const order = await this.orderRepository.findByIdWithItems(shipment.order_id);
+      const sellerOrgMatches = (order?.items || []).some((item) =>
+        String(item.seller_id || item.sellerId || "") === sellerId &&
+        String(item.organization_id || item.organizationId || "") === String(actor.organizationId),
+      );
+      if (!sellerOrgMatches) {
+        throw new AppError("You are not allowed to manage delivery for this seller organization", 403);
+      }
+    }
+  }
+
   async assertCanManageOrder(orderId, actor) {
     if (["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin) {
       return;
@@ -1116,7 +1168,7 @@ class DeliveryService {
       throw new AppError("You are not allowed to manage delivery for this order", 403);
     }
 
-    const sellerId = actor.ownerSellerId || actor.userId;
+    const sellerId = this.getActorSellerId(actor);
     const isSellerInOrder = await this.orderRepository.isSellerInOrder(orderId, sellerId);
     if (!isSellerInOrder) {
       throw new AppError("You are not allowed to manage delivery for this order", 403);

@@ -9,8 +9,13 @@ const { catchErrors } = require("../../../shared/middleware/catch-errors");
 const {
   profileBody,
   updateProfileBody,
+  templateBody,
+  updateTemplateBody,
+  cloneTemplateBody,
   listProfilesSchema,
+  listTemplatesSchema,
   profileParamSchema,
+  templateParamSchema,
 } = require("../validation/shipping-profiles.validation");
 
 const shippingProfilesRoutes = express.Router();
@@ -23,6 +28,55 @@ shippingProfilesRoutes.get(
   allowPermissions("delivery:view"),
   checkInput({ query: listProfilesSchema }),
   catchErrors(controller.list)
+);
+
+// Admin-authored templates. Sellers can view published templates and clone their own copy.
+shippingProfilesRoutes.get(
+  "/templates",
+  authenticate,
+  allowPermissions("delivery:view"),
+  checkInput({ query: listTemplatesSchema }),
+  catchErrors(controller.listTemplates)
+);
+
+shippingProfilesRoutes.post(
+  "/templates",
+  authenticate,
+  allowPermissions("delivery:create"),
+  checkInput({ body: templateBody }),
+  catchErrors(controller.createTemplate)
+);
+
+shippingProfilesRoutes.get(
+  "/templates/:templateId",
+  authenticate,
+  allowPermissions("delivery:view"),
+  checkInput({ params: templateParamSchema }),
+  catchErrors(controller.getTemplate)
+);
+
+shippingProfilesRoutes.patch(
+  "/templates/:templateId",
+  authenticate,
+  allowPermissions("delivery:update"),
+  checkInput({ params: templateParamSchema, body: updateTemplateBody }),
+  catchErrors(controller.updateTemplate)
+);
+
+shippingProfilesRoutes.delete(
+  "/templates/:templateId",
+  authenticate,
+  allowPermissions("delivery:delete"),
+  checkInput({ params: templateParamSchema }),
+  catchErrors(controller.archiveTemplate)
+);
+
+shippingProfilesRoutes.post(
+  "/templates/:templateId/clone",
+  authenticate,
+  allowPermissions("delivery:create"),
+  checkInput({ params: templateParamSchema, body: cloneTemplateBody }),
+  catchErrors(controller.cloneTemplate)
 );
 
 // Create

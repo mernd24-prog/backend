@@ -202,6 +202,7 @@ const returnValidation = {
     orderId: Joi.string(),
     buyerId: Joi.string(),
     sellerId: Joi.string(),
+    organizationId: Joi.string().guid({ version: "uuidv4" }),
     reason: Joi.string().valid(
       "defective",
       "damaged_in_transit",

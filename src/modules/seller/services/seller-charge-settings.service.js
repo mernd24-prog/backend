@@ -1,5 +1,6 @@
 const { knex } = require("../../../infrastructure/postgres/postgres-client");
 const { AppError } = require("../../../shared/errors/app-error");
+const { ShippingProfilesService } = require("../../delivery/services/shipping-profiles.service");
 
 const TABLE_NAME = "seller_charge_settings";
 const GLOBAL_ORGANIZATION_KEY = "seller_default";
@@ -36,6 +37,8 @@ const DEFAULT_SELLER_CHARGE_SETTINGS = {
   },
   metadata: {},
 };
+
+const shippingProfilesService = new ShippingProfilesService();
 
 const ALLOWED = {
   codChargeMode: ["inherit", "none", "flat"],
@@ -638,9 +641,140 @@ class SellerChargeSettingsService {
     };
   }
 
+  getShippingProfileId(item = {}) {
+    return item.shipping?.shippingProfileId ||
+      item.productSnapshot?.shipping?.shippingProfileId ||
+      item.product_snapshot?.shipping?.shippingProfileId ||
+      null;
+  }
+
+  async loadShippingProfileMap(items = []) {
+    const profileIds = items.map((item) => this.getShippingProfileId(item)).filter(Boolean);
+    return shippingProfilesService.getByIds(profileIds);
+  }
+
+  profileEta(profile = {}) {
+    if (profile.etaMin == null && profile.etaMax == null) return null;
+    return {
+      minDays: profile.etaMin == null ? null : Number(profile.etaMin),
+      maxDays: profile.etaMax == null ? null : Number(profile.etaMax),
+    };
+  }
+
+  ensureProfileForItem(profile, item = {}, group = {}) {
+    shippingProfilesService.assertProfileBelongsToSeller(profile, {
+      sellerId: group.sellerId || item.sellerId,
+      organizationId: group.organizationId || item.organizationId || null,
+    });
+  }
+
+  evaluateShippingProfilesForGroup(group = {}, address = {}, profileMap = new Map()) {
+    const profileItems = [];
+    const fallbackItems = [];
+    for (const item of group.items || []) {
+      if (this.getShippingProfileId(item)) profileItems.push(item);
+      else fallbackItems.push(item);
+    }
+    if (!profileItems.length) {
+      return {
+        hasProfiles: false,
+        fallbackGroup: group,
+        amount: 0,
+        profiles: [],
+      };
+    }
+
+    const parts = this.getAddressParts(address);
+    const byProfile = new Map();
+    for (const item of profileItems) {
+      const profileId = this.getShippingProfileId(item);
+      if (!byProfile.has(profileId)) {
+        byProfile.set(profileId, { profileId, items: [], amount: 0, quantity: 0 });
+      }
+      const current = byProfile.get(profileId);
+      current.items.push(item);
+      current.amount += money(item.discountedLineTotal ?? item.lineTotal);
+      current.quantity += Number(item.quantity || 0);
+    }
+
+    let profileChargeAmount = 0;
+    const profileBreakup = [];
+    for (const profileGroup of byProfile.values()) {
+      const profile = profileMap.get(String(profileGroup.profileId));
+      if (!profile) {
+        throw new AppError("Shipping profile assigned to a product was not found", 400);
+      }
+      this.ensureProfileForItem(profile, profileGroup.items[0], group);
+      const serviceability = shippingProfilesService.checkPincodeAgainstProfile(
+        profile,
+        parts.pincode,
+        parts.city,
+        parts.state,
+      );
+      if (!serviceability.allowed) {
+        const productTitle = profileGroup.items[0]?.title || profileGroup.items[0]?.productTitle || "Selected product";
+        throw new AppError(
+          `${productTitle} is not deliverable to ${parts.pincode || "the selected pincode"}: ${serviceability.reason}`,
+          400,
+        );
+      }
+
+      const threshold = profile.freeShippingThreshold == null ? null : Number(profile.freeShippingThreshold);
+      const chargeAmount = threshold !== null && profileGroup.amount >= threshold
+        ? 0
+        : money(profile.shippingCharge);
+      profileChargeAmount += chargeAmount;
+      profileBreakup.push({
+        shippingProfileId: profile.id,
+        shippingProfileName: profile.name,
+        sourceTemplateId: profile.sourceTemplateId || null,
+        sourceTemplateVersion: profile.sourceTemplateVersion || null,
+        itemCount: profileGroup.items.length,
+        quantity: profileGroup.quantity,
+        orderAmount: money(profileGroup.amount),
+        chargeAmount,
+        freeShippingThreshold: threshold,
+        shippingMethod: profile.shippingMethod || "standard",
+        estimatedDeliveryDays: this.profileEta(profile),
+        codAvailable: profile.codAvailable !== false,
+      });
+    }
+
+    const fallbackGroup = {
+      ...group,
+      items: fallbackItems,
+      amount: money(fallbackItems.reduce((sum, item) => sum + money(item.discountedLineTotal ?? item.lineTotal), 0)),
+      quantity: fallbackItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+    };
+
+    return {
+      hasProfiles: true,
+      fallbackGroup,
+      amount: money(profileChargeAmount),
+      profiles: profileBreakup,
+    };
+  }
+
+  findProfileCodBlocker(group = {}, profileMap = new Map()) {
+    for (const item of group.items || []) {
+      const profileId = this.getShippingProfileId(item);
+      if (!profileId) continue;
+      const profile = profileMap.get(String(profileId));
+      if (!profile || profile.active === false || profile.archivedAt) {
+        return { item, reason: "shipping_profile_inactive" };
+      }
+      this.ensureProfileForItem(profile, item, group);
+      if (profile.codAvailable === false) {
+        return { item, profile, reason: "shipping_profile_cod_disabled" };
+      }
+    }
+    return null;
+  }
+
   async evaluateCodForItems(pricedItems = [], address = {}) {
     const groups = this.groupItemsBySeller(pricedItems);
     const settingsMap = await this.getSettingsMap([...groups.values()]);
+    const profileMap = await this.loadShippingProfileMap(pricedItems);
     const sellers = [];
     const blockers = [];
     let sellerChargeAmount = 0;
@@ -665,6 +799,14 @@ class SellerChargeSettingsService {
         allowed = false;
         reason = "seller_cod_max_order_exceeded";
       } else {
+        const profileCodBlocker = this.findProfileCodBlocker(group, profileMap);
+        if (profileCodBlocker) {
+          allowed = false;
+          reason = profileCodBlocker.reason;
+        }
+      }
+
+      if (allowed) {
         const deliveryCodBlocker = (group.items || []).find((item) => {
           const productRule = this.findProductRule(settings, item, address);
           const regionRule = this.findRegionRule(settings, group, address);
@@ -704,35 +846,40 @@ class SellerChargeSettingsService {
   async calculateDeliveryCharges(pricedItems = [], address = {}) {
     const groups = this.groupItemsBySeller(pricedItems);
     const settingsMap = await this.getSettingsMap([...groups.values()]);
+    const profileMap = await this.loadShippingProfileMap(pricedItems);
     const sellers = [];
     let totalAmount = 0;
 
     for (const group of groups.values()) {
+      const profileDelivery = this.evaluateShippingProfilesForGroup(group, address, profileMap);
+      const workingGroup = profileDelivery.hasProfiles ? profileDelivery.fallbackGroup : group;
       const settings = settingsMap.get(this.scopeKey(group.sellerId, group.organizationId)) ||
         this.withSellerId(group.sellerId, {}, group.organizationId);
       const delivery = settings.delivery;
-      let chargeAmount = 0;
+      let chargeAmount = profileDelivery.amount;
       let appliedRule = null;
-      let ruleSource = delivery.mode;
+      let ruleSource = profileDelivery.hasProfiles ? "shipping_profile" : delivery.mode;
 
-      const serviceability = this.assertDeliveryServiceable(settings, group, address);
-      if (!serviceability.allowed) {
-        throw new AppError(
-          serviceability.productTitle
-            ? serviceability.productTitle + " is not deliverable to " + (this.getPostalCode(address) || "the selected pincode")
-            : "Seller " + group.sellerId + " is not deliverable to " + (this.getPostalCode(address) || "the selected pincode"),
-          400,
-        );
+      if (workingGroup.items.length) {
+        const serviceability = this.assertDeliveryServiceable(settings, workingGroup, address);
+        if (!serviceability.allowed) {
+          throw new AppError(
+            serviceability.productTitle
+              ? serviceability.productTitle + " is not deliverable to " + (this.getPostalCode(address) || "the selected pincode")
+              : "Seller " + group.sellerId + " is not deliverable to " + (this.getPostalCode(address) || "the selected pincode"),
+            400,
+          );
+        }
       }
 
       const productRuleCharge = () => {
         let amount = 0;
         let firstRule = null;
-        for (const item of group.items || []) {
+        for (const item of workingGroup.items || []) {
           const rule = this.findProductRule(settings, item, address);
           if (!rule) continue;
           firstRule = firstRule || rule;
-          amount += this.ruleCharge(rule, group) * Number(item.quantity || 1);
+          amount += this.ruleCharge(rule, workingGroup) * Number(item.quantity || 1);
           amount += money(rule.handlingCharge) * Number(item.quantity || 1);
         }
         return { amount: money(amount), rule: firstRule };
@@ -741,41 +888,46 @@ class SellerChargeSettingsService {
       if (delivery.mode === "none") {
         const productCharges = productRuleCharge();
         if (productCharges.rule) {
-          chargeAmount = productCharges.amount;
+          chargeAmount = money(chargeAmount + productCharges.amount);
           appliedRule = productCharges.rule;
-          ruleSource = productCharges.rule.source || "product_rule";
+          ruleSource = profileDelivery.hasProfiles ? "shipping_profile_plus_product_rule" : productCharges.rule.source || "product_rule";
         }
-      } else if (delivery.mode === "flat") {
-        chargeAmount = money(delivery.chargeAmount);
-      } else if (delivery.mode === "free_over_amount") {
+      } else if (workingGroup.items.length && delivery.mode === "flat") {
+        chargeAmount = money(chargeAmount + money(delivery.chargeAmount));
+        if (!profileDelivery.hasProfiles) ruleSource = delivery.mode;
+      } else if (workingGroup.items.length && delivery.mode === "free_over_amount") {
         const threshold = nullableMoney(delivery.freeDeliveryMinOrderAmount);
-        chargeAmount = threshold !== null && group.amount >= threshold
+        const fallbackCharge = threshold !== null && workingGroup.amount >= threshold
           ? 0
           : money(delivery.chargeAmount);
-      } else if (["product", "rule_based"].includes(delivery.mode)) {
+        chargeAmount = money(chargeAmount + fallbackCharge);
+        if (!profileDelivery.hasProfiles) ruleSource = delivery.mode;
+      } else if (workingGroup.items.length && ["product", "rule_based"].includes(delivery.mode)) {
         const productCharges = productRuleCharge();
-        chargeAmount = productCharges.amount;
+        chargeAmount = money(chargeAmount + productCharges.amount);
         appliedRule = productCharges.rule;
         if (!appliedRule && delivery.mode === "rule_based") {
-          appliedRule = this.findRegionRule(settings, group, address) || this.findOrderRule(settings, group, address);
+          appliedRule = this.findRegionRule(settings, workingGroup, address) || this.findOrderRule(settings, workingGroup, address);
           if (appliedRule) {
-            chargeAmount = this.ruleCharge(appliedRule, group);
-            ruleSource = appliedRule.states?.length || appliedRule.cities?.length || appliedRule.regions?.length ? "region_rule" : "order_rule";
+            chargeAmount = money(chargeAmount + this.ruleCharge(appliedRule, workingGroup));
+            ruleSource = profileDelivery.hasProfiles
+              ? "shipping_profile_plus_rule_based"
+              : appliedRule.states?.length || appliedRule.cities?.length || appliedRule.regions?.length ? "region_rule" : "order_rule";
           }
         } else if (appliedRule) {
-          ruleSource = "product_rule";
+          ruleSource = profileDelivery.hasProfiles ? "shipping_profile_plus_product_rule" : "product_rule";
         }
-      } else if (delivery.mode === "region") {
-        appliedRule = this.findRegionRule(settings, group, address);
-        chargeAmount = appliedRule ? this.ruleCharge(appliedRule, group) : money(delivery.chargeAmount);
-        ruleSource = appliedRule ? "region_rule" : "region_fallback";
-      } else if (delivery.mode === "order") {
-        appliedRule = this.findOrderRule(settings, group, address);
-        chargeAmount = appliedRule ? this.ruleCharge(appliedRule, group) : money(delivery.chargeAmount);
-        ruleSource = appliedRule ? "order_rule" : "order_fallback";
+      } else if (workingGroup.items.length && delivery.mode === "region") {
+        appliedRule = this.findRegionRule(settings, workingGroup, address);
+        chargeAmount = money(chargeAmount + (appliedRule ? this.ruleCharge(appliedRule, workingGroup) : money(delivery.chargeAmount)));
+        ruleSource = profileDelivery.hasProfiles ? "shipping_profile_plus_region" : appliedRule ? "region_rule" : "region_fallback";
+      } else if (workingGroup.items.length && delivery.mode === "order") {
+        appliedRule = this.findOrderRule(settings, workingGroup, address);
+        chargeAmount = money(chargeAmount + (appliedRule ? this.ruleCharge(appliedRule, workingGroup) : money(delivery.chargeAmount)));
+        ruleSource = profileDelivery.hasProfiles ? "shipping_profile_plus_order" : appliedRule ? "order_rule" : "order_fallback";
       }
 
-      const handlingCharge = money(delivery.handlingCharge);
+      const handlingCharge = workingGroup.items.length ? money(delivery.handlingCharge) : 0;
       chargeAmount = money(chargeAmount + handlingCharge);
       totalAmount += chargeAmount;
       sellers.push({
@@ -789,10 +941,11 @@ class SellerChargeSettingsService {
         freeDeliveryMinOrderAmount: delivery.freeDeliveryMinOrderAmount,
         serviceabilityMode: delivery.serviceabilityMode,
         shippingPartner: appliedRule?.shippingPartner || delivery.shippingPartner || null,
-        shippingMethod: appliedRule?.shippingMethod || delivery.shippingMethod || "standard",
-        estimatedDeliveryDays: this.ruleEta(appliedRule, delivery),
+        shippingMethod: profileDelivery.profiles[0]?.shippingMethod || appliedRule?.shippingMethod || delivery.shippingMethod || "standard",
+        estimatedDeliveryDays: profileDelivery.profiles[0]?.estimatedDeliveryDays || this.ruleEta(appliedRule, delivery),
         ruleSource,
         appliedRuleName: appliedRule?.name || null,
+        shippingProfiles: profileDelivery.profiles,
         settingsSource: settings.source,
       });
     }

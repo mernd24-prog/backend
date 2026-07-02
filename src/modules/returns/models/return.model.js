@@ -8,6 +8,7 @@ const returnItemSchema = new mongoose.Schema(
     productSku: String,
     productImage: String,
     sellerId: { type: String, index: true },
+    organizationId: { type: String, index: true },
     variantId: String,
     variantSku: String,
     quantity: Number,
@@ -73,6 +74,7 @@ const returnSchema = new mongoose.Schema(
     orderId: { type: String, required: true, index: true },
     buyerId: { type: String, required: true, index: true },
     sellerId: { type: String, index: true },
+    organizationId: { type: String, index: true },
     reason: {
       type: String,
       enum: [

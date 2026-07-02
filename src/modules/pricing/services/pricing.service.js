@@ -149,6 +149,11 @@ class PricingService {
             storeId: product.storeId || null,
             warehouseId: product.warehouseId || null,
             shipping: product.shipping || {},
+            warranty: product.warranty || {},
+            returnPolicy: product.warranty?.returnPolicy || {},
+            commercialPolicy: {
+              returnPolicy: product.warranty?.returnPolicy || {},
+            },
           },
         };
       }),

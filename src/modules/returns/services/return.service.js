@@ -113,6 +113,90 @@ class ReturnServiceClass {
     };
   }
 
+  userDisplayName(user = {}) {
+    const profileName = [user.profile?.firstName, user.profile?.lastName]
+      .filter(Boolean)
+      .join(" ");
+    return user.sellerProfile?.displayName ||
+      user.sellerProfile?.businessName ||
+      profileName ||
+      user.email ||
+      null;
+  }
+
+  toReturnUserSummary(user = {}) {
+    if (!user?._id) return null;
+    const displayName = this.userDisplayName(user);
+    return {
+      id: String(user._id),
+      name: displayName,
+      displayName,
+      fullName: [user.profile?.firstName, user.profile?.lastName].filter(Boolean).join(" ") || displayName,
+      businessName: user.sellerProfile?.businessName || user.sellerProfile?.displayName || null,
+      email: user.email || null,
+      phone: user.phone || null,
+    };
+  }
+
+  snapshotDisplayName(snapshot = {}) {
+    return snapshot.displayName ||
+      snapshot.fullName ||
+      snapshot.name ||
+      [snapshot.firstName || snapshot.profile?.firstName, snapshot.lastName || snapshot.profile?.lastName]
+        .filter(Boolean)
+        .join(" ") ||
+      snapshot.businessName ||
+      snapshot.email ||
+      null;
+  }
+
+  async enrichReturnDetail(response = {}) {
+    const userIds = new Set([
+      response.buyerId,
+      response.sellerId,
+      ...(response.items || []).map((item) => item.sellerId),
+    ].map((id) => String(id || "")).filter(Boolean));
+    const objectIds = [...userIds].filter((id) => UserModel.db.base.Types.ObjectId.isValid(id));
+
+    const [order, users] = await Promise.all([
+      response.orderId
+        ? this.orderRepository.findById(response.orderId).catch(() => null)
+        : Promise.resolve(null),
+      objectIds.length
+        ? UserModel.find({ _id: { $in: objectIds } })
+          .select("email phone profile sellerProfile")
+          .lean()
+          .catch(() => [])
+        : Promise.resolve([]),
+    ]);
+
+    const usersById = new Map(
+      users.map((user) => [String(user._id), this.toReturnUserSummary(user)]),
+    );
+    const buyerSnapshot = response.buyerSnapshot || {};
+    const buyer = usersById.get(String(response.buyerId || "")) || buyerSnapshot;
+    const seller = usersById.get(String(response.sellerId || "")) || response.seller || null;
+
+    return {
+      ...response,
+      orderNumber: response.orderNumber || order?.order_number || order?.orderNumber || null,
+      buyer,
+      buyerName: this.snapshotDisplayName(buyer),
+      buyerEmail: buyer?.email || buyerSnapshot.email || null,
+      buyerPhone: buyer?.phone || buyerSnapshot.phone || null,
+      seller,
+      sellerName: this.snapshotDisplayName(seller || {}),
+      items: (response.items || []).map((item) => {
+        const itemSeller = usersById.get(String(item.sellerId || "")) || null;
+        return {
+          ...item,
+          seller: itemSeller,
+          sellerName: this.snapshotDisplayName(itemSeller || {}) || item.sellerName || null,
+        };
+      }),
+    };
+  }
+
   async markOrderReturnRequested(order = {}, returnRequests = [], actor = {}) {
     if (!order?.id) return null;
     const metadata = this.parseJson(order.metadata, {});
@@ -321,8 +405,12 @@ class ReturnServiceClass {
   async assertCanView(returnRequest, actor) {
     if (this.isAdmin(actor) || returnRequest.buyerId === actor.userId) return;
     if (this.isSeller(actor)) {
-      const sellerId = String(actor.ownerSellerId || actor.userId);
-      if ((returnRequest.items || []).some((item) => String(item.sellerId) === sellerId)) return;
+      const sellerId = String(actor.ownerSellerId || actor.sellerId || actor.userId);
+      const organizationId = actor.organizationId ? String(actor.organizationId) : null;
+      if ((returnRequest.items || []).some((item) =>
+        String(item.sellerId) === sellerId &&
+        (!organizationId || !item.organizationId || String(item.organizationId) === organizationId),
+      )) return;
     }
     throw new AppError("You are not allowed to view this return", 403);
   }
@@ -330,9 +418,17 @@ class ReturnServiceClass {
   async assertCanManage(returnRequest, actor) {
     if (this.isAdmin(actor)) return;
     if (this.isSeller(actor)) {
-      const sellerId = String(actor.ownerSellerId || actor.userId);
+      const sellerId = String(actor.ownerSellerId || actor.sellerId || actor.userId);
       const itemSellerIds = new Set((returnRequest.items || []).map((item) => String(item.sellerId || "")));
-      if (itemSellerIds.size === 1 && itemSellerIds.has(sellerId)) return;
+      const itemOrganizationIds = new Set(
+        (returnRequest.items || [])
+          .map((item) => String(item.organizationId || returnRequest.organizationId || ""))
+          .filter(Boolean),
+      );
+      const organizationMatches = !actor.organizationId ||
+        itemOrganizationIds.size === 0 ||
+        (itemOrganizationIds.size <= 1 && itemOrganizationIds.has(String(actor.organizationId)));
+      if (itemSellerIds.size === 1 && itemSellerIds.has(sellerId) && organizationMatches) return;
     }
     throw new AppError("You are not allowed to manage this return", 403);
   }
@@ -471,6 +567,7 @@ class ReturnServiceClass {
         productSku: orderItem.product_sku || "",
         productImage: orderItem.product_image || "",
         sellerId: orderItem.seller_id || "",
+        organizationId: orderItem.organization_id || "",
         variantId: item.variantId || orderItem.variant_id || "",
         variantSku: item.variantSku || orderItem.variant_sku || "",
         quantity,
@@ -489,14 +586,17 @@ class ReturnServiceClass {
     const grouped = new Map();
     normalizedItems.forEach((item) => {
       const sellerId = String(item.sellerId || "platform");
-      if (!grouped.has(sellerId)) grouped.set(sellerId, []);
-      grouped.get(sellerId).push(item);
+      const organizationId = String(item.organizationId || "");
+      const key = `${sellerId}:${organizationId || "default"}`;
+      if (!grouped.has(key)) grouped.set(key, { sellerId, organizationId, items: [] });
+      grouped.get(key).items.push(item);
     });
 
     const buyerSnapshot = order.relations?.buyer || { id: buyerId };
     const shippingAddress = this.parseJson(order.shipping_address, {});
     const createdReturns = [];
-    for (const [sellerId, sellerItems] of grouped.entries()) {
+    for (const group of grouped.values()) {
+      const { sellerId, organizationId, items: sellerItems } = group;
       const refundBreakup = this.calculateRefundBreakup(sellerItems, order);
       this.allocateItemRefunds(sellerItems, refundBreakup.totalRefundAmount, { setEligible: true });
       const returnRequest = await ReturnModel.create({
@@ -504,6 +604,7 @@ class ReturnServiceClass {
         orderId,
         buyerId,
         sellerId,
+        organizationId: organizationId || null,
         items: sellerItems,
         reason,
         resolution: extra.resolution || "refund",
@@ -528,7 +629,7 @@ class ReturnServiceClass {
           actorRole: actor.role || "buyer",
           reason,
           note: description || null,
-          metadata: { sellerId, resolution: extra.resolution || "refund" },
+          metadata: { sellerId, organizationId: organizationId || null, resolution: extra.resolution || "refund" },
           at: new Date(),
         }],
       });
@@ -749,6 +850,14 @@ class ReturnServiceClass {
     await this.assertCanManage(returnRequest, actor);
     const shipmentId = payload.shipmentId || returnRequest.reverseShipment?.shipmentId;
     if (!shipmentId) throw new AppError("Reverse shipment has not been created", 409);
+    const reverseShipment = await this.deliveryRepository.findShipmentById(shipmentId);
+    if (!reverseShipment) throw new AppError("Reverse shipment not found", 404);
+    if (
+      String(reverseShipment.return_id || "") !== String(returnRequest._id || "") &&
+      String(returnRequest.reverseShipment?.shipmentId || "") !== String(reverseShipment.id || "")
+    ) {
+      throw new AppError("Shipment does not belong to this return", 403);
+    }
 
     const returnStatus = REVERSE_STATUS_MAP[payload.status];
     if (!returnStatus) throw new AppError("Unsupported reverse shipment status", 400);
@@ -989,6 +1098,9 @@ class ReturnServiceClass {
   async processRefund(returnId, actor = {}, payload = {}) {
     let returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
+    if (!this.isAdmin(actor)) {
+      throw new AppError("Only platform finance/admin users can process refunds", 403);
+    }
     if (returnRequest.refund?.status === "completed" || returnRequest.refundedAt) return returnRequest;
     if (!["qc_passed", "qc_completed", "refund_failed"].includes(returnRequest.status)) {
       throw new AppError("Refund can be processed only after accepted QC", 409);
@@ -1410,6 +1522,12 @@ class ReturnServiceClass {
   async closeReturn(returnId, payload, actor = {}) {
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
+    if (
+      returnRequest.status === "refund_pending" ||
+      ["pending", "provider_pending", "manual_review"].includes(returnRequest.refund?.status)
+    ) {
+      throw new AppError("Return cannot be closed while refund processing is pending", 409);
+    }
     this.validateTransition(returnRequest.status, "closed");
     returnRequest.status = "closed";
     returnRequest.closedAt = new Date();
@@ -1425,7 +1543,7 @@ class ReturnServiceClass {
   async getReturnById(returnId, actor = {}) {
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanView(returnRequest, actor);
-    const response = returnRequest.toObject();
+    let response = await this.enrichReturnDetail(returnRequest.toObject());
     if (response.reverseShipment?.shipmentId) {
       const shipment = await this.deliveryRepository.findShipmentById(response.reverseShipment.shipmentId);
       if (shipment) {
@@ -1473,8 +1591,21 @@ class ReturnServiceClass {
     }
     if (this.isAdmin(actor)) {
       if (query.sellerId) filter["items.sellerId"] = query.sellerId;
+      if (query.organizationId) filter["items.organizationId"] = query.organizationId;
     } else if (this.isSeller(actor)) {
-      filter["items.sellerId"] = actor.ownerSellerId || actor.userId;
+      filter["items.sellerId"] = actor.ownerSellerId || actor.sellerId || actor.userId;
+      if (actor.organizationId) {
+        filter.$and = [
+          ...(filter.$and || []),
+          {
+            $or: [
+              { "items.organizationId": actor.organizationId },
+              { "items.organizationId": { $exists: false } },
+              { "items.organizationId": "" },
+            ],
+          },
+        ];
+      }
     }
     if (!this.isAdmin(actor) && !this.isSeller(actor)) filter.buyerId = actor.userId;
     const limit = Math.min(Number(query.limit || 50), 200);

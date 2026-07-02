@@ -112,8 +112,11 @@ class OrderService {
     const metadata = this.normalizeJson(order.metadata, {});
     const tracking = trackingInfo || metadata.tracking || {};
     const itemsBySeller = this.groupOrderItemsBySeller(order.items || []);
+    const actorIsSeller = ["seller", "seller-admin", "seller-sub-admin"].includes(actor.role);
+    const actorSellerId = String(actor.ownerSellerId || actor.sellerId || actor.userId || "");
 
     for (const [sellerId, sellerItems] of itemsBySeller.entries()) {
+      if (actorIsSeller && String(sellerId) !== actorSellerId) continue;
       const fulfillment = this.getFulfillmentSnapshotForItems(sellerItems);
       await this.orderRepository.createShipment({
         orderId,
@@ -357,7 +360,7 @@ class OrderService {
   }
 
   async listSellerOrders(actor, filters = {}) {
-    const sellerId = actor.ownerSellerId || actor.userId;
+      const sellerId = actor.ownerSellerId || actor.sellerId || actor.userId;
     const scopedFilters = {
       ...filters,
       organizationId: filters.organizationId || actor.organizationId || null,
@@ -389,7 +392,7 @@ class OrderService {
 
     const isOwner = order.buyer_id === actor.userId;
     const isAdmin = ["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin;
-    const sellerId = actor.ownerSellerId || actor.userId;
+      const sellerId = actor.ownerSellerId || actor.sellerId || actor.userId;
     const isSeller = ["seller", "seller-admin", "seller-sub-admin"].includes(actor.role)
       ? await this.orderRepository.isSellerInOrder(orderId, sellerId)
       : false;
@@ -804,7 +807,7 @@ class OrderService {
     const isOwner = order.buyer_id === actor.userId;
     const isAdmin = ["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin;
     const isSeller = ["seller", "seller-admin", "seller-sub-admin"].includes(actor.role);
-    const sellerId = actor.ownerSellerId || actor.userId;
+    const sellerId = actor.ownerSellerId || actor.sellerId || actor.userId;
     const isOrderSeller = isSeller
       ? await this.orderRepository.isSellerInOrder(orderId, sellerId)
       : false;
@@ -870,6 +873,22 @@ class OrderService {
       }
       if (isSeller && !isOrderSeller) {
         throw new AppError("You are not allowed to manage this order", 403);
+      }
+      if (isSeller) {
+        const items = await this.orderRepository.findItemsByOrderId(orderId);
+        const sellerIds = new Set((items || []).map((item) => String(item.seller_id || "")).filter(Boolean));
+        if (sellerIds.size > 1) {
+          throw new AppError("Multi-seller order fulfillment must be managed from Seller Shipments, not aggregate order status", 409);
+        }
+        if (actor.organizationId) {
+          const sellerOrgMatch = (items || []).some((item) =>
+            String(item.seller_id || "") === String(sellerId) &&
+            String(item.organization_id || "") === String(actor.organizationId),
+          );
+          if (!sellerOrgMatch) {
+            throw new AppError("You are not allowed to manage this seller organization order", 403);
+          }
+        }
       }
       return;
     }
