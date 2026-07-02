@@ -11,6 +11,7 @@ const {
   updateProfileBody,
   listProfilesSchema,
   profileParamSchema,
+  bulkDeleteProfilesSchema,
 } = require("../validation/shipping-profiles.validation");
 
 const shippingProfilesRoutes = express.Router();
@@ -32,6 +33,15 @@ shippingProfilesRoutes.post(
   allowPermissions("delivery:create"),
   checkInput({ body: profileBody }),
   catchErrors(controller.create)
+);
+
+// Bulk delete
+shippingProfilesRoutes.post(
+  "/bulk-delete",
+  authenticate,
+  allowPermissions("delivery:delete"),
+  checkInput({ body: bulkDeleteProfilesSchema }),
+  catchErrors(controller.bulkDelete)
 );
 
 // Get single

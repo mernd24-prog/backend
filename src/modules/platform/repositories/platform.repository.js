@@ -226,6 +226,12 @@ class PlatformRepository {
     return ProductReviewModel.findOne({ productId, buyerId, orderId });
   }
 
+  async getProductReviewByProductAndBuyer(productId, buyerIds = []) {
+    const ids = Array.isArray(buyerIds) ? buyerIds.filter(Boolean) : [buyerIds].filter(Boolean);
+    if (!ids.length) return null;
+    return ProductReviewModel.findOne({ productId, buyerId: { $in: ids } }).sort({ createdAt: -1 });
+  }
+
   async createProductReview(payload) {
     return ProductReviewModel.create(payload);
   }

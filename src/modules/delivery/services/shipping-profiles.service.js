@@ -3,8 +3,10 @@
 const { v4: uuidv4 } = require("uuid");
 const { ShippingProfile } = require("../models/shipping-profile.model");
 const { Op } = require("sequelize");
+const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
 const { AppError } = require("../../../shared/errors/app-error");
 const { SellerOrganizationRepository } = require("../../seller/repositories/seller-organization.repository");
+const { UserModel } = require("../../user/models/user.model");
 
 const ADMIN_ROLES = new Set(["admin", "sub-admin", "super-admin", "super_admin"]);
 
@@ -42,11 +44,17 @@ class ShippingProfilesService {
       offset,
     });
 
+    const serializedRows = rows.map(this._serialize);
+    const sellerMap = await this._getSellerMap(serializedRows.map((profile) => profile.sellerId));
+
     return {
       total: count,
       limit,
       offset,
-      profiles: rows.map(this._serialize),
+      profiles: serializedRows.map((profile) => ({
+        ...profile,
+        seller: sellerMap.get(String(profile.sellerId)) || null,
+      })),
     };
   }
 
@@ -136,6 +144,21 @@ class ShippingProfilesService {
     this._assertAccess(profile, actor);
     await profile.destroy();
     return { deleted: true, profileId };
+  }
+
+  async bulkDelete(profileIds = [], actor) {
+    const ids = [...new Set((profileIds || []).map(String).filter(Boolean))];
+    if (!ids.length) throw new AppError("Select at least one shipping profile", 400);
+
+    const profiles = await ShippingProfile.findAll({ where: { id: { [Op.in]: ids } } });
+    if (profiles.length !== ids.length) {
+      throw new AppError("One or more shipping profiles were not found", 404);
+    }
+
+    profiles.forEach((profile) => this._assertAccess(profile, actor));
+    await ShippingProfile.destroy({ where: { id: { [Op.in]: ids } } });
+
+    return { deleted: true, deletedCount: ids.length, profileIds: ids };
   }
 
   async setDefault(profileId, actor) {
@@ -263,6 +286,35 @@ class ShippingProfilesService {
     if (String(profile.sellerId) !== String(this._getActorSellerId(actor))) {
       throw new AppError("Access denied to this shipping profile", 403);
     }
+  }
+
+  async _getSellerMap(sellerIds = []) {
+    const ids = [...new Set(sellerIds.map(String).filter(Boolean))]
+      .filter((id) => mongoose.Types.ObjectId.isValid(id));
+    if (!ids.length) return new Map();
+
+    const users = await UserModel.find({ _id: { $in: ids } })
+      .select("email phone profile sellerProfile")
+      .lean();
+
+    return new Map(users.map((user) => {
+      const id = String(user._id);
+      const name =
+        user.sellerProfile?.displayName ||
+        user.sellerProfile?.businessName ||
+        user.sellerProfile?.legalBusinessName ||
+        [user.profile?.firstName, user.profile?.lastName].filter(Boolean).join(" ") ||
+        user.email ||
+        id;
+
+      return [id, {
+        id,
+        name,
+        email: user.email || "",
+        phone: user.phone || "",
+        avatarUrl: user.profile?.avatarUrl || user.sellerProfile?.avatarUrl || "",
+      }];
+    }));
   }
 
   _serialize(profile) {

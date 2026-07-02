@@ -478,6 +478,21 @@ const listProductReviewsSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
+const createProductReviewSchema = Joi.object({
+  body: Joi.object({
+    productId: Joi.string().trim().required(),
+    buyerName: Joi.string().trim().max(120).allow("", null),
+    buyerId: Joi.string().trim().max(120).allow("", null),
+    rating: Joi.number().integer().min(1).max(5).required(),
+    title: Joi.string().trim().max(200).allow("", null),
+    reviewText: Joi.string().trim().max(2000).required(),
+    media: Joi.array().items(Joi.string().trim()).default([]),
+    status: Joi.string().valid("pending", "published", "hidden", "rejected").default("published"),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
 const updateProductReviewSchema = Joi.object({
   body: Joi.object({
     rating: Joi.number().min(1).max(5),
@@ -778,6 +793,7 @@ module.exports = {
   geographyParamSchema,
   geographyCodeSchema: geographyParamSchema,
   listProductReviewsSchema,
+  createProductReviewSchema,
   updateProductReviewSchema,
   bulkUpdateProductReviewsSchema,
   productReviewIdSchema,

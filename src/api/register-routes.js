@@ -45,6 +45,7 @@ function registerRoutes(app) {
   app.use(`${env.apiPrefix}/cancellations`, cancellationRoutes);
   app.use(`${env.apiPrefix}/payments`, paymentRoutes);
   app.use(`${env.apiPrefix}/platform`, platformRoutes);
+  app.use(`${env.apiPrefix}/admin/platform`, platformRoutes);
   app.use(`${env.apiPrefix}/cms`, cmsRoutes);
   app.use(`${env.apiPrefix}/sellers`, sellerRoutes);
   app.use(`${env.apiPrefix}/notifications`, notificationRoutes);

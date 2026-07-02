@@ -43,6 +43,7 @@ const {
   listProductOptionValuesSchema,
   productOptionValueIdSchema,
   listProductReviewsSchema,
+  createProductReviewSchema,
   updateProductReviewSchema,
   bulkUpdateProductReviewsSchema,
   productReviewIdSchema,
@@ -230,6 +231,13 @@ platformRoutes.get(
   allowActions(ACTIONS.CATALOG_REVIEW),
   checkInput(listProductReviewsSchema),
   catchErrors(platformController.listProductReviews),
+);
+platformRoutes.post(
+  "/product-reviews",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_REVIEW),
+  checkInput(createProductReviewSchema),
+  catchErrors(platformController.createProductReviewByAdmin),
 );
 platformRoutes.post(
   "/product-reviews/bulk-action",
