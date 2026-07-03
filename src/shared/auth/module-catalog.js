@@ -190,6 +190,18 @@ const MODULE_CATALOG = [
     apiPath: "/returns",
   },
   {
+    tab: "Support",
+    slug: "queries",
+    name: "Support Query Management",
+    description: "Customer and seller help/support queries",
+    icon: "life-buoy",
+    order: 6.5,
+    forPlatform: true,
+    forSeller: true,
+    apiPath: "/support",
+    apiAliases: ["/admin/support"],
+  },
+  {
     tab: "Payments & Finance",
     slug: "payments",
     name: "Payment Management",

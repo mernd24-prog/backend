@@ -44,6 +44,8 @@ const SIDEBAR_MODULES = [
   { moduleName: "Return Requests", moduleKey: "returns", moduleSlug: "returns", icon: "MdAssignmentReturn", routePath: "/app/returns", moduleType: "page", order: 91, parentModule: "returns-cancellations", requiredModule: "returns" },
   { moduleName: "Cancellations", moduleKey: "cancellations", moduleSlug: "cancellations", icon: "MdCancel", routePath: "/app/cancellations", moduleType: "page", order: 92, parentModule: "returns-cancellations", requiredModule: "cancellations" },
 
+  { moduleName: "Queries", moduleKey: "queries", moduleSlug: "queries", icon: "MdSupportAgent", routePath: "/app/queries", moduleType: "page", order: 93, parentModule: null, requiredModule: "queries" },
+
   { moduleName: "Invoices & Taxation", moduleKey: "invoices-taxation", moduleSlug: "invoices-taxation", icon: "MdReceiptLong", moduleType: "group", order: 94, parentModule: null, requiredModule: "tax" },
   { moduleName: "Tax Invoices", moduleKey: "tax-invoices", moduleSlug: "tax-invoices", icon: "MdReceiptLong", routePath: "/app/tax-invoices", moduleType: "page", order: 95, parentModule: "invoices-taxation", requiredModule: "tax" },
   { moduleName: "Credit Notes", moduleKey: "credit-notes", moduleSlug: "credit-notes", icon: "MdCreditScore", routePath: "/app/credit-notes", moduleType: "page", order: 96, parentModule: "invoices-taxation", requiredModule: "tax" },
@@ -174,6 +176,8 @@ const SELLER_SIDEBAR_MODULES = [
 
   { moduleName: "My Reports", moduleKey: "seller-reports-analytics", moduleSlug: "seller-reports-analytics", icon: "MdBarChart", moduleType: "group", order: 70, parentModule: null, requiredModule: "reports" },
   { moduleName: "Seller Reports", moduleKey: "seller-reports-sales", moduleSlug: "seller-reports-sales", icon: "MdTrendingUp", routePath: "/app/reports-sales", moduleType: "page", order: 71, parentModule: "seller-reports-analytics", requiredModule: "reports" },
+
+  { moduleName: "Help & Support", moduleKey: "seller-help-support", moduleSlug: "seller-help-support", icon: "MdSupportAgent", routePath: "/app/help-support", moduleType: "page", order: 80, parentModule: null, requiredModule: "queries" },
 ].map((module) => ({
   ...module,
   allowedRoles: ["seller", "seller-admin", "seller-sub-admin"],

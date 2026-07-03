@@ -299,6 +299,11 @@ const MODULE_ALIASES = {
   seller_sub_admins: "sellers",
   "charge-settings": "cod-config",
   charge_settings: "cod-config",
+  queries: "queries",
+  query: "queries",
+  support: "queries",
+  "help-support": "queries",
+  help_support: "queries",
 
 };
 
@@ -453,6 +458,8 @@ function getRequestModule(req) {
       analytics: "reports",
       reports: "reports",
       returns: "returns",
+      support: "queries",
+      queries: "queries",
       chargebacks: "fraud",
       referral: "referral",
       system: "admin",

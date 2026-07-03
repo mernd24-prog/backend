@@ -34,6 +34,8 @@ const { metaRoutes } = require("../shared/routes/meta.routes");
 const searchRoutes = require("../shared/routes/search.routes");
 const { commonManagementRoutes } = require("../modules/admin/routes/common-management.routes");
 const { commerceSettingsRoutes } = require("../modules/admin/routes/commerce-settings.routes");
+const { supportRoutes } = require("../modules/support/routes/support.routes");
+const { adminSupportRoutes } = require("../modules/support/routes/admin-support.routes");
 
 function registerRoutes(app) {
   app.use(`${env.apiPrefix}/auth`, authRoutes);
@@ -47,6 +49,7 @@ function registerRoutes(app) {
   app.use(`${env.apiPrefix}/platform`, platformRoutes);
   app.use(`${env.apiPrefix}/admin/platform`, platformRoutes);
   app.use(`${env.apiPrefix}/cms`, cmsRoutes);
+  app.use(`${env.apiPrefix}/support`, supportRoutes);
   app.use(`${env.apiPrefix}/sellers`, sellerRoutes);
   app.use(`${env.apiPrefix}/notifications`, notificationRoutes);
   app.use(`${env.apiPrefix}/analytics`, analyticsRoutes);
@@ -54,6 +57,7 @@ function registerRoutes(app) {
   app.use(`${env.apiPrefix}/coupons`, pricingRoutes);
   app.use(`${env.apiPrefix}/wallets`, walletRoutes);
   app.use(`${env.apiPrefix}/admin/commerce-settings`, commerceSettingsRoutes);
+  app.use(`${env.apiPrefix}/admin/support`, adminSupportRoutes);
   app.use(`${env.apiPrefix}/admin`, adminRoutes);
   app.use(`${env.apiPrefix}/tax`, taxRoutes);
   app.use(`${env.apiPrefix}/subscriptions`, subscriptionRoutes);

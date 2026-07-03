@@ -42,6 +42,7 @@ const ORGANIZATION_CONTEXT_OPTIONAL_PREFIXES = [
   "/sellers/me/settings",
   "/sellers/me/kyc",
   "/sellers/onboarding",
+  "/support",
 ];
 
 function isSuperAdminPayload(payload = {}) {
