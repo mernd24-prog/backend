@@ -894,7 +894,10 @@ class OrderService {
     }
 
     if (nextStatus === ORDER_STATUS.DELIVERED) {
-      throw new AppError("Delivery must be completed from shipment tracking or delivery verification", 409);
+      if (!isAdmin) {
+        throw new AppError("Only admin can mark an order delivered from order status", 403);
+      }
+      return;
     }
 
     if ([ORDER_STATUS.RETURN_REQUESTED, ORDER_STATUS.PARTIALLY_RETURNED, ORDER_STATUS.RETURNED].includes(nextStatus)) {
