@@ -248,6 +248,7 @@ class SellerRepository {
     const { rows } = await postgresPool.query(
       `SELECT
          oi.product_id,
+         COALESCE(MAX(NULLIF(oi.product_title, '')), MAX(NULLIF(oi.product_sku, '')), oi.product_id) AS name,
          COALESCE(SUM(oi.quantity), 0)::INT AS units_sold,
          COALESCE(SUM(oi.line_total), 0)::NUMERIC AS revenue
        FROM order_items oi
@@ -256,7 +257,7 @@ class SellerRepository {
          AND o.created_at BETWEEN $2 AND $3
          ${orgSql}
        GROUP BY oi.product_id
-       ORDER BY revenue DESC
+       ORDER BY revenue DESC, units_sold DESC
        LIMIT $4`,
       values,
     );

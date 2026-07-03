@@ -795,7 +795,13 @@ class SellerService {
         averageOrderValue: totalOrders > 0 ? Number((gmv / totalOrders).toFixed(2)) : 0,
         averageItemValue: Number(summary?.avg_item_value || 0),
       },
-      topProducts,
+      topProducts: topProducts.map((product) => ({
+        ...product,
+        productId: product.product_id,
+        name: product.name || product.title || product.product_id,
+        unitsSold: Number(product.units_sold || product.unitsSold || 0),
+        revenue: Number(product.revenue || 0),
+      })),
       recentOrders,
     };
   }
