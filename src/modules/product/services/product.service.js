@@ -25,6 +25,7 @@ const { logger } = require("../../../shared/logger/logger");
 const { PlatformRepository } = require("../../platform/repositories/platform.repository");
 const { PlatformService } = require("../../platform/services/platform.service");
 const { OrderRepository } = require("../../order/repositories/order.repository");
+const { DealRepository } = require("../../deal/repositories/deal.repository");
 const { WarehouseModel } = require("../../inventory/models/warehouse.model");
 const { UserModel } = require("../../user/models/user.model");
 const { sellerOrganizationService } = require("../../seller/services/seller-organization.service");
@@ -90,6 +91,9 @@ const PRODUCT_LIST_PROJECTION = {
   analytics: 1,
   "metadata.featured": 1,
   "metadata.codAvailable": 1,
+  "metadata.isDealProduct": 1,
+  "metadata.dealBadge": 1,
+  "metadata.dealSource": 1,
   revisionStatus: 1,
   pendingRevisionId: 1,
   createdAt: 1,
@@ -115,12 +119,14 @@ class ProductService {
     platformService = null,
     inventoryService = null,
     shippingProfilesService = null,
+    dealRepository = null,
   } = {}) {
     this.productRepository = productRepository;
     this.platformRepository = platformRepository;
     this.platformService = platformService || new PlatformService({ platformRepository });
     this.inventoryService = inventoryService || new InventoryService({ productRepository });
     this.shippingProfilesService = shippingProfilesService || new ShippingProfilesService();
+    this.dealRepository = dealRepository || new DealRepository();
   }
 
   // ─── Category & attribute helpers ─────────────────────────────────────────
@@ -1350,6 +1356,70 @@ class ProductService {
 
   // ─── List ─────────────────────────────────────────────────────────────────
 
+  buildProductWithActiveDeal(product = {}, deal = null) {
+    const plain = this.toPlainObject(product);
+    if (!deal) return plain;
+
+    const dealBadge = deal.metadata?.dealBadge || deal.metadata?.badge || "Deal";
+    const dealPrice = Number(deal.dealPrice || 0);
+    const originalPrice = Number(deal.originalPrice || plain.mrp || plain.price || 0);
+    const remainingQuantity = Math.max(
+      0,
+      Number(deal.allocatedQuantity || 0) -
+        Number(deal.soldQuantity || 0) -
+        Number(deal.reservedQuantity || 0),
+    );
+
+    return {
+      ...plain,
+      price: dealPrice || plain.price,
+      salePrice: dealPrice || plain.salePrice || plain.price,
+      sellingPrice: dealPrice || plain.sellingPrice || plain.salePrice || plain.price,
+      mrp: originalPrice || plain.mrp,
+      originalPrice: originalPrice || plain.originalPrice || plain.price,
+      compareAtPrice: originalPrice || plain.compareAtPrice || plain.mrp || plain.price,
+      discountPercent: Number(deal.discountPercent || 0),
+      metadata: {
+        ...(plain.metadata || {}),
+        isDealProduct: true,
+        dealBadge,
+        dealSource: deal.metadata?.dealSource || null,
+      },
+      deal: {
+        dealId: deal.id || deal.dealId,
+        dealNumber: deal.dealNumber,
+        title: deal.title,
+        badge: dealBadge,
+        source: deal.metadata?.dealSource || null,
+        dealType: deal.dealType,
+        originalPrice,
+        dealPrice,
+        discountPercent: Number(deal.discountPercent || 0),
+        allocatedQuantity: Number(deal.allocatedQuantity || 0),
+        soldQuantity: Number(deal.soldQuantity || 0),
+        reservedQuantity: Number(deal.reservedQuantity || 0),
+        remainingQuantity,
+        maxQuantityPerOrder: deal.maxQuantityPerOrder,
+        startAt: deal.startAt,
+        endAt: deal.endAt,
+      },
+    };
+  }
+
+  async enrichProductsWithActiveDeals(items = []) {
+    const plainItems = items.map((item) => this.toPlainObject(item));
+    const productIds = plainItems.map((item) => String(item._id || item.id || "")).filter(Boolean);
+    if (!productIds.length) return plainItems;
+
+    const deals = await this.dealRepository.findActiveDealsForProducts(productIds).catch(() => []);
+    if (!deals.length) return plainItems;
+
+    const dealByProductId = new Map(deals.map((deal) => [String(deal.productId || deal.product_id || ""), deal]));
+    return plainItems.map((item) =>
+      this.buildProductWithActiveDeal(item, dealByProductId.get(String(item._id || item.id || ""))),
+    );
+  }
+
   async listProducts(query, { publicOnly = true, actor = null } = {}) {
     const pagination = { ...getPage(query), sortBy: query.sortBy || query.sort, sortDir: query.sortDir };
     const filter = {};
@@ -1428,12 +1498,16 @@ class ProductService {
     const publicFilter = applyPublicProductFilter(filter);
     const projection = buildProductListProjection(query);
     const cacheKey = `products:${JSON.stringify({ filter: publicFilter, pagination, projection })}`;
-    return remember(cacheKey, 60, () =>
+    const result = await remember(cacheKey, 60, () =>
       this.productRepository.paginate(publicFilter, pagination, {
         projection,
         lean: true,
       }),
     );
+    return {
+      ...result,
+      items: await this.enrichProductsWithActiveDeals(result.items || []),
+    };
   }
 
   async listSellerProducts(query, actor) {
@@ -1723,7 +1797,8 @@ class ProductService {
       applyPublicProductFilter({ _id: productId }),
     );
     if (!product) throw new AppError("Product not found", 404);
-    return product;
+    const [enriched] = await this.enrichProductsWithActiveDeals([product]);
+    return enriched || product;
   }
 
   async getProductForManagement(productId, actor = {}) {

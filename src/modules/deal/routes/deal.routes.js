@@ -17,6 +17,7 @@ const {
   sponsorshipUpdateSchema,
   sponsorshipParamSchema,
   placementSchema,
+  publicDealProductsSchema,
   analyticsSchema,
   payoutGenerateSchema,
   payoutListSchema,
@@ -31,6 +32,12 @@ dealRoutes.get(
   "/public/placements",
   checkInput(placementSchema),
   catchErrors(dealController.publicPlacements),
+);
+
+dealRoutes.get(
+  "/public/products",
+  checkInput(publicDealProductsSchema),
+  catchErrors(dealController.publicDealProducts),
 );
 
 dealRoutes.get(

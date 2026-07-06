@@ -4,6 +4,7 @@ const { AppError } = require("../../../shared/errors/app-error");
 const { DealRepository } = require("../repositories/deal.repository");
 const { ProductRepository } = require("../../product/repositories/product.repository");
 const { NotificationRepository } = require("../../notification/repositories/notification.repository");
+const { UserModel } = require("../../user/models/user.model");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
@@ -42,6 +43,55 @@ class DealService {
       return { ...query, sellerId: this.sellerIdFor(actor) };
     }
     return query;
+  }
+
+  getSellerDisplayName(user = {}) {
+    const fullName = [user.profile?.firstName, user.profile?.lastName].filter(Boolean).join(" ").trim();
+    return user.sellerProfile?.displayName ||
+      user.sellerProfile?.businessName ||
+      user.sellerProfile?.legalBusinessName ||
+      fullName ||
+      user.email ||
+      String(user._id || "");
+  }
+
+  async getSellerSummaries(sellerIds = []) {
+    const ids = Array.from(new Set(
+      sellerIds
+        .map((sellerId) => String(sellerId || ""))
+        .filter((sellerId) => UserModel.base.Types.ObjectId.isValid(sellerId)),
+    ));
+    if (!ids.length) return new Map();
+
+    const users = await UserModel.find({ _id: { $in: ids } })
+      .select("email phone profile sellerProfile accountStatus")
+      .lean()
+      .catch(() => []);
+
+    return new Map(users.map((user) => {
+      const displayName = this.getSellerDisplayName(user);
+      return [String(user._id), {
+        id: String(user._id),
+        displayName,
+        businessName: user.sellerProfile?.businessName || user.sellerProfile?.legalBusinessName || null,
+        email: user.email || null,
+        phone: user.phone || null,
+        status: user.accountStatus || null,
+      }];
+    }));
+  }
+
+  async enrichDealsWithSellers(deals = []) {
+    if (!deals.length) return deals;
+    const sellersById = await this.getSellerSummaries(deals.map((deal) => deal.sellerId || deal.seller_id));
+    return deals.map((deal) => {
+      const seller = sellersById.get(String(deal.sellerId || deal.seller_id || "")) || null;
+      return {
+        ...deal,
+        seller,
+        sellerName: seller?.displayName || null,
+      };
+    });
   }
 
   async assertDealVisible(deal, actor = {}) {
@@ -111,13 +161,18 @@ class DealService {
 
   async listDeals(query = {}, actor = {}) {
     await this.dealRepository.expireDueDeals({ userId: "system", role: "system" }).catch(() => null);
-    return this.dealRepository.listDeals(this.scopeListQuery(query, actor));
+    const result = await this.dealRepository.listDeals(this.scopeListQuery(query, actor));
+    return {
+      ...result,
+      items: await this.enrichDealsWithSellers(result.items || []),
+    };
   }
 
   async getDeal(dealId, actor = {}) {
     const deal = await this.dealRepository.getDealDetail(dealId);
     await this.assertDealVisible(deal, actor);
-    return deal;
+    const [enriched] = await this.enrichDealsWithSellers(deal ? [deal] : []);
+    return enriched || deal;
   }
 
   async createDeal(payload = {}, actor = {}) {
@@ -363,6 +418,147 @@ class DealService {
 
   async getPublicPlacements(query = {}) {
     return this.dealRepository.listActivePlacements(query);
+  }
+
+  normalizeProductForDeal(product = {}) {
+    const raw = typeof product.toObject === "function" ? product.toObject() : product;
+    return {
+      ...raw,
+      id: String(raw._id || raw.id || ""),
+      _id: raw._id,
+    };
+  }
+
+  productMatchesDealFilters(product = {}, query = {}) {
+    const search = String(query.q || query.search || "").trim().toLowerCase();
+    if (search) {
+      const haystack = [
+        product.title,
+        product.name,
+        product.description,
+        product.sku,
+        product.brand,
+        product.category,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    if (query.category && String(product.category || product.categoryId || "") !== String(query.category)) {
+      return false;
+    }
+    if (query.brand && String(product.brand || "").toLowerCase() !== String(query.brand).toLowerCase()) {
+      return false;
+    }
+    return true;
+  }
+
+  sortDealProducts(items = [], sort = "") {
+    const sorted = [...items];
+    if (sort === "price_asc") {
+      return sorted.sort((left, right) => Number(left.price || 0) - Number(right.price || 0));
+    }
+    if (sort === "price_desc") {
+      return sorted.sort((left, right) => Number(right.price || 0) - Number(left.price || 0));
+    }
+    if (sort === "ending_soon") {
+      return sorted.sort((left, right) => new Date(left.deal?.endAt || 0) - new Date(right.deal?.endAt || 0));
+    }
+    if (sort === "discount") {
+      return sorted.sort((left, right) => Number(right.discountPercent || 0) - Number(left.discountPercent || 0));
+    }
+    return sorted;
+  }
+
+  async getPublicDealProducts(query = {}) {
+    await this.dealRepository.expireDueDeals({ userId: "system", role: "system" }).catch(() => null);
+
+    const page = Math.max(1, Number(query.page || 1));
+    const limit = Math.min(100, Math.max(1, Number(query.limit || 12)));
+    const dealRows = await this.dealRepository.listActiveDealProducts({
+      sellerId: query.sellerId,
+      productId: query.productId,
+      dealType: query.dealType,
+      sortBy: ["price_asc", "price_desc", "ending_soon", "discount"].includes(query.sort)
+        ? "priority"
+        : query.sortBy,
+      sortDir: query.sortDir,
+      limit: 500,
+    });
+
+    const productIds = Array.from(new Set(dealRows.map((deal) => String(deal.productId)).filter(Boolean)));
+    const products = await this.productRepository.findByIds(productIds);
+    const productById = new Map(
+      products.map((product) => {
+        const normalized = this.normalizeProductForDeal(product);
+        return [String(normalized._id || normalized.id), normalized];
+      }),
+    );
+
+    const items = dealRows
+      .map((deal) => {
+        const product = productById.get(String(deal.productId));
+        if (!product || product.status !== "active") return null;
+        if (!this.productMatchesDealFilters(product, query)) return null;
+
+        const dealBadge = deal.metadata?.dealBadge || deal.metadata?.badge || "Deal";
+        const remainingQuantity = Math.max(
+          0,
+          Number(deal.allocatedQuantity || 0) -
+            Number(deal.soldQuantity || 0) -
+            Number(deal.reservedQuantity || 0),
+        );
+
+        return {
+          ...product,
+          id: String(product._id || product.id),
+          productId: String(product._id || product.id),
+          price: Number(deal.dealPrice || 0),
+          salePrice: Number(deal.dealPrice || 0),
+          sellingPrice: Number(deal.dealPrice || 0),
+          mrp: Number(deal.originalPrice || product.mrp || product.price || 0),
+          originalPrice: Number(deal.originalPrice || product.price || 0),
+          compareAtPrice: Number(deal.originalPrice || product.mrp || product.price || 0),
+          discountPercent: Number(deal.discountPercent || 0),
+          metadata: {
+            ...(product.metadata || {}),
+            isDealProduct: true,
+            dealBadge,
+            dealSource: deal.metadata?.dealSource || null,
+          },
+          deal: {
+            dealId: deal.id,
+            dealNumber: deal.dealNumber,
+            title: deal.title,
+            badge: dealBadge,
+            source: deal.metadata?.dealSource || null,
+            dealType: deal.dealType,
+            originalPrice: Number(deal.originalPrice || 0),
+            dealPrice: Number(deal.dealPrice || 0),
+            discountPercent: Number(deal.discountPercent || 0),
+            allocatedQuantity: Number(deal.allocatedQuantity || 0),
+            soldQuantity: Number(deal.soldQuantity || 0),
+            reservedQuantity: Number(deal.reservedQuantity || 0),
+            remainingQuantity,
+            maxQuantityPerOrder: deal.maxQuantityPerOrder,
+            startAt: deal.startAt,
+            endAt: deal.endAt,
+          },
+        };
+      })
+      .filter(Boolean);
+
+    const sortedItems = this.sortDealProducts(items, query.sort);
+    const total = sortedItems.length;
+    const offset = (page - 1) * limit;
+    return {
+      items: sortedItems.slice(offset, offset + limit),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit) || 0,
+    };
   }
 
   async getAnalytics(query = {}, actor = {}) {

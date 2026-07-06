@@ -119,6 +119,22 @@ const placementSchema = {
     limit: Joi.number().integer().min(1).max(100).default(20),
   }),
 };
+const publicDealProductsSchema = {
+  query: Joi.object({
+    q: Joi.string().trim().allow("").max(180).optional(),
+    search: Joi.string().trim().allow("").max(180).optional(),
+    category: Joi.string().trim().allow("").max(180).optional(),
+    brand: Joi.string().trim().allow("").max(180).optional(),
+    sellerId: id.optional(),
+    productId: id.optional(),
+    dealType: Joi.string().valid(...Object.values(DEAL_TYPE)).optional(),
+    sort: Joi.string().valid("newest", "price_asc", "price_desc", "ending_soon", "discount").default("ending_soon"),
+    sortBy: Joi.string().valid("priority", "created_at", "start_at", "end_at", "deal_price", "discount_percent", "sold_quantity").default("priority"),
+    sortDir: Joi.string().valid("asc", "desc").default("asc"),
+    page: Joi.number().integer().min(1).default(1),
+    limit: Joi.number().integer().min(1).max(100).default(12),
+  }),
+};
 const analyticsSchema = {
   query: Joi.object({
     sellerId: id.optional(),
@@ -170,6 +186,7 @@ module.exports = {
   sponsorshipUpdateSchema,
   sponsorshipParamSchema,
   placementSchema,
+  publicDealProductsSchema,
   analyticsSchema,
   payoutGenerateSchema,
   payoutListSchema,
