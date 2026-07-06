@@ -109,9 +109,14 @@ class SellerCommissionService {
 
   buildDateRange(periodStart, periodEnd) {
     const now = new Date();
+    const toDateOnly = (value, fallback) => {
+      if (!value) return fallback;
+      const date = value instanceof Date ? value : new Date(value);
+      return Number.isNaN(date.getTime()) ? fallback : date.toISOString().slice(0, 10);
+    };
     return {
-      periodStart: periodStart || new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10),
-      periodEnd: periodEnd || now.toISOString().slice(0, 10),
+      periodStart: toDateOnly(periodStart, new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10)),
+      periodEnd: toDateOnly(periodEnd, now.toISOString().slice(0, 10)),
     };
   }
 

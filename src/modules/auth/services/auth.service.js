@@ -530,7 +530,7 @@ class AuthService {
   }
 
 
-  async login(payload, requestContext = {}) {
+  async login(payload, requestContext = {}, options = {}) {
     const user = await this.authRepository.findUserByEmail(payload.email);
     if (!user) {
       await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
@@ -567,6 +567,10 @@ class AuthService {
       throw new AppError("Invalid credentials", 401);
     }
 
+    const influencerSession = options.requireInfluencer
+      ? await this.referralService.getInfluencerSessionByUserId(user.id)
+      : null;
+
     const sellerFlowState = await this.getSellerLoginFlowState(user);
     if (sellerFlowState?.requiresOnboarding) {
       return this.makeOnboardingResponse(user);
@@ -584,7 +588,12 @@ class AuthService {
     }
 
     await this.authRepository.updateLastLogin(user.id, new Date());
-    return this.issueTokens(user, requestContext, "password");
+    const result = await this.issueTokens(user, requestContext, "password");
+    return influencerSession ? { ...result, influencer: influencerSession } : result;
+  }
+
+  async loginInfluencer(payload, requestContext = {}) {
+    return this.login(payload, requestContext, { requireInfluencer: true });
   }
 
   async socialLogin(payload, requestContext = {}) {

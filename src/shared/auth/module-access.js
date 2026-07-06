@@ -136,7 +136,7 @@ const MODULE_ALIASES = {
   "promotions-banners": "banners",
   promotions_banners: "banners",
   banners: "banners",
-  "content-management": "cms_pages",
+  
   content_management: "cms_pages",
   "cms-pages": "cms_pages",
   cms_pages: "cms_pages",

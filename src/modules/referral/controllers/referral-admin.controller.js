@@ -145,6 +145,58 @@ class ReferralAdminController {
     res.json(okResponse(rules));
   };
 
+  listBonusRules = async (req, res) => {
+    const result = await this.referralService.listBonusRules(req.query);
+    res.json(
+      okResponse(result.items, {
+        total: result.total,
+        page: result.page,
+        limit: result.limit,
+      }),
+    );
+  };
+
+  createBonusRule = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const rule = await this.referralService.createBonusRule(req.body, actor);
+    res.status(201).json(okResponse(rule));
+  };
+
+  updateBonusRule = async (req, res) => {
+    const rule = await this.referralService.updateBonusRule(
+      req.params.ruleId,
+      req.body,
+    );
+    res.json(okResponse(rule));
+  };
+
+  listBonusAchievements = async (req, res) => {
+    const result = await this.referralService.listBonusAchievements(req.query);
+    res.json(
+      okResponse(result.items, {
+        total: result.total,
+        page: result.page,
+        limit: result.limit,
+      }),
+    );
+  };
+
+  bonusProgressReport = async (req, res) => {
+    const result = await this.referralService.getBonusProgressReport(req.query);
+    res.json(
+      okResponse(result.items, {
+        total: result.total,
+        page: result.page,
+        limit: result.limit,
+      }),
+    );
+  };
+
+  evaluateBonusRules = async (req, res) => {
+    const result = await this.referralService.evaluateBonusRules(req.body);
+    res.json(okResponse(result));
+  };
+
   summaryReport = async (req, res) => {
     const report = await this.referralService.getSummaryReport();
     res.json(okResponse(report));

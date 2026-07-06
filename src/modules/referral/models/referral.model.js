@@ -49,7 +49,7 @@ const influencerProfileSchema = new mongoose.Schema(
 influencerProfileSchema.index({ parentInfluencerId: 1, status: 1 });
 influencerProfileSchema.index({ rootInfluencerId: 1, level: 1 });
 
-const referralCodeSchema = new mongoose.Schema(
+const influencerCodeSchema = new mongoose.Schema(
   {
     influencerId: { type: String, required: true, index: true },
     userId: { type: String, required: true, index: true },
@@ -61,8 +61,6 @@ const referralCodeSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
-    discountPercent: { type: Number, default: 5, min: 0, max: 100 },
-    maxDiscountAmount: { type: Number, default: 0, min: 0 },
     status: {
       type: String,
       enum: ["active", "inactive", "expired", "suspended"],
@@ -79,13 +77,14 @@ const referralCodeSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-referralCodeSchema.index({ influencerId: 1, status: 1 });
+influencerCodeSchema.index({ influencerId: 1, status: 1 });
 
 const referralOrderSchema = new mongoose.Schema(
   {
     orderId: { type: String, required: true, unique: true, index: true },
     customerId: { type: String, required: true, index: true },
-    referralCodeId: { type: String, required: true, index: true },
+    influencerCodeId: { type: String, required: true, index: true },
+    referralCodeId: { type: String, default: null, index: true },
     code: { type: String, required: true, uppercase: true, trim: true, index: true },
     codeOwnerInfluencerId: { type: String, required: true, index: true },
     directParentInfluencerId: { type: String, default: null, index: true },
@@ -120,7 +119,10 @@ const referralCommissionLedgerSchema = new mongoose.Schema(
         "code_owner_bonus",
         "direct_parent",
         "lifetime_override",
+        "performance_bonus",
         "reversal",
+        "withdrawal",
+        "coin_expiry",
         "manual_adjustment",
       ],
       required: true,
@@ -138,6 +140,7 @@ const referralCommissionLedgerSchema = new mongoose.Schema(
         "payout_requested",
         "paid",
         "reversed",
+        "expired",
       ],
       default: "pending",
       index: true,
@@ -159,6 +162,7 @@ const influencerWalletSchema = new mongoose.Schema(
     availableBalance: { type: Number, default: 0 },
     paidBalance: { type: Number, default: 0 },
     reversedBalance: { type: Number, default: 0 },
+    expiredBalance: { type: Number, default: 0 },
   },
   { timestamps: true },
 );
@@ -191,48 +195,47 @@ const influencerPayoutRequestSchema = new mongoose.Schema(
 
 influencerPayoutRequestSchema.index({ influencerId: 1, status: 1 });
 
-const monthlyBonusTierSchema = new mongoose.Schema(
-  {
-    fromAmount: { type: Number, default: 0, min: 0 },
-    toAmount: { type: Number, default: null, min: 0 },
-    bonusPercent: { type: Number, default: 0, min: 0, max: 100 },
-  },
-  { _id: false },
-);
-
 const referralCommissionRuleSchema = new mongoose.Schema(
   {
-    customerDiscountPercent: { type: Number, default: 5, min: 0, max: 100 },
-    codeOwnerBasePercent: { type: Number, default: 3, min: 0, max: 100 },
-    directParentPercent: { type: Number, default: 2, min: 0, max: 100 },
-    lifetimeOverridePercent: { type: Number, default: 0.5, min: 0, max: 100 },
+    distributionType: {
+      type: String,
+      enum: ["fixed_amount", "percentage"],
+      default: "percentage",
+      index: true,
+    },
+    referralPoolAmount: { type: Number, default: 0, min: 0 },
+    referralPoolPercent: { type: Number, default: 10, min: 0, max: 100 },
+    maximumReferralPoolAmount: { type: Number, default: 0, min: 0 },
+    coinValue: { type: Number, default: 1, min: 0.000001 },
+    coinExpiryDays: { type: Number, default: 365, min: 0 },
+    coinUsage: {
+      type: String,
+      enum: ["wallet", "discount", "both"],
+      default: "wallet",
+    },
+    customerSharePercent: { type: Number, default: 50, min: 0, max: 100 },
+    childSharePercent: { type: Number, default: 30, min: 0, max: 100 },
+    parentSharePercent: { type: Number, default: 20, min: 0, max: 100 },
     releaseDelayDays: { type: Number, default: 7, min: 0 },
-    yearlyPromotionThreshold: { type: Number, default: 10000000, min: 0 },
-    overrideMode: {
+    minimumWithdrawalCoins: { type: Number, default: 0, min: 0 },
+    maximumWithdrawalCoins: { type: Number, default: 0, min: 0 },
+    dailyWithdrawalLimitCoins: { type: Number, default: 0, min: 0 },
+    monthlyWithdrawalLimitCoins: { type: Number, default: 0, min: 0 },
+    withdrawalKycRequired: { type: Boolean, default: true },
+    withdrawalApprovalMode: {
       type: String,
-      enum: ["nearest_only", "stacked"],
-      default: "nearest_only",
+      enum: ["manual", "auto"],
+      default: "manual",
     },
-    overrideScope: {
-      type: String,
-      enum: ["promoted_subtree", "direct_sales_only"],
-      default: "promoted_subtree",
+    withdrawalMethods: {
+      type: [String],
+      enum: ["upi", "bank", "manual"],
+      default: ["upi", "bank", "manual"],
     },
-    couponStackAllowed: { type: Boolean, default: false },
     minOrderAmount: { type: Number, default: 0, min: 0 },
-    maxDiscountAmount: { type: Number, default: 0, min: 0 },
     active: { type: Boolean, default: true, index: true },
     effectiveFrom: { type: Date, default: Date.now },
     effectiveTo: { type: Date, default: null },
-    monthlyBonusTiers: {
-      type: [monthlyBonusTierSchema],
-      default: [
-        { fromAmount: 0, toAmount: 100000, bonusPercent: 0 },
-        { fromAmount: 100000, toAmount: 500000, bonusPercent: 0.5 },
-        { fromAmount: 500000, toAmount: 1000000, bonusPercent: 1 },
-        { fromAmount: 1000000, toAmount: null, bonusPercent: 2 },
-      ],
-    },
     metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   { timestamps: true },
@@ -261,11 +264,126 @@ const referralFraudReviewSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+const influencerBonusRuleSchema = new mongoose.Schema(
+  {
+    ruleName: { type: String, required: true, trim: true },
+    period: {
+      type: String,
+      enum: ["monthly", "quarterly", "yearly", "custom"],
+      default: "monthly",
+      index: true,
+    },
+    customStartAt: { type: Date, default: null },
+    customEndAt: { type: Date, default: null },
+    targetType: {
+      type: String,
+      enum: ["order_value", "order_count", "customer_count", "active_children"],
+      default: "order_value",
+      index: true,
+    },
+    targetValue: { type: Number, required: true, min: 0 },
+    bonusType: {
+      type: String,
+      enum: ["fixed_coins", "percentage_extra_coins"],
+      default: "fixed_coins",
+    },
+    bonusValue: { type: Number, required: true, min: 0 },
+    applyTo: {
+      type: String,
+      enum: ["code_owner", "parent", "child", "all_eligible_influencers"],
+      default: "code_owner",
+      index: true,
+    },
+    resetCycle: {
+      type: String,
+      enum: ["monthly", "quarterly", "yearly"],
+      default: "monthly",
+    },
+    releaseRule: {
+      type: String,
+      enum: [
+        "instantly_available",
+        "locked_until_all_related_orders_fulfilled",
+        "locked_until_period_ends",
+      ],
+      default: "instantly_available",
+    },
+    status: {
+      type: String,
+      enum: ["active", "inactive"],
+      default: "active",
+      index: true,
+    },
+    createdBy: { type: String, default: null },
+    metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
+  },
+  { timestamps: true },
+);
+
+influencerBonusRuleSchema.index({ status: 1, period: 1, resetCycle: 1 });
+
+const influencerBonusAchievementSchema = new mongoose.Schema(
+  {
+    ruleId: { type: String, required: true, index: true },
+    ruleName: { type: String, required: true },
+    influencerId: { type: String, required: true, index: true },
+    cycleKey: { type: String, required: true, index: true },
+    periodStart: { type: Date, required: true, index: true },
+    periodEnd: { type: Date, required: true, index: true },
+    targetType: {
+      type: String,
+      enum: ["order_value", "order_count", "customer_count", "active_children"],
+      required: true,
+    },
+    targetValue: { type: Number, required: true, min: 0 },
+    achievedValue: { type: Number, default: 0, min: 0 },
+    bonusType: {
+      type: String,
+      enum: ["fixed_coins", "percentage_extra_coins"],
+      required: true,
+    },
+    bonusValue: { type: Number, required: true, min: 0 },
+    bonusCoins: { type: Number, required: true, min: 0 },
+    applyTo: {
+      type: String,
+      enum: ["code_owner", "parent", "child", "all_eligible_influencers"],
+      required: true,
+    },
+    releaseRule: {
+      type: String,
+      enum: [
+        "instantly_available",
+        "locked_until_all_related_orders_fulfilled",
+        "locked_until_period_ends",
+      ],
+      required: true,
+    },
+    status: {
+      type: String,
+      enum: ["locked", "released", "reversed"],
+      default: "locked",
+      index: true,
+    },
+    ledgerEntryId: { type: String, default: null, index: true },
+    achievedAt: { type: Date, default: Date.now },
+    releasedAt: { type: Date, default: null },
+    metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
+  },
+  { timestamps: true },
+);
+
+influencerBonusAchievementSchema.index(
+  { ruleId: 1, influencerId: 1, cycleKey: 1 },
+  { unique: true },
+);
+influencerBonusAchievementSchema.index({ influencerId: 1, periodStart: -1 });
+
 const InfluencerProfileModel = mongoose.model(
   "InfluencerProfile",
   influencerProfileSchema,
 );
-const ReferralCodeModel = mongoose.model("ReferralCode", referralCodeSchema);
+const InfluencerCodeModel = mongoose.model("InfluencerCode", influencerCodeSchema);
+const ReferralCodeModel = InfluencerCodeModel;
 const ReferralOrderModel = mongoose.model("ReferralOrder", referralOrderSchema);
 const ReferralCommissionLedgerModel = mongoose.model(
   "ReferralCommissionLedger",
@@ -287,10 +405,19 @@ const ReferralFraudReviewModel = mongoose.model(
   "ReferralFraudReview",
   referralFraudReviewSchema,
 );
+const InfluencerBonusRuleModel = mongoose.model(
+  "InfluencerBonusRule",
+  influencerBonusRuleSchema,
+);
+const InfluencerBonusAchievementModel = mongoose.model(
+  "InfluencerBonusAchievement",
+  influencerBonusAchievementSchema,
+);
 
 module.exports = {
   ReferralModel,
   InfluencerProfileModel,
+  InfluencerCodeModel,
   ReferralCodeModel,
   ReferralOrderModel,
   ReferralCommissionLedgerModel,
@@ -298,4 +425,6 @@ module.exports = {
   InfluencerPayoutRequestModel,
   ReferralCommissionRuleModel,
   ReferralFraudReviewModel,
+  InfluencerBonusRuleModel,
+  InfluencerBonusAchievementModel,
 };

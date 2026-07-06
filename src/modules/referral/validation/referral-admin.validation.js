@@ -23,13 +23,17 @@ const ledgerStatuses = [
   "payout_requested",
   "paid",
   "reversed",
+  "expired",
 ];
 const commissionTypes = [
   "code_owner_base",
   "code_owner_bonus",
   "direct_parent",
   "lifetime_override",
+  "performance_bonus",
   "reversal",
+  "withdrawal",
+  "coin_expiry",
   "manual_adjustment",
 ];
 const payoutStatuses = [
@@ -40,6 +44,22 @@ const payoutStatuses = [
   "paid",
   "failed",
 ];
+const bonusPeriods = ["monthly", "quarterly", "yearly", "custom"];
+const bonusTargetTypes = ["order_value", "order_count", "customer_count", "active_children"];
+const bonusTypes = ["fixed_coins", "percentage_extra_coins"];
+const bonusApplyTo = ["code_owner", "parent", "child", "all_eligible_influencers"];
+const bonusResetCycles = ["monthly", "quarterly", "yearly"];
+const bonusReleaseRules = [
+  "instantly_available",
+  "locked_until_all_related_orders_fulfilled",
+  "locked_until_period_ends",
+];
+const bonusStatuses = ["active", "inactive"];
+const bonusAchievementStatuses = ["locked", "released", "reversed"];
+const distributionTypes = ["fixed_amount", "percentage"];
+const coinUsageModes = ["wallet", "discount", "both"];
+const withdrawalApprovalModes = ["manual", "auto"];
+const withdrawalMethods = ["upi", "bank", "manual"];
 
 const newInfluencerBody = {
   userId: Joi.string(),
@@ -59,8 +79,6 @@ const newInfluencerBody = {
   payoutProfileStatus: Joi.string().allow("", null),
   yearlySalesAmount: Joi.number().min(0),
   code: Joi.string().trim().uppercase(),
-  discountPercent: Joi.number().min(0).max(100),
-  maxDiscountAmount: Joi.number().min(0),
   startsAt: Joi.date().iso().allow(null),
   expiresAt: Joi.date().iso().allow(null),
   usageLimit: Joi.number().integer().min(1).allow(null),
@@ -114,8 +132,6 @@ const promoteInfluencerSchema = Joi.object({
     promotedAt: Joi.date().iso(),
     note: Joi.string().allow("", null),
     code: Joi.string().trim().uppercase(),
-    discountPercent: Joi.number().min(0).max(100),
-    maxDiscountAmount: Joi.number().min(0),
   }).default({}),
   query: Joi.object({}).required(),
   params: Joi.object({
@@ -137,8 +153,6 @@ const createCodeSchema = Joi.object({
   body: Joi.object({
     influencerId: Joi.string().required(),
     code: Joi.string().trim().uppercase(),
-    discountPercent: Joi.number().min(0).max(100),
-    maxDiscountAmount: Joi.number().min(0),
     status: Joi.string().valid(...codeStatuses),
     startsAt: Joi.date().iso().allow(null),
     expiresAt: Joi.date().iso().allow(null),
@@ -152,8 +166,6 @@ const createCodeSchema = Joi.object({
 const updateCodeSchema = Joi.object({
   body: Joi.object({
     code: Joi.string().trim().uppercase(),
-    discountPercent: Joi.number().min(0).max(100),
-    maxDiscountAmount: Joi.number().min(0),
     status: Joi.string().valid(...codeStatuses),
     startsAt: Joi.date().iso().allow(null),
     expiresAt: Joi.date().iso().allow(null),
@@ -202,6 +214,8 @@ const listPayoutsSchema = Joi.object({
     ...pagingQuery,
     status: Joi.string().valid(...payoutStatuses),
     influencerId: Joi.string(),
+    fromDate: Joi.date().iso(),
+    toDate: Joi.date().iso(),
   }).required(),
   params: Joi.object({}).required(),
 });
@@ -230,31 +244,114 @@ const listRulesSchema = Joi.object({
 
 const upsertRulesSchema = Joi.object({
   body: Joi.object({
-    customerDiscountPercent: Joi.number().min(0).max(100),
-    codeOwnerBasePercent: Joi.number().min(0).max(100),
-    directParentPercent: Joi.number().min(0).max(100),
-    lifetimeOverridePercent: Joi.number().min(0).max(100),
+    distributionType: Joi.string().valid(...distributionTypes),
+    referralPoolAmount: Joi.number().min(0),
+    referralPoolPercent: Joi.number().min(0).max(100),
+    maximumReferralPoolAmount: Joi.number().min(0),
+    coinValue: Joi.number().greater(0),
+    coinExpiryDays: Joi.number().integer().min(0),
+    coinUsage: Joi.string().valid(...coinUsageModes),
+    customerSharePercent: Joi.number().min(0).max(100),
+    childSharePercent: Joi.number().min(0).max(100),
+    parentSharePercent: Joi.number().min(0).max(100),
     releaseDelayDays: Joi.number().integer().min(0),
-    yearlyPromotionThreshold: Joi.number().min(0),
-    overrideMode: Joi.string().valid("nearest_only", "stacked"),
-    overrideScope: Joi.string().valid("promoted_subtree", "direct_sales_only"),
-    couponStackAllowed: Joi.boolean(),
+    minimumWithdrawalCoins: Joi.number().min(0),
+    maximumWithdrawalCoins: Joi.number().min(0),
+    dailyWithdrawalLimitCoins: Joi.number().min(0),
+    monthlyWithdrawalLimitCoins: Joi.number().min(0),
+    withdrawalKycRequired: Joi.boolean(),
+    withdrawalApprovalMode: Joi.string().valid(...withdrawalApprovalModes),
+    withdrawalMethods: Joi.array().items(Joi.string().valid(...withdrawalMethods)).min(1),
     minOrderAmount: Joi.number().min(0),
-    maxDiscountAmount: Joi.number().min(0),
     active: Joi.boolean(),
     effectiveFrom: Joi.date().iso().allow(null),
     effectiveTo: Joi.date().iso().allow(null),
-    monthlyBonusTiers: Joi.array().items(
-      Joi.object({
-        fromAmount: Joi.number().min(0).required(),
-        toAmount: Joi.number().min(0).allow(null),
-        bonusPercent: Joi.number().min(0).max(100).required(),
-      }),
-    ),
     metadata: Joi.object(),
   })
     .min(1)
     .required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
+const bonusRuleBody = {
+  ruleName: Joi.string().trim().min(2).max(160),
+  period: Joi.string().valid(...bonusPeriods),
+  customStartAt: Joi.date().iso().allow(null),
+  customEndAt: Joi.date().iso().allow(null),
+  targetType: Joi.string().valid(...bonusTargetTypes),
+  targetValue: Joi.number().min(0),
+  bonusType: Joi.string().valid(...bonusTypes),
+  bonusValue: Joi.number().min(0),
+  applyTo: Joi.string().valid(...bonusApplyTo),
+  resetCycle: Joi.string().valid(...bonusResetCycles),
+  releaseRule: Joi.string().valid(...bonusReleaseRules),
+  status: Joi.string().valid(...bonusStatuses),
+  metadata: Joi.object(),
+};
+
+const listBonusRulesSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    ...pagingQuery,
+    status: Joi.string().valid(...bonusStatuses),
+    period: Joi.string().valid(...bonusPeriods),
+    targetType: Joi.string().valid(...bonusTargetTypes),
+    applyTo: Joi.string().valid(...bonusApplyTo),
+  }).required(),
+  params: Joi.object({}).required(),
+});
+
+const createBonusRuleSchema = Joi.object({
+  body: Joi.object({
+    ...bonusRuleBody,
+    ruleName: bonusRuleBody.ruleName.required(),
+    targetValue: bonusRuleBody.targetValue.required(),
+    bonusValue: bonusRuleBody.bonusValue.required(),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
+const updateBonusRuleSchema = Joi.object({
+  body: Joi.object(bonusRuleBody).min(1).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    ruleId: Joi.string().required(),
+  }).required(),
+});
+
+const listBonusAchievementsSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    ...pagingQuery,
+    ruleId: Joi.string(),
+    influencerId: Joi.string(),
+    status: Joi.string().valid(...bonusAchievementStatuses),
+    fromDate: Joi.date().iso(),
+    toDate: Joi.date().iso(),
+  }).required(),
+  params: Joi.object({}).required(),
+});
+
+const bonusProgressSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    page: Joi.number().integer().min(1),
+    limit: Joi.number().integer().min(1).max(500),
+    ruleId: Joi.string(),
+    influencerId: Joi.string(),
+    referenceDate: Joi.date().iso(),
+  }).required(),
+  params: Joi.object({}).required(),
+});
+
+const evaluateBonusRulesSchema = Joi.object({
+  body: Joi.object({
+    ruleId: Joi.string(),
+    influencerId: Joi.string(),
+    referenceDate: Joi.date().iso(),
+  }).default({}),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),
 });
@@ -292,6 +389,12 @@ module.exports = {
   payoutActionSchema,
   listRulesSchema,
   upsertRulesSchema,
+  listBonusRulesSchema,
+  createBonusRuleSchema,
+  updateBonusRuleSchema,
+  listBonusAchievementsSchema,
+  bonusProgressSchema,
+  evaluateBonusRulesSchema,
   emptySchema,
   listFraudReviewsSchema,
 };

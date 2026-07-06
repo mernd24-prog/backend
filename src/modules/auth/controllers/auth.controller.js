@@ -27,6 +27,11 @@ class AuthController {
     res.json(okResponse(result));
   };
 
+  influencerLogin = async (req, res) => {
+    const result = await this.authService.loginInfluencer(req.body, getRequestInfo(req));
+    res.json(okResponse(result));
+  };
+
   refresh = async (req, res) => {
     const result = await this.authService.refreshToken(req.body.refreshToken, getRequestInfo(req));
     res.json(okResponse(result));

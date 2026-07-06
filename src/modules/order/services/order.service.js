@@ -16,6 +16,7 @@ const { CommissionService } = require("../../seller/services/commission.service"
 const { DealService } = require("../../deal/services/deal.service");
 const { CartRepository } = require("../../cart/repositories/cart.repository");
 const { logger } = require("../../../shared/logger/logger");
+const { ReferralService } = require("../../referral/services/referral.service");
 
 class OrderService {
   constructor({
@@ -27,6 +28,7 @@ class OrderService {
     commissionService = CommissionService,
     dealService = new DealService(),
     cartRepository = new CartRepository(),
+    referralService = new ReferralService(),
   } = {}) {
     this.orderRepository = orderRepository;
     this.pricingService = pricingService;
@@ -36,6 +38,7 @@ class OrderService {
     this.commissionService = commissionService;
     this.dealService = dealService;
     this.cartRepository = cartRepository;
+    this.referralService = referralService;
   }
 
   orderStatusToShipmentStatus(status) {
@@ -230,6 +233,14 @@ class OrderService {
               sellerPayoutAmount: pricedOrder.pricing.sellerPayoutAmount,
             },
             idempotencyKey: payload.idempotencyKey || undefined,
+            referral: pricedOrder.referralContext
+              ? {
+                  code: pricedOrder.referralContext.code,
+                  influencerId: pricedOrder.referralContext.influencerId,
+                  referralPoolAmount: pricedOrder.referralContext.referralPoolAmount,
+                  customerDiscountAmount: pricedOrder.referralContext.customerDiscountAmount,
+                }
+              : undefined,
           },
           items: pricedOrder.items,
           buyerId: actor.userId,
@@ -245,6 +256,14 @@ class OrderService {
       await this.dealService.reserveOrderSales(hydratedOrder, {
         userId: actor.userId,
         role: actor.role || "buyer",
+      });
+
+      await this.referralService.recordInfluencerReferralOrder({
+        orderId: order.id,
+        customerId: actor.userId,
+        orderStatus: order.status,
+        paymentStatus: order.payment_status || order.paymentStatus,
+        referralContext: pricedOrder.referralContext,
       });
 
       await this.pricingService.finalizeCouponUsage(pricedOrder.couponToConsume);
@@ -304,6 +323,8 @@ class OrderService {
         currency: payload.currency || "INR",
         paymentProvider: pricing.paymentProvider,
         appliedCouponCode: pricing.appliedCouponCode,
+        discountSource: pricing.discountSource || null,
+        referralDiscountAmount: pricing.referralDiscountAmount || 0,
         subtotalAmount: pricing.subtotalAmount,
         discountAmount: pricing.discountAmount,
         walletAppliedAmount: pricing.walletAppliedAmount,
@@ -330,6 +351,14 @@ class OrderService {
         buyerId: quoteUserId,
         quotedBy: actor.userId,
         quotedByRole: actor.role,
+        referral: pricedOrder.referralContext
+          ? {
+              code: pricedOrder.referralContext.code,
+              influencerId: pricedOrder.referralContext.influencerId,
+              referralPoolAmount: pricedOrder.referralContext.referralPoolAmount,
+              customerDiscountAmount: pricedOrder.referralContext.customerDiscountAmount,
+            }
+          : null,
       },
       summary: {
         itemAmount: pricing.subtotalAmount,
@@ -761,6 +790,19 @@ class OrderService {
       } catch (error) {
         logger.error({ orderId, status: nextStatus, error: error.message }, "Seller commission sync failed");
       }
+    }
+
+    try {
+      await this.referralService.syncInfluencerReferralOrderStatus(
+        orderId,
+        nextStatus,
+        actor.paymentStatus || updatedOrder.payment_status || updatedOrder.paymentStatus || null,
+      );
+    } catch (error) {
+      logger.error(
+        { orderId, status: nextStatus, error: error.message },
+        "Influencer referral order status sync failed",
+      );
     }
 
     await eventPublisher.publish(

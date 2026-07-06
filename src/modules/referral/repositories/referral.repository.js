@@ -1,6 +1,7 @@
 const {
   ReferralModel,
   InfluencerProfileModel,
+  InfluencerCodeModel,
   ReferralCodeModel,
   ReferralOrderModel,
   ReferralCommissionLedgerModel,
@@ -8,6 +9,8 @@ const {
   InfluencerPayoutRequestModel,
   ReferralCommissionRuleModel,
   ReferralFraudReviewModel,
+  InfluencerBonusRuleModel,
+  InfluencerBonusAchievementModel,
 } = require("../models/referral.model");
 const { UserModel } = require("../../user/models/user.model");
 const { UserRepository } = require("../../user/repositories/user.repository");
@@ -41,24 +44,8 @@ class ReferralRepository {
     const ids = Array.from(new Set(userIds.map(String).filter(Boolean)));
     if (!ids.length) return [];
     return UserModel.find({ _id: { $in: ids } }).select(
-      "email phone role profile accountStatus referralCode influencerProfile createdAt updatedAt",
+      "email phone role profile accountStatus createdAt updatedAt",
     );
-  }
-
-  async updateUserInfluencerSnapshot(userId, snapshot) {
-    return UserModel.findByIdAndUpdate(
-      userId,
-      { $set: { influencerProfile: snapshot } },
-      { new: true },
-    ).select("-passwordHash -refreshSessions.tokenHash");
-  }
-
-  async updateUserReferralCode(userId, referralCode) {
-    return UserModel.findByIdAndUpdate(
-      userId,
-      { $set: { referralCode } },
-      { new: true },
-    ).select("-passwordHash -refreshSessions.tokenHash");
   }
 
   async createInfluencerProfile(payload) {
@@ -99,21 +86,28 @@ class ReferralRepository {
     }
 
     if (q) {
+      const codeRows = await InfluencerCodeModel.find({
+        code: { $regex: q, $options: "i" },
+      }).select("influencerId");
+      const influencerIdsFromCodes = codeRows.map((code) => String(code.influencerId));
       const users = await UserModel.find({
         $or: [
           { email: { $regex: q, $options: "i" } },
           { phone: { $regex: q, $options: "i" } },
           { "profile.firstName": { $regex: q, $options: "i" } },
           { "profile.lastName": { $regex: q, $options: "i" } },
-          { referralCode: { $regex: q, $options: "i" } },
         ],
       }).select("_id");
       const userIds = users.map((user) => String(user._id));
-      filter.$or = [
-        { userId: { $in: userIds } },
-        { _id: q.match(/^[a-f\d]{24}$/i) ? q : undefined },
-      ].filter((entry) => entry._id !== undefined);
-      if (!filter.$or.length) {
+      const orFilters = [];
+      if (userIds.length) orFilters.push({ userId: { $in: userIds } });
+      if (influencerIdsFromCodes.length) {
+        orFilters.push({ _id: { $in: influencerIdsFromCodes } });
+      }
+      if (q.match(/^[a-f\d]{24}$/i)) orFilters.push({ _id: q });
+      if (orFilters.length) {
+        filter.$or = orFilters;
+      } else {
         filter.userId = { $in: userIds };
       }
     }
@@ -154,14 +148,23 @@ class ReferralRepository {
 
   async listReferralCodes({
     q = "",
+    code = null,
     influencerId = null,
     status = null,
+    fromDate = null,
+    toDate = null,
     page = 1,
     limit = 50,
   } = {}) {
     const filter = {};
     if (influencerId) filter.influencerId = influencerId;
     if (status) filter.status = status;
+    if (code) filter.code = String(code).toUpperCase();
+    if (fromDate || toDate) {
+      filter.createdAt = {};
+      if (fromDate) filter.createdAt.$gte = new Date(fromDate);
+      if (toDate) filter.createdAt.$lte = new Date(toDate);
+    }
     if (q) {
       filter.$or = [
         { code: { $regex: q, $options: "i" } },
@@ -179,9 +182,140 @@ class ReferralRepository {
     return { items, total };
   }
 
+  async getOrderIdsForCode({ influencerId = null, code = null } = {}) {
+    const filter = {};
+    if (influencerId) filter.codeOwnerInfluencerId = String(influencerId);
+    if (code) filter.code = String(code).toUpperCase();
+    if (!filter.code && !filter.codeOwnerInfluencerId) return [];
+
+    return ReferralOrderModel.distinct("orderId", filter);
+  }
+
+  async aggregateCodeStats(influencerId, codes = []) {
+    const normalizedCodes = Array.from(
+      new Set(codes.map((code) => String(code || "").toUpperCase()).filter(Boolean)),
+    );
+    if (!normalizedCodes.length) return new Map();
+
+    const orderRows = await ReferralOrderModel.aggregate([
+      {
+        $match: {
+          codeOwnerInfluencerId: String(influencerId),
+          code: { $in: normalizedCodes },
+        },
+      },
+      {
+        $group: {
+          _id: "$code",
+          totalOrders: { $sum: 1 },
+          totalSalesAmount: { $sum: "$eligibleAmount" },
+          customerDiscountAmount: { $sum: "$discountAmount" },
+          orderIds: { $addToSet: "$orderId" },
+        },
+      },
+    ]);
+
+    const orderCodeById = new Map();
+    orderRows.forEach((row) => {
+      (row.orderIds || []).forEach((orderId) => {
+        orderCodeById.set(String(orderId), String(row._id));
+      });
+    });
+
+    const ledgerRows = orderCodeById.size
+      ? await ReferralCommissionLedgerModel.aggregate([
+          {
+            $match: {
+              influencerId: String(influencerId),
+              orderId: { $in: Array.from(orderCodeById.keys()) },
+              commissionType: { $nin: ["reversal", "withdrawal", "coin_expiry"] },
+              status: { $ne: "reversed" },
+            },
+          },
+          {
+            $group: {
+              _id: "$orderId",
+              coinsEarned: { $sum: "$amount" },
+            },
+          },
+        ])
+      : [];
+
+    const statsByCode = new Map(
+      normalizedCodes.map((code) => [
+        code,
+        {
+          totalOrders: 0,
+          totalSalesAmount: 0,
+          customerDiscountAmount: 0,
+          totalCoinsEarned: 0,
+        },
+      ]),
+    );
+
+    orderRows.forEach((row) => {
+      statsByCode.set(String(row._id), {
+        ...statsByCode.get(String(row._id)),
+        totalOrders: Number(row.totalOrders || 0),
+        totalSalesAmount: Number(row.totalSalesAmount || 0),
+        customerDiscountAmount: Number(row.customerDiscountAmount || 0),
+        totalCoinsEarned: 0,
+      });
+    });
+
+    ledgerRows.forEach((row) => {
+      const code = orderCodeById.get(String(row._id));
+      if (!code) return;
+      const current = statsByCode.get(code) || {};
+      current.totalCoinsEarned =
+        Number(current.totalCoinsEarned || 0) + Number(row.coinsEarned || 0);
+      statsByCode.set(code, current);
+    });
+
+    return statsByCode;
+  }
+
   async updateReferralCode(codeId, payload) {
     return ReferralCodeModel.findByIdAndUpdate(
       codeId,
+      { $set: payload },
+      { new: true },
+    );
+  }
+
+  async incrementReferralCodeUsage(codeId) {
+    return ReferralCodeModel.findByIdAndUpdate(
+      codeId,
+      { $inc: { usageCount: 1 } },
+      { new: true },
+    );
+  }
+
+  async createReferralOrder(payload) {
+    return ReferralOrderModel.create(payload);
+  }
+
+  async getReferralOrderByOrderId(orderId) {
+    return ReferralOrderModel.findOne({ orderId: String(orderId) });
+  }
+
+  async updateReferralOrderByOrderId(orderId, payload) {
+    return ReferralOrderModel.findOneAndUpdate(
+      { orderId: String(orderId) },
+      { $set: payload },
+      { new: true },
+    );
+  }
+
+  async listCommissionLedgerByReferralOrder(referralOrderId) {
+    return ReferralCommissionLedgerModel.find({
+      referralOrderId: String(referralOrderId),
+    });
+  }
+
+  async updateCommissionLedgerEntry(entryId, payload) {
+    return ReferralCommissionLedgerModel.findByIdAndUpdate(
+      entryId,
       { $set: payload },
       { new: true },
     );
@@ -214,11 +348,40 @@ class ReferralRepository {
     );
   }
 
+  async getLedgerOrderIdsForInfluencer({
+    influencerId,
+    coinStatus = null,
+    code = null,
+  } = {}) {
+    if (!influencerId) return [];
+
+    const filter = {
+      influencerId: String(influencerId),
+      orderId: { $not: /^bonus:/ },
+    };
+    if (coinStatus === "locked") {
+      filter.status = { $in: ["pending", "locked"] };
+    } else if (coinStatus === "available") {
+      filter.status = { $in: ["available", "payout_requested", "paid"] };
+    } else if (coinStatus === "reversed") {
+      filter.$or = [{ status: "reversed" }, { commissionType: "reversal" }];
+    }
+    if (code) {
+      const codeOrderIds = await this.getOrderIdsForCode({ code });
+      if (!codeOrderIds.length) return [];
+      filter.orderId = { $in: codeOrderIds };
+    }
+
+    return ReferralCommissionLedgerModel.distinct("orderId", filter);
+  }
+
   async listReferralOrders({
     q = "",
     status = null,
+    coinStatus = null,
     code = null,
     influencerId = null,
+    participantInfluencerId = null,
     customerId = null,
     fromDate = null,
     toDate = null,
@@ -226,9 +389,30 @@ class ReferralRepository {
     limit = 50,
   } = {}) {
     const filter = {};
+    const andFilters = [];
     if (status) filter.status = status;
     if (code) filter.code = String(code).toUpperCase();
     if (influencerId) filter.codeOwnerInfluencerId = influencerId;
+    if (participantInfluencerId) {
+      const participantId = String(participantInfluencerId);
+      const ledgerOrderIds = await this.getLedgerOrderIdsForInfluencer({
+        influencerId: participantId,
+        coinStatus,
+        code,
+      });
+      if (coinStatus) {
+        filter.orderId = { $in: ledgerOrderIds };
+      } else {
+        andFilters.push({
+          $or: [
+            { codeOwnerInfluencerId: participantId },
+            { directParentInfluencerId: participantId },
+            { overrideInfluencerId: participantId },
+            { orderId: { $in: ledgerOrderIds } },
+          ],
+        });
+      }
+    }
     if (customerId) filter.customerId = customerId;
     if (fromDate || toDate) {
       filter.createdAt = {};
@@ -236,11 +420,16 @@ class ReferralRepository {
       if (toDate) filter.createdAt.$lte = new Date(toDate);
     }
     if (q) {
-      filter.$or = [
-        { orderId: { $regex: q, $options: "i" } },
-        { customerId: { $regex: q, $options: "i" } },
-        { code: { $regex: q, $options: "i" } },
-      ];
+      andFilters.push({
+        $or: [
+          { orderId: { $regex: q, $options: "i" } },
+          { customerId: { $regex: q, $options: "i" } },
+          { code: { $regex: q, $options: "i" } },
+        ],
+      });
+    }
+    if (andFilters.length) {
+      filter.$and = andFilters;
     }
 
     const skip = (Number(page) - 1) * Number(limit);
@@ -258,6 +447,7 @@ class ReferralRepository {
     commissionType = null,
     influencerId = null,
     orderId = null,
+    code = null,
     fromDate = null,
     toDate = null,
     page = 1,
@@ -268,6 +458,12 @@ class ReferralRepository {
     if (commissionType) filter.commissionType = commissionType;
     if (influencerId) filter.influencerId = influencerId;
     if (orderId) filter.orderId = orderId;
+    if (code) {
+      const codeOrderIds = await this.getOrderIdsForCode({ code });
+      filter.orderId = orderId && codeOrderIds.includes(orderId)
+        ? orderId
+        : { $in: codeOrderIds };
+    }
     if (fromDate || toDate) {
       filter.createdAt = {};
       if (fromDate) filter.createdAt.$gte = new Date(fromDate);
@@ -297,12 +493,19 @@ class ReferralRepository {
     q = "",
     status = null,
     influencerId = null,
+    fromDate = null,
+    toDate = null,
     page = 1,
     limit = 50,
   } = {}) {
     const filter = {};
     if (status) filter.status = status;
     if (influencerId) filter.influencerId = influencerId;
+    if (fromDate || toDate) {
+      filter.createdAt = {};
+      if (fromDate) filter.createdAt.$gte = new Date(fromDate);
+      if (toDate) filter.createdAt.$lte = new Date(toDate);
+    }
     if (q) {
       filter.$or = [
         { influencerId: { $regex: q, $options: "i" } },
@@ -321,6 +524,289 @@ class ReferralRepository {
     ]);
 
     return { items, total };
+  }
+
+  async aggregatePayoutTotalsByInfluencer({
+    influencerId,
+    statuses = [],
+    fromDate = null,
+    toDate = null,
+  } = {}) {
+    if (!influencerId) return { total: 0, count: 0 };
+    const filter = { influencerId: String(influencerId) };
+    if (statuses.length) filter.status = { $in: statuses };
+    if (fromDate || toDate) {
+      filter.createdAt = {};
+      if (fromDate) filter.createdAt.$gte = new Date(fromDate);
+      if (toDate) filter.createdAt.$lte = new Date(toDate);
+    }
+    const [result] = await InfluencerPayoutRequestModel.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$amount" },
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+    return {
+      total: Number(result?.total || 0),
+      count: Number(result?.count || 0),
+    };
+  }
+
+  async aggregateLedgerByOrderForInfluencer({
+    influencerId,
+    orderIds = [],
+  } = {}) {
+    const ids = Array.from(new Set(orderIds.map(String).filter(Boolean)));
+    if (!influencerId || !ids.length) return new Map();
+
+    const rows = await ReferralCommissionLedgerModel.aggregate([
+      {
+        $match: {
+          influencerId: String(influencerId),
+          orderId: { $in: ids },
+        },
+      },
+      {
+        $group: {
+          _id: "$orderId",
+          coinsEarned: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $ne: ["$commissionType", "reversal"] },
+                    { $ne: ["$status", "reversed"] },
+                  ],
+                },
+                "$amount",
+                0,
+              ],
+            },
+          },
+          reversedCoins: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ["$commissionType", "reversal"] },
+                    { $eq: ["$status", "reversed"] },
+                  ],
+                },
+                "$amount",
+                0,
+              ],
+            },
+          },
+          statuses: { $addToSet: "$status" },
+          commissionTypes: { $addToSet: "$commissionType" },
+          expectedReleaseDate: { $min: "$releaseAt" },
+          entries: { $push: "$$ROOT" },
+        },
+      },
+    ]);
+
+    return new Map(rows.map((row) => [String(row._id), row]));
+  }
+
+  async listMobileCoinLedger({
+    influencerId,
+    q = "",
+    status = null,
+    commissionType = null,
+    transactionType = null,
+    orderId = null,
+    code = null,
+    fromDate = null,
+    toDate = null,
+    page = 1,
+    limit = 50,
+  } = {}) {
+    if (!influencerId) return { items: [], total: 0 };
+
+    const ledgerFilter = { influencerId: String(influencerId) };
+    const payoutFilter = { influencerId: String(influencerId) };
+    const withdrawalStatuses = {
+      pending: "payout_requested",
+      approved: "payout_requested",
+      processing: "payout_requested",
+      paid: "paid",
+      rejected: "reversed",
+      failed: "reversed",
+    };
+
+    if (status) {
+      const mappedLedgerStatus = withdrawalStatuses[status];
+      if (mappedLedgerStatus) {
+        ledgerFilter.status =
+          status === "pending"
+            ? { $in: ["pending", mappedLedgerStatus] }
+            : mappedLedgerStatus;
+        payoutFilter.status = status;
+      } else {
+        ledgerFilter.status = status;
+        const payoutStatuses = Object.entries(withdrawalStatuses)
+          .filter(([, mappedStatus]) => mappedStatus === status)
+          .map(([payoutStatus]) => payoutStatus);
+        if (payoutStatuses.length) payoutFilter.status = { $in: payoutStatuses };
+        else payoutFilter.status = "__none__";
+      }
+    }
+    if (commissionType) {
+      ledgerFilter.commissionType = commissionType;
+      if (commissionType !== "withdrawal") payoutFilter.status = "__none__";
+    }
+    if (transactionType) {
+      if (transactionType === "withdrawal_coins") {
+        ledgerFilter.commissionType = "withdrawal";
+      } else {
+        payoutFilter.status = "__none__";
+      }
+
+      if (transactionType === "locked_coins") {
+        ledgerFilter.status = { $in: ["pending", "locked"] };
+      } else if (transactionType === "released_coins") {
+        ledgerFilter.status = "available";
+      } else if (transactionType === "reversed_coins") {
+        ledgerFilter.$or = [{ status: "reversed" }, { commissionType: "reversal" }];
+        payoutFilter.status = { $in: ["rejected", "failed"] };
+      } else if (transactionType === "expired_coins") {
+        ledgerFilter.$or = [{ status: "expired" }, { commissionType: "coin_expiry" }];
+      } else if (transactionType === "debit_coins") {
+        ledgerFilter.amount = { $lt: 0 };
+      } else if (transactionType === "credit_coins") {
+        ledgerFilter.amount = { $gt: 0 };
+      } else if (transactionType !== "withdrawal_coins") {
+        ledgerFilter.commissionType = "__none__";
+      }
+
+      if (
+        !["withdrawal_coins", "reversed_coins"].includes(transactionType) &&
+        payoutFilter.status !== "__none__"
+      ) {
+        payoutFilter.status = "__none__";
+      }
+      if (transactionType === "withdrawal_coins" && !status) {
+        delete payoutFilter.status;
+      }
+    }
+    if (orderId) {
+      ledgerFilter.orderId = orderId;
+      payoutFilter.status = "__none__";
+    }
+    if (code) {
+      const codeOrderIds = await this.getOrderIdsForCode({ code });
+      ledgerFilter.orderId = { $in: codeOrderIds };
+      payoutFilter.status = "__none__";
+    }
+    if (fromDate || toDate) {
+      ledgerFilter.createdAt = {};
+      payoutFilter.createdAt = {};
+      if (fromDate) {
+        ledgerFilter.createdAt.$gte = new Date(fromDate);
+        payoutFilter.createdAt.$gte = new Date(fromDate);
+      }
+      if (toDate) {
+        ledgerFilter.createdAt.$lte = new Date(toDate);
+        payoutFilter.createdAt.$lte = new Date(toDate);
+      }
+    }
+    if (q) {
+      ledgerFilter.$or = [
+        { orderId: { $regex: q, $options: "i" } },
+        { commissionType: { $regex: q, $options: "i" } },
+      ];
+      payoutFilter.$or = [
+        { payoutMethod: { $regex: q, $options: "i" } },
+        { upiId: { $regex: q, $options: "i" } },
+      ];
+    }
+
+    const skip = (Number(page) - 1) * Number(limit);
+    const [result = {}] = await ReferralCommissionLedgerModel.aggregate([
+      { $match: ledgerFilter },
+      {
+        $project: {
+          source: { $literal: "coin_ledger" },
+          sourceId: { $toString: "$_id" },
+          referralOrderId: 1,
+          orderId: 1,
+          influencerId: 1,
+          commissionType: 1,
+          amount: 1,
+          status: 1,
+          releaseAt: 1,
+          paidAt: 1,
+          reversedAt: 1,
+          metadata: 1,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      {
+        $unionWith: {
+          coll: InfluencerPayoutRequestModel.collection.name,
+          pipeline: [
+            { $match: payoutFilter },
+            {
+              $project: {
+                source: { $literal: "withdrawal" },
+                sourceId: { $toString: "$_id" },
+                referralOrderId: { $literal: null },
+                orderId: { $literal: null },
+                influencerId: 1,
+                commissionType: { $literal: "withdrawal" },
+                amount: { $multiply: ["$amount", -1] },
+                status: {
+                  $switch: {
+                    branches: [
+                      {
+                        case: { $in: ["$status", ["pending", "approved", "processing"]] },
+                        then: "payout_requested",
+                      },
+                      { case: { $eq: ["$status", "paid"] }, then: "paid" },
+                      { case: { $in: ["$status", ["rejected", "failed"]] }, then: "reversed" },
+                    ],
+                    default: "$status",
+                  },
+                },
+                releaseAt: { $literal: null },
+                paidAt: "$paidAt",
+                reversedAt: { $literal: null },
+                metadata: {
+                  payoutRequestId: { $toString: "$_id" },
+                  payoutStatus: "$status",
+                  payoutMethod: "$payoutMethod",
+                  bankAccountId: "$bankAccountId",
+                  upiId: "$upiId",
+                },
+                createdAt: 1,
+                updatedAt: 1,
+              },
+            },
+          ],
+        },
+      },
+      { $sort: { createdAt: -1, sourceId: -1 } },
+      {
+        $facet: {
+          items: [{ $skip: skip }, { $limit: Number(limit) }],
+          total: [{ $count: "count" }],
+        },
+      },
+    ]);
+
+    return {
+      items: result.items || [],
+      total: Number(result.total?.[0]?.count || 0),
+    };
+  }
+
+  async createPayoutRequest(payload) {
+    return InfluencerPayoutRequestModel.create(payload);
   }
 
   async getPayoutRequestById(payoutId) {
@@ -364,6 +850,323 @@ class ReferralRepository {
       );
     }
     return ReferralCommissionRuleModel.create(payload);
+  }
+
+  async createCommissionLedger(payload) {
+    return ReferralCommissionLedgerModel.create(payload);
+  }
+
+  async listActiveBonusRules() {
+    return InfluencerBonusRuleModel.find({ status: "active" }).sort({
+      createdAt: -1,
+    });
+  }
+
+  async listBonusRules({
+    q = "",
+    status = null,
+    period = null,
+    targetType = null,
+    applyTo = null,
+    page = 1,
+    limit = 50,
+  } = {}) {
+    const filter = {};
+    if (status) filter.status = status;
+    if (period) filter.period = period;
+    if (targetType) filter.targetType = targetType;
+    if (applyTo) filter.applyTo = applyTo;
+    if (q) {
+      filter.$or = [
+        { ruleName: { $regex: q, $options: "i" } },
+        { targetType: { $regex: q, $options: "i" } },
+        { applyTo: { $regex: q, $options: "i" } },
+      ];
+    }
+
+    const skip = (Number(page) - 1) * Number(limit);
+    const [items, total] = await Promise.all([
+      InfluencerBonusRuleModel.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(Number(limit)),
+      InfluencerBonusRuleModel.countDocuments(filter),
+    ]);
+    return { items, total };
+  }
+
+  async getBonusRuleById(ruleId) {
+    return InfluencerBonusRuleModel.findById(ruleId);
+  }
+
+  async createBonusRule(payload) {
+    return InfluencerBonusRuleModel.create(payload);
+  }
+
+  async updateBonusRule(ruleId, payload) {
+    return InfluencerBonusRuleModel.findByIdAndUpdate(
+      ruleId,
+      { $set: payload },
+      { new: true },
+    );
+  }
+
+  async findBonusAchievement(ruleId, influencerId, cycleKey) {
+    return InfluencerBonusAchievementModel.findOne({
+      ruleId: String(ruleId),
+      influencerId: String(influencerId),
+      cycleKey: String(cycleKey),
+    });
+  }
+
+  async createBonusAchievement(payload) {
+    return InfluencerBonusAchievementModel.create(payload);
+  }
+
+  async updateBonusAchievement(achievementId, payload) {
+    return InfluencerBonusAchievementModel.findByIdAndUpdate(
+      achievementId,
+      { $set: payload },
+      { new: true },
+    );
+  }
+
+  async listBonusAchievements({
+    q = "",
+    ruleId = null,
+    influencerId = null,
+    status = null,
+    fromDate = null,
+    toDate = null,
+    page = 1,
+    limit = 50,
+  } = {}) {
+    const filter = {};
+    if (ruleId) filter.ruleId = String(ruleId);
+    if (influencerId) filter.influencerId = String(influencerId);
+    if (status) filter.status = status;
+    if (fromDate || toDate) {
+      filter.periodStart = {};
+      if (fromDate) filter.periodStart.$gte = new Date(fromDate);
+      if (toDate) filter.periodStart.$lte = new Date(toDate);
+    }
+    if (q) {
+      filter.$or = [
+        { ruleName: { $regex: q, $options: "i" } },
+        { influencerId: { $regex: q, $options: "i" } },
+        { cycleKey: { $regex: q, $options: "i" } },
+      ];
+    }
+
+    const skip = (Number(page) - 1) * Number(limit);
+    const [items, total] = await Promise.all([
+      InfluencerBonusAchievementModel.find(filter)
+        .sort({ periodStart: -1, createdAt: -1 })
+        .skip(skip)
+        .limit(Number(limit)),
+      InfluencerBonusAchievementModel.countDocuments(filter),
+    ]);
+    return { items, total };
+  }
+
+  async aggregateBonusAchievementTotals(filter = {}) {
+    const [result] = await InfluencerBonusAchievementModel.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: null,
+          achievementCount: { $sum: 1 },
+          bonusCoins: { $sum: "$bonusCoins" },
+          lockedCoins: {
+            $sum: {
+              $cond: [{ $eq: ["$status", "locked"] }, "$bonusCoins", 0],
+            },
+          },
+          releasedCoins: {
+            $sum: {
+              $cond: [{ $eq: ["$status", "released"] }, "$bonusCoins", 0],
+            },
+          },
+        },
+      },
+    ]);
+    return result || {
+      achievementCount: 0,
+      bonusCoins: 0,
+      lockedCoins: 0,
+      releasedCoins: 0,
+    };
+  }
+
+  async aggregateReferralPerformance({
+    influencerIds = [],
+    code = null,
+    fromDate = null,
+    toDate = null,
+  } = {}) {
+    const ids = Array.from(new Set(influencerIds.map(String).filter(Boolean)));
+    if (!ids.length) {
+      return {
+        orderCount: 0,
+        orderValue: 0,
+        customerCount: 0,
+        customers: [],
+        orderIds: [],
+        orders: [],
+      };
+    }
+
+    const filter = {
+      codeOwnerInfluencerId: { $in: ids },
+      status: { $nin: ["cancelled", "refunded", "reversed"] },
+    };
+    if (code) filter.code = String(code).toUpperCase();
+    if (fromDate || toDate) {
+      filter.createdAt = {};
+      if (fromDate) filter.createdAt.$gte = new Date(fromDate);
+      if (toDate) filter.createdAt.$lte = new Date(toDate);
+    }
+
+    const [summary] = await ReferralOrderModel.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: null,
+          orderCount: { $sum: 1 },
+          orderValue: { $sum: "$eligibleAmount" },
+          customers: { $addToSet: "$customerId" },
+          orderIds: { $addToSet: "$orderId" },
+        },
+      },
+    ]);
+    const orders = await ReferralOrderModel.find(filter).select(
+      "orderId status orderStatus paymentStatus eligibleAmount customerId createdAt completedAt",
+    );
+
+    return {
+      orderCount: Number(summary?.orderCount || 0),
+      orderValue: Number(summary?.orderValue || 0),
+      customerCount: Array.isArray(summary?.customers) ? summary.customers.length : 0,
+      customers: summary?.customers || [],
+      orderIds: summary?.orderIds || [],
+      orders,
+    };
+  }
+
+  async aggregateLedgerTotalsByInfluencer({
+    influencerId,
+    code = null,
+    fromDate = null,
+    toDate = null,
+    includeStatuses = [],
+    includeTypes = [],
+    excludeTypes = [],
+  } = {}) {
+    const filter = { influencerId: String(influencerId) };
+    if (includeStatuses.length) filter.status = { $in: includeStatuses };
+    if (includeTypes.length) filter.commissionType = { $in: includeTypes };
+    if (excludeTypes.length) filter.commissionType = { $nin: excludeTypes };
+    if (code) {
+      const codeOrderIds = await this.getOrderIdsForCode({ code });
+      filter.orderId = { $in: codeOrderIds };
+    }
+    if (fromDate || toDate) {
+      filter.createdAt = {};
+      if (fromDate) filter.createdAt.$gte = new Date(fromDate);
+      if (toDate) filter.createdAt.$lte = new Date(toDate);
+    }
+    const [result] = await ReferralCommissionLedgerModel.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$amount" },
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+    return {
+      total: Number(result?.total || 0),
+      count: Number(result?.count || 0),
+    };
+  }
+
+  async aggregateLedgerByDay({
+    influencerId,
+    code = null,
+    fromDate = null,
+    toDate = null,
+    includeTypes = [],
+    excludeTypes = [],
+  } = {}) {
+    const filter = { influencerId: String(influencerId) };
+    if (includeTypes.length) filter.commissionType = { $in: includeTypes };
+    if (excludeTypes.length) filter.commissionType = { $nin: excludeTypes };
+    if (code) {
+      const codeOrderIds = await this.getOrderIdsForCode({ code });
+      filter.orderId = { $in: codeOrderIds };
+    }
+    if (fromDate || toDate) {
+      filter.createdAt = {};
+      if (fromDate) filter.createdAt.$gte = new Date(fromDate);
+      if (toDate) filter.createdAt.$lte = new Date(toDate);
+    }
+    return ReferralCommissionLedgerModel.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: { $dateToString: { date: "$createdAt", format: "%Y-%m-%d" } },
+          coins: { $sum: "$amount" },
+          entries: { $sum: 1 },
+        },
+      },
+      { $sort: { _id: 1 } },
+      {
+        $project: {
+          _id: 0,
+          date: "$_id",
+          coins: 1,
+          entries: 1,
+        },
+      },
+    ]);
+  }
+
+  async listDirectChildren(
+    parentInfluencerId,
+    { status = null, code = null, page = 1, limit = 50 } = {},
+  ) {
+    const filter = { parentInfluencerId: String(parentInfluencerId) };
+    if (status) filter.status = status;
+    if (code) {
+      const codeRows = await ReferralCodeModel.find({
+        code: String(code).toUpperCase(),
+      }).select("influencerId");
+      const childInfluencerIds = codeRows.map((row) => String(row.influencerId));
+      filter._id = { $in: childInfluencerIds };
+    }
+    const skip = (Number(page) - 1) * Number(limit);
+    const [items, total] = await Promise.all([
+      InfluencerProfileModel.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(Number(limit)),
+      InfluencerProfileModel.countDocuments(filter),
+    ]);
+    return { items, total };
+  }
+
+  async listDirectChildIds(parentInfluencerId, { status = null, code = null } = {}) {
+    const filter = { parentInfluencerId: String(parentInfluencerId) };
+    if (status) filter.status = status;
+    if (code) {
+      const codeRows = await ReferralCodeModel.find({
+        code: String(code).toUpperCase(),
+      }).select("influencerId");
+      filter._id = { $in: codeRows.map((row) => String(row.influencerId)) };
+    }
+    const rows = await InfluencerProfileModel.find(filter).select("_id");
+    return rows.map((row) => String(row._id));
   }
 
   async countInfluencers(filter = {}) {

@@ -27,6 +27,11 @@ authRoutes.post("/register", checkInput(registerSchema), catchErrors(authControl
 authRoutes.post("/register-otp", checkInput(registerWithOtpSchema), catchErrors(authController.registerWithOtp));
 authRoutes.post("/verify-registration", checkInput(verifyRegistrationSchema), catchErrors(authController.verifyRegistration));
 authRoutes.post("/login", checkInput(loginSchema), catchErrors(authController.login));
+authRoutes.post(
+  "/influencer/login",
+  checkInput(loginSchema),
+  catchErrors(authController.influencerLogin),
+);
 authRoutes.post("/social", checkInput(socialLoginSchema), catchErrors(authController.socialLogin));
 authRoutes.post("/refresh", checkInput(refreshSchema), catchErrors(authController.refresh));
 

@@ -19,6 +19,12 @@ const {
   payoutActionSchema,
   listRulesSchema,
   upsertRulesSchema,
+  listBonusRulesSchema,
+  createBonusRuleSchema,
+  updateBonusRuleSchema,
+  listBonusAchievementsSchema,
+  bonusProgressSchema,
+  evaluateBonusRulesSchema,
   emptySchema,
   listFraudReviewsSchema,
 } = require("../validation/referral-admin.validation");
@@ -108,6 +114,37 @@ referralAdminRoutes.put(
   "/rules",
   checkInput(upsertRulesSchema),
   catchErrors(referralAdminController.upsertRules),
+);
+
+referralAdminRoutes.get(
+  "/bonus-rules",
+  checkInput(listBonusRulesSchema),
+  catchErrors(referralAdminController.listBonusRules),
+);
+referralAdminRoutes.post(
+  "/bonus-rules",
+  checkInput(createBonusRuleSchema),
+  catchErrors(referralAdminController.createBonusRule),
+);
+referralAdminRoutes.patch(
+  "/bonus-rules/:ruleId",
+  checkInput(updateBonusRuleSchema),
+  catchErrors(referralAdminController.updateBonusRule),
+);
+referralAdminRoutes.post(
+  "/bonus-rules/evaluate",
+  checkInput(evaluateBonusRulesSchema),
+  catchErrors(referralAdminController.evaluateBonusRules),
+);
+referralAdminRoutes.get(
+  "/bonus-achievements",
+  checkInput(listBonusAchievementsSchema),
+  catchErrors(referralAdminController.listBonusAchievements),
+);
+referralAdminRoutes.get(
+  "/reports/bonus-progress",
+  checkInput(bonusProgressSchema),
+  catchErrors(referralAdminController.bonusProgressReport),
 );
 
 referralAdminRoutes.get(

@@ -13,6 +13,7 @@ const { isPublicProduct } = require("../../../shared/catalog/public-product-filt
 const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
 const { sellerChargeSettingsService } = require("../../seller/services/seller-charge-settings.service");
+const { ReferralService } = require("../../referral/services/referral.service");
 
 class PricingService {
   constructor({
@@ -23,6 +24,7 @@ class PricingService {
     paymentMethodConfigRepository = new PaymentMethodConfigRepository(),
     dealService = new DealService(),
     redisClient = redis,
+    referralService = new ReferralService(),
   } = {}) {
     this.pricingRepository = pricingRepository;
     this.productRepository = productRepository;
@@ -31,6 +33,7 @@ class PricingService {
     this.paymentMethodConfigRepository = paymentMethodConfigRepository;
     this.dealService = dealService;
     this.redis = redisClient;
+    this.referralService = referralService;
   }
 
   async priceOrder({ items, couponCode = null, walletAmount = 0, shippingAddress, userId, paymentProvider = PAYMENT_PROVIDER.RAZORPAY }) {
@@ -268,6 +271,8 @@ class PricingService {
         totalAmount,
         payableAmount,
         appliedCouponCode: discount.appliedCouponCode,
+        discountSource: discount.discountSource || null,
+        referralDiscountAmount: discount.discountSource === "influencer" ? discount.discountAmount : 0,
         commerceSettingsSnapshot: {
           finance: commerceSettings.finance,
           wallet: commerceSettings.wallet,
@@ -276,6 +281,7 @@ class PricingService {
         },
       },
       couponToConsume: discount.couponToConsume,
+      referralContext: discount.referralContext || null,
       walletToReserveAmount: walletBreakup.walletAppliedAmount,
     };
   }
@@ -1041,12 +1047,33 @@ class PricingService {
 
   async calculateDiscount(couponCode, subtotalAmount, userId = null) {
     if (!couponCode) {
-      return { discountAmount: 0, appliedCouponCode: null, couponToConsume: null };
+      return {
+        discountAmount: 0,
+        appliedCouponCode: null,
+        couponToConsume: null,
+        discountSource: null,
+        referralContext: null,
+      };
     }
 
     const coupon = await this.pricingRepository.findCouponByCode(couponCode);
-    if (!coupon || !coupon.active) {
-      throw new AppError("Invalid coupon code", 400);
+    if (!coupon) {
+      const referralContext = await this.referralService.resolveInfluencerCodeForCheckout(
+        couponCode,
+        subtotalAmount,
+        userId,
+      );
+      if (!referralContext) throw new AppError("Invalid coupon or influencer code", 400);
+      return {
+        discountAmount: referralContext.customerDiscountAmount,
+        appliedCouponCode: referralContext.code,
+        couponToConsume: null,
+        discountSource: "influencer",
+        referralContext,
+      };
+    }
+    if (!coupon.active) {
+      throw new AppError("Coupon is not active", 400);
     }
 
     const now = new Date();
@@ -1091,6 +1118,8 @@ class PricingService {
       discountAmount,
       appliedCouponCode: coupon.code,
       couponToConsume: coupon.id,
+      discountSource: "coupon",
+      referralContext: null,
     };
   }
 }

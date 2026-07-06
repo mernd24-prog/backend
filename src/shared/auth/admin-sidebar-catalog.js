@@ -82,7 +82,6 @@ const SIDEBAR_MODULES = [
   { moduleName: "Permission Templates", moduleKey: "permission-templates", moduleSlug: "permission-templates", icon: "MdDashboardCustomize", routePath: "/app/permission-templates", moduleType: "page", order: 111, parentModule: "users-access", requiredModule: "rbac" },
 
   { moduleName: "Marketing", moduleKey: "marketing", moduleSlug: "marketing", icon: "MdCampaign", moduleType: "group", order: 120, parentModule: null, requiredModule: "pricing" },
-  { moduleName: "Promotion Banners", moduleKey: "promotions-banners", moduleSlug: "promotions-banners", icon: "MdWeb", routePath: "/app/content-management/promotion-banner", moduleType: "page", order: 125, parentModule: "marketing", requiredModule: "banners" },
   { moduleName: "Referral Programs", moduleKey: "referral-commerce", moduleSlug: "referral-commerce", icon: "MdShare", routePath: "/app/referral-commerce", moduleType: "page", order: 130, parentModule: "marketing", requiredModule: "referral" },
 
   { moduleName: "Reports & Analytics", moduleKey: "reports-analytics", moduleSlug: "reports-analytics", icon: "MdBarChart", moduleType: "group", order: 150, parentModule: null, requiredModule: "reports" },
@@ -98,7 +97,6 @@ const SIDEBAR_MODULES = [
   { moduleName: "Zip / Pin Codes", moduleKey: "zip-codes", moduleSlug: "zip-codes", icon: "MdPinDrop", routePath: "/app/zip-codes", moduleType: "page", order: 174, parentModule: "location-management", requiredModule: "zip_codes" },
 
   { moduleName: "Settings", moduleKey: "settings-menu", moduleSlug: "settings-menu", icon: "CiSettings", moduleType: "group", order: 190, parentModule: null, requiredModule: "cms_pages" },
-  { moduleName: "Content Pages", moduleKey: "content-management", moduleSlug: "content-management", icon: "MdArticle", routePath: "/app/content-management", moduleType: "page", order: 191, parentModule: "settings-menu", requiredModule: "cms_pages" },
   { moduleName: "CMS Pages", moduleKey: "content-pages", moduleSlug: "content-pages", icon: "MdPages", routePath: "/app/content-pages", moduleType: "page", order: 192, parentModule: "settings-menu", requiredModule: "cms_pages" },
 
   // Catalog Masters additions
@@ -110,7 +108,6 @@ const SIDEBAR_MODULES = [
   { moduleName: "User Addresses", moduleKey: "users-addresses", moduleSlug: "users-addresses", icon: "MdLocationOn", routePath: "/app/users-addresses", moduleType: "page", order: 215, parentModule: "users-access", requiredModule: "users" },
 
   // Marketing additions
-  { moduleName: "Influencers", moduleKey: "influencer-management", moduleSlug: "influencer-management", icon: "MdStarBorder", routePath: "/app/influencer-management", moduleType: "page", order: 216, parentModule: "marketing", requiredModule: "influencer-management" },
   { moduleName: "Notifications", moduleKey: "notifications", moduleSlug: "notifications", icon: "MdNotifications", routePath: "/app/notifications", moduleType: "page", order: 238, parentModule: "marketing", requiredModule: "notifications" },
 
   // Reports & Analytics additions
@@ -242,7 +239,7 @@ const ROUTE_METADATA_BY_KEY = {
   },
   orders: { supportedRoutes: ["/app/orders/view/:id", "/app/view-orders"] },
   "seller-orders": { supportedRoutes: ["/app/orders/view/:id", "/app/view-orders"] },
-  "content-management": { supportedRoutes: ["/app/content-management/:type"] },
+ 
   "product-options": { supportedRoutes: ["/app/product-option-value/:id"] },
   "product-option-values": { supportedRoutes: ["/app/product-option-value/:id"] },
   subTax: { supportedRoutes: ["/app/subTax/:id"] },
