@@ -3,10 +3,12 @@ const { ProductModel } = require("../../product/models/product.model");
 const { AppError } = require("../../../shared/errors/app-error");
 const { isPublicProduct } = require("../../../shared/catalog/public-product-filter");
 const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
+const { DealService } = require("../../deal/services/deal.service");
 
 class CartService {
-  constructor({ cartRepository = new CartRepository() } = {}) {
+  constructor({ cartRepository = new CartRepository(), dealService = new DealService() } = {}) {
     this.cartRepository = cartRepository;
+    this.dealService = dealService;
   }
 
   async getCart(userId) {
@@ -37,12 +39,12 @@ class CartService {
   }
 
   async upsertCart(userId, payload) {
-    return this.cartRepository.upsertCart(userId, {
+    return this.refreshCartAvailability(await this.cartRepository.upsertCart(userId, {
       $set: {
         items: await this.mergeItems(payload.items || []),
         wishlist: await this.normalizeWishlist(payload.wishlist || []),
       },
-    });
+    }));
   }
 
   itemKey(item = {}) {
@@ -106,8 +108,9 @@ class CartService {
     return variants.find((variant) => variant.isDefault) || variants[0] || null;
   }
 
-  resolvePrice(product = {}, variant = null) {
+  resolvePrice(product = {}, variant = null, deal = null) {
     return Number(
+      deal?.dealPrice ??
       variant?.salePrice ??
       variant?.price ??
       product.salePrice ??
@@ -116,8 +119,17 @@ class CartService {
     );
   }
 
-  resolveMrp(product = {}, variant = null) {
-    return Number(variant?.mrp ?? product.mrp ?? this.resolvePrice(product, variant) ?? 0);
+  resolveMrp(product = {}, variant = null, deal = null) {
+    return Number(deal?.originalPrice ?? variant?.mrp ?? product.mrp ?? this.resolvePrice(product, variant, deal) ?? 0);
+  }
+
+  async findActiveDeal(product = {}, variant = null, item = {}) {
+    return this.dealService.findActiveDealForItem({
+      productId: String(product._id || product.id || item.productId || ""),
+      variantId: variant ? String(variant._id || variant.id || item.variantId || "") : item.variantId,
+      variantSku: variant?.sku || item.variantSku || "",
+      sellerId: product.sellerId,
+    }).catch(() => null);
   }
 
   availableStock(product = {}, variant = null) {
@@ -135,28 +147,32 @@ class CartService {
     return "in_stock";
   }
 
-  refreshCartAvailability(cart = null) {
+  async refreshCartAvailability(cart = null) {
     if (!cart || !Array.isArray(cart.items)) return cart;
 
     return {
       ...cart,
-      items: cart.items.map((item) => {
+      items: await Promise.all(cart.items.map(async (item) => {
         const product = item.productId && typeof item.productId === "object"
           ? item.productId
           : null;
         if (!product) return item;
 
         const variant = this.resolveVariant(product, item);
+        const activeDeal = await this.findActiveDeal(product, variant, item);
         const availableStock = this.availableStock(product, variant);
         const allowBackorder = product.inventorySettings?.allowBackorder === true;
         return {
           ...item,
+          price: Math.max(0, this.resolvePrice(product, variant, activeDeal)),
+          mrp: this.resolveMrp(product, variant, activeDeal),
+          deal: activeDeal?.dealId ? activeDeal : null,
           availableStock,
           stockStatus: allowBackorder && Number(item.quantity || 0) > availableStock
             ? "backorder"
             : this.stockStatus(product, variant),
         };
-      }),
+      })),
     };
   }
 
@@ -218,7 +234,11 @@ class CartService {
           409,
         );
       }
-      const price = this.resolvePrice(product, variant);
+      const activeDeal = await this.findActiveDeal(product, variant, item);
+      if (activeDeal?.maxQuantityPerOrder && nextQuantity > Number(activeDeal.maxQuantityPerOrder)) {
+        throw new AppError(`Deal quantity limit is ${activeDeal.maxQuantityPerOrder} for ${product.title}`, 409);
+      }
+      const price = this.resolvePrice(product, variant, activeDeal);
       const normalized = {
         productId,
         variantId: variant?._id || variant?.id || "",
@@ -230,9 +250,10 @@ class CartService {
         sellerId: product.sellerId || "",
         image: this.firstImage(product, variant),
         currency: product.currency || "INR",
-        mrp: this.resolveMrp(product, variant),
+        mrp: this.resolveMrp(product, variant, activeDeal),
         quantity,
         price: Math.max(0, price),
+        deal: activeDeal?.dealId ? activeDeal : null,
         availableStock: available,
         stockStatus: allowBackorder && nextQuantity > available ? "backorder" : this.stockStatus(product, variant),
       };

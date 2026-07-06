@@ -45,6 +45,18 @@ function buyerNameFromUser(user = {}) {
   );
 }
 
+function productImageFromProduct(product = {}) {
+  return (
+    product.thumbnail ||
+    product.thumbnailUrl ||
+    product.image ||
+    product.imageUrl ||
+    product.images?.[0] ||
+    product.imageUrls?.[0] ||
+    ""
+  );
+}
+
 function buyerImageFromUser(user = {}) {
   return (
     user.profile?.avatarUrl ||
@@ -672,17 +684,53 @@ class PlatformService {
       ? await UserModel.find({ _id: { $in: validBuyerIds } }).select("email profile displayName avatarUrl profileImage user_image image")
       : [];
     const userById = new Map(users.map((user) => [String(user._id), user]));
+    const productIds = [
+      ...new Set(
+        plainItems
+          .map((review) => String(review?.productId || ""))
+          .filter(isMongoObjectId),
+      ),
+    ];
+    const products = productIds.length
+      ? await ProductModel.find({ _id: { $in: productIds } })
+        .select("_id title slug sku images imageUrls thumbnail thumbnailUrl image imageUrl")
+        .lean()
+      : [];
+    const productById = new Map(products.map((product) => [String(product._id), product]));
 
     return plainItems.map((review) => {
       const user = userById.get(reviewBuyerLookupId(review?.buyerId));
+      const product = productById.get(String(review?.productId || ""));
       const buyerImage = buyerImageFromUser(user);
       const storedBuyerName = String(review.buyerName || "").trim();
       const shouldUseUserName = !storedBuyerName || storedBuyerName === "Admin Review";
+      const buyerName = shouldUseUserName ? buyerNameFromUser(user) || storedBuyerName || "Verified Buyer" : review.buyerName;
+      const productName = product?.title || product?.name || product?.sku || "";
+      const productImage = productImageFromProduct(product);
       return {
         ...review,
-        buyerName: shouldUseUserName ? buyerNameFromUser(user) || storedBuyerName || "Verified Buyer" : review.buyerName,
+        buyerName,
         buyerImage,
         buyerAvatarUrl: buyerImage,
+        buyer: user
+          ? {
+              id: String(user._id),
+              displayName: buyerName,
+              email: user.email || "",
+              avatarUrl: buyerImage,
+            }
+          : null,
+        productName,
+        productImage,
+        product: product
+          ? {
+              id: String(product._id),
+              title: productName,
+              slug: product.slug || "",
+              sku: product.sku || "",
+              image: productImage,
+            }
+          : review.product || null,
       };
     });
   }

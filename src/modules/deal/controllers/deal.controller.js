@@ -123,6 +123,18 @@ class DealController {
     res.json(okResponse(result));
   };
 
+  publicDealProducts = async (req, res) => {
+    const result = await this.dealService.getPublicDealProducts(req.query);
+    res.json(okResponse(result.items, {
+      pagination: {
+        page: result.page,
+        limit: result.limit,
+        total: result.total,
+        totalPages: result.totalPages,
+      },
+    }));
+  };
+
   analytics = async (req, res) => {
     const result = await this.dealService.getAnalytics(req.query, getCurrentUser(req));
     res.json(okResponse(result));

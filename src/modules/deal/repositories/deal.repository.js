@@ -209,6 +209,27 @@ class DealRepository {
     return this.normalizeDealRow(row);
   }
 
+  async findActiveDealsForProducts(productIds = [], trx = knex) {
+    const ids = Array.from(new Set(productIds.map((productId) => String(productId || "")).filter(Boolean)));
+    if (!ids.length) return [];
+    const now = new Date();
+    const rows = await trx("deals")
+      .whereIn("product_id", ids)
+      .where("status", "active")
+      .andWhere("start_at", "<=", now)
+      .andWhere("end_at", ">", now)
+      .andWhereRaw("(allocated_quantity = 0 OR sold_quantity + reserved_quantity < allocated_quantity)")
+      .orderByRaw("COALESCE((metadata->>'priority')::int, 100) asc")
+      .orderBy("created_at", "desc");
+
+    const byProductId = new Map();
+    rows.forEach((row) => {
+      const productId = String(row.product_id || "");
+      if (!byProductId.has(productId)) byProductId.set(productId, this.normalizeDealRow(row));
+    });
+    return Array.from(byProductId.values());
+  }
+
   async createDeal(payload, timeline) {
     return knex.transaction(async (trx) => {
       const [deal] = await trx("deals").insert({ id: payload.id || uuidv4(), ...this.normalizeDealPayload(payload) }).returning("*");
@@ -380,6 +401,46 @@ class DealRepository {
       .orderBy("sp.priority", "asc")
       .orderBy("sp.created_at", "desc")
       .limit(Number(limit));
+  }
+
+  async listActiveDealProducts({
+    sellerId = null,
+    productId = null,
+    dealType = null,
+    sortBy = "priority",
+    sortDir = "asc",
+    limit = 200,
+  } = {}) {
+    const now = new Date();
+    const query = knex("deals as d")
+      .select("d.*")
+      .where("d.status", "active")
+      .andWhere("d.start_at", "<=", now)
+      .andWhere("d.end_at", ">", now)
+      .andWhereRaw("(d.allocated_quantity = 0 OR d.sold_quantity + d.reserved_quantity < d.allocated_quantity)");
+
+    if (sellerId) query.andWhere("d.seller_id", String(sellerId));
+    if (productId) query.andWhere("d.product_id", String(productId));
+    if (dealType) query.andWhere("d.deal_type", dealType);
+
+    const sortColumns = {
+      priority: knex.raw("COALESCE((d.metadata->>'priority')::int, 100)"),
+      created_at: "d.created_at",
+      start_at: "d.start_at",
+      end_at: "d.end_at",
+      deal_price: "d.deal_price",
+      discount_percent: "d.discount_percent",
+      sold_quantity: "d.sold_quantity",
+    };
+    const sortColumn = sortColumns[sortBy] || sortColumns.priority;
+    const direction = String(sortDir).toLowerCase() === "desc" ? "desc" : "asc";
+
+    const rows = await query
+      .orderBy(sortColumn, direction)
+      .orderBy("d.created_at", "desc")
+      .limit(Math.min(500, Math.max(1, Number(limit) || 200)));
+
+    return rows.map((row) => this.normalizeDealRow(row));
   }
 
   async reserveOrderSales({ orderId, orderItems = [], actor = {} }) {
