@@ -1,5 +1,6 @@
 const {
   ReferralModel,
+  InfluencerAccountModel,
   InfluencerProfileModel,
   InfluencerCodeModel,
   ReferralCodeModel,
@@ -36,6 +37,36 @@ class ReferralRepository {
     return UserModel.create(payload);
   }
 
+  async createInfluencerAccount(payload) {
+    return InfluencerAccountModel.create(payload);
+  }
+
+  async getInfluencerAccountById(accountId, { includeSecrets = false } = {}) {
+    const query = InfluencerAccountModel.findById(accountId);
+    if (!includeSecrets) query.select("-passwordHash -refreshSessions.tokenHash");
+    return query;
+  }
+
+  async findInfluencerAccountByEmail(email, { includeSecrets = false } = {}) {
+    const query = InfluencerAccountModel.findOne({
+      email: String(email || "").trim().toLowerCase(),
+    });
+    if (!includeSecrets) query.select("-passwordHash -refreshSessions.tokenHash");
+    return query;
+  }
+
+  async updateInfluencerAccount(accountId, update) {
+    return InfluencerAccountModel.findByIdAndUpdate(accountId, update, { new: true });
+  }
+
+  async updateInfluencerAccountRefreshSessions(accountId, refreshSessions) {
+    return this.updateInfluencerAccount(accountId, { $set: { refreshSessions } });
+  }
+
+  async updateInfluencerAccountLastLogin(accountId, lastLoginAt) {
+    return this.updateInfluencerAccount(accountId, { $set: { lastLoginAt } });
+  }
+
   async getUserById(userId) {
     return UserModel.findById(userId).select("-passwordHash -refreshSessions.tokenHash");
   }
@@ -68,6 +99,10 @@ class ReferralRepository {
     return InfluencerProfileModel.findOne({ userId: String(userId) });
   }
 
+  async getInfluencerProfileByAccountId(accountId) {
+    return InfluencerProfileModel.findOne({ accountId: String(accountId) });
+  }
+
   async listInfluencerProfiles({
     q = "",
     status = null,
@@ -90,16 +125,22 @@ class ReferralRepository {
         code: { $regex: q, $options: "i" },
       }).select("influencerId");
       const influencerIdsFromCodes = codeRows.map((code) => String(code.influencerId));
-      const users = await UserModel.find({
+      const identityFilter = {
         $or: [
           { email: { $regex: q, $options: "i" } },
           { phone: { $regex: q, $options: "i" } },
           { "profile.firstName": { $regex: q, $options: "i" } },
           { "profile.lastName": { $regex: q, $options: "i" } },
         ],
-      }).select("_id");
+      };
+      const [accounts, users] = await Promise.all([
+        InfluencerAccountModel.find(identityFilter).select("_id"),
+        UserModel.find(identityFilter).select("_id"),
+      ]);
+      const accountIds = accounts.map((account) => String(account._id));
       const userIds = users.map((user) => String(user._id));
       const orFilters = [];
+      if (accountIds.length) orFilters.push({ accountId: { $in: accountIds } });
       if (userIds.length) orFilters.push({ userId: { $in: userIds } });
       if (influencerIdsFromCodes.length) {
         orFilters.push({ _id: { $in: influencerIdsFromCodes } });
@@ -108,7 +149,7 @@ class ReferralRepository {
       if (orFilters.length) {
         filter.$or = orFilters;
       } else {
-        filter.userId = { $in: userIds };
+        filter.$or = [{ accountId: { $in: accountIds } }, { userId: { $in: userIds } }];
       }
     }
 

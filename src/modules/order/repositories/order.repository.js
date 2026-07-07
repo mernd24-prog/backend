@@ -361,10 +361,17 @@ class OrderRepository {
       if (existing) {
         const nextStatus = this.advanceShipmentStatus(existing.status, requestedStatus);
         const shouldWriteEvent = nextStatus !== existing.status;
+        const verifiedAt = nextStatus === "delivered_verified"
+          ? existing.delivered_verified_at || now
+          : existing.delivered_verified_at;
         const [updated] = await trx("shipments")
           .where("id", existing.id)
           .update({
             status: nextStatus,
+            delivered_verified_at: verifiedAt,
+            verified_by: nextStatus === "delivered_verified"
+              ? payload.updatedBy || payload.createdBy || existing.verified_by || null
+              : existing.verified_by,
             provider: payload.provider || existing.provider || "manual",
             courier_name: courierName || existing.courier_name,
             awb_number: trackingNumber || existing.awb_number,
@@ -376,8 +383,8 @@ class OrderRepository {
                 : Boolean(payload.verificationRequired),
             verification_methods:
               payload.verificationMethods === undefined
-                ? existing.verification_methods
-                : payload.verificationMethods || [],
+                ? this.jsonb(existing.verification_methods, [])
+                : this.jsonb(payload.verificationMethods, []),
             metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [
               JSON.stringify({
                 ...(payload.metadata || {}),
@@ -437,8 +444,10 @@ class OrderRepository {
           deal_id: payload.dealId || null,
           fulfillment_model: payload.fulfillmentModel || null,
           verification_required: Boolean(payload.verificationRequired),
-          verification_methods: payload.verificationMethods || [],
+          verification_methods: this.jsonb(payload.verificationMethods, []),
           delivery_proof_snapshot: payload.deliveryProofSnapshot || {},
+          delivered_verified_at: requestedStatus === "delivered_verified" ? now : null,
+          verified_by: requestedStatus === "delivered_verified" ? payload.updatedBy || payload.createdBy || null : null,
           manifest_id: payload.manifestId || null,
           expected_delivery_at: payload.expectedDeliveryAt || null,
           idempotency_key: payload.idempotencyKey || null,

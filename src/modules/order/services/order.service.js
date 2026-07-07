@@ -41,7 +41,9 @@ class OrderService {
     this.referralService = referralService;
   }
 
-  orderStatusToShipmentStatus(status) {
+  orderStatusToShipmentStatus(status, deliveryStatus = null) {
+    if (deliveryStatus === "delivered_verified") return "delivered_verified";
+    if (deliveryStatus === "delivered") return "delivered";
     return {
       [ORDER_STATUS.PACKED]: "initiated",
       [ORDER_STATUS.SHIPPED]: "in_transit",
@@ -106,7 +108,7 @@ class OrderService {
   }
 
   async syncShipmentsForOrderStatus(orderId, nextStatus, actor = {}, trackingInfo = null) {
-    const shipmentStatus = this.orderStatusToShipmentStatus(nextStatus);
+    const shipmentStatus = this.orderStatusToShipmentStatus(nextStatus, actor.deliveryStatus);
     if (!shipmentStatus) return;
 
     const order = await this.orderRepository.findByIdWithItems(orderId);

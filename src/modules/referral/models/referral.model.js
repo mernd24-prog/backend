@@ -14,9 +14,50 @@ const referralSchema = new mongoose.Schema(
 
 const ReferralModel = mongoose.model("Referral", referralSchema);
 
+const influencerRefreshSessionSchema = new mongoose.Schema(
+  {
+    sessionId: { type: String, required: true },
+    tokenHash: { type: String, required: true },
+    provider: { type: String, default: "password" },
+    ipAddress: String,
+    userAgent: String,
+    platform: String,
+    createdAt: { type: Date, default: Date.now },
+    lastUsedAt: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
+const influencerAccountSchema = new mongoose.Schema(
+  {
+    email: { type: String, required: true, lowercase: true, trim: true, unique: true, index: true },
+    phone: { type: String, default: null, index: true },
+    passwordHash: { type: String },
+    profile: {
+      firstName: String,
+      lastName: String,
+      avatarUrl: String,
+    },
+    accountStatus: { type: String, default: "active", index: true },
+    emailVerified: { type: Boolean, default: false },
+    tokenVersion: { type: Number, default: 0 },
+    sessionVersion: { type: Number, default: 0 },
+    permissionVersion: { type: Number, default: 0 },
+    passwordChangedAt: Date,
+    refreshSessions: [influencerRefreshSessionSchema],
+    lastLoginAt: Date,
+    createdBy: { type: String, default: null, index: true },
+    metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
+  },
+  { timestamps: true },
+);
+
+const InfluencerAccountModel = mongoose.model("InfluencerAccount", influencerAccountSchema);
+
 const influencerProfileSchema = new mongoose.Schema(
   {
-    userId: { type: String, required: true, unique: true, index: true },
+    accountId: { type: String, default: null, unique: true, sparse: true, index: true },
+    userId: { type: String, default: null, unique: true, sparse: true, index: true },
     influencerType: {
       type: String,
       enum: ["parent", "child"],
@@ -52,7 +93,8 @@ influencerProfileSchema.index({ rootInfluencerId: 1, level: 1 });
 const influencerCodeSchema = new mongoose.Schema(
   {
     influencerId: { type: String, required: true, index: true },
-    userId: { type: String, required: true, index: true },
+    accountId: { type: String, default: null, index: true },
+    userId: { type: String, default: null, index: true },
     code: {
       type: String,
       required: true,
@@ -416,6 +458,7 @@ const InfluencerBonusAchievementModel = mongoose.model(
 
 module.exports = {
   ReferralModel,
+  InfluencerAccountModel,
   InfluencerProfileModel,
   InfluencerCodeModel,
   ReferralCodeModel,

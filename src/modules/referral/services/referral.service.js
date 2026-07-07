@@ -135,16 +135,22 @@ class ReferralService {
   async enrichInfluencer(profile) {
     const plainProfile = this.toPlainObject(profile);
     const influencerId = this.getRecordId(plainProfile);
-    const [user, primaryCode, wallet] = await Promise.all([
-      this.referralRepository.getUserById(plainProfile.userId),
+    const [account, legacyUser, primaryCode, wallet] = await Promise.all([
+      plainProfile.accountId
+        ? this.referralRepository.getInfluencerAccountById(plainProfile.accountId)
+        : null,
+      plainProfile.userId ? this.referralRepository.getUserById(plainProfile.userId) : null,
       this.referralRepository.getPrimaryReferralCode(influencerId),
       this.referralRepository.ensureWallet(influencerId),
     ]);
+    const identity = account || legacyUser;
 
     return {
       ...plainProfile,
       id: influencerId,
-      user: this.toPlainObject(user),
+      account: account ? this.toPlainObject(account) : null,
+      user: this.toPlainObject(identity),
+      legacyUser: legacyUser ? this.toPlainObject(legacyUser) : null,
       primaryCode: primaryCode ? this.toPlainObject(primaryCode) : null,
       wallet: wallet ? this.toPlainObject(wallet) : null,
     };
@@ -174,31 +180,37 @@ class ReferralService {
       if (["admin", "sub-admin", "super-admin", "seller", "seller-sub-admin"].includes(existingUser.role)) {
         throw new AppError("Influencers must be normal customer users", 400);
       }
-      return { user: existingUser, temporaryPassword: null };
+      return { account: null, user: existingUser, temporaryPassword: null, legacyUser: true };
     }
 
     const email = String(payload.email || "").trim().toLowerCase();
     if (!email) {
       throw new AppError("Email is required for a new influencer user", 400);
     }
+    const existingAccount = await this.referralRepository.findInfluencerAccountByEmail(email);
+    if (existingAccount) {
+      throw new AppError("Influencer account already exists for this email", 409);
+    }
 
     const temporaryPassword =
       payload.password || `Influencer@${randomBytes(4).toString("hex")}1`;
-    const user = await this.referralRepository.createUser({
+    const account = await this.referralRepository.createInfluencerAccount({
       email,
       phone: payload.phone || null,
       passwordHash: await hashText(temporaryPassword),
-      role: "buyer",
       profile: {
         firstName: payload.firstName || payload.profile?.firstName || "Influencer",
         lastName: payload.lastName || payload.profile?.lastName || "",
       },
       accountStatus: payload.accountStatus || "active",
+      createdBy: payload.createdBy || null,
     });
 
     return {
-      user,
+      account,
+      user: null,
       temporaryPassword: payload.password ? null : temporaryPassword,
+      legacyUser: false,
     };
   }
 
@@ -207,11 +219,17 @@ class ReferralService {
     const existing = await this.referralRepository.getPrimaryReferralCode(influencerId);
     if (existing) return existing;
 
-    const user = await this.referralRepository.getUserById(profile.userId);
+    const account = profile.accountId
+      ? await this.referralRepository.getInfluencerAccountById(profile.accountId)
+      : null;
+    const user = !account && profile.userId
+      ? await this.referralRepository.getUserById(profile.userId)
+      : null;
+    const identity = account || user;
     const code = payload.code
       ? this.normalizeCode(payload.code)
       : await this.makeUniqueCode(
-          `${user?.profile?.firstName || user?.email || "REF"}${profile.level || 1}`,
+          `${identity?.profile?.firstName || identity?.email || "REF"}${profile.level || 1}`,
         );
     const existingCustomerSignupCode =
       await this.referralRepository.findReferrerByCode(code);
@@ -221,7 +239,8 @@ class ReferralService {
 
     const influencerCode = await this.referralRepository.createReferralCode({
       influencerId,
-      userId: profile.userId,
+      accountId: profile.accountId || null,
+      userId: profile.userId || null,
       code,
       status: payload.codeStatus || "active",
       startsAt: payload.startsAt || null,
@@ -252,9 +271,13 @@ class ReferralService {
   }
 
   async createParentInfluencer(payload = {}, actor = {}) {
-    const { user, temporaryPassword } = await this.ensureInfluencerUser(payload);
+    const { account, user, temporaryPassword } = await this.ensureInfluencerUser({
+      ...payload,
+      createdBy: actor?.userId || null,
+    });
     const created = await this.referralRepository.createInfluencerProfile({
-      userId: this.getRecordId(user),
+      accountId: account ? this.getRecordId(account) : null,
+      userId: user ? this.getRecordId(user) : null,
       influencerType: "parent",
       level: 1,
       path: [],
@@ -294,7 +317,10 @@ class ReferralService {
       throw new AppError("Parent influencer cannot create children", 400);
     }
 
-    const { user, temporaryPassword } = await this.ensureInfluencerUser(payload);
+    const { account, user, temporaryPassword } = await this.ensureInfluencerUser({
+      ...payload,
+      createdBy: actor?.userId || null,
+    });
     const parentIdString = this.getRecordId(parent);
     const rootInfluencerId = parent.rootInfluencerId || parentIdString;
     const parentPath = Array.isArray(parent.path) && parent.path.length
@@ -302,7 +328,8 @@ class ReferralService {
       : [parentIdString];
 
     const created = await this.referralRepository.createInfluencerProfile({
-      userId: this.getRecordId(user),
+      accountId: account ? this.getRecordId(account) : null,
+      userId: user ? this.getRecordId(user) : null,
       influencerType: "child",
       parentInfluencerId: parentIdString,
       rootInfluencerId,
@@ -409,7 +436,8 @@ class ReferralService {
 
     const influencerCode = await this.referralRepository.createReferralCode({
       influencerId: this.getRecordId(influencer),
-      userId: influencer.userId,
+      accountId: influencer.accountId || null,
+      userId: influencer.userId || null,
       code,
       status: payload.status || "active",
       startsAt: payload.startsAt || null,
@@ -480,7 +508,7 @@ class ReferralService {
     if (code.usageLimit && Number(code.usageCount || 0) >= Number(code.usageLimit)) {
       throw new AppError("Influencer code usage limit reached", 400);
     }
-    if (customerId && String(code.userId) === String(customerId)) {
+    if (customerId && code.userId && String(code.userId) === String(customerId)) {
       throw new AppError("You cannot use your own influencer code", 400);
     }
 
@@ -509,7 +537,8 @@ class ReferralService {
       codeId: this.getRecordId(code),
       code: code.code,
       influencerId: this.getRecordId(influencer),
-      influencerUserId: String(influencer.userId),
+      influencerAccountId: influencer.accountId ? String(influencer.accountId) : null,
+      influencerUserId: influencer.userId ? String(influencer.userId) : null,
       parentInfluencerId: influencer.parentInfluencerId || null,
       overrideInfluencerId: influencer.originalParentInfluencerId || null,
       eligibleAmount: Number(Number(eligibleAmount || 0).toFixed(2)),
@@ -1108,6 +1137,7 @@ class ReferralService {
           rule: plainRule,
           influencer: {
             id: influencerId,
+            accountId: plainProfile.accountId || null,
             userId: plainProfile.userId,
             influencerType: plainProfile.influencerType,
             parentInfluencerId: plainProfile.parentInfluencerId || null,
@@ -1286,7 +1316,7 @@ class ReferralService {
   }
 
   async getMyInfluencerProfileOrThrow(actor = {}) {
-    const profile = await this.referralRepository.getInfluencerProfileByUserId(actor.userId);
+    const profile = await this.getInfluencerProfileByActorId(actor.userId);
     if (!profile) throw new AppError("Influencer profile not found", 404);
     if (profile.status !== "active") {
       throw new AppError("Influencer profile is not active", 403);
@@ -1294,8 +1324,39 @@ class ReferralService {
     return profile;
   }
 
+  async getInfluencerProfileByActorId(actorId) {
+    if (!actorId) return null;
+    return (
+      (await this.referralRepository.getInfluencerProfileByAccountId(actorId)) ||
+      (await this.referralRepository.getInfluencerProfileByUserId(actorId))
+    );
+  }
+
+  async getInfluencerAccountForLogin(email) {
+    return this.referralRepository.findInfluencerAccountByEmail(email, {
+      includeSecrets: true,
+    });
+  }
+
+  async getInfluencerAccountForSession(accountId) {
+    return this.referralRepository.getInfluencerAccountById(accountId, {
+      includeSecrets: true,
+    });
+  }
+
+  async updateInfluencerAccountLastLogin(accountId, lastLoginAt) {
+    return this.referralRepository.updateInfluencerAccountLastLogin(accountId, lastLoginAt);
+  }
+
+  async updateInfluencerAccountRefreshSessions(accountId, refreshSessions) {
+    return this.referralRepository.updateInfluencerAccountRefreshSessions(
+      accountId,
+      refreshSessions,
+    );
+  }
+
   async getInfluencerSessionByUserId(userId) {
-    const profile = await this.referralRepository.getInfluencerProfileByUserId(userId);
+    const profile = await this.getInfluencerProfileByActorId(userId);
     if (!profile) throw new AppError("This account is not registered as an influencer", 403);
     const enriched = await this.enrichInfluencer(profile);
     const status = String(profile.status || "pending");

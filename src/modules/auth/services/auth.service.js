@@ -593,7 +593,125 @@ class AuthService {
   }
 
   async loginInfluencer(payload, requestContext = {}) {
-    return this.login(payload, requestContext, { requireInfluencer: true });
+    const account = await this.referralService.getInfluencerAccountForLogin(payload.email);
+    if (!account) {
+      return this.login(payload, requestContext, { requireInfluencer: true });
+    }
+
+    if (account.accountStatus && account.accountStatus !== "active") {
+      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
+        userId: account.id,
+        email: account.email,
+        provider: "influencer-password",
+        ...requestContext,
+        metadata: { reason: "account_not_active", role: ROLES.INFLUENCER },
+      });
+      throw new AppError("Influencer account is not active", 403);
+    }
+
+    if (!account.passwordHash) {
+      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
+        userId: account.id,
+        email: account.email,
+        provider: "influencer-password",
+        ...requestContext,
+        metadata: { reason: "password_login_not_enabled", role: ROLES.INFLUENCER },
+      });
+      throw new AppError("Password login is not enabled for this influencer account", 401);
+    }
+
+    const isMatch = await checkHash(payload.password, account.passwordHash);
+    if (!isMatch) {
+      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
+        userId: account.id,
+        email: account.email,
+        provider: "influencer-password",
+        ...requestContext,
+        metadata: { reason: "invalid_password", role: ROLES.INFLUENCER },
+      });
+      throw new AppError("Invalid credentials", 401);
+    }
+
+    const influencerSession = await this.referralService.getInfluencerSessionByUserId(account.id);
+    await this.referralService.updateInfluencerAccountLastLogin(account.id, new Date());
+    const result = await this.issueInfluencerTokens(account, requestContext);
+    return { ...result, influencer: influencerSession };
+  }
+
+  sanitizeInfluencerAccount(account) {
+    const plainAccount = this.toPlainObject(account);
+    delete plainAccount.passwordHash;
+    if (Array.isArray(plainAccount.refreshSessions)) {
+      plainAccount.refreshSessions = plainAccount.refreshSessions.map((session) => {
+        const cleanSession = { ...session };
+        delete cleanSession.tokenHash;
+        return cleanSession;
+      });
+    }
+    return {
+      ...plainAccount,
+      role: ROLES.INFLUENCER,
+      userType: ROLES.INFLUENCER,
+    };
+  }
+
+  async issueInfluencerTokens(
+    account,
+    requestContext = {},
+    provider = "influencer-password",
+    successEventType = SECURITY_EVENTS.AUTH_LOGIN_SUCCESS,
+    replacedSessionId = null,
+  ) {
+    const tokenPayload = {
+      sub: account.id,
+      email: account.email,
+      role: ROLES.INFLUENCER,
+      roles: [ROLES.INFLUENCER],
+      userType: ROLES.INFLUENCER,
+      status: account.accountStatus || "active",
+      tokenVersion: Number(account.tokenVersion || 0),
+      sessionVersion: Number(account.sessionVersion || 0),
+      permissionVersion: Number(account.permissionVersion || 0),
+      authScope: "referral",
+      isSuperAdmin: false,
+    };
+    const accessToken = makeAccessToken(tokenPayload);
+    const refreshToken = makeRefreshToken(tokenPayload);
+    const refreshPayload = readRefreshToken(refreshToken);
+    const tokenHash = await hashText(refreshToken);
+    const refreshSessions = (account.refreshSessions || [])
+      .filter((session) => session.sessionId !== replacedSessionId)
+      .slice(-4);
+
+    refreshSessions.push({
+      sessionId: refreshPayload.sessionId,
+      tokenHash,
+      provider,
+      ipAddress: requestContext.ipAddress,
+      userAgent: requestContext.userAgent,
+      platform: requestContext.platform,
+      createdAt: new Date(),
+      lastUsedAt: new Date(),
+    });
+
+    await this.referralService.updateInfluencerAccountRefreshSessions(account.id, refreshSessions);
+    await this.recordSecurityEvent(successEventType, "success", {
+      userId: account.id,
+      email: account.email,
+      provider,
+      ...requestContext,
+      metadata: { role: ROLES.INFLUENCER },
+    });
+
+    return {
+      user: this.sanitizeInfluencerAccount(account),
+      tokens: {
+        accessToken,
+        refreshToken,
+      },
+      flowState: null,
+      permissions: null,
+    };
   }
 
   async socialLogin(payload, requestContext = {}) {
@@ -872,6 +990,59 @@ class AuthService {
           : AUTH_ERROR_CODES.TOKEN_INVALID,
         401,
       );
+    }
+
+    if (payload.role === ROLES.INFLUENCER || payload.authScope === "referral") {
+      const account = await this.referralService.getInfluencerAccountForSession(payload.sub);
+      if (!account) {
+        await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_REFRESH_FAILED, "failed", {
+          email: payload.email,
+          provider: "influencer-session",
+          ...requestContext,
+          metadata: { reason: "influencer_account_not_found", role: ROLES.INFLUENCER },
+        });
+        throw authError(AUTH_ERROR_CODES.USER_NOT_FOUND, 401);
+      }
+      const sessionError = getSessionAuthError(account, payload);
+      if (sessionError) {
+        throw sessionError;
+      }
+      const currentSession = (account.refreshSessions || []).find(
+        (session) => session.sessionId === payload.sessionId,
+      );
+      if (!currentSession) {
+        await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_REFRESH_FAILED, "failed", {
+          userId: account.id,
+          email: account.email,
+          provider: "influencer-session",
+          ...requestContext,
+          metadata: { reason: "session_not_found", role: ROLES.INFLUENCER },
+        });
+        throw authError(AUTH_ERROR_CODES.SESSION_INVALID, 401);
+      }
+      const tokenValid = await checkHash(refreshToken, currentSession.tokenHash);
+      if (!tokenValid) {
+        await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_REFRESH_FAILED, "failed", {
+          userId: account.id,
+          email: account.email,
+          provider: "influencer-session",
+          ...requestContext,
+          metadata: { reason: "token_hash_mismatch", role: ROLES.INFLUENCER },
+        });
+        throw authError(AUTH_ERROR_CODES.SESSION_INVALID, 401);
+      }
+
+      const result = await this.issueInfluencerTokens(
+        account,
+        requestContext,
+        currentSession.provider || "influencer-session",
+        SECURITY_EVENTS.AUTH_REFRESH_SUCCESS,
+        currentSession.sessionId,
+      );
+      return {
+        ...result,
+        influencer: await this.referralService.getInfluencerSessionByUserId(account.id),
+      };
     }
 
     const user = await this.authRepository.findUserByEmail(payload.email);

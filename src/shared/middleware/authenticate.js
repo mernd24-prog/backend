@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
 const { env } = require("../../config/env");
 const { UserModel } = require("../../modules/user/models/user.model");
+const { InfluencerAccountModel } = require("../../modules/referral/models/referral.model");
 const { ROLES } = require("../constants/roles");
 const { AppError } = require("../errors/app-error");
 const { RbacService } = require("../../modules/rbac/services/rbac.service");
@@ -173,6 +174,31 @@ async function validateAuthUser(payload = {}) {
     throw authError(AUTH_ERROR_CODES.TOKEN_INVALID, 401);
   }
 
+  if (payload.role === ROLES.INFLUENCER || payload.authScope === "referral") {
+    const influencerAccount = await InfluencerAccountModel.findById(payload.sub)
+      .select("-passwordHash -refreshSessions.tokenHash")
+      .lean()
+      .catch(() => null);
+
+    if (!influencerAccount) {
+      throw authError(AUTH_ERROR_CODES.USER_NOT_FOUND, 401);
+    }
+    const statusError = getStatusAuthError(influencerAccount);
+    if (statusError) {
+      throw statusError;
+    }
+    const sessionError = getSessionAuthError(influencerAccount, payload);
+    if (sessionError) {
+      throw sessionError;
+    }
+
+    return {
+      ...influencerAccount,
+      role: ROLES.INFLUENCER,
+      allowedModules: ["referral"],
+    };
+  }
+
   const user = await UserModel.findById(payload.sub)
     .select("-passwordHash -refreshSessions.tokenHash")
     .lean()
@@ -209,6 +235,23 @@ async function validateAuthUser(payload = {}) {
 
 async function hydrateAuthPermissions(payload = {}) {
   const user = await validateAuthUser(payload);
+
+  if (user.role === ROLES.INFLUENCER || payload.authScope === "referral") {
+    return {
+      ...payload,
+      role: ROLES.INFLUENCER,
+      roles: [ROLES.INFLUENCER],
+      userType: ROLES.INFLUENCER,
+      status: user.accountStatus || "active",
+      tokenVersion: Number(user.tokenVersion || 0),
+      sessionVersion: Number(user.sessionVersion || 0),
+      permissionVersion: Number(user.permissionVersion || 0),
+      isSuperAdmin: false,
+      permissions: [],
+      allowedModules: ["referral"],
+      user,
+    };
+  }
 
   if (PERMISSION_CACHE_TTL_MS > 0) {
     const cached = permissionCache.get(`${payload.sub}:${user.sessionVersion || 0}:${user.permissionVersion || 0}`);

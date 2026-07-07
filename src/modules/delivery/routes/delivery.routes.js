@@ -90,6 +90,12 @@ deliveryRoutes.post(
   catchErrors(deliveryController.createShipment),
 );
 
+deliveryRoutes.post(
+  "/shipments/webhook",
+  checkInput(trackingWebhookSchema),
+  catchErrors(deliveryController.trackingWebhook),
+);
+
 deliveryRoutes.get(
   "/shipments/:shipmentId",
   authenticate,
@@ -128,12 +134,6 @@ deliveryRoutes.post(
   allowPermissions("delivery:status_change"),
   checkInput(confirmDeliverySchema),
   catchErrors(deliveryController.confirmDelivery),
-);
-
-deliveryRoutes.post(
-  "/shipments/webhook",
-  checkInput(trackingWebhookSchema),
-  catchErrors(deliveryController.trackingWebhook),
 );
 
 deliveryRoutes.post(

@@ -31,18 +31,31 @@ function withUpdateActor(payload, req) {
   return { ...payload, updatedBy: String(actorId) };
 }
 
-function buyerNameFromUser(user = {}) {
+function buyerNameFromUser(user = {}, { includeEmail = true } = {}) {
   const first = user.profile?.firstName || user.firstName || "";
   const last = user.profile?.lastName || user.lastName || "";
   const fullName = [first, last].filter(Boolean).join(" ").trim();
+  const defaultAddressName = Array.isArray(user.addresses)
+    ? user.addresses.find((address) => address?.isDefault)?.fullName || user.addresses.find((address) => address?.fullName)?.fullName
+    : "";
   return (
     fullName ||
     user.profile?.fullName ||
+    defaultAddressName ||
     user.displayName ||
     user.name ||
-    user.email ||
+    (includeEmail ? user.email : "") ||
     ""
   );
+}
+
+function buyerDisplayNameFromUser(user = {}) {
+  const name = buyerNameFromUser(user, { includeEmail: false });
+  return isEmailLike(name) ? "" : name;
+}
+
+function isEmailLike(value = "") {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
 
 function productImageFromProduct(product = {}) {
@@ -681,7 +694,7 @@ class PlatformService {
     ];
     const validBuyerIds = buyerIds.filter(isMongoObjectId);
     const users = validBuyerIds.length
-      ? await UserModel.find({ _id: { $in: validBuyerIds } }).select("email profile displayName avatarUrl profileImage user_image image")
+      ? await UserModel.find({ _id: { $in: validBuyerIds } }).select("email profile addresses.fullName addresses.isDefault displayName avatarUrl profileImage user_image image")
       : [];
     const userById = new Map(users.map((user) => [String(user._id), user]));
     const productIds = [
@@ -703,8 +716,13 @@ class PlatformService {
       const product = productById.get(String(review?.productId || ""));
       const buyerImage = buyerImageFromUser(user);
       const storedBuyerName = String(review.buyerName || "").trim();
-      const shouldUseUserName = !storedBuyerName || storedBuyerName === "Admin Review";
-      const buyerName = shouldUseUserName ? buyerNameFromUser(user) || storedBuyerName || "Verified Buyer" : review.buyerName;
+      const profileBuyerName = buyerDisplayNameFromUser(user);
+      const shouldUseUserName =
+        Boolean(profileBuyerName) &&
+        (!storedBuyerName || storedBuyerName === "Admin Review" || isEmailLike(storedBuyerName));
+      const buyerName = shouldUseUserName
+        ? profileBuyerName
+        : storedBuyerName || buyerNameFromUser(user) || "Verified Buyer";
       const productName = product?.title || product?.name || product?.sku || "";
       const productImage = productImageFromProduct(product);
       return {

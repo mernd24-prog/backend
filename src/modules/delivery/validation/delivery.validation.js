@@ -212,6 +212,7 @@ const trackingWebhookSchema = Joi.object({
 
 const deliveryOtpSchema = Joi.object({
   body: Joi.object({
+    channel: Joi.string().valid("sms", "email", "app", "in_app"),
     channels: Joi.array()
       .items(Joi.string().valid("sms", "email", "app", "in_app"))
       .unique()

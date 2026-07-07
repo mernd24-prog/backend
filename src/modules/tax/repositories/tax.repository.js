@@ -257,7 +257,23 @@ class TaxRepository {
     const pagingValues = [...values, limit, offset];
     const [listResult, countResult] = await Promise.all([
       postgresPool.query(
-        `SELECT ti.*
+        `SELECT
+           ti.*,
+           ti.invoice_number AS "invoiceNumber",
+           ti.order_id AS "orderId",
+           ti.buyer_id AS "buyerId",
+           ti.seller_id AS "sellerId",
+           ti.organization_id AS "organizationId",
+           ti.taxable_amount AS "taxableAmount",
+           ti.tax_amount AS "taxAmount",
+           ti.cgst_amount AS "cgstAmount",
+           ti.sgst_amount AS "sgstAmount",
+           ti.igst_amount AS "igstAmount",
+           ti.tcs_amount AS "tcsAmount",
+           ti.total_amount AS "totalAmount",
+           ti.invoice_type AS "invoiceType",
+           ti.issued_at AS "issuedAt",
+           ti.created_at AS "createdAt"
          FROM tax_invoices ti
          ${whereSql}
          ORDER BY ${orderColumn} ${orderDirection}, ti.issued_at DESC
@@ -401,7 +417,23 @@ class TaxRepository {
     const pagingValues = [...values, limit, offset];
     const [listResult, countResult] = await Promise.all([
       postgresPool.query(
-        `SELECT *
+        `SELECT
+           *,
+           credit_note_number AS "creditNoteNumber",
+           invoice_id AS "invoiceId",
+           order_id AS "orderId",
+           buyer_id AS "buyerId",
+           organization_id AS "organizationId",
+           reference_type AS "referenceType",
+           reference_id AS "referenceId",
+           taxable_amount AS "taxableAmount",
+           tax_amount AS "taxAmount",
+           cgst_amount AS "cgstAmount",
+           sgst_amount AS "sgstAmount",
+           igst_amount AS "igstAmount",
+           total_amount AS "totalAmount",
+           issued_at AS "issuedAt",
+           created_at AS "createdAt"
          FROM tax_credit_notes
          ${whereSql}
          ORDER BY ${orderColumn} ${orderDirection}, issued_at DESC

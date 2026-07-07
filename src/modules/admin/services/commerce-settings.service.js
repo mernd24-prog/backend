@@ -21,14 +21,49 @@ const DEFAULT_SETTINGS = {
     razorpaySandboxTargetDate: "2026-06-18",
     razorpaySandboxKeyAvailable: false,
     gatewayFeePolicy: "platform_absorbs",
+    gateway: "razorpay",
+    refundPolicy: "manual_review",
+  },
+  platformFees: {
+    customerFeeType: "fixed",
+    customerFeeValue: 0,
+    sellerFeeType: "percentage",
+    sellerFeeValue: 0,
+    gstRate: 18,
+    calculationBase: "subtotal",
   },
   cod: {
+    enabled: true,
     availabilityMode: "all_pincodes",
     allowPincodes: [],
     blockPincodes: [],
     collectionPolicy: "platform_or_courier",
     payoutRequiresCapture: true,
+    feeAmount: 0,
+    minOrderAmount: null,
+    maxOrderAmount: null,
   },
+  shippingDefaults: {
+    defaultCharge: 0,
+    freeShippingThreshold: null,
+    handlingFee: 0,
+    shippingMethod: "standard",
+  },
+  templates: [
+    { id: "standard_seller", name: "Standard Seller", active: true, description: "Default marketplace commerce rules." },
+    { id: "premium_seller", name: "Premium Seller", active: true, description: "Reduced friction settings for high quality sellers." },
+    { id: "local_seller", name: "Local Seller", active: true, description: "Local delivery and tight regional serviceability." },
+    { id: "grocery_seller", name: "Grocery Seller", active: true, description: "Fast moving grocery and COD friendly defaults." },
+    { id: "heavy_item_seller", name: "Heavy Item Seller", active: true, description: "Higher shipping and handling defaults." },
+    { id: "electronics_seller", name: "Electronics Seller", active: true, description: "Electronics focused shipping, COD, and payout rules." },
+  ],
+  sellerTiers: [
+    { id: "bronze", name: "Bronze", active: true, platformFeeType: "percentage", platformFeeValue: 0, codCharge: 0, payoutDelayDays: 7, commissionPercent: 0 },
+    { id: "silver", name: "Silver", active: true, platformFeeType: "percentage", platformFeeValue: 0, codCharge: 0, payoutDelayDays: 5, commissionPercent: 0 },
+    { id: "gold", name: "Gold", active: true, platformFeeType: "percentage", platformFeeValue: 0, codCharge: 0, payoutDelayDays: 3, commissionPercent: 0 },
+    { id: "platinum", name: "Platinum", active: true, platformFeeType: "percentage", platformFeeValue: 0, codCharge: 0, payoutDelayDays: 2, commissionPercent: 0 },
+    { id: "enterprise", name: "Enterprise", active: true, platformFeeType: "percentage", platformFeeValue: 0, codCharge: 0, payoutDelayDays: 1, commissionPercent: 0 },
+  ],
   wallet: {
     partialPaymentMode: "user_opt_in",
     autoApplyMaxPercent: env.commerce.maxWalletUsagePerOrderPercent,
@@ -58,6 +93,12 @@ const ALLOWED = {
   payments: {
     razorpaySandboxStatus: ["pending", "available", "blocked", "not_required"],
     gatewayFeePolicy: ["platform_absorbs", "seller_deducted", "split"],
+    gateway: ["razorpay", "cashfree", "stripe", "manual"],
+    refundPolicy: ["manual_review", "auto_after_return", "instant_wallet", "gateway_original"],
+  },
+  platformFees: {
+    feeType: ["fixed", "percentage"],
+    calculationBase: ["product_price", "order_total", "subtotal"],
   },
   cod: {
     availabilityMode: ["all_pincodes", "allowlist", "blocklist", "disabled"],
@@ -85,6 +126,39 @@ const uniqueStrings = (items = []) =>
         .filter(Boolean),
     ),
   );
+
+const normalizeTemplateList = (items = []) =>
+  (Array.isArray(items) ? items : [])
+    .filter(isPlainObject)
+    .map((item) => ({
+      id: String(item.id || item.key || item.name || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""),
+      name: String(item.name || item.label || "Commerce Template").trim(),
+      description: String(item.description || ""),
+      active: bool(item.active, true),
+      version: String(item.version || "v1"),
+      settings: isPlainObject(item.settings) ? item.settings : {},
+      sellerIds: uniqueStrings(item.sellerIds || item.assignedSellerIds),
+    }))
+    .filter((item) => item.id && item.name);
+
+const normalizeTierList = (items = []) =>
+  (Array.isArray(items) ? items : [])
+    .filter(isPlainObject)
+    .map((item) => ({
+      id: String(item.id || item.key || item.name || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""),
+      name: String(item.name || item.label || "Seller Tier").trim(),
+      active: bool(item.active, true),
+      platformFeeType: pickAllowed(item.platformFeeType || item.feeType, ALLOWED.platformFees.feeType, "percentage"),
+      platformFeeValue: Math.max(num(item.platformFeeValue || item.feeValue, 0), 0),
+      codCharge: Math.max(num(item.codCharge, 0), 0),
+      payoutDelayDays: Math.min(Math.max(num(item.payoutDelayDays, 0), 0), 365),
+      commissionPercent: Math.min(Math.max(num(item.commissionPercent, 0), 0), 100),
+      shippingBenefits: String(item.shippingBenefits || ""),
+      freeShippingRule: String(item.freeShippingRule || ""),
+      prioritySupport: bool(item.prioritySupport, false),
+      upgradeRule: String(item.upgradeRule || ""),
+    }))
+    .filter((item) => item.id && item.name);
 
 const num = (value, fallback = 0) => {
   if (value === undefined || value === null || value === "") return fallback;
@@ -173,8 +247,39 @@ class CommerceSettingsService {
           ALLOWED.payments.gatewayFeePolicy,
           DEFAULT_SETTINGS.payments.gatewayFeePolicy,
         ),
+        gateway: pickAllowed(
+          source.payments.gateway,
+          ALLOWED.payments.gateway,
+          DEFAULT_SETTINGS.payments.gateway,
+        ),
+        refundPolicy: pickAllowed(
+          source.payments.refundPolicy,
+          ALLOWED.payments.refundPolicy,
+          DEFAULT_SETTINGS.payments.refundPolicy,
+        ),
+      },
+      platformFees: {
+        customerFeeType: pickAllowed(
+          source.platformFees.customerFeeType,
+          ALLOWED.platformFees.feeType,
+          DEFAULT_SETTINGS.platformFees.customerFeeType,
+        ),
+        customerFeeValue: Math.max(num(source.platformFees.customerFeeValue, 0), 0),
+        sellerFeeType: pickAllowed(
+          source.platformFees.sellerFeeType,
+          ALLOWED.platformFees.feeType,
+          DEFAULT_SETTINGS.platformFees.sellerFeeType,
+        ),
+        sellerFeeValue: Math.max(num(source.platformFees.sellerFeeValue, 0), 0),
+        gstRate: Math.min(Math.max(num(source.platformFees.gstRate, 18), 0), 100),
+        calculationBase: pickAllowed(
+          source.platformFees.calculationBase,
+          ALLOWED.platformFees.calculationBase,
+          DEFAULT_SETTINGS.platformFees.calculationBase,
+        ),
       },
       cod: {
+        enabled: bool(source.cod.enabled, true),
         availabilityMode: pickAllowed(
           source.cod.availabilityMode,
           ALLOWED.cod.availabilityMode,
@@ -188,7 +293,28 @@ class CommerceSettingsService {
           DEFAULT_SETTINGS.cod.collectionPolicy,
         ),
         payoutRequiresCapture: bool(source.cod.payoutRequiresCapture, true),
+        feeAmount: Math.max(num(source.cod.feeAmount, 0), 0),
+        minOrderAmount: source.cod.minOrderAmount === "" || source.cod.minOrderAmount === undefined || source.cod.minOrderAmount === null
+          ? null
+          : Math.max(num(source.cod.minOrderAmount, 0), 0),
+        maxOrderAmount: source.cod.maxOrderAmount === "" || source.cod.maxOrderAmount === undefined || source.cod.maxOrderAmount === null
+          ? null
+          : Math.max(num(source.cod.maxOrderAmount, 0), 0),
       },
+      shippingDefaults: {
+        defaultCharge: Math.max(num(source.shippingDefaults.defaultCharge, 0), 0),
+        freeShippingThreshold: source.shippingDefaults.freeShippingThreshold === "" || source.shippingDefaults.freeShippingThreshold === undefined || source.shippingDefaults.freeShippingThreshold === null
+          ? null
+          : Math.max(num(source.shippingDefaults.freeShippingThreshold, 0), 0),
+        handlingFee: Math.max(num(source.shippingDefaults.handlingFee, 0), 0),
+        shippingMethod: String(source.shippingDefaults.shippingMethod || DEFAULT_SETTINGS.shippingDefaults.shippingMethod),
+      },
+      templates: normalizeTemplateList(source.templates).length
+        ? normalizeTemplateList(source.templates)
+        : DEFAULT_SETTINGS.templates,
+      sellerTiers: normalizeTierList(source.sellerTiers).length
+        ? normalizeTierList(source.sellerTiers)
+        : DEFAULT_SETTINGS.sellerTiers,
       wallet: {
         partialPaymentMode: pickAllowed(
           source.wallet.partialPaymentMode,

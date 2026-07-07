@@ -5,6 +5,7 @@ const ROLES = {
   SELLER_ADMIN: "seller-admin",
   SELLER_SUB_ADMIN: "seller-sub-admin",
   BUYER: "buyer",
+  INFLUENCER: "influencer",
   SUPER_ADMIN: "super-admin",
 };
 

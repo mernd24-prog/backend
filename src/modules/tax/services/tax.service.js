@@ -45,11 +45,12 @@ class TaxService {
     const orderMetadata = this.normalizeJson(order.metadata, {});
     const pricingSummary = orderMetadata.pricingSummary || {};
     const grossSalesAmount = Number(order.subtotal_amount || 0);
-    const taxableAmount = Number(taxBreakup.taxableAmount || 0);
-    const taxAmount = Number(order.tax_amount || taxBreakup.totalTaxAmount || 0);
-    const cgstAmount = Number(taxBreakup.cgstAmount || 0);
-    const sgstAmount = Number(taxBreakup.sgstAmount || 0);
-    const igstAmount = Number(taxBreakup.igstAmount || 0);
+    const taxTotals = this.calculateOrderTaxAmounts(order);
+    const taxableAmount = taxTotals.taxableAmount;
+    const taxAmount = Number(order.tax_amount || taxTotals.taxAmount || 0);
+    const cgstAmount = taxTotals.cgstAmount;
+    const sgstAmount = taxTotals.sgstAmount;
+    const igstAmount = taxTotals.igstAmount;
     const tcsAmount = Number((taxableAmount * 0.01).toFixed(2));
     const invoiceNumber = await this.taxRepository.nextInvoiceNumber("GST");
 
@@ -146,6 +147,39 @@ class TaxService {
       limit: Number(query.limit || 50),
       offset: Number(query.offset || 0),
     });
+  }
+
+  normalizeInvoiceResponse(invoice = {}) {
+    if (!invoice) return null;
+    return {
+      ...invoice,
+      invoiceNumber: invoice.invoice_number,
+      orderId: invoice.order_id,
+      buyerId: invoice.buyer_id,
+      sellerId: invoice.seller_id,
+      organizationId: invoice.organization_id,
+      taxableAmount: Number(invoice.taxable_amount || 0),
+      taxAmount: Number(invoice.tax_amount || 0),
+      cgstAmount: Number(invoice.cgst_amount || 0),
+      sgstAmount: Number(invoice.sgst_amount || 0),
+      igstAmount: Number(invoice.igst_amount || 0),
+      tcsAmount: Number(invoice.tcs_amount || 0),
+      totalAmount: Number(invoice.total_amount || 0),
+      invoiceType: this.invoiceType(invoice),
+      issuedAt: invoice.issued_at,
+      createdAt: invoice.created_at,
+      metadata: this.normalizeJson(invoice.metadata, {}),
+      organizationSnapshot: this.normalizeJson(invoice.organization_snapshot, {}),
+    };
+  }
+
+  async getInvoice(invoiceId, actor = {}) {
+    const invoice = await this.taxRepository.findInvoiceById(invoiceId);
+    if (!invoice) {
+      throw new AppError("Invoice not found", 404);
+    }
+    await this.assertInvoiceViewAccess(invoice, actor);
+    return this.normalizeInvoiceResponse(invoice);
   }
 
   async getOrderInvoice(orderId, actor = {}) {
@@ -1234,6 +1268,45 @@ class TaxService {
     };
   }
 
+  calculateOrderTaxAmounts(order = {}) {
+    const taxBreakup = this.normalizeJson(order.tax_breakup, {});
+    const items = Array.isArray(order.items) ? order.items : [];
+    const itemTotals = items.reduce((acc, item) => {
+      const itemAmounts = this.buildInvoiceItem(item);
+      acc.taxableAmount += itemAmounts.taxableAmount;
+      acc.taxAmount += itemAmounts.taxAmount;
+      acc.cgstAmount += itemAmounts.cgstAmount;
+      acc.sgstAmount += itemAmounts.sgstAmount;
+      acc.igstAmount += itemAmounts.igstAmount;
+      acc.taxPayableAmount += itemAmounts.taxPayableAmount;
+      return acc;
+    }, {
+      taxableAmount: 0,
+      taxAmount: 0,
+      cgstAmount: 0,
+      sgstAmount: 0,
+      igstAmount: 0,
+      taxPayableAmount: 0,
+    });
+
+    const rootTaxableAmount = this.money(taxBreakup.taxableAmount);
+    const rootTaxAmount = this.money(taxBreakup.totalTaxAmount ?? taxBreakup.taxAmount);
+    const cgstAmount = this.money(taxBreakup.cgstAmount ?? itemTotals.cgstAmount);
+    const sgstAmount = this.money(taxBreakup.sgstAmount ?? itemTotals.sgstAmount);
+    const igstAmount = this.money(taxBreakup.igstAmount ?? itemTotals.igstAmount);
+    const splitTaxAmount = this.money(cgstAmount + sgstAmount + igstAmount);
+    const orderTaxAmount = this.money(order.tax_amount);
+
+    return {
+      taxableAmount: rootTaxableAmount || this.money(itemTotals.taxableAmount),
+      taxAmount: orderTaxAmount || rootTaxAmount || splitTaxAmount || this.money(itemTotals.taxAmount),
+      cgstAmount,
+      sgstAmount,
+      igstAmount,
+      taxPayableAmount: this.money(taxBreakup.taxPayableAmount ?? itemTotals.taxPayableAmount),
+    };
+  }
+
   calculatePlatformCommissionAmounts(items = [], sellerSnapshot = {}) {
     const taxableAmount = items.reduce((sum, item) => {
       const pricing = this.normalizeJson(item.pricing_snapshot, {});
@@ -1442,6 +1515,36 @@ class TaxService {
     }
 
     throw new AppError("You are not allowed to download this tax document", 403);
+  }
+
+  async assertInvoiceViewAccess(invoice = {}, actor = {}) {
+    if (this.isAdminActor(actor)) return;
+
+    const sellerId = this.getActorSellerId(actor);
+    if (sellerId && invoice.seller_id && String(invoice.seller_id) === String(sellerId)) {
+      if (
+        actor.organizationId &&
+        String(invoice.organization_id || "") !== String(actor.organizationId)
+      ) {
+        throw new AppError("This tax document belongs to another organization", 403);
+      }
+      return;
+    }
+
+    if (actor.userId && String(invoice.buyer_id || "") === String(actor.userId || "")) {
+      return;
+    }
+
+    if (
+      sellerId &&
+      invoice.order_id &&
+      this.invoiceType(invoice) !== INVOICE_TYPES.PLATFORM_COMMISSION &&
+      await this.orderRepository.isSellerInOrder(invoice.order_id, sellerId)
+    ) {
+      return;
+    }
+
+    throw new AppError("You are not allowed to view this tax document", 403);
   }
 
   buildInvoiceDocument(invoice = {}) {

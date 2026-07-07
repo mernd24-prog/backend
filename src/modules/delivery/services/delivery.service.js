@@ -838,17 +838,18 @@ class DeliveryService {
       throw new AppError("Delivery OTP can be generated only when shipment is out for delivery", 409);
     }
 
-    const otp = createOtp(6);
+    const channels = this.resolveOtpChannels(payload);
+    const otp = this.createDeliveryOtp();
     const expiresAt = new Date(Date.now() + Number(payload.ttlMinutes || DELIVERY_OTP_TTL_MINUTES) * 60 * 1000);
     const result = await this.deliveryRepository.storeDeliveryOtp(shipmentId, {
       otpHash: this.hashDeliveryOtp(shipmentId, otp),
       expiresAt,
       proofSnapshot: {
-        channels: payload.channels || ["in_app"],
+        channels,
         requestedAt: new Date().toISOString(),
       },
       rawPayload: {
-        channels: payload.channels || ["in_app"],
+        channels,
         ttlMinutes: payload.ttlMinutes || DELIVERY_OTP_TTL_MINUTES,
       },
       actorId: actor.userId,
@@ -856,13 +857,23 @@ class DeliveryService {
       source: payload.source || "manual",
     });
 
-    const order = await this.orderRepository.findById(shipment.order_id);
+    const order = await this.orderRepository.findById(shipment.order_id).catch((error) => {
+      logger.warn(
+        { shipmentId, orderId: shipment.order_id, error: error.message, code: error.code },
+        "Delivery OTP order lookup failed; using shipment order snapshot",
+      );
+      return {
+        id: shipment.order_id,
+        order_number: shipment.order_number,
+        buyer_id: shipment.buyer_id,
+      };
+    });
     const notificationDelivery = await this.sendDeliveryOtpNotifications({
       order,
       shipment,
       otp,
       expiresAt,
-      channels: payload.channels || ["in_app"],
+      channels,
     });
     await eventPublisher.publish(
       makeEvent(
@@ -873,7 +884,7 @@ class DeliveryService {
           buyerId: order?.buyer_id || null,
           sellerId: shipment.seller_id,
           expiresAt,
-          channels: payload.channels || ["in_app"],
+          channels,
           generatedBy: actor.userId,
           otpQueued: true,
         },
@@ -885,19 +896,38 @@ class DeliveryService {
       shipment: result.shipment,
       verificationEvent: result.event,
       expiresAt,
-      channels: payload.channels || ["in_app"],
+      channels,
       notificationDelivery,
+      ...(env.auth.exposeStaticOtp && !env.production ? { otp } : {}),
     };
+  }
+
+  createDeliveryOtp() {
+    return env.production || env.auth.otpMode === "live"
+      ? createOtp(6)
+      : env.auth.staticOtp || "123456";
+  }
+
+  resolveOtpChannels(payload = {}) {
+    if (payload.channel) {
+      return [payload.channel];
+    }
+    if (Array.isArray(payload.channels) && payload.channels.length) {
+      return payload.channels;
+    }
+    return ["in_app"];
   }
 
   async sendDeliveryOtpNotifications({ order, shipment, otp, expiresAt, channels = [] }) {
     const buyerId = order?.buyer_id;
     if (!buyerId) return [];
 
-    const buyer = await UserModel.findById(buyerId)
-      .select("email phone profile")
-      .lean()
-      .catch(() => null);
+    const buyer = UserModel.db.base.Types.ObjectId.isValid(String(buyerId || ""))
+      ? await UserModel.findById(buyerId)
+        .select("email phone profile")
+        .lean()
+        .catch(() => null)
+      : null;
     const uniqueChannels = Array.from(new Set(channels.length ? channels : ["in_app"]));
     return Promise.all(uniqueChannels.map(async (channel) => {
       const normalizedChannel = channel === "app" ? "push" : channel;

@@ -702,7 +702,8 @@ class SellerChargeSettingsService {
     for (const profileGroup of byProfile.values()) {
       const profile = profileMap.get(String(profileGroup.profileId));
       if (!profile) {
-        throw new AppError("Shipping profile assigned to a product was not found", 400);
+        fallbackItems.push(...profileGroup.items);
+        continue;
       }
       this.ensureProfileForItem(profile, profileGroup.items[0], group);
       const serviceability = shippingProfilesService.checkPincodeAgainstProfile(
@@ -748,7 +749,7 @@ class SellerChargeSettingsService {
     };
 
     return {
-      hasProfiles: true,
+      hasProfiles: profileBreakup.length > 0,
       fallbackGroup,
       amount: money(profileChargeAmount),
       profiles: profileBreakup,
@@ -760,7 +761,8 @@ class SellerChargeSettingsService {
       const profileId = this.getShippingProfileId(item);
       if (!profileId) continue;
       const profile = profileMap.get(String(profileId));
-      if (!profile || profile.active === false || profile.archivedAt) {
+      if (!profile) continue;
+      if (profile.active === false || profile.archivedAt) {
         return { item, reason: "shipping_profile_inactive" };
       }
       this.ensureProfileForItem(profile, item, group);

@@ -4,6 +4,21 @@ const { knex } = require("../../../infrastructure/postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
 
 class DeliveryRepository {
+  jsonb(value, fallback = {}) {
+    let normalized = value;
+    if (normalized === undefined || normalized === null || normalized === "") {
+      normalized = fallback;
+    }
+    if (typeof normalized === "string") {
+      try {
+        normalized = JSON.parse(normalized);
+      } catch {
+        normalized = fallback;
+      }
+    }
+    return knex.raw("?::jsonb", [JSON.stringify(normalized)]);
+  }
+
   async getServiceability(pincode) {
     const [serviceability] = await knex("pincode_serviceability")
       .where({ pincode })
@@ -125,7 +140,7 @@ class DeliveryRepository {
           deal_id: payload.dealId || null,
           fulfillment_model: payload.fulfillmentModel || null,
           verification_required: Boolean(payload.verificationRequired),
-          verification_methods: payload.verificationMethods || [],
+          verification_methods: this.jsonb(payload.verificationMethods, []),
           delivery_proof_snapshot: payload.deliveryProofSnapshot || {},
           delivery_agent_id: payload.deliveryAgentId || null,
           delivery_agent_snapshot: payload.deliveryAgentSnapshot || {},
@@ -330,7 +345,7 @@ class DeliveryRepository {
         .where("id", shipmentId)
         .update({
           verification_required: true,
-          verification_methods: verificationMethods,
+          verification_methods: this.jsonb(verificationMethods, []),
           delivery_otp_hash: payload.otpHash,
           delivery_otp_expires_at: payload.expiresAt,
           delivery_otp_attempts: 0,
@@ -501,7 +516,7 @@ class DeliveryRepository {
           id: uuidv4(),
           manifest_number: payload.manifestNumber || `MAN-${Date.now()}`,
           courier_name: payload.courierName || null,
-          shipment_ids: payload.shipmentIds || [],
+          shipment_ids: this.jsonb(payload.shipmentIds, []),
           status: payload.status || "created",
           metadata: payload.metadata || {},
           created_by: payload.createdBy || null,

@@ -67,6 +67,13 @@ taxRoutes.get(
 );
 
 taxRoutes.get(
+  "/invoices/:invoiceId",
+  authenticate,
+  checkInput(taxDocumentDownloadSchema("invoiceId")),
+  catchErrors(taxController.getInvoice),
+);
+
+taxRoutes.get(
   "/invoices/:invoiceId/download",
   authenticate,
   checkInput(taxDocumentDownloadSchema("invoiceId")),
