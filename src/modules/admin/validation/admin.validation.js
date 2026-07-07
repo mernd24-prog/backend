@@ -112,6 +112,7 @@ const listUsersSchema = Joi.object({
     accountStatus: Joi.string().valid(...accountStatuses),
     status: Joi.string().valid(...accountStatuses),
     emailVerified: Joi.boolean(),
+    includeInfluencers: Joi.boolean().default(false),
     ownerAdminId: Joi.string().allow(null),
     ownerSellerId: Joi.string().allow(null),
     parentAdminId: Joi.string().allow(null),

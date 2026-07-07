@@ -1,6 +1,7 @@
 const { postgresPool } = require("../../../infrastructure/postgres/postgres-client");
 const { UserModel } = require("../../user/models/user.model");
 const { ProductModel } = require("../../product/models/product.model");
+const { InfluencerProfileModel } = require("../../referral/models/referral.model");
 const { v4: uuidv4 } = require("uuid");
 const { randomBytes } = require("crypto");
 const { hashText } = require("../../../shared/tools/hash");
@@ -380,7 +381,7 @@ class AdminRepository {
     return { items, total };
   }
 
-  async listUsers({ q = "", role = null, roles = null, accountStatus = null, status = null, emailVerified = null, page = 1, limit = 50, ownerAdminId = null, ownerSellerId = null, parentAdminId = null, parentSellerId = null, createdBy = null } = {}) {
+  async listUsers({ q = "", role = null, roles = null, accountStatus = null, status = null, emailVerified = null, includeInfluencers = false, page = 1, limit = 50, ownerAdminId = null, ownerSellerId = null, parentAdminId = null, parentSellerId = null, createdBy = null } = {}) {
     const filter = {};
     if (Array.isArray(roles) && roles.length) {
       filter.role = { $in: roles };
@@ -406,6 +407,20 @@ class AdminRepository {
     if (parentAdminId) filter.parentAdminId = parentAdminId;
     if (parentSellerId) filter.parentSellerId = parentSellerId;
     if (createdBy) filter.createdBy = createdBy;
+    const buyerListRequested =
+      role === "buyer" ||
+      (Array.isArray(roles) && roles.includes("buyer") && !roles.some((item) => item !== "buyer"));
+    if (!includeInfluencers && buyerListRequested) {
+      const influencerUserIds = await InfluencerProfileModel.distinct("userId", {
+        userId: { $nin: [null, ""] },
+      });
+      if (influencerUserIds.length) {
+        filter._id = {
+          ...(filter._id || {}),
+          $nin: influencerUserIds,
+        };
+      }
+    }
 
     const skip = (Number(page) - 1) * Number(limit);
     const [items, total] = await Promise.all([
