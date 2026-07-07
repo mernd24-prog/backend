@@ -19,6 +19,7 @@ const INVOICE_TYPES = {
 
 const ADMIN_ROLES = [ROLES.ADMIN, ROLES.SUB_ADMIN, ROLES.SUPER_ADMIN];
 const SELLER_ROLES = [ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN];
+const CUSTOMER_INVOICE_READY_STATUS = "fulfilled";
 
 class TaxService {
   constructor({
@@ -188,6 +189,9 @@ class TaxService {
       return null;
     }
 
+    const order = await this.orderRepository.findById(orderId);
+    this.assertBuyerInvoiceReady(order, actor);
+
     const isOwner = invoice.buyer_id === actor.userId;
     const isAdmin = this.isAdminActor(actor);
     if (!isOwner && !isAdmin) {
@@ -258,6 +262,7 @@ class TaxService {
     }
 
     const scope = await this.resolveMarketplaceInvoiceScope(order, actor, { write: false });
+    this.assertBuyerInvoiceReady(order, actor);
     const invoices = await this.taxRepository.findInvoicesByOrderId(orderId);
     const visibleInvoices = this.filterInvoicesForScope(invoices, scope);
 
@@ -468,6 +473,10 @@ class TaxService {
       throw new AppError("Invoice not found", 404);
     }
     this.assertInvoiceDocumentAccess(invoice, actor);
+    if (invoice.order_id) {
+      const order = await this.orderRepository.findById(invoice.order_id);
+      this.assertBuyerInvoiceReady(order, actor);
+    }
     return documentRendererService.render(this.buildInvoiceDocument(invoice), {
       format: query.format || "pdf",
       fileBaseName: invoice.invoice_number || `invoice-${invoice.id}`,
@@ -1489,6 +1498,19 @@ class TaxService {
 
   invoiceType(invoice = {}) {
     return invoice.invoice_type || INVOICE_TYPES.ORDER_CUSTOMER;
+  }
+
+  assertBuyerInvoiceReady(order = {}, actor = {}) {
+    if (!order || this.isAdminActor(actor) || this.getActorSellerId(actor)) {
+      return;
+    }
+
+    const isBuyer = actor.userId && String(order.buyer_id || "") === String(actor.userId);
+    if (!isBuyer) return;
+
+    if (order.status !== CUSTOMER_INVOICE_READY_STATUS) {
+      throw new AppError("Invoice will be available after the order is fulfilled", 409);
+    }
   }
 
   assertInvoiceDocumentAccess(invoice = {}, actor = {}) {
