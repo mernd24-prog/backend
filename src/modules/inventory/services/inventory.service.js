@@ -312,21 +312,44 @@ class InventoryService {
   }
 
   async adjustProductInventory(productId, payload = {}, actor = {}) {
-    const product = await this.productRepository.findById(productId);
+    let product = await this.productRepository.findById(productId);
     if (!product) throw new AppError("Product not found", 404);
 
-    const adjustment = this.resolveManualAdjustment(product, payload);
+    const hasVariants = Array.isArray(product.variants) && product.variants.length > 0;
+    const requestedVariantSku = payload.variantSku || "";
+    let variantSku = requestedVariantSku;
+    let usesGeneratedDefaultVariant = false;
+
+    if (!variantSku && !hasVariants) {
+      const defaultVariant = await this.productRepository.ensureDefaultVariant(productId);
+      if (defaultVariant?.sku) {
+        variantSku = defaultVariant.sku;
+        usesGeneratedDefaultVariant = true;
+        product = await this.productRepository.findById(productId);
+      }
+    }
+
+    const adjustment = this.resolveManualAdjustment(product, { ...payload, variantSku });
     if (adjustment === 0) {
       throw new AppError("Inventory adjustment does not change stock", 400);
     }
 
-    const variantSku = payload.variantSku || "";
-    const updatedProduct = variantSku
+    let updatedProduct = variantSku
       ? await this.productRepository.adjustVariantStock(productId, variantSku, adjustment)
       : await this.productRepository.adjustStock(productId, adjustment);
 
     if (!updatedProduct) {
       throw new AppError("Insufficient stock for negative adjustment", 400);
+    }
+
+    if (usesGeneratedDefaultVariant) {
+      const defaultVariant = (updatedProduct.variants || []).find((variant) => variant.sku === variantSku);
+      if (defaultVariant) {
+        updatedProduct = await this.productRepository.update(productId, {
+          stock: Number(defaultVariant.stock || 0),
+          reservedStock: Number(defaultVariant.reservedStock || 0),
+        });
+      }
     }
 
     await this.inventoryRepository.recordTransaction(

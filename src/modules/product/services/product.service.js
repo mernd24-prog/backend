@@ -82,6 +82,17 @@ const PRODUCT_LIST_PROJECTION = {
   reservedStock: 1,
   inventorySettings: 1,
   "shipping.codAvailable": 1,
+  "shipping.freeShipping": 1,
+  "shipping.shippingCharge": 1,
+  "shipping.additionalCost": 1,
+  "shipping.shippingMethod": 1,
+  "shipping.shippingClass": 1,
+  "shipping.expressDelivery": 1,
+  "shipping.express_delivery": 1,
+  "shipping.isExpress": 1,
+  "shipping.estimatedDaysMin": 1,
+  "shipping.estimatedDaysMax": 1,
+  "shipping.processingDays": 1,
   origin: 1,
   status: 1,
   visibility: 1,
@@ -249,6 +260,23 @@ class ProductService {
           throw new AppError(`Variant attribute '${axis}' has invalid value '${value}'`, 400);
         }
       }
+    }
+  }
+
+  validatePricing(payload = {}, existingProduct = null) {
+    const source = existingProduct ? this.toPlainObject(existingProduct) : {};
+    const price = payload.price !== undefined ? Number(payload.price) : Number(source.price || 0);
+    const mrp = payload.mrp !== undefined ? Number(payload.mrp) : Number(source.mrp || 0);
+    const salePriceValue = payload.salePrice !== undefined ? payload.salePrice : source.salePrice;
+    const salePrice = salePriceValue === undefined || salePriceValue === null || salePriceValue === ""
+      ? null
+      : Number(salePriceValue);
+
+    if (Number.isFinite(price) && Number.isFinite(mrp) && price > mrp) {
+      throw new AppError("Selling price must be less than or equal to MRP", 400);
+    }
+    if (salePrice !== null && Number.isFinite(salePrice) && Number.isFinite(price) && salePrice > price) {
+      throw new AppError("Special price must be less than or equal to selling price", 400);
     }
   }
 
@@ -964,6 +992,7 @@ class ProductService {
       payload.attributes || {},
     );
     this.validateVariants(payload.variants || [], payload.options || []);
+    this.validatePricing(payload);
     await this.validateProductReferences(payload, actor);
     this._validateProductType(productType, payload);
 
@@ -1068,6 +1097,7 @@ class ProductService {
     this.validateDynamicAttributes(this.normalizeCategoryAttributes(category), nextAttributes);
     const nextOptions = payload.options || existingProduct.options || [];
     this.validateVariants(payload.variants || existingProduct.variants || [], nextOptions);
+    this.validatePricing(payload, existingProduct);
     await this.validateProductReferences(
       { ...this.toPlainObject(existingProduct), ...payload, options: nextOptions },
       actor,
@@ -1420,13 +1450,172 @@ class ProductService {
     );
   }
 
+  parseProductFilterValues(value) {
+    return splitFilterValues(value);
+  }
+
+  normalizeProductFilterText(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
+  parseProductRatingFilter(value) {
+    return this.parseProductFilterValues(value)
+      .map((item) => {
+        const match = String(item).match(/\d+(\.\d+)?/);
+        return match ? Number(match[0]) : NaN;
+      })
+      .filter((rating) => Number.isFinite(rating) && rating > 0);
+  }
+
+  getProductAvailableStockValue(product = {}) {
+    const variants = Array.isArray(product.variants) ? product.variants : [];
+    const variantStock = variants
+      .filter((variant) => variant?.status !== "inactive" && variant?.status !== "out_of_stock")
+      .map((variant) => {
+        const available = variant.availableStock ?? variant.available_stock;
+        if (available !== undefined && available !== null && available !== "") return Number(available);
+        return Number(variant.stock || 0) - Number(variant.reservedStock || 0);
+      })
+      .filter((value) => Number.isFinite(value));
+
+    if (variantStock.length) return variantStock.reduce((total, value) => total + Math.max(0, value), 0);
+
+    const available = product.availableStock ?? product.available_stock;
+    if (available !== undefined && available !== null && available !== "") return Number(available);
+    return Number(product.stock || 0) - Number(product.reservedStock || 0);
+  }
+
+  matchesProductDeliveryFilter(product = {}, type = "") {
+    const shipping = product.shipping || {};
+    if (type === "free") {
+      const charge = shipping.shippingCharge ?? shipping.additionalCost;
+      return shipping.freeShipping === true || (charge !== undefined && charge !== null && Number(charge) === 0);
+    }
+    if (type === "express") {
+      return (
+        shipping.expressDelivery === true ||
+        shipping.express_delivery === true ||
+        shipping.isExpress === true ||
+        String(shipping.shippingMethod || shipping.shippingClass || "").toLowerCase().includes("express") ||
+        Number(shipping.estimatedDaysMax ?? shipping.estimatedDaysMin ?? shipping.processingDays ?? Infinity) <= 2
+      );
+    }
+    return true;
+  }
+
+  productMatchesPostFilters(product = {}, query = {}) {
+    const outOfStock = query.out_of_stock === "true" || query.outOfStock === "true";
+    if (outOfStock && this.getProductAvailableStockValue(product) > 0) return false;
+
+    if ((query.free_delivery === "true" || query.freeDelivery === "true") && !this.matchesProductDeliveryFilter(product, "free")) return false;
+    if ((query.express_delivery === "true" || query.expressDelivery === "true") && !this.matchesProductDeliveryFilter(product, "express")) return false;
+
+    return true;
+  }
+
+  hasProductPostFilters(query = {}) {
+    return (
+      query.out_of_stock === "true" ||
+      query.outOfStock === "true" ||
+      query.free_delivery === "true" ||
+      query.freeDelivery === "true" ||
+      query.express_delivery === "true" ||
+      query.expressDelivery === "true"
+    );
+  }
+
+  async buildProductFacets(filter = {}, projection = PRODUCT_LIST_PROJECTION, query = {}) {
+    const facetResult = await this.productRepository.paginate(filter, {
+      page: 1,
+      limit: 500,
+      skip: 0,
+      sortBy: "newest",
+      sortDir: "desc",
+    }, {
+      projection: {
+        ...projection,
+        variants: 1,
+        hasVariants: 1,
+      },
+      lean: true,
+    });
+
+    const items = (facetResult.items || []).filter((product) => this.productMatchesPostFilters(product, query));
+    const categoryCounts = new Map();
+    const brandCounts = new Map();
+    const ratingCounts = new Map([["5", 0], ["4", 0], ["3", 0], ["2", 0], ["1", 0]]);
+    const availability = { inStock: 0, outOfStock: 0 };
+    let minPrice = null;
+    let maxPrice = null;
+
+    items.forEach((product) => {
+      const categoryKey = String(product.categoryId || product.category_id || product.category || "").trim();
+      if (categoryKey) categoryCounts.set(categoryKey, (categoryCounts.get(categoryKey) || 0) + 1);
+
+      const brand = String(product.brandName || product.brand || product.brand_id || "").trim();
+      if (brand) brandCounts.set(brand, (brandCounts.get(brand) || 0) + 1);
+
+      const rating = Number(product.rating ?? product.averageRating ?? product.avgRating ?? 0);
+      [5, 4, 3, 2, 1].forEach((stars) => {
+        if (rating >= stars) ratingCounts.set(String(stars), (ratingCounts.get(String(stars)) || 0) + 1);
+      });
+
+      if (this.getProductAvailableStockValue(product) > 0) availability.inStock += 1;
+      else availability.outOfStock += 1;
+
+      const price = Number(product.salePrice ?? product.price ?? product.sellingPrice ?? 0);
+      if (Number.isFinite(price) && price > 0) {
+        minPrice = minPrice === null ? price : Math.min(minPrice, price);
+        maxPrice = maxPrice === null ? price : Math.max(maxPrice, price);
+      }
+    });
+
+    const categoryLabelByKey = new Map();
+    await Promise.all(
+      [...categoryCounts.keys()].map(async (categoryKey) => {
+        const category = await this.platformRepository.getCategory(categoryKey).catch(() => null);
+        categoryLabelByKey.set(categoryKey, category?.title || categoryKey);
+      }),
+    );
+
+    return {
+      total: items.length,
+      categories: [...categoryCounts.entries()].map(([value, count]) => ({
+        value,
+        label: categoryLabelByKey.get(value) || value,
+        count,
+      })),
+      brands: [...brandCounts.entries()].map(([value, count]) => ({
+        value,
+        label: value,
+        count,
+      })),
+      ratings: [...ratingCounts.entries()].map(([value, count]) => ({
+        value,
+        label: `${value}★ & up`,
+        count,
+      })),
+      availability,
+      price: {
+        min: minPrice,
+        max: maxPrice,
+      },
+    };
+  }
+
   async listProducts(query, { publicOnly = true, actor = null } = {}) {
     const pagination = { ...getPage(query), sortBy: query.sortBy || query.sort, sortDir: query.sortDir };
     const filter = {};
 
-    if (query.category) {
-      const categoryKeys = await this.platformRepository.getCategoryDescendantKeys(query.category);
-      filter.category = categoryKeys.length ? { $in: categoryKeys } : query.category;
+    const category = query.category_id || query.category;
+    if (category) {
+      const selectedCategories = this.parseProductFilterValues(category);
+      const categoryKeys = new Set(selectedCategories);
+      for (const categoryKey of selectedCategories) {
+        const descendants = await this.platformRepository.getCategoryDescendantKeys(categoryKey).catch(() => []);
+        descendants.forEach((descendantKey) => categoryKeys.add(descendantKey));
+      }
+      filter.category = categoryKeys.size ? { $in: [...categoryKeys] } : category;
     }
     if (query.hsnCode) filter.hsnCode = query.hsnCode;
     if (query.color) filter.color = query.color;
@@ -1434,7 +1623,12 @@ class ProductService {
       filter.productFamilyCode = query.productFamilyCode || query.family || query.familyCode;
     }
     if (query.sku) filter.sku = query.sku;
-    if (query.brand) filter.brand = new RegExp(`^${escapeRegExp(query.brand)}$`, "i");
+    if (query.brand) {
+      const brands = this.parseProductFilterValues(query.brand);
+      filter.brand = brands.length > 1
+        ? { $in: brands.map((brand) => new RegExp(`^${escapeRegExp(brand)}$`, "i")) }
+        : new RegExp(`^${escapeRegExp(brands[0] || query.brand)}$`, "i");
+    }
     if (query.sellerId) filter.sellerId = query.sellerId;
     const organizationId = query.organizationId || actor?.organizationId;
     if (organizationId) filter.organizationId = organizationId;
@@ -1445,15 +1639,18 @@ class ProductService {
       filter.hasVariants = query.hasVariants === true || query.hasVariants === "true";
     }
     if (!publicOnly && query.visibility) filter.visibility = query.visibility;
-    if (query.tags) filter.tags = { $in: query.tags.split(",").map((t) => t.trim()) };
-    if (query.rating) filter.rating = { $gte: Number(query.rating) };
+    if (query.tags) filter.tags = { $in: this.parseProductFilterValues(query.tags) };
+    const ratings = this.parseProductRatingFilter(query.min_rating ?? query.minRating ?? query.rating);
+    if (ratings.length) filter.rating = { $gte: Math.min(...ratings) };
 
     this.applyAttributeFilters(filter, query);
 
-    if (query.minPrice !== undefined || query.maxPrice !== undefined) {
+    const minPrice = query.min_price ?? query.minPrice;
+    const maxPrice = query.max_price ?? query.maxPrice;
+    if (minPrice !== undefined || maxPrice !== undefined) {
       filter.price = {};
-      if (query.minPrice !== undefined) filter.price.$gte = Number(query.minPrice);
-      if (query.maxPrice !== undefined) filter.price.$lte = Number(query.maxPrice);
+      if (minPrice !== undefined) filter.price.$gte = Number(minPrice);
+      if (maxPrice !== undefined) filter.price.$lte = Number(maxPrice);
     }
 
     this.applyDateFilters(filter, query);
@@ -1504,9 +1701,14 @@ class ProductService {
         lean: true,
       }),
     );
+    const facets = await this.buildProductFacets(publicFilter, projection, query);
+    const hasPostFilters = this.hasProductPostFilters(query);
+    const filteredItems = (result.items || []).filter((product) => this.productMatchesPostFilters(product, query));
     return {
       ...result,
-      items: await this.enrichProductsWithActiveDeals(result.items || []),
+      total: hasPostFilters ? facets.total : result.total,
+      items: await this.enrichProductsWithActiveDeals(filteredItems),
+      facets,
     };
   }
 
@@ -1628,6 +1830,7 @@ class ProductService {
       "keyWord",
       "search",
       "category",
+      "category_id",
       "status",
       "productType",
       "hasVariants",
@@ -1650,11 +1853,20 @@ class ProductService {
       "warehouseId",
       "minPrice",
       "maxPrice",
+      "min_price",
+      "max_price",
       "dateFrom",
       "dateTo",
       "createdFrom",
       "createdTo",
       "inStock",
+      "in_stock",
+      "outOfStock",
+      "out_of_stock",
+      "freeDelivery",
+      "free_delivery",
+      "expressDelivery",
+      "express_delivery",
       "stockStatus",
       "inventoryStatus",
       "lowStockThreshold",
@@ -1665,6 +1877,7 @@ class ProductService {
       "sortDir",
       "rating",
       "minRating",
+      "min_rating",
     ]);
 
     Object.entries(query).forEach(([key, value]) => {

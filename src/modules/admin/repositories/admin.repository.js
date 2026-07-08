@@ -76,6 +76,16 @@ class AdminRepository {
     }
   }
 
+  parseJson(value, fallback = {}) {
+    if (!value) return fallback;
+    if (typeof value === "object") return value;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return fallback;
+    }
+  }
+
   normalizeTrend(current, previous) {
     const currentValue = this.money(current);
     const previousValue = this.money(previous);
@@ -695,10 +705,133 @@ class AdminRepository {
         values,
       ),
     ]);
+    const list = await this.enrichOrderListRows(listResult.rows || []);
     return {
-      list: listResult.rows,
+      list,
       total: Number(countResult.rows[0]?.total || 0),
     };
+  }
+
+  async enrichOrderListRows(rows = []) {
+    const orderIds = rows.map((order) => order.id).filter(Boolean);
+    if (!orderIds.length) return rows;
+
+    const [items, shipments] = await Promise.all([
+      this.safePostgresQuery(
+        `SELECT
+           id,
+           order_id,
+           seller_id,
+           organization_id,
+           quantity,
+           seller_snapshot,
+           organization_snapshot
+         FROM order_items
+         WHERE order_id = ANY($1::uuid[])
+         ORDER BY id ASC`,
+        [orderIds],
+        [],
+      ),
+      this.safePostgresQuery(
+        `SELECT
+           id,
+           order_id,
+           seller_id,
+           organization_id,
+           status,
+           direction,
+           delivery_status
+         FROM shipments
+         WHERE order_id = ANY($1::uuid[])
+         ORDER BY created_at DESC`,
+        [orderIds],
+        [],
+      ),
+    ]);
+
+    const itemsByOrder = items.reduce((map, item) => {
+      if (!map.has(item.order_id)) map.set(item.order_id, []);
+      map.get(item.order_id).push(item);
+      return map;
+    }, new Map());
+    const shipmentsByOrder = shipments.reduce((map, shipment) => {
+      if (!map.has(shipment.order_id)) map.set(shipment.order_id, []);
+      map.get(shipment.order_id).push(shipment);
+      return map;
+    }, new Map());
+
+    const fallbackSellerIds = rows.flatMap((order) => {
+      const platformFeeBreakup = this.parseJson(order.platform_fee_breakup, []);
+      const metadata = this.parseJson(order.metadata, {});
+      const feeSellerIds = Array.isArray(platformFeeBreakup)
+        ? platformFeeBreakup.map((entry) => entry?.sellerId)
+        : [];
+      const deliverySellerIds = Array.isArray(metadata.deliveryCharge?.sellers)
+        ? metadata.deliveryCharge.sellers.map((entry) => entry?.sellerId)
+        : [];
+      return [...feeSellerIds, ...deliverySellerIds];
+    });
+    const sellerIds = [...new Set([
+      ...items.map((item) => item.seller_id),
+      ...fallbackSellerIds,
+    ].filter(Boolean).map(String))];
+    const sellerNames = await this.getUsersByIds(sellerIds);
+
+    const nameFromSnapshot = (snapshot = {}) =>
+      snapshot.displayName ||
+      snapshot.businessName ||
+      snapshot.legalBusinessName ||
+      snapshot.name ||
+      snapshot.sellerName ||
+      "";
+    const orgNameFromSnapshot = (snapshot = {}) =>
+      snapshot.storeDisplayName ||
+      snapshot.legalBusinessName ||
+      snapshot.legalName ||
+      snapshot.store_name ||
+      snapshot.name ||
+      "";
+
+    return rows.map((order) => {
+      const orderItems = itemsByOrder.get(order.id) || [];
+      const orderShipments = shipmentsByOrder.get(order.id) || [];
+      const platformFeeBreakup = this.parseJson(order.platform_fee_breakup, []);
+      const metadata = this.parseJson(order.metadata, {});
+      const taxBreakup = this.parseJson(order.tax_breakup, {});
+      const deliverySeller = Array.isArray(metadata.deliveryCharge?.sellers)
+        ? metadata.deliveryCharge.sellers[0]
+        : null;
+      const feeSeller = Array.isArray(platformFeeBreakup) ? platformFeeBreakup[0] : null;
+      const firstItem = orderItems[0] || {};
+      const sellerSnapshot = this.parseJson(firstItem.seller_snapshot, {});
+      const organizationSnapshot = this.parseJson(firstItem.organization_snapshot, {});
+      const sellerId = firstItem.seller_id || feeSeller?.sellerId || deliverySeller?.sellerId || null;
+      const organizationId = firstItem.organization_id || feeSeller?.organizationId || deliverySeller?.organizationId || null;
+      const forwardShipments = orderShipments.filter((shipment) => String(shipment.direction || "forward") !== "reverse");
+      const shipmentStatuses = forwardShipments
+        .map((shipment) => shipment.status || shipment.delivery_status)
+        .filter(Boolean);
+      const shipmentStatus = shipmentStatuses[0] || order.delivery_status || "not_created";
+      const fallbackQuantity = Array.isArray(metadata.deliveryCharge?.sellers)
+        ? metadata.deliveryCharge.sellers.reduce((sum, seller) => sum + Number(seller.quantity || 0), 0)
+        : 0;
+      const fallbackItemCount = Array.isArray(taxBreakup.items) ? taxBreakup.items.length : 0;
+
+      return {
+        ...order,
+        sellerId,
+        seller_id: sellerId,
+        sellerName: sellerNames.get(String(sellerId)) || nameFromSnapshot(sellerSnapshot) || null,
+        organizationId,
+        organization_id: organizationId,
+        organizationName: orgNameFromSnapshot(organizationSnapshot) || null,
+        itemCount: orderItems.length || fallbackItemCount,
+        itemQuantity: orderItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0) || fallbackQuantity || fallbackItemCount,
+        shipmentStatus,
+        shipment_status: shipmentStatus,
+        shipmentCount: forwardShipments.length,
+      };
+    });
   }
 
   async listPayments({ status = null, provider = null, fromDate = null, toDate = null, limit = 50, offset = 0 } = {}) {

@@ -1402,10 +1402,10 @@ class SellerOrganizationService {
         ...(profile.supportEmail ? { supportEmail: profile.supportEmail } : {}),
         ...(profile.supportPhone ? { supportPhone: profile.supportPhone } : {}),
         ...(profile.primaryContactName ? { primaryContactName: profile.primaryContactName } : {}),
-        ...(profile.gstNumber ? { gstin: profile.gstNumber } : {}),
-        ...(profile.panNumber ? { pan: profile.panNumber } : {}),
-        ...(profile.aadhaarNumber ? { aadhaarNumber: profile.aadhaarNumber } : {}),
-        ...(profile.dateOfBirth ? { dateOfBirth: profile.dateOfBirth } : {}),
+        ...(!this.normalizeText(existing.gstin) && profile.gstNumber ? { gstin: profile.gstNumber } : {}),
+        ...(!this.normalizeText(existing.pan) && profile.panNumber ? { pan: profile.panNumber } : {}),
+        ...(!this.normalizeText(existing.aadhaarNumber) && profile.aadhaarNumber ? { aadhaarNumber: profile.aadhaarNumber } : {}),
+        ...(!this.normalizeText(existing.dateOfBirth) && profile.dateOfBirth ? { dateOfBirth: profile.dateOfBirth } : {}),
       };
     }
     const reviewBase = this.mergeOrganizationPatch(existing, repairPayload);

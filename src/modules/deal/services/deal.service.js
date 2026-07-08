@@ -3,6 +3,7 @@
 const { AppError } = require("../../../shared/errors/app-error");
 const { DealRepository } = require("../repositories/deal.repository");
 const { ProductRepository } = require("../../product/repositories/product.repository");
+const { PlatformRepository } = require("../../platform/repositories/platform.repository");
 const { NotificationRepository } = require("../../notification/repositories/notification.repository");
 const { UserModel } = require("../../user/models/user.model");
 const { makeEvent } = require("../../../contracts/events/event");
@@ -19,10 +20,12 @@ class DealService {
   constructor({
     dealRepository = new DealRepository(),
     productRepository = new ProductRepository(),
+    platformRepository = new PlatformRepository(),
     notificationRepository = new NotificationRepository(),
   } = {}) {
     this.dealRepository = dealRepository;
     this.productRepository = productRepository;
+    this.platformRepository = platformRepository;
     this.notificationRepository = notificationRepository;
   }
 
@@ -429,6 +432,143 @@ class DealService {
     };
   }
 
+  parseDealFilterValues(value) {
+    return String(value || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  normalizeDealFilterText(value) {
+    return String(value || "").trim().toLowerCase();
+  }
+
+  async resolveDealCategoryFilterKeys(value) {
+    const selected = this.parseDealFilterValues(value);
+    if (!selected.length) return [];
+
+    const keys = new Set();
+    for (const categoryKey of selected) {
+      keys.add(categoryKey);
+      const descendants = await this.platformRepository
+        .getCategoryDescendantKeys(categoryKey)
+        .catch(() => []);
+      descendants.forEach((descendantKey) => keys.add(descendantKey));
+    }
+    return [...keys];
+  }
+
+  getDealProductAvailableStock(product = {}) {
+    const variants = Array.isArray(product.variants) ? product.variants : [];
+    const variantStock = variants
+      .filter((variant) => variant?.status !== "inactive" && variant?.status !== "out_of_stock")
+      .map((variant) => {
+        const available = variant.availableStock ?? variant.available_stock;
+        if (available !== undefined && available !== null && available !== "") return Number(available);
+        return Number(variant.stock || 0) - Number(variant.reservedStock || 0);
+      })
+      .filter((value) => Number.isFinite(value));
+
+    if (variantStock.length) return variantStock.reduce((total, value) => total + Math.max(0, value), 0);
+
+    const available = product.availableStock ?? product.available_stock;
+    if (available !== undefined && available !== null && available !== "") return Number(available);
+    return Number(product.stock || 0) - Number(product.reservedStock || 0);
+  }
+
+  getDealProductRating(product = {}) {
+    return Number(product.rating ?? product.averageRating ?? product.avgRating ?? product.reviewAverage ?? product.reviewRating ?? 0);
+  }
+
+  parseDealRatingFilter(value) {
+    return this.parseDealFilterValues(value)
+      .map((item) => {
+        const match = String(item).match(/\d+(\.\d+)?/);
+        return match ? Number(match[0]) : NaN;
+      })
+      .filter((rating) => Number.isFinite(rating) && rating > 0);
+  }
+
+  async buildDealProductFacets(items = []) {
+    const categoryCounts = new Map();
+    const brandCounts = new Map();
+    const ratingCounts = new Map([["5", 0], ["4", 0], ["3", 0], ["2", 0], ["1", 0]]);
+    const availability = { inStock: 0, outOfStock: 0 };
+    let minPrice = null;
+    let maxPrice = null;
+
+    items.forEach((product) => {
+      const categoryKey = String(product.categoryId || product.category_id || product.category || "").trim();
+      if (categoryKey) categoryCounts.set(categoryKey, (categoryCounts.get(categoryKey) || 0) + 1);
+
+      const brand = String(product.brandName || product.brand || product.brand_id || "").trim();
+      if (brand) brandCounts.set(brand, (brandCounts.get(brand) || 0) + 1);
+
+      const rating = this.getDealProductRating(product);
+      [5, 4, 3, 2, 1].forEach((stars) => {
+        if (rating >= stars) ratingCounts.set(String(stars), (ratingCounts.get(String(stars)) || 0) + 1);
+      });
+
+      if (this.getDealProductAvailableStock(product) > 0) availability.inStock += 1;
+      else availability.outOfStock += 1;
+
+      const price = Number(product.price ?? product.salePrice ?? product.sellingPrice ?? 0);
+      if (Number.isFinite(price) && price > 0) {
+        minPrice = minPrice === null ? price : Math.min(minPrice, price);
+        maxPrice = maxPrice === null ? price : Math.max(maxPrice, price);
+      }
+    });
+
+    const categoryLabelByKey = new Map();
+    await Promise.all(
+      [...categoryCounts.keys()].map(async (categoryKey) => {
+        const category = await this.platformRepository.getCategory(categoryKey).catch(() => null);
+        categoryLabelByKey.set(categoryKey, category?.title || categoryKey);
+      }),
+    );
+
+    return {
+      categories: [...categoryCounts.entries()].map(([value, count]) => ({
+        value,
+        label: categoryLabelByKey.get(value) || value,
+        count,
+      })),
+      brands: [...brandCounts.entries()].map(([value, count]) => ({
+        value,
+        label: value,
+        count,
+      })),
+      ratings: [...ratingCounts.entries()].map(([value, count]) => ({
+        value,
+        label: `${value}★ & up`,
+        count,
+      })),
+      availability,
+      price: {
+        min: minPrice,
+        max: maxPrice,
+      },
+    };
+  }
+
+  matchesDealDeliveryFilter(product = {}, type = "") {
+    const shipping = product.shipping || {};
+    if (type === "free") {
+      const charge = shipping.shippingCharge ?? shipping.additionalCost;
+      return shipping.freeShipping === true || (charge !== undefined && charge !== null && Number(charge) === 0);
+    }
+    if (type === "express") {
+      return (
+        shipping.expressDelivery === true ||
+        shipping.express_delivery === true ||
+        shipping.isExpress === true ||
+        String(shipping.shippingMethod || shipping.shippingClass || "").toLowerCase().includes("express") ||
+        Number(shipping.estimatedDaysMax ?? shipping.estimatedDaysMin ?? shipping.processingDays ?? Infinity) <= 2
+      );
+    }
+    return true;
+  }
+
   productMatchesDealFilters(product = {}, query = {}) {
     const search = String(query.q || query.search || "").trim().toLowerCase();
     if (search) {
@@ -445,12 +585,58 @@ class DealService {
         .toLowerCase();
       if (!haystack.includes(search)) return false;
     }
-    if (query.category && String(product.category || product.categoryId || "") !== String(query.category)) {
+    const categoryKeys = Array.isArray(query.categoryKeys) && query.categoryKeys.length
+      ? query.categoryKeys
+      : this.parseDealFilterValues(query.category_id || query.category);
+    if (categoryKeys.length) {
+      const selected = categoryKeys.map(this.normalizeDealFilterText);
+      const productValues = [
+        product.category,
+        product.categoryId,
+        product.category_id,
+        product.categoryKey,
+        product.categoryName,
+      ].map(this.normalizeDealFilterText);
+      if (!selected.some((value) => productValues.includes(value))) return false;
+    }
+
+    const brand = query.brand_id || query.brand;
+    if (brand) {
+      const selected = this.parseDealFilterValues(brand).map(this.normalizeDealFilterText);
+      const productValues = [
+        product.brand,
+        product.brandId,
+        product.brand_id,
+        product.brandName,
+        product.manufacturer,
+      ].map(this.normalizeDealFilterText);
+      if (!selected.some((value) => productValues.includes(value))) return false;
+    }
+
+    const minPrice = query.min_price ?? query.minPrice;
+    if (minPrice !== undefined && minPrice !== "" && Number(product.price || product.salePrice || 0) < Number(minPrice)) {
       return false;
     }
-    if (query.brand && String(product.brand || "").toLowerCase() !== String(query.brand).toLowerCase()) {
+    const maxPrice = query.max_price ?? query.maxPrice;
+    if (maxPrice !== undefined && maxPrice !== "" && Number(product.price || product.salePrice || 0) > Number(maxPrice)) {
       return false;
     }
+
+    const rating = query.min_rating || query.minRating || query.rating;
+    const selectedRatings = this.parseDealRatingFilter(rating);
+    if (selectedRatings.length && !selectedRatings.some((value) => this.getDealProductRating(product) >= value)) return false;
+
+    const inStock = query.in_stock === "true" || query.inStock === "true";
+    const outOfStock = query.out_of_stock === "true" || query.outOfStock === "true";
+    if (inStock || outOfStock) {
+      const hasStock = this.getDealProductAvailableStock(product) > 0;
+      if (inStock && !outOfStock && !hasStock) return false;
+      if (outOfStock && !inStock && hasStock) return false;
+    }
+
+    if ((query.free_delivery === "true" || query.freeDelivery === "true") && !this.matchesDealDeliveryFilter(product, "free")) return false;
+    if ((query.express_delivery === "true" || query.expressDelivery === "true") && !this.matchesDealDeliveryFilter(product, "express")) return false;
+
     return true;
   }
 
@@ -476,14 +662,16 @@ class DealService {
 
     const page = Math.max(1, Number(query.page || 1));
     const limit = Math.min(100, Math.max(1, Number(query.limit || 12)));
+    const categoryKeys = await this.resolveDealCategoryFilterKeys(query.category_id || query.category);
+    const normalizedQuery = { ...query, categoryKeys };
     const dealRows = await this.dealRepository.listActiveDealProducts({
-      sellerId: query.sellerId,
-      productId: query.productId,
-      dealType: query.dealType,
-      sortBy: ["price_asc", "price_desc", "ending_soon", "discount"].includes(query.sort)
+      sellerId: normalizedQuery.sellerId,
+      productId: normalizedQuery.productId,
+      dealType: normalizedQuery.dealType,
+      sortBy: ["price_asc", "price_desc", "ending_soon", "discount"].includes(normalizedQuery.sort)
         ? "priority"
-        : query.sortBy,
-      sortDir: query.sortDir,
+        : normalizedQuery.sortBy,
+      sortDir: normalizedQuery.sortDir,
       limit: 500,
     });
 
@@ -500,7 +688,12 @@ class DealService {
       .map((deal) => {
         const product = productById.get(String(deal.productId));
         if (!product || product.status !== "active") return null;
-        if (!this.productMatchesDealFilters(product, query)) return null;
+        if (!this.productMatchesDealFilters({
+          ...product,
+          price: Number(deal.dealPrice || 0),
+          salePrice: Number(deal.dealPrice || 0),
+          sellingPrice: Number(deal.dealPrice || 0),
+        }, normalizedQuery)) return null;
 
         const dealBadge = deal.metadata?.dealBadge || deal.metadata?.badge || "Deal";
         const remainingQuantity = Math.max(
@@ -549,15 +742,17 @@ class DealService {
       })
       .filter(Boolean);
 
-    const sortedItems = this.sortDealProducts(items, query.sort);
+    const sortedItems = this.sortDealProducts(items, normalizedQuery.sort);
     const total = sortedItems.length;
     const offset = (page - 1) * limit;
+    const facets = await this.buildDealProductFacets(sortedItems);
     return {
       items: sortedItems.slice(offset, offset + limit),
       total,
       page,
       limit,
       totalPages: Math.ceil(total / limit) || 0,
+      facets,
     };
   }
 

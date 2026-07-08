@@ -132,6 +132,10 @@ class DealController {
         total: result.total,
         totalPages: result.totalPages,
       },
+      meta: {
+        facets: result.facets || {},
+        filters: result.facets || {},
+      },
     }));
   };
 

@@ -272,6 +272,45 @@ class ProductRepository {
     );
   }
 
+  async ensureDefaultVariant(productId) {
+    const product = await ProductModel.findById(productId);
+    if (!product) return null;
+
+    const variants = Array.isArray(product.variants) ? product.variants : [];
+    const existingDefault = variants.find((variant) => variant.isDefault) || variants[0];
+    if (existingDefault?.sku) return existingDefault;
+
+    const defaultSku = product.sku || `DEFAULT-${String(product._id).slice(-8)}`;
+    const defaultVariant = {
+      sku: defaultSku,
+      title: "Default variant",
+      price: Number(product.price || 0),
+      mrp: Number(product.mrp || 0),
+      salePrice: product.salePrice,
+      stock: Number(product.stock || 0),
+      reservedStock: Number(product.reservedStock || 0),
+      attributes: {},
+      images: [],
+      status: "active",
+      isDefault: true,
+      sortOrder: 0,
+    };
+
+    const updated = await ProductModel.findByIdAndUpdate(
+      productId,
+      {
+        $set: {
+          variants: [defaultVariant],
+          hasVariants: false,
+          "inventorySettings.manageVariantInventory": true,
+        },
+      },
+      { new: true },
+    );
+
+    return (updated?.variants || []).find((variant) => variant.isDefault) || updated?.variants?.[0] || null;
+  }
+
   async reserveVariantStock(productId, variantSku, quantity) {
     return ProductModel.findOneAndUpdate(
       {
