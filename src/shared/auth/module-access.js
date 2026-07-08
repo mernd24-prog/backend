@@ -15,6 +15,8 @@ const MODULE_ALIASES = {
   home: "admin",
   dashboard: "admin",
   admin: "admin",
+  "seller-dashboard": "seller-dashboard",
+  seller_dashboard: "seller-dashboard",
   "admin-users": "admin_users",
   admin_users: "admin_users",
   "sub-admins": "admin_users",

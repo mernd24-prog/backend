@@ -9,6 +9,22 @@ const { commissionValidation } = require("../../validation");
 
 const financeView = allowPermissions("sellers/commissions:view");
 const financeManage = allowPermissions("sellers/commissions:update");
+const SELLER_ROLES = new Set(["seller", "seller-admin", "seller-sub-admin"]);
+
+function platformFinanceOnly(req, res, next) {
+  if (SELLER_ROLES.has(req.auth?.role)) {
+    return res.status(403).json({
+      success: false,
+      message: "Seller finance operations are managed by the platform.",
+      error: {
+        code: "FORBIDDEN",
+        message: "Seller finance operations are managed by the platform.",
+      },
+      code: "FORBIDDEN",
+    });
+  }
+  return next();
+}
 
 function sendDocument(res, document) {
   res.setHeader("Content-Type", document.contentType);
@@ -205,7 +221,7 @@ router.get("/my-settlements/:settlementId/statement", authenticate, financeView,
 // ==============================
 // Admin: Finance summary
 // ==============================
-router.get("/summary", authenticate, financeView, async (req, res, next) => {
+router.get("/summary", authenticate, platformFinanceOnly, financeView, async (req, res, next) => {
   try {
     const summary = await CommissionService.getFinanceSummary(req.query);
     return res.status(200).json({
@@ -220,7 +236,7 @@ router.get("/summary", authenticate, financeView, async (req, res, next) => {
 // ==============================
 // Admin: Seller wallet summary
 // ==============================
-router.get("/wallet/:sellerId", authenticate, financeView, async (req, res, next) => {
+router.get("/wallet/:sellerId", authenticate, platformFinanceOnly, financeView, async (req, res, next) => {
   try {
     const wallet = await CommissionService.getSellerWalletSummary(req.params.sellerId, req.query);
     return res.status(200).json({
@@ -235,7 +251,7 @@ router.get("/wallet/:sellerId", authenticate, financeView, async (req, res, next
 // ==============================
 // Admin: List seller commissions
 // ==============================
-router.get("/", authenticate, financeView, async (req, res, next) => {
+router.get("/", authenticate, platformFinanceOnly, financeView, async (req, res, next) => {
   try {
     const commissions = await CommissionService.listSellerCommissions(req.query);
     return res.status(200).json({
@@ -250,7 +266,7 @@ router.get("/", authenticate, financeView, async (req, res, next) => {
 // ==============================
 // Admin: Export seller commissions
 // ==============================
-router.get("/export", authenticate, financeView, async (req, res, next) => {
+router.get("/export", authenticate, platformFinanceOnly, financeView, async (req, res, next) => {
   try {
     const document = await CommissionService.exportSellerCommissions(req.query);
     return sendDocument(res, document);
@@ -262,7 +278,7 @@ router.get("/export", authenticate, financeView, async (req, res, next) => {
 // ==============================
 // Admin: List seller payouts
 // ==============================
-router.get("/payouts", authenticate, financeView, async (req, res, next) => {
+router.get("/payouts", authenticate, platformFinanceOnly, financeView, async (req, res, next) => {
   try {
     const payouts = await CommissionService.listSellerPayouts(req.query);
     return res.status(200).json({
@@ -277,7 +293,7 @@ router.get("/payouts", authenticate, financeView, async (req, res, next) => {
 // ==============================
 // Admin: Export seller payouts
 // ==============================
-router.get("/payouts/export", authenticate, financeView, async (req, res, next) => {
+router.get("/payouts/export", authenticate, platformFinanceOnly, financeView, async (req, res, next) => {
   try {
     const document = await CommissionService.exportSellerPayouts(req.query);
     return sendDocument(res, document);
@@ -289,7 +305,7 @@ router.get("/payouts/export", authenticate, financeView, async (req, res, next) 
 // ==============================
 // Admin: Payout operations queue
 // ==============================
-router.get("/payout-ops/queue", authenticate, financeView, async (req, res, next) => {
+router.get("/payout-ops/queue", authenticate, platformFinanceOnly, financeView, async (req, res, next) => {
   try {
     const queue = await CommissionService.getPayoutOperationsQueue(req.query);
     return res.status(200).json({
@@ -304,7 +320,7 @@ router.get("/payout-ops/queue", authenticate, financeView, async (req, res, next
 // ==============================
 // Admin: Negative balance recovery queue
 // ==============================
-router.get("/negative-balances", authenticate, financeView, async (req, res, next) => {
+router.get("/negative-balances", authenticate, platformFinanceOnly, financeView, async (req, res, next) => {
   try {
     const balances = await CommissionService.listNegativeBalanceRecoveries(req.query);
     return res.status(200).json({
@@ -319,7 +335,7 @@ router.get("/negative-balances", authenticate, financeView, async (req, res, nex
 // ==============================
 // Admin: Resolve negative balance recovery
 // ==============================
-router.post("/negative-balances/:settlementId/resolve", authenticate, financeManage, async (req, res, next) => {
+router.post("/negative-balances/:settlementId/resolve", authenticate, platformFinanceOnly, financeManage, async (req, res, next) => {
   try {
     const result = await CommissionService.resolveNegativeBalanceRecovery(
       req.params.settlementId,
@@ -339,7 +355,7 @@ router.post("/negative-balances/:settlementId/resolve", authenticate, financeMan
 // ==============================
 // Admin: Complete payout
 // ==============================
-router.post("/payouts/:payoutId/process", authenticate, financeManage, async (req, res, next) => {
+router.post("/payouts/:payoutId/process", authenticate, platformFinanceOnly, financeManage, async (req, res, next) => {
   try {
     const result = await CommissionService.processPayout(
       req.params.payoutId,
@@ -363,7 +379,7 @@ router.post("/payouts/:payoutId/process", authenticate, financeManage, async (re
 // ==============================
 // Admin: Mark payout failed and release commissions
 // ==============================
-router.post("/payouts/:payoutId/fail", authenticate, financeManage, async (req, res, next) => {
+router.post("/payouts/:payoutId/fail", authenticate, platformFinanceOnly, financeManage, async (req, res, next) => {
   try {
     const result = await CommissionService.failPayout(req.params.payoutId, req.body?.reason, req.auth);
     return res.status(200).json({
@@ -379,7 +395,7 @@ router.post("/payouts/:payoutId/fail", authenticate, financeManage, async (req, 
 // ==============================
 // Admin: Approve payout for processing
 // ==============================
-router.post("/payouts/:payoutId/approve", authenticate, financeManage, async (req, res, next) => {
+router.post("/payouts/:payoutId/approve", authenticate, platformFinanceOnly, financeManage, async (req, res, next) => {
   try {
     const result = await CommissionService.approvePayout(req.params.payoutId, {
       note: req.body?.note,
@@ -399,7 +415,7 @@ router.post("/payouts/:payoutId/approve", authenticate, financeManage, async (re
 // ==============================
 // Admin: Put payout on hold
 // ==============================
-router.post("/payouts/:payoutId/hold", authenticate, financeManage, async (req, res, next) => {
+router.post("/payouts/:payoutId/hold", authenticate, platformFinanceOnly, financeManage, async (req, res, next) => {
   try {
     const result = await CommissionService.holdPayout(req.params.payoutId, req.body?.reason, req.auth);
     return res.status(200).json({
@@ -415,7 +431,7 @@ router.post("/payouts/:payoutId/hold", authenticate, financeManage, async (req, 
 // ==============================
 // Admin: Release payout hold
 // ==============================
-router.post("/payouts/:payoutId/release-hold", authenticate, financeManage, async (req, res, next) => {
+router.post("/payouts/:payoutId/release-hold", authenticate, platformFinanceOnly, financeManage, async (req, res, next) => {
   try {
     const result = await CommissionService.releasePayoutHold(req.params.payoutId, {
       approve: req.body?.approve === true,
@@ -435,7 +451,7 @@ router.post("/payouts/:payoutId/release-hold", authenticate, financeManage, asyn
 // ==============================
 // Admin: Retry failed payout
 // ==============================
-router.post("/payouts/:payoutId/retry", authenticate, financeManage, async (req, res, next) => {
+router.post("/payouts/:payoutId/retry", authenticate, platformFinanceOnly, financeManage, async (req, res, next) => {
   try {
     const result = await CommissionService.retryFailedPayout(req.params.payoutId, {
       paymentReference: req.body?.paymentReference,
@@ -459,6 +475,7 @@ router.post("/payouts/:payoutId/retry", authenticate, financeManage, async (req,
 router.post(
   "/calculate/:orderId",
   authenticate,
+  platformFinanceOnly,
   financeManage,
   async (req, res, next) => {
     try {
@@ -499,6 +516,7 @@ router.post(
 router.post(
   "/process-payouts",
   authenticate,
+  platformFinanceOnly,
   financeManage,
   async (req, res, next) => {
     try {
@@ -545,6 +563,7 @@ router.post(
 router.get(
   "/settlements",
   authenticate,
+  platformFinanceOnly,
   financeView,
   async (req, res, next) => {
     try {
@@ -566,6 +585,7 @@ router.get(
 router.get(
   "/settlements/export",
   authenticate,
+  platformFinanceOnly,
   financeView,
   async (req, res, next) => {
     try {
@@ -583,6 +603,7 @@ router.get(
 router.get(
   "/settlements/:settlementId/statement",
   authenticate,
+  platformFinanceOnly,
   financeView,
   async (req, res, next) => {
     try {

@@ -5,6 +5,7 @@ const {
   usesModuleAccess,
   getRequestModule,
   cleanModuleName,
+  DEFAULT_SELLER_MODULES,
 } = require("../auth/module-access");
 const {
   ACTION_ALIASES,
@@ -32,7 +33,12 @@ function isPlatformAdminRole(role) {
 // Full (owner) seller bypasses permission checks on seller-scoped slugs.
 function isOwnerSellerBypass(userRoles, permissionSlugs) {
   const isOwnerSeller = userRoles.includes(ROLES.SELLER);
-  return isOwnerSeller && permissionSlugs.every((slug) => slug.startsWith("sellers:"));
+  if (!isOwnerSeller) return false;
+  const sellerModuleScope = new Set(DEFAULT_SELLER_MODULES.map(cleanModuleName));
+  return permissionSlugs.every((slug) => {
+    const moduleName = extractModuleSlugFromPermission(slug);
+    return moduleName && sellerModuleScope.has(moduleName);
+  });
 }
 
 function extractModuleSlugFromPermission(permissionSlug = "") {
@@ -50,7 +56,11 @@ function getAuthorizedModuleScope(auth = {}) {
         .map(extractModuleSlugFromPermission)
         .filter(Boolean)
     : [];
-  return new Set([...allowedModules, ...permissionModules]);
+  const ownerSellerModules =
+    auth.role === ROLES.SELLER
+      ? DEFAULT_SELLER_MODULES.map(cleanModuleName)
+      : [];
+  return new Set([...allowedModules, ...permissionModules, ...ownerSellerModules]);
 }
 
 const PERMISSION_ACTION_ALIASES = Object.entries(ACTION_ALIASES).reduce(
@@ -146,6 +156,13 @@ function hasGrantedPermission(auth = {}, moduleName, action = "view") {
   if (auth.isSuperAdmin || auth.role === ROLES.SUPER_ADMIN) return true;
 
   const normalizedModule = cleanModuleName(moduleName);
+  if (
+    auth.role === ROLES.SELLER &&
+    DEFAULT_SELLER_MODULES.map(cleanModuleName).includes(normalizedModule)
+  ) {
+    return true;
+  }
+
   const permissionSlug = `${normalizedModule}:${action}`;
   const permissionCandidates = buildPermissionCandidates(permissionSlug);
   const grantedPermissions = Array.isArray(auth.permissions)

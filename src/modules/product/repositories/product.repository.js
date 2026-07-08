@@ -238,21 +238,39 @@ class ProductRepository {
 
   // ─── Variant inventory ────────────────────────────────────────────────────
 
+  async syncRootInventoryFromVariants(productId) {
+    const product = await ProductModel.findById(productId);
+    if (!product || !Array.isArray(product.variants) || !product.variants.length) return product;
+
+    const stock = product.variants.reduce((total, variant) => total + Number(variant.stock || 0), 0);
+    const reservedStock = product.variants.reduce((total, variant) => total + Number(variant.reservedStock || 0), 0);
+    product.stock = stock;
+    product.reservedStock = reservedStock;
+    product.hasVariants = true;
+    product.inventorySettings = {
+      ...(product.inventorySettings?.toObject ? product.inventorySettings.toObject() : product.inventorySettings || {}),
+      manageVariantInventory: true,
+    };
+    await product.save();
+    return product;
+  }
+
   async adjustVariantStock(productId, variantSku, adjustment) {
     if (adjustment === 0) return ProductModel.findById(productId);
 
     const variantFilter = { _id: productId, "variants.sku": variantSku };
 
     if (adjustment > 0) {
-      return ProductModel.findOneAndUpdate(
+      const updated = await ProductModel.findOneAndUpdate(
         variantFilter,
         { $inc: { "variants.$.stock": adjustment } },
         { new: true },
       );
+      return updated ? this.syncRootInventoryFromVariants(productId) : null;
     }
 
     const quantity = Math.abs(adjustment);
-    return ProductModel.findOneAndUpdate(
+    const updated = await ProductModel.findOneAndUpdate(
       {
         ...variantFilter,
         $expr: {
@@ -270,10 +288,11 @@ class ProductRepository {
       { $inc: { "variants.$.stock": -quantity } },
       { new: true },
     );
+    return updated ? this.syncRootInventoryFromVariants(productId) : null;
   }
 
   async reserveVariantStock(productId, variantSku, quantity) {
-    return ProductModel.findOneAndUpdate(
+    const updated = await ProductModel.findOneAndUpdate(
       {
         _id: productId,
         "variants.sku": variantSku,
@@ -292,10 +311,11 @@ class ProductRepository {
       { $inc: { "variants.$.reservedStock": quantity } },
       { new: true },
     );
+    return updated ? this.syncRootInventoryFromVariants(productId) : null;
   }
 
   async releaseReservedVariantStock(productId, variantSku, quantity) {
-    return ProductModel.findOneAndUpdate(
+    const updated = await ProductModel.findOneAndUpdate(
       {
         _id: productId,
         variants: { $elemMatch: { sku: variantSku, reservedStock: { $gte: quantity } } },
@@ -303,10 +323,11 @@ class ProductRepository {
       { $inc: { "variants.$.reservedStock": -quantity } },
       { new: true },
     );
+    return updated ? this.syncRootInventoryFromVariants(productId) : null;
   }
 
   async commitReservedVariantStock(productId, variantSku, quantity) {
-    return ProductModel.findOneAndUpdate(
+    const updated = await ProductModel.findOneAndUpdate(
       {
         _id: productId,
         variants: {
@@ -320,6 +341,7 @@ class ProductRepository {
       { $inc: { "variants.$.reservedStock": -quantity, "variants.$.stock": -quantity } },
       { new: true },
     );
+    return updated ? this.syncRootInventoryFromVariants(productId) : null;
   }
 
   // ─── Analytics ───────────────────────────────────────────────────────────

@@ -240,8 +240,9 @@ class ProductService {
         throw new AppError("Variant stock must be non-negative", 400);
       }
 
-      const attributes = this.normalizeVariantAttributes(variant.attributes || {});
-      for (const [axis, value] of Object.entries(attributes)) {
+	      const attributes = this.normalizeVariantAttributes(variant.attributes || {});
+	      if (!optionMap.size) continue;
+	      for (const [axis, value] of Object.entries(attributes)) {
         if (!optionMap.has(axis)) {
           throw new AppError(`Variant attribute '${axis}' is not configured as a product option`, 400);
         }
@@ -280,6 +281,118 @@ class ProductService {
     }));
   }
 
+  hasPayloadValue(payload = {}, field) {
+    return Object.prototype.hasOwnProperty.call(payload, field) &&
+      payload[field] !== undefined &&
+      payload[field] !== null &&
+      payload[field] !== "";
+  }
+
+  toVariantNumber(value, fallback = 0) {
+    if (value === undefined || value === null || value === "") return fallback;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+  }
+
+  toPlainVariant(variant = {}) {
+    const plain = typeof variant?.toObject === "function"
+      ? variant.toObject({ depopulate: true })
+      : { ...variant };
+    if (plain.attributes instanceof Map) {
+      plain.attributes = Object.fromEntries(plain.attributes);
+    }
+    return plain;
+  }
+
+  syncRootAndDefaultVariant(payload = {}, existingProduct = null) {
+    const existingVariants = Array.isArray(existingProduct?.variants)
+      ? existingProduct.variants.map((variant) => this.toPlainVariant(variant))
+      : [];
+    const submittedVariants = Array.isArray(payload.variants)
+      ? payload.variants.map((variant) => this.toPlainVariant(variant))
+      : [];
+    const hasVariantPayload = Object.prototype.hasOwnProperty.call(payload, "variants");
+    const rootHasInventoryOrPricing = ["sku", "price", "mrp", "salePrice", "stock", "color"].some((field) =>
+      this.hasPayloadValue(payload, field),
+    );
+
+    let variants = hasVariantPayload ? submittedVariants : existingVariants;
+
+    if (!variants.length && rootHasInventoryOrPricing) {
+      variants = [{
+        sku: payload.sku || `${payload.title || payload.name || "SKU"}-1`,
+        title: payload.color && payload.color !== "default" ? String(payload.color) : "Default",
+        price: this.toVariantNumber(payload.price, 0),
+        mrp: this.toVariantNumber(payload.mrp, this.toVariantNumber(payload.price, 0)),
+        salePrice: this.hasPayloadValue(payload, "salePrice") ? this.toVariantNumber(payload.salePrice, 0) : undefined,
+        stock: this.toVariantNumber(payload.stock, 0),
+        reservedStock: 0,
+        attributes: payload.color && payload.color !== "default" ? { color: payload.color } : {},
+        images: [],
+        status: "active",
+        isDefault: true,
+        sortOrder: 0,
+      }];
+    }
+
+    if (!variants.length) return payload;
+
+    const defaultIndex = Math.max(0, variants.findIndex((variant) => variant.isDefault === true));
+    variants = variants.map((variant, index) => {
+      const next = {
+        ...variant,
+        attributes: this.normalizeVariantAttributes(variant.attributes || {}),
+        isDefault: index === defaultIndex,
+        sortOrder: variant.sortOrder ?? index,
+      };
+
+      if (!hasVariantPayload && index === defaultIndex) {
+        if (this.hasPayloadValue(payload, "sku")) next.sku = payload.sku;
+        if (this.hasPayloadValue(payload, "price")) next.price = this.toVariantNumber(payload.price, next.price);
+        if (this.hasPayloadValue(payload, "mrp")) next.mrp = this.toVariantNumber(payload.mrp, next.mrp);
+        if (this.hasPayloadValue(payload, "salePrice")) next.salePrice = this.toVariantNumber(payload.salePrice, next.salePrice);
+        if (this.hasPayloadValue(payload, "stock")) next.stock = this.toVariantNumber(payload.stock, next.stock);
+        if (this.hasPayloadValue(payload, "color") && payload.color !== "default") {
+          next.attributes = { ...(next.attributes || {}), color: payload.color };
+          if (!next.title || next.title === "Default") next.title = String(payload.color);
+        }
+      }
+
+      if (!next.sku) next.sku = `${payload.sku || payload.title || "SKU"}-${index + 1}`;
+      next.price = this.toVariantNumber(
+        next.price,
+        hasVariantPayload ? 0 : this.toVariantNumber(payload.price, 0),
+      );
+      next.mrp = this.toVariantNumber(
+        next.mrp,
+        hasVariantPayload ? next.price : this.toVariantNumber(payload.mrp, next.price),
+      );
+      next.stock = this.toVariantNumber(next.stock, 0);
+      next.reservedStock = this.toVariantNumber(next.reservedStock, 0);
+      next.status = next.status || "active";
+      return next;
+    });
+
+    const defaultVariant = variants[defaultIndex] || variants[0];
+    const stock = variants.reduce((total, variant) => total + this.toVariantNumber(variant.stock, 0), 0);
+    const reservedStock = variants.reduce((total, variant) => total + this.toVariantNumber(variant.reservedStock, 0), 0);
+
+    return {
+      ...payload,
+      sku: payload.sku || defaultVariant.sku,
+      price: this.toVariantNumber(payload.price, defaultVariant.price),
+      mrp: this.toVariantNumber(payload.mrp, defaultVariant.mrp),
+      stock,
+      reservedStock,
+      variants,
+      hasVariants: true,
+      inventorySettings: {
+        ...(payload.inventorySettings || {}),
+        manageVariantInventory: true,
+      },
+    };
+  }
+
   normalizeProductVariants(payload = {}) {
     const hasOptionPayload = Object.prototype.hasOwnProperty.call(payload, "options");
     const hasVariantPayload = Object.prototype.hasOwnProperty.call(payload, "variants");
@@ -312,14 +425,14 @@ class ProductService {
         ? payload.variantAxes.map((axis) => this.normalizeVariantAxis({ name: axis })).filter(Boolean)
         : [];
 
-    return {
+    return this.syncRootAndDefaultVariant({
       ...payload,
       ...(hasOptionPayload ? { options } : {}),
       ...(hasVariantPayload || (hasOptionPayload && variants.length) ? { variants } : {}),
       variantAxes,
       hasVariants: payload.hasVariants === true || variants.length > 0,
       defaultVariantId: payload.defaultVariantId,
-    };
+    });
   }
 
   // ─── Media helpers ────────────────────────────────────────────────────────
@@ -948,6 +1061,7 @@ class ProductService {
 
     payload = this.normalizeProductMedia(payload);
     payload = this.normalizeProductVariants(payload);
+    payload = this.syncRootAndDefaultVariant(payload);
     payload = {
       ...payload,
       gstInclusive: true,
@@ -1057,6 +1171,7 @@ class ProductService {
 
     payload = this.normalizeProductMedia(payload);
     payload = this.normalizeProductVariants(payload);
+    payload = this.syncRootAndDefaultVariant(payload, existingProduct);
     payload = await this.normalizeProductCompliance(payload, actor, existingProduct);
 
     const categoryKey =

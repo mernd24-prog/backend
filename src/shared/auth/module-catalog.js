@@ -11,6 +11,17 @@ const MODULE_CATALOG = [
     forSeller: false,
     apiPath: "/admin",
   },
+  {
+    tab: "Dashboard",
+    slug: "seller-dashboard",
+    name: "Seller Dashboard",
+    description: "Seller overview, sales, orders, and operational summaries",
+    icon: "dashboard",
+    order: 1.1,
+    forPlatform: false,
+    forSeller: true,
+    apiPath: "/sellers/me/dashboard",
+  },
 
   // ── Catalog Management ────────────────────────────────────────────────────
   {
@@ -379,7 +390,7 @@ const MODULE_CATALOG = [
     icon: "send",
     order: 14.1,
     forPlatform: true,
-    forSeller: false,
+    forSeller: true,
     apiPath: "/admin/payouts",
   },
 

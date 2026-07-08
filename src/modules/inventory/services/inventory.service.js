@@ -281,6 +281,12 @@ class InventoryService {
   }
 
   resolveManualAdjustment(product, payload = {}) {
+    const requestedVariantSku = payload.variantSku || "";
+    const defaultVariant = Array.isArray(product.variants) && product.variants.length
+      ? product.variants.find((variant) => variant.isDefault === true) || product.variants[0]
+      : null;
+    const variantSku = requestedVariantSku || defaultVariant?.sku || "";
+
     if (payload.adjustment !== undefined && payload.adjustment !== null && payload.adjustment !== "") {
       const adjustment = Number(payload.adjustment);
       if (!Number.isFinite(adjustment)) {
@@ -298,7 +304,6 @@ class InventoryService {
     if (adjustmentType === "add") return quantity;
     if (adjustmentType === "remove") return -quantity;
     if (adjustmentType === "set") {
-      const variantSku = payload.variantSku || "";
       if (variantSku && !(product.variants || []).some((variant) => variant.sku === variantSku)) {
         throw new AppError("Variant SKU not found for this product", 404);
       }
@@ -320,7 +325,10 @@ class InventoryService {
       throw new AppError("Inventory adjustment does not change stock", 400);
     }
 
-    const variantSku = payload.variantSku || "";
+    const defaultVariant = Array.isArray(product.variants) && product.variants.length
+      ? product.variants.find((variant) => variant.isDefault === true) || product.variants[0]
+      : null;
+    const variantSku = payload.variantSku || defaultVariant?.sku || "";
     const updatedProduct = variantSku
       ? await this.productRepository.adjustVariantStock(productId, variantSku, adjustment)
       : await this.productRepository.adjustStock(productId, adjustment);
