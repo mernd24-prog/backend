@@ -34,7 +34,13 @@ class ProductController {
       publicOnly: !req.auth,
       actor,
     });
-    res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
+    res.json(okResponse(result.items, {
+      pagination: paginationMeta(page, limit, result.total),
+      meta: {
+        facets: result.facets || {},
+        filters: result.facets || {},
+      },
+    }));
   };
 
   listMine = async (req, res) => {

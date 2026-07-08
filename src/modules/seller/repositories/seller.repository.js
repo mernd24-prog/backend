@@ -234,7 +234,8 @@ class SellerRepository {
        FROM order_items oi
        INNER JOIN orders o ON o.id = oi.order_id
        WHERE oi.seller_id = $1
-         AND o.created_at BETWEEN $2 AND $3
+         AND o.created_at >= $2::date
+         AND o.created_at < ($3::date + INTERVAL '1 day')
          ${orgSql}`,
       values,
     );
@@ -254,11 +255,64 @@ class SellerRepository {
        FROM order_items oi
        INNER JOIN orders o ON o.id = oi.order_id
        WHERE oi.seller_id = $1
-         AND o.created_at BETWEEN $2 AND $3
+         AND o.created_at >= $2::date
+         AND o.created_at < ($3::date + INTERVAL '1 day')
          ${orgSql}
        GROUP BY oi.product_id
        ORDER BY revenue DESC, units_sold DESC
        LIMIT $4`,
+      values,
+    );
+    return rows;
+  }
+
+  async fetchOrderPerformance(sellerId, fromDate, toDate, organizationId = null) {
+    const values = [sellerId, fromDate, toDate];
+    const orgSql = organizationId ? "AND oi.organization_id = $4::uuid" : "";
+    if (organizationId) values.push(organizationId);
+    const { rows } = await postgresPool.query(
+      `SELECT
+         TO_CHAR(day_bucket, 'Dy') AS label,
+         COALESCE(order_count, 0)::INT AS value,
+         COALESCE(revenue, 0)::NUMERIC AS revenue
+       FROM (
+         SELECT generate_series($2::date, $3::date, INTERVAL '1 day')::DATE AS day_bucket
+       ) days
+       LEFT JOIN (
+         SELECT
+           o.created_at::DATE AS order_day,
+           COUNT(DISTINCT o.id)::INT AS order_count,
+           COALESCE(SUM(oi.line_total), 0)::NUMERIC AS revenue
+         FROM orders o
+         INNER JOIN order_items oi ON oi.order_id = o.id
+         WHERE oi.seller_id = $1
+           AND o.created_at >= $2::date
+           AND o.created_at < ($3::date + INTERVAL '1 day')
+           ${orgSql}
+         GROUP BY o.created_at::DATE
+       ) orders_by_day ON orders_by_day.order_day = days.day_bucket
+       ORDER BY day_bucket`,
+      values,
+    );
+    return rows;
+  }
+
+  async fetchOrderStatusBreakdown(sellerId, fromDate, toDate, organizationId = null) {
+    const values = [sellerId, fromDate, toDate];
+    const orgSql = organizationId ? "AND oi.organization_id = $4::uuid" : "";
+    if (organizationId) values.push(organizationId);
+    const { rows } = await postgresPool.query(
+      `SELECT
+         LOWER(COALESCE(NULLIF(o.status, ''), 'pending')) AS status,
+         COUNT(DISTINCT o.id)::INT AS count
+       FROM orders o
+       INNER JOIN order_items oi ON oi.order_id = o.id
+       WHERE oi.seller_id = $1
+         AND o.created_at >= $2::date
+         AND o.created_at < ($3::date + INTERVAL '1 day')
+         ${orgSql}
+       GROUP BY LOWER(COALESCE(NULLIF(o.status, ''), 'pending'))
+       ORDER BY count DESC`,
       values,
     );
     return rows;

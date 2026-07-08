@@ -747,10 +747,12 @@ class SellerService {
     const fromDate = query.fromDate ? new Date(query.fromDate) : this.getDateBeforeDays(30);
     const toDate = query.toDate ? new Date(query.toDate) : new Date();
 
-    const [summary, topProducts, recentOrders, seller, kyc, organization] = await Promise.all([
+    const [summary, topProducts, recentOrders, orderPerformance, orderStatusRows, seller, kyc, organization] = await Promise.all([
       this.sellerRepository.fetchDashboardSummary(sellerId, fromDate, toDate, organizationId),
       this.sellerRepository.fetchTopProducts(sellerId, fromDate, toDate, 5, organizationId),
       this.sellerRepository.fetchRecentOrders(sellerId, 10, organizationId),
+      this.sellerRepository.fetchOrderPerformance(sellerId, fromDate, toDate, organizationId),
+      this.sellerRepository.fetchOrderStatusBreakdown(sellerId, fromDate, toDate, organizationId),
       this.sellerRepository.findSellerById(sellerId),
       this.sellerRepository.findKycBySellerId(sellerId),
       organizationId
@@ -801,6 +803,21 @@ class SellerService {
         name: product.name || product.title || product.product_id,
         unitsSold: Number(product.units_sold || product.unitsSold || 0),
         revenue: Number(product.revenue || 0),
+      })),
+      orderPerformance: orderPerformance.map((row) => ({
+        label: row.label,
+        value: Number(row.value || 0),
+        revenue: Number(row.revenue || 0),
+      })),
+      orderStatus: orderStatusRows.map((row) => ({
+        name: row.status,
+        label: String(row.status || "pending").replace(/_/g, " "),
+        value: Number(row.count || 0),
+      })),
+      statusBreakdown: orderStatusRows.map((row) => ({
+        name: row.status,
+        label: String(row.status || "pending").replace(/_/g, " "),
+        value: Number(row.count || 0),
       })),
       recentOrders,
     };

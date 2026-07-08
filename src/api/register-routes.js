@@ -29,6 +29,7 @@ const notificationPreferenceRoutes = require("../modules/notification/routes/not
 const { deliveryRoutes } = require("../modules/delivery/routes/delivery.routes");
 const { shippingProfilesRoutes } = require("../modules/delivery/routes/shipping-profiles.routes");
 const { dealRoutes } = require("../modules/deal/routes/deal.routes");
+const { homeRoutes } = require("../modules/home/routes/home.routes");
 const { fileUploaderRoutes } = require("../shared/routes/file-uploader.routes");
 const { metaRoutes } = require("../shared/routes/meta.routes");
 const searchRoutes = require("../shared/routes/search.routes");
@@ -78,6 +79,7 @@ function registerRoutes(app) {
   app.use(`${env.apiPrefix}/delivery`, deliveryRoutes);
   app.use(`${env.apiPrefix}/shipping-profiles`, shippingProfilesRoutes);
   app.use(`${env.apiPrefix}/deals`, dealRoutes);
+  app.use(`${env.apiPrefix}/home`, homeRoutes);
   app.use(`${env.apiPrefix}/file-uploader`, fileUploaderRoutes);
   app.use(`${env.apiPrefix}/meta`, metaRoutes);
   app.use(`${env.apiPrefix}/search`, searchRoutes);

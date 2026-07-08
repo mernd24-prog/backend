@@ -1,0 +1,352 @@
+"use strict";
+
+const { ProductRepository } = require("../../product/repositories/product.repository");
+const { DealRepository } = require("../../deal/repositories/deal.repository");
+const {
+  applyPublicProductFilter,
+  isPublicProduct,
+} = require("../../../shared/catalog/public-product-filter");
+
+const SECTION_CONFIGS = [
+  {
+    key: "mens-best-sellers",
+    title: "Best Sellers in Men's Fashion",
+    label: "Trending",
+    source: "products",
+    category: "mens-fashion",
+    sort: "popular",
+  },
+  {
+    key: "home-lifestyle-deals",
+    title: "Home & Lifestyle Deals",
+    discountTitleSuffix: "Home & Lifestyle",
+    label: "Hot Deal",
+    source: "deals",
+    category: "home",
+    sort: "discount",
+    minDiscountPercent: 10,
+  },
+  {
+    key: "womens-trending",
+    title: "Trending in Women's Fashion",
+    label: "New In",
+    source: "products",
+    category: "womens-fashion",
+    sort: "newest",
+  },
+  {
+    key: "kids-popular",
+    title: "Top Picks in Kids Fashion",
+    label: "Popular",
+    source: "products",
+    category: "kids",
+    sort: "popular",
+  },
+];
+
+const GENERIC_SECTION_CONFIGS = [
+  {
+    key: "collage-deals",
+    title: "Deals 10% Off & More",
+    discountTitleSuffix: "Deals",
+    label: "Hot Deal",
+    source: "deals",
+    sort: "discount",
+    minDiscountPercent: 10,
+  },
+  {
+    key: "collage-trending",
+    title: "Trending Products",
+    label: "Trending",
+    source: "products",
+    sort: "popular",
+  },
+  {
+    key: "collage-new-arrivals",
+    title: "New Arrivals",
+    label: "New In",
+    source: "products",
+    sort: "newest",
+  },
+  {
+    key: "collage-top-picks",
+    title: "Top Picks For You",
+    label: "Popular",
+    source: "products",
+    sort: "popular",
+  },
+];
+
+const FALLBACK_CATEGORIES = {
+  "mens-fashion": ["mens-fashion", "men", "mens-shoes", "mens-watches"],
+  home: ["home", "home-kitchen", "home-lifestyle", "lifestyle"],
+  "womens-fashion": ["womens-fashion", "women", "womens", "beauty-fragrances-perfumes-women"],
+  kids: ["kids", "kids-fashion"],
+};
+
+const firstDefined = (...values) =>
+  values.find((value) => value !== undefined && value !== null && value !== "");
+
+const normalizeKey = (value = "") => String(value || "").trim().toLowerCase();
+
+const categoryMatches = (product = {}, categoryCandidates = []) => {
+  const allowed = new Set(categoryCandidates.map(normalizeKey).filter(Boolean));
+  if (!allowed.size) return true;
+  return [
+    product.category,
+    product.categoryId,
+    product.category_id,
+    product.categoryKey,
+    product.categorySlug,
+    product.dealCategory,
+  ].some((value) => allowed.has(normalizeKey(value)));
+};
+
+class HomeService {
+  constructor({
+    productRepository = new ProductRepository(),
+    dealRepository = new DealRepository(),
+  } = {}) {
+    this.productRepository = productRepository;
+    this.dealRepository = dealRepository;
+  }
+
+  productImage(product = {}) {
+    const images = Array.isArray(product.images) ? product.images : [];
+    const firstImage = images[0];
+    if (typeof firstImage === "string") return firstImage;
+    return firstDefined(
+      firstImage?.url,
+      firstImage?.image,
+      firstImage?.imageUrl,
+      product.image,
+      product.thumbnail,
+      product.thumbnailUrl,
+      product.coverImage,
+      "",
+    );
+  }
+
+  productLink(product = {}) {
+    const productId = firstDefined(product._id, product.id, product.productId, product.slug);
+    return productId ? `/products/${productId}` : "/products";
+  }
+
+  productLabel(product = {}) {
+    return firstDefined(
+      product.shortTitle,
+      product.title,
+      product.name,
+      product.categoryName,
+      product.category,
+      "Shop Now",
+    );
+  }
+
+  toCollageItem(product = {}) {
+    const image = this.productImage(product);
+    if (!image) return null;
+    return {
+      image,
+      link: this.productLink(product),
+      label: this.productLabel(product),
+      productId: String(firstDefined(product._id, product.id, product.productId, "")),
+      category: firstDefined(product.category, product.categoryId, product.category_id, ""),
+      price: firstDefined(product.salePrice, product.sellingPrice, product.price, null),
+      mrp: firstDefined(product.mrp, product.originalPrice, product.compareAtPrice, null),
+      discountPercent: Number(product.discountPercent || product.discount_percent || 0),
+      rating: Number(product.rating || 0),
+      reviewCount: Number(product.reviewCount || 0),
+      source: product?.metadata?.isDealProduct ? "deal" : "product",
+    };
+  }
+
+  uniqueItems(items = [], limit = 4) {
+    const seen = new Set();
+    const unique = [];
+    items.forEach((item) => {
+      const key = item.productId || item.link || item.image;
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      unique.push(item);
+    });
+    return unique.slice(0, limit);
+  }
+
+  async listProductItems(config, limit) {
+    const hasCategory = Boolean(config.category);
+    const categoryCandidates = hasCategory
+      ? FALLBACK_CATEGORIES[config.category] || [config.category]
+      : [];
+    const projection = {
+      title: 1,
+      slug: 1,
+      category: 1,
+      categoryId: 1,
+      images: 1,
+      image: 1,
+      thumbnail: 1,
+      thumbnailUrl: 1,
+      price: 1,
+      mrp: 1,
+      salePrice: 1,
+      sellingPrice: 1,
+      rating: 1,
+      reviewCount: 1,
+      analytics: 1,
+      status: 1,
+      visibility: 1,
+      publishedAt: 1,
+      scheduledAt: 1,
+      metadata: 1,
+    };
+    const readItems = async (filter = {}, readLimit = limit) => {
+      const result = await this.productRepository.paginate(
+        applyPublicProductFilter(filter),
+        {
+          page: 1,
+          limit: Math.max(readLimit * 3, readLimit),
+          skip: 0,
+          sortBy: config.sort,
+          sortDir: "desc",
+        },
+        { projection, lean: true },
+      );
+      return (result.items || []).map((product) => this.toCollageItem(product)).filter(Boolean);
+    };
+
+    if (!hasCategory) return this.uniqueItems(await readItems({}, limit * 2), limit);
+
+    const categoryFilter = {
+      $or: [
+        { category: { $in: categoryCandidates } },
+        { categoryId: { $in: categoryCandidates } },
+        { category_id: { $in: categoryCandidates } },
+        { categoryKey: { $in: categoryCandidates } },
+        { categorySlug: { $in: categoryCandidates } },
+      ],
+    };
+    const categoryItems = await readItems(categoryFilter);
+    const selectedCategoryItems = this.uniqueItems(categoryItems, limit);
+    if (selectedCategoryItems.length >= limit) return selectedCategoryItems;
+
+    const topUpItems = await readItems({}, limit * 2);
+    return this.uniqueItems([...selectedCategoryItems, ...topUpItems], limit);
+  }
+
+  async listDealItems(config, limit) {
+    const hasCategory = Boolean(config.category);
+    const categoryCandidates = hasCategory
+      ? FALLBACK_CATEGORIES[config.category] || [config.category]
+      : [];
+    const deals = await this.dealRepository.listActiveDealProducts({
+      sortBy: config.sort === "discount" ? "discount_percent" : "priority",
+      sortDir: config.sort === "discount" ? "desc" : "asc",
+      limit: Math.max(limit * 8, 24),
+    });
+    const productIds = [...new Set(deals.map((deal) => String(deal.productId || "")).filter(Boolean))];
+    if (!productIds.length) return [];
+
+    const products = await this.productRepository.findByIds(productIds);
+    const productById = new Map(products.map((product) => [String(product._id || product.id), product]));
+    const dealProducts = deals
+      .map((deal) => {
+        const product = productById.get(String(deal.productId || ""));
+        if (!product || !isPublicProduct(product)) return null;
+        const productObject = typeof product.toObject === "function" ? product.toObject() : product;
+        return {
+          ...productObject,
+          price: Number(deal.dealPrice || productObject.salePrice || productObject.price || 0),
+          salePrice: Number(deal.dealPrice || productObject.salePrice || productObject.price || 0),
+          mrp: Number(deal.originalPrice || productObject.mrp || productObject.price || 0),
+          originalPrice: Number(deal.originalPrice || productObject.mrp || productObject.price || 0),
+          discountPercent: Number(deal.discountPercent || 0),
+          dealCategory: deal.category,
+          metadata: {
+            ...(productObject.metadata || {}),
+            isDealProduct: true,
+            dealBadge: deal.metadata?.dealBadge || deal.metadata?.badge || "Deal",
+          },
+          deal: {
+            dealId: deal.id || deal.dealId,
+            title: deal.title,
+            discountPercent: Number(deal.discountPercent || 0),
+            endAt: deal.endAt,
+          },
+        };
+      })
+      .filter(Boolean);
+
+    const minDiscountPercent = Number(config.minDiscountPercent || 0);
+    const eligibleDeals = dealProducts.filter(
+      (product) => Number(product.discountPercent || 0) >= minDiscountPercent,
+    );
+    const sourceDeals = eligibleDeals.length >= limit ? eligibleDeals : dealProducts;
+
+    const categoryItems = sourceDeals
+      .filter((product) => !hasCategory || categoryMatches(product, categoryCandidates))
+      .map((product) => this.toCollageItem(product))
+      .filter(Boolean);
+    const topUpItems = sourceDeals
+      .map((product) => this.toCollageItem(product))
+      .filter(Boolean)
+      .slice(0, limit * 2);
+
+    return this.uniqueItems([...categoryItems, ...topUpItems], limit);
+  }
+
+  sectionTitle(config, items = []) {
+    if (config.source !== "deals") return config.title;
+    const discounts = items
+      .map((item) => Number(item.discountPercent || 0))
+      .filter((discount) => discount > 0);
+    const displayDiscount = discounts.length ? Math.min(...discounts) : 0;
+    const suffix = config.discountTitleSuffix || "Deals";
+    return displayDiscount > 0
+      ? `Up to ${Math.round(displayDiscount)}% Off ${suffix}`
+      : config.title;
+  }
+
+  async buildSection(config, perSectionLimit, usedProductIds = new Set()) {
+    const items = config.source === "deals"
+      ? await this.listDealItems(config, perSectionLimit + usedProductIds.size)
+      : await this.listProductItems(config, perSectionLimit + usedProductIds.size);
+    const selectedItems = items.slice(0, perSectionLimit);
+    if (!selectedItems.length) return null;
+    selectedItems.forEach((item) => {
+      const key = String(item.productId || item.link || item.image || "");
+      if (key) usedProductIds.add(key);
+    });
+    return {
+      key: config.key,
+      title: this.sectionTitle(config, selectedItems),
+      label: config.label,
+      source: config.source,
+      category: config.category || null,
+      images: selectedItems,
+    };
+  }
+
+  async listCollectionCollages(query = {}) {
+    const perSectionLimit = Math.min(8, Math.max(1, Number(query.itemsPerSection || query.itemLimit || 4)));
+    const sectionLimit = Math.min(8, Math.max(1, Number(query.limit || 4)));
+    const sections = [];
+    const usedProductIds = new Set();
+
+    for (const config of SECTION_CONFIGS.slice(0, sectionLimit)) {
+      const section = await this.buildSection(config, perSectionLimit, usedProductIds);
+      if (section) sections.push(section);
+    }
+
+    for (const config of GENERIC_SECTION_CONFIGS) {
+      if (sections.length >= sectionLimit) break;
+      if (sections.some((section) => section.key === config.key)) continue;
+      const section = await this.buildSection(config, perSectionLimit, usedProductIds);
+      if (section) sections.push(section);
+    }
+
+    return sections;
+  }
+}
+
+module.exports = { HomeService };
