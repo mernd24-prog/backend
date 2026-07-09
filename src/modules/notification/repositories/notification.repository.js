@@ -1,4 +1,18 @@
 const { NotificationModel } = require("../models/notification.model");
+const { UserModel } = require("../../user/models/user.model");
+
+const formatRecipientName = (user) => {
+  if (!user) return null;
+  const profileName = [user.profile?.firstName, user.profile?.lastName].filter(Boolean).join(" ");
+  return (
+    user.profile?.name ||
+    profileName ||
+    user.sellerProfile?.displayName ||
+    user.sellerProfile?.businessName ||
+    user.email ||
+    null
+  );
+};
 
 class NotificationRepository {
   async create(payload) {
@@ -29,7 +43,32 @@ class NotificationRepository {
       NotificationModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(Number(limit)).lean(),
       NotificationModel.countDocuments(filter),
     ]);
-    return { items, total };
+    const userIds = [
+      ...new Set(
+        items
+          .map((item) => String(item.userId || ""))
+          .filter((id) => UserModel.db.base.Types.ObjectId.isValid(id)),
+      ),
+    ];
+
+    const users = userIds.length
+      ? await UserModel.find({ _id: { $in: userIds } })
+        .select("email profile sellerProfile")
+        .lean()
+      : [];
+    const usersById = new Map(users.map((user) => [String(user._id), user]));
+
+    return {
+      items: items.map((item) => {
+        const user = usersById.get(String(item.userId || ""));
+        const recipientName = formatRecipientName(user);
+        return {
+          ...item,
+          ...(recipientName ? { recipientName, userName: recipientName } : {}),
+        };
+      }),
+      total,
+    };
   }
 }
 
