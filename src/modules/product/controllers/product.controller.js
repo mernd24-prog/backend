@@ -247,12 +247,20 @@ class ProductController {
     res.json(okResponse(stats));
   };
 
+  lowStockProducts = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const limit = Number(req.query.limit || 10);
+    const products = await this.productService.getLowStockProducts(limit, actor, req.query);
+    res.json(okResponse(products));
+  };
+
   // ─── Analytics ────────────────────────────────────────────────────────────
 
   topProducts = async (req, res) => {
+    const actor = getCurrentUser(req);
     const limit = Number(req.query.limit || 10);
     const metric = req.query.metric || "purchases";
-    const products = await this.productService.getTopProducts(limit, metric);
+    const products = await this.productService.getTopProducts(limit, metric, actor, req.query);
     res.json(okResponse(products));
   };
 

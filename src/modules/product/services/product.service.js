@@ -2446,6 +2446,13 @@ class ProductService {
     };
   }
 
+  async getLowStockProducts(limit = 10, actor = {}, query = {}) {
+    return this.productRepository.getLowStockProducts(
+      limit,
+      this.buildReportProductFilter(actor, query),
+    );
+  }
+
   // ─── Delete ───────────────────────────────────────────────────────────────
 
   async deleteProduct(productId, actor) {
@@ -2647,8 +2654,31 @@ class ProductService {
 
   // ─── Analytics ───────────────────────────────────────────────────────────
 
-  async getTopProducts(limit = 10, metric = "purchases") {
-    return this.productRepository.getTopProducts(limit, metric);
+  async getTopProducts(limit = 10, metric = "purchases", actor = {}, query = {}) {
+    return this.productRepository.getTopProducts(
+      limit,
+      metric,
+      this.buildReportProductFilter(actor, query),
+      { fromDate: query.fromDate || null, toDate: query.toDate || null },
+    );
+  }
+
+  buildReportProductFilter(actor = {}, query = {}) {
+    const filter = {};
+
+    if (isSellerRole(actor)) {
+      filter.sellerId = actor.ownerSellerId || actor.userId;
+      if (isScopedSellerRole(actor)) {
+        filter.createdBy = actor.userId;
+      }
+      return filter;
+    }
+
+    if (query.sellerId) {
+      filter.sellerId = query.sellerId;
+    }
+
+    return filter;
   }
 
   async publishScheduledProducts({ now = new Date(), limit = 100, actor = null } = {}) {

@@ -154,6 +154,11 @@ productRoutes.get(
   authenticate,
   catchErrors(productController.inventoryStats),
 );
+productRoutes.get(
+  "/inventory/low-stock",
+  authenticate,
+  catchErrors(productController.lowStockProducts),
+);
 
 // ── Analytics ─────────────────────────────────────────────────────────────────
 

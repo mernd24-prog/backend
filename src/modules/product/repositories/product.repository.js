@@ -1,5 +1,6 @@
 const { ProductModel } = require("../models/product.model");
 const { ProductRevisionModel } = require("../models/product-revision.model");
+const { knex } = require("../../../infrastructure/postgres/postgres-client");
 
 class ProductRepository {
   // ─── Create & basic CRUD ──────────────────────────────────────────────────
@@ -456,12 +457,74 @@ class ProductRepository {
     ]);
   }
 
-  async getTopProducts(limit = 10, metric = "purchases") {
-    const sortField = `analytics.${metric}`;
-    return ProductModel.find({ status: "active" })
-      .sort({ [sortField]: -1 })
+  async getLowStockProducts(limit = 10, filter = {}) {
+    return ProductModel.find({
+      ...filter,
+      $expr: {
+        $lte: [
+          { $subtract: ["$stock", "$reservedStock"] },
+          { $ifNull: ["$inventorySettings.lowStockThreshold", 5] },
+        ],
+      },
+    })
+      .sort({ stock: 1, updatedAt: -1 })
       .limit(limit)
-      .select("title sku sellerId price analytics status");
+      .select("title sku sellerId price stock reservedStock inventorySettings status analytics");
+  }
+
+  async getTopProducts(limit = 10, metric = "purchases", filter = {}, range = {}) {
+    const safeLimit = Math.min(Math.max(Number(limit) || 10, 1), 50);
+    const products = await ProductModel.find({ status: "active", ...filter })
+      .select("title sku sellerId price analytics status")
+      .lean();
+    const productIds = products.map((product) => String(product._id || product.id || "")).filter(Boolean);
+
+    if (!productIds.length) {
+      return [];
+    }
+
+    const salesRows = await knex("order_items as oi")
+      .join("orders as o", "o.id", "oi.order_id")
+      .whereIn("oi.product_id", productIds)
+      .modify((builder) => {
+        if (filter.sellerId) builder.where("oi.seller_id", String(filter.sellerId));
+        if (range.fromDate) builder.where("o.created_at", ">=", range.fromDate);
+        if (range.toDate) builder.where("o.created_at", "<=", `${range.toDate} 23:59:59`);
+      })
+      .select("oi.product_id")
+      .sum({ purchases: "oi.quantity" })
+      .sum({ revenue: "oi.line_total" })
+      .countDistinct({ orderCount: "o.id" })
+      .groupBy("oi.product_id");
+
+    const salesByProduct = new Map(salesRows.map((row) => [
+      String(row.product_id),
+      {
+        purchases: Number(row.purchases || 0),
+        revenue: Number(row.revenue || 0),
+        orderCount: Number(row.orderCount || row.order_count || 0),
+      },
+    ]));
+
+    return products
+      .map((product) => {
+        const productId = String(product._id || product.id || "");
+        const sales = salesByProduct.get(productId) || {};
+        return {
+          ...product,
+          analytics: {
+            ...(product.analytics || {}),
+            purchases: Number(sales.purchases || 0),
+            revenue: Number(sales.revenue || 0),
+            orderCount: Number(sales.orderCount || 0),
+          },
+        };
+      })
+      .sort((a, b) => {
+        const key = metric === "revenue" ? "revenue" : metric === "views" ? "views" : "purchases";
+        return Number(b.analytics?.[key] || 0) - Number(a.analytics?.[key] || 0);
+      })
+      .slice(0, safeLimit);
   }
 }
 
