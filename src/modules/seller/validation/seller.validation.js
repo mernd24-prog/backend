@@ -13,6 +13,7 @@ const sellerKycDocumentKeys = [
   "aadhaarBackUrl",
   "bankProofUrl",
   "addressProofUrl",
+  "udyogAadhaarDocumentUrl",
 ];
 
 const organizationStatuses = ["draft", "pending_review", "resubmitted", "approved", "rejected", "suspended", "blocked", "active"];
@@ -48,6 +49,7 @@ const sellerOrganizationBodySchema = Joi.object({
   supportEmail: Joi.string().email(),
   supportPhone: Joi.string().pattern(/^\d{10,15}$/),
   registrationNumber: Joi.string().max(128).allow("", null),
+  udyogAadhaarNumber: Joi.string().max(128).allow("", null),
   aadhaarNumber: Joi.string().pattern(aadhaarPattern).allow("", null),
   dateOfBirth: Joi.date().iso().allow("", null),
   businessWebsite: Joi.string().uri().allow("", null),

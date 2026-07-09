@@ -782,21 +782,23 @@ class PlatformService {
     const sellerId = actor.ownerSellerId || actor.userId;
     if (!sellerId) throw AppError.forbidden("Seller context is required");
 
-    const products = await ProductModel.find({
+    const productFilter = {
       sellerId,
       ...(actor.organizationId ? { organizationId: actor.organizationId } : {}),
-    }).select("_id title slug images sellerId organizationId rating reviewCount");
+    };
+    const products = await ProductModel.find(productFilter).select("_id title slug images sellerId organizationId rating reviewCount");
     const productIds = products.map((product) => String(product._id));
     const productById = new Map(products.map((product) => [String(product._id), product]));
 
-    const filter = {
-      $or: [
-        { sellerId },
-        ...(productIds.length ? [{ productId: { $in: productIds } }] : []),
-      ],
-    };
-    if (actor.organizationId) filter.organizationId = actor.organizationId;
-    if (query.productId) filter.productId = query.productId;
+    const filter = productIds.length
+      ? { productId: { $in: productIds } }
+      : { productId: { $in: [] } };
+    if (query.productId) {
+      if (!productIds.includes(String(query.productId))) {
+        return { items: [], total: 0 };
+      }
+      filter.productId = query.productId;
+    }
     if (query.buyerId) filter.buyerId = query.buyerId;
     if (query.orderId) filter.orderId = query.orderId;
     if (query.status) filter.status = query.status;

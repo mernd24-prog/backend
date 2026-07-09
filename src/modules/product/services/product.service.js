@@ -1791,10 +1791,10 @@ class ProductService {
         if (query.status) filter.status = query.status;
       } else {
         filter.status = query.status || PRODUCT_STATUS.ACTIVE;
-      }
 
-      if (!query.status && query.includeArchived !== true && query.includeArchived !== "true") {
-        filter.status = { $ne: PRODUCT_STATUS.ARCHIVED };
+        if (!query.status && query.includeArchived !== true && query.includeArchived !== "true") {
+          filter.status = { $ne: PRODUCT_STATUS.ARCHIVED };
+        }
       }
 
       const projection = buildProductListProjection(query);
@@ -1832,7 +1832,9 @@ class ProductService {
     const sellerId = actor.ownerSellerId || actor.userId;
     const filter = {};
     if (isScopedSellerRole(actor)) filter.createdBy = actor.userId;
-    if (query.status) {
+    if (query.includeAllStatuses === true || query.includeAllStatuses === "true") {
+      if (query.status) filter.status = query.status;
+    } else if (query.status) {
       filter.status = query.status;
     } else {
       filter.status = { $ne: PRODUCT_STATUS.ARCHIVED };

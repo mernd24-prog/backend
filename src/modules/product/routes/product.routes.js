@@ -49,6 +49,13 @@ productRoutes.get(
   checkInput(listProductSchema),
   catchErrors(productController.listMine),
 );
+productRoutes.get(
+  "/manage/:productId",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(productParamSchema),
+  catchErrors(productController.getOne),
+);
 productRoutes.post(
   "/",
   authenticate,

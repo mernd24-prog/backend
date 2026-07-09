@@ -136,6 +136,12 @@ function makeSidebarModuleList() {
 function validateSeedCatalog() {
   const catalogSlugs = new Set(MODULE_CATALOG.map((module) => module.slug));
   const sidebarKeys = new Set(SIDEBAR_MODULES.map((module) => module.moduleKey));
+  const duplicateSidebarKeys = SIDEBAR_MODULES
+    .map((module) => module.moduleKey)
+    .filter((key, index, keys) => keys.indexOf(key) !== index);
+  const duplicateSidebarSlugs = SIDEBAR_MODULES
+    .map((module) => module.moduleSlug)
+    .filter((slug, index, slugs) => slugs.indexOf(slug) !== index);
   const missingRequiredModules = SIDEBAR_MODULES
     .filter((module) => module.requiredModule && !catalogSlugs.has(module.requiredModule))
     .map((module) => `${module.moduleKey}->${module.requiredModule}`);
@@ -143,10 +149,21 @@ function validateSeedCatalog() {
     .filter((module) => module.parentModule && !sidebarKeys.has(module.parentModule))
     .map((module) => `${module.moduleKey}->${module.parentModule}`);
 
-  if (missingRequiredModules.length || missingParents.length) {
+  if (
+    duplicateSidebarKeys.length ||
+    duplicateSidebarSlugs.length ||
+    missingRequiredModules.length ||
+    missingParents.length
+  ) {
     throw new Error(
       [
         "RBAC seed catalog mismatch:",
+        duplicateSidebarKeys.length
+          ? `duplicate sidebar keys: ${Array.from(new Set(duplicateSidebarKeys)).join(", ")}`
+          : null,
+        duplicateSidebarSlugs.length
+          ? `duplicate sidebar slugs: ${Array.from(new Set(duplicateSidebarSlugs)).join(", ")}`
+          : null,
         missingRequiredModules.length
           ? `missing backend modules: ${missingRequiredModules.join(", ")}`
           : null,

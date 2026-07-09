@@ -322,6 +322,12 @@ class SellerOrganizationService {
       payload.storeDisplayName || payload.displayName || payload.storeName,
       legalBusinessName,
     );
+    const metadata = {
+      ...(payload.metadata || {}),
+      ...(payload.udyogAadhaarNumber !== undefined
+        ? { udyogAadhaarNumber: this.normalizeText(payload.udyogAadhaarNumber) || null }
+        : {}),
+    };
 
     const normalized = {
       ...(legalBusinessName ? { legalBusinessName } : {}),
@@ -354,7 +360,7 @@ class SellerOrganizationService {
       ...(payload.invoiceSettings !== undefined ? { invoiceSettings: payload.invoiceSettings || {} } : {}),
       ...(payload.payoutSettings !== undefined ? { payoutSettings: payload.payoutSettings || {} } : {}),
       ...(payload.complianceSettings !== undefined ? { complianceSettings: payload.complianceSettings || {} } : {}),
-      ...(payload.metadata !== undefined ? { metadata: payload.metadata || {} } : {}),
+      ...(payload.metadata !== undefined || payload.udyogAadhaarNumber !== undefined ? { metadata } : {}),
       updatedBy: actor.userId || actor.sub || null,
     };
 
@@ -488,8 +494,15 @@ class SellerOrganizationService {
   }
 
   async uploadOrganizationDocuments(organizationId, documents = {}, existingDocuments = {}) {
-    if (!documents || !Object.keys(documents).length) return existingDocuments || {};
-    const uploaded = await this.storageService.uploadKycDocuments(documents, {
+    const filteredDocuments = Object.entries(documents || {}).reduce((result, [key, value]) => {
+      if (value === null || value === undefined) return result;
+      if (typeof value === "string" && !value.trim()) return result;
+      if (typeof value === "object" && !Object.keys(value).length) return result;
+      result[key] = value;
+      return result;
+    }, {});
+    if (!Object.keys(filteredDocuments).length) return existingDocuments || {};
+    const uploaded = await this.storageService.uploadKycDocuments(filteredDocuments, {
       ownerType: "seller-organizations",
       ownerId: organizationId,
       folder: `ecommerce/kyc/seller-organizations/${organizationId}`,
@@ -677,7 +690,10 @@ class SellerOrganizationService {
       description: organization.description || profile.description,
       supportEmail: organization.supportEmail || profile.supportEmail,
       supportPhone: organization.supportPhone || profile.supportPhone,
-      registrationNumber: organization.registrationNumber || profile.registrationNumber,
+      udyogAadhaarNumber:
+        organization.metadata?.udyogAadhaarNumber ||
+        profile.metadata?.udyogAadhaarNumber ||
+        profile.udyogAadhaarNumber,
       aadhaarNumber: organization.aadhaarNumber || profile.aadhaarNumber,
       dateOfBirth: organization.dateOfBirth || profile.dateOfBirth,
       businessWebsite: organization.businessWebsite || profile.businessWebsite,
@@ -690,6 +706,10 @@ class SellerOrganizationService {
       returnAddress,
       billingAddress,
       documents: organization.documents || profile.documents || profile.kycDocuments || {},
+      metadata: {
+        ...(profile.metadata || {}),
+        ...(organization.metadata || {}),
+      },
       kycStatus: organization.kycStatus || profile.kycStatus,
       bankVerificationStatus: organization.bankVerificationStatus || profile.bankVerificationStatus,
       rejectionReason: organization.rejectionReason || profile.rejectionReason,
