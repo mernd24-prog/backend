@@ -137,6 +137,7 @@ class RbacRepository {
 
     const items = modules.map((module) => {
       const plainModule = module.toJSON();
+      const moduleName = plainModule.metadata?.displayName || plainModule.name;
       const permissions = (plainModule.permissions || [])
         .sort((left, right) => {
           const actionCompare =
@@ -169,10 +170,10 @@ class RbacRepository {
 
       return {
         id: plainModule.id,
-        name: plainModule.name,
+        name: moduleName,
         slug: plainModule.slug,
         moduleKey: plainModule.moduleKey,
-        moduleName: plainModule.name,
+        moduleName,
         moduleSlug: plainModule.slug,
         routePath: plainModule.routePath,
         parentModuleId: plainModule.parentModuleId,

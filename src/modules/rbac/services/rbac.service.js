@@ -45,6 +45,9 @@ class RbacService {
     const status = moduleData.status || (moduleData.active === false ? "inactive" : "active");
     const metadata = {
       ...(moduleData.metadata || {}),
+      ...(moduleData.requiredModule
+        ? { requiredModule: moduleData.requiredModule }
+        : {}),
       ...(Array.isArray(moduleData.allowedRoles)
         ? { allowedRoles: moduleData.allowedRoles }
         : {}),
@@ -83,15 +86,20 @@ class RbacService {
 
   serializeModule(module = {}) {
     const plain = typeof module.toJSON === "function" ? module.toJSON() : module;
+    const moduleName = plain.metadata?.displayName || plain.name;
+    const parentModuleName =
+      plain.parentModule?.metadata?.displayName || plain.parentModule?.name;
     return {
       ...plain,
-      moduleName: plain.name,
+      name: moduleName,
+      moduleName,
       moduleKey: plain.moduleKey || plain.slug,
       moduleSlug: plain.slug,
       parentModule: plain.parentModule
         ? {
             id: plain.parentModule.id,
-            moduleName: plain.parentModule.name,
+            name: parentModuleName,
+            moduleName: parentModuleName,
             moduleKey: plain.parentModule.moduleKey || plain.parentModule.slug,
             moduleSlug: plain.parentModule.slug,
           }

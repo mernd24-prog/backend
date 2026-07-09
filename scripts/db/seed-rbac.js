@@ -108,7 +108,7 @@ function makePlatformModuleList() {
 function makeSidebarModuleList() {
   return SIDEBAR_MODULES.map((module) => ({
     id: uuidv4(),
-    name: module.moduleName,
+    name: `Sidebar ${module.moduleKey}`,
     slug: `sidebar-${module.moduleSlug}`,
     moduleKey: `sidebar-${module.moduleKey}`,
     description: `${module.moduleName} sidebar page`,
@@ -123,6 +123,7 @@ function makeSidebarModuleList() {
     order: Number(module.order || 0),
     metadata: {
       ...(module.metadata || {}),
+      displayName: module.moduleName,
       requiredModule: module.requiredModule || module.moduleKey,
       routeKey: module.moduleKey,
       tab: module.tab || null,
@@ -188,16 +189,16 @@ function slugsForModules(moduleSlugs, actions = CANONICAL_ACTIONS) {
 }
 
 async function upsertModule(module, transaction) {
-  // Sidebar modules use prefixed slugs, but the modules table also has a unique
-  // name constraint. Prefer slug/key and fall back to name so partial seeds can
-  // repair old rows instead of failing on a duplicate display name.
+  // Sidebar modules keep their user-facing label in metadata.displayName because
+  // the modules table has a global unique name constraint shared with platform
+  // modules. Match sidebar rows by slug/key only so a label like "Inventory"
+  // never hijacks the platform Inventory module.
   const isSidebarModule = module.slug?.startsWith("sidebar-");
 
   const lookupSql = isSidebarModule
     ? `SELECT id FROM modules
        WHERE slug = :slug
           OR module_key = :moduleKey
-          OR name = :name
        ORDER BY CASE
          WHEN slug = :slug OR module_key = :moduleKey THEN 0
          ELSE 1
@@ -218,7 +219,6 @@ async function upsertModule(module, transaction) {
       slug: module.slug,
       moduleKey: module.moduleKey,
       name: module.name,
-      source: module.metadata?.source || "",
     },
     transaction,
   });
@@ -842,7 +842,7 @@ async function seedRbac() {
 
     console.log("\nSidebar modules seeded:");
     sidebarModules.forEach((m) =>
-      console.log(`  [sidebar]   ${m.slug.padEnd(42)} ${m.name}`),
+      console.log(`  [sidebar]   ${m.slug.padEnd(42)} ${m.metadata?.displayName || m.name}`),
     );
 
     console.log("\nSystem roles seeded:");
