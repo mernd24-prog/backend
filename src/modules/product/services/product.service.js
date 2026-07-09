@@ -402,14 +402,20 @@ class ProductService {
     });
 
     const defaultVariant = variants[defaultIndex] || variants[0];
+    const defaultVariantPrice = this.toVariantNumber(defaultVariant.price, 0);
+    const defaultVariantMrp = this.toVariantNumber(defaultVariant.mrp, this.toVariantNumber(defaultVariant.price, defaultVariantPrice));
+    const defaultVariantSalePrice = this.hasPayloadValue(defaultVariant, "salePrice")
+      ? this.toVariantNumber(defaultVariant.salePrice, 0)
+      : null;
     const stock = variants.reduce((total, variant) => total + this.toVariantNumber(variant.stock, 0), 0);
     const reservedStock = variants.reduce((total, variant) => total + this.toVariantNumber(variant.reservedStock, 0), 0);
 
     return {
       ...payload,
       sku: payload.sku || defaultVariant.sku,
-      price: this.toVariantNumber(payload.price, defaultVariant.price),
-      mrp: this.toVariantNumber(payload.mrp, defaultVariant.mrp),
+      price: hasVariantPayload ? defaultVariantPrice : this.toVariantNumber(payload.price, defaultVariantPrice),
+      mrp: hasVariantPayload ? defaultVariantMrp : this.toVariantNumber(payload.mrp, defaultVariantMrp),
+      salePrice: hasVariantPayload ? defaultVariantSalePrice : payload.salePrice,
       stock,
       reservedStock,
       variants,
@@ -1095,7 +1101,9 @@ class ProductService {
       gstInclusive: true,
     };
     payload = await this.normalizeProductCompliance(payload, actor);
-    const productType = payload.productType || PRODUCT_TYPE.SIMPLE;
+    const productType = (payload.hasVariants === true || (payload.variants || []).length > 0)
+      ? PRODUCT_TYPE.VARIABLE
+      : payload.productType || PRODUCT_TYPE.SIMPLE;
 
     const categoryKey = payload.categoryId || payload.category;
     const category = await this.platformRepository.getCategory(categoryKey);
@@ -1219,7 +1227,9 @@ class ProductService {
       existingProduct,
     );
 
-    const productType = payload.productType || existingProduct.productType || PRODUCT_TYPE.SIMPLE;
+    const productType = (payload.hasVariants === true || (payload.variants || existingProduct.variants || []).length > 0)
+      ? PRODUCT_TYPE.VARIABLE
+      : payload.productType || existingProduct.productType || PRODUCT_TYPE.SIMPLE;
     this._validateProductType(productType, { ...existingProduct.toObject(), ...payload });
 
     const hasVariants =
