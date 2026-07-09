@@ -500,8 +500,12 @@ function getRequestModule(req) {
   if (first === "sellers" && second === "me" && third === "tracking") {
     return "orders";
   }
-  if (first === "sellers" && second === "me" && third === "access") {
-    return "sellers";
+  if (
+    first === "sellers" &&
+    second === "me" &&
+    (third === "access" || third === "sidebar")
+  ) {
+    return null;
   }
   if (first === "platform" && second === "cms") {
     return "cms_pages";

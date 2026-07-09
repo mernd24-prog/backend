@@ -4,6 +4,7 @@ const { AppError } = require("../../../shared/errors/app-error");
 const { ROLES } = require("../../../shared/constants/roles");
 const { UserModel } = require("../../user/models/user.model");
 const { cleanModuleName } = require("../../../shared/auth/module-access");
+const { DEFAULT_SELLER_MODULES } = require("../../../shared/auth/module-catalog");
 const {
   PERMISSION_ACTIONS,
   SIDEBAR_PERMISSION_ACTIONS,
@@ -159,7 +160,18 @@ class RbacService {
           .map((parts) => cleanModuleName(parts[0]))
           .filter(Boolean)
       : [];
-    const viewModuleScope = new Set(viewModules);
+    const allowedModules = Array.isArray(actor.allowedModules)
+      ? actor.allowedModules.map(cleanModuleName).filter(Boolean)
+      : [];
+    const ownerSellerModules =
+      actor.role === ROLES.SELLER
+        ? DEFAULT_SELLER_MODULES.map(cleanModuleName)
+        : [];
+    const viewModuleScope = new Set([
+      ...viewModules,
+      ...allowedModules,
+      ...ownerSellerModules,
+    ]);
 
     if (!isSuperAdmin && !viewModuleScope.size) {
       return [];

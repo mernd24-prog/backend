@@ -197,7 +197,8 @@ const MODULE_CATALOG = [
     icon: "undo",
     order: 6,
     forPlatform: true,
-    forSeller: true,
+    forSeller: false,
+
     apiPath: "/returns",
   },
   {
@@ -231,7 +232,8 @@ const MODULE_CATALOG = [
     icon: "truck",
     order: 7.1,
     forPlatform: true,
-    forSeller: true,
+    forSeller: false,
+
     apiPath: "/admin/payments/admin/cod-config",
   },
   {
@@ -335,7 +337,8 @@ const MODULE_CATALOG = [
     icon: "user",
     order: 12,
     forPlatform: true,
-    forSeller: false,
+      forSeller: false,
+
     apiPath: "/users",
   },
   {
@@ -346,7 +349,8 @@ const MODULE_CATALOG = [
     icon: "store",
     order: 13,
     forPlatform: true,
-    forSeller: true,
+      forSeller: false,
+
     apiPath: "/sellers",
   },
   {
@@ -368,7 +372,8 @@ const MODULE_CATALOG = [
     icon: "banknote",
     order: 13.2,
     forPlatform: true,
-    forSeller: false,
+        forSeller: false,
+
     apiPath: "/admin/sellers/:sellerId/bank",
   },
   {
@@ -379,7 +384,8 @@ const MODULE_CATALOG = [
     icon: "percent",
     order: 14,
     forPlatform: true,
-    forSeller: true,
+    forSeller: false,
+
     apiPath: "/sellers/commissions",
   },
   {
@@ -390,7 +396,8 @@ const MODULE_CATALOG = [
     icon: "send",
     order: 14.1,
     forPlatform: true,
-    forSeller: true,
+      forSeller: false,
+
     apiPath: "/admin/payouts",
   },
 
@@ -403,7 +410,8 @@ const MODULE_CATALOG = [
     icon: "ticket",
     order: 14.5,
     forPlatform: true,
-    forSeller: true,
+      forSeller: false,
+
     apiPath: "/coupons",
     apiAliases: ["/admin/pricing/coupons"],
   },
@@ -415,7 +423,8 @@ const MODULE_CATALOG = [
     icon: "tag",
     order: 15,
     forPlatform: true,
-    forSeller: true,
+       forSeller: false,
+
     apiPath: "/pricing",
   },
   {
@@ -529,7 +538,8 @@ const MODULE_CATALOG = [
     icon: "receipt",
     order: 21,
     forPlatform: true,
-    forSeller: true,
+      forSeller: false,
+
     apiPath: "/tax",
   },
   {
@@ -564,7 +574,8 @@ const MODULE_CATALOG = [
     icon: "truck",
     order: 22,
     forPlatform: true,
-    forSeller: true,
+       forSeller: false,
+
     apiPath: "/delivery",
   },
 
@@ -577,7 +588,8 @@ const MODULE_CATALOG = [
     icon: "chart",
     order: 24,
     forPlatform: true,
-    forSeller: true,
+       forSeller: false,
+
     apiPath: "/analytics",
   },
   {
@@ -588,7 +600,7 @@ const MODULE_CATALOG = [
     icon: "bar-chart",
     order: 24.1,
     forPlatform: true,
-    forSeller: true,
+    forSeller: false,
     apiPath: "/admin/reports",
     apiAliases: ["/admin/analytics", "/analytics"],
   },

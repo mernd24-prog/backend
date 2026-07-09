@@ -33,6 +33,8 @@ const PERMISSION_CACHE_TTL_MS = Math.max(
 );
 const ORGANIZATION_CONTEXT_OPTIONAL_PREFIXES = [
   "/sellers/me/status",
+  "/sellers/me/access",
+  "/sellers/me/sidebar",
   "/sellers/me/profile",
   "/sellers/me/organizations",
   "/sellers/me/business-address",
