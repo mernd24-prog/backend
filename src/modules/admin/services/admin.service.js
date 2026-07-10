@@ -926,7 +926,7 @@ class AdminService {
       );
     const updatePayload = {
       legalBusinessName: fallbackName,
-      storeDisplayName: profile.displayName || profile.businessName || fallbackName,
+      storeDisplayName: profile.legalBusinessName || profile.businessName || fallbackName,
       businessType: profile.businessType || null,
       description: profile.description || null,
       supportEmail: profile.supportEmail || null,
@@ -935,7 +935,6 @@ class AdminService {
       aadhaarNumber: profile.aadhaarNumber || null,
       dateOfBirth: profile.dateOfBirth || null,
       businessWebsite: profile.businessWebsite || null,
-      primaryContactName: profile.primaryContactName || null,
       gstin: this.sellerOrganizationService.normalizeCode(profile.gstNumber),
       pan: this.sellerOrganizationService.normalizeCode(profile.panNumber),
       documents: this.sellerOrganizationService.normalizeDocuments(
@@ -1185,7 +1184,7 @@ class AdminService {
       profile.profileCompleted === true ||
       profile.onboardingChecklist?.profileCompleted === true ||
       onboardingState.requirements.profile.completed === true ||
-      Boolean(profile.displayName && profile.legalBusinessName && profile.supportEmail && profile.supportPhone);
+      Boolean(profile.legalBusinessName && profile.supportEmail && profile.supportPhone);
     const bankReady =
       bankVerificationStatus === "verified" ||
       (bankVerificationStatus === "submitted" && bankDetailsComplete);

@@ -9,12 +9,10 @@ const SELLER_ONBOARDING_STATUS = Object.freeze({
 });
 
 const SELLER_PROFILE_REQUIRED_FIELDS = Object.freeze([
-  "displayName",
   "legalBusinessName",
   "businessType",
   "supportEmail",
   "supportPhone",
-  "primaryContactName",
   "gstNumber",
   "panNumber",
   "aadhaarNumber",
@@ -86,8 +84,8 @@ function getSellerProfileFieldValue(sellerProfile = {}, field, { user = {}, kyc 
       kyc?.legal_name,
     ],
     businessType: [sellerProfile.businessType, kyc?.business_type],
-    supportEmail: [sellerProfile.supportEmail, sellerProfile.email, user?.email],
-    supportPhone: [sellerProfile.supportPhone, sellerProfile.phone, user?.phone],
+    supportEmail: [sellerProfile.supportEmail, sellerProfile.email],
+    supportPhone: [sellerProfile.supportPhone, sellerProfile.phone],
     primaryContactName: [
       sellerProfile.primaryContactName,
       sellerProfile.contactName,

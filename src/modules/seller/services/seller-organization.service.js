@@ -60,11 +60,27 @@ class SellerOrganizationService {
     return text || null;
   }
 
+  normalizeDigits(value) {
+    const text = String(value || "").replace(/\D/g, "");
+    return text || null;
+  }
+
+  normalizeBankDetails(bankDetails = {}) {
+    const source = bankDetails || {};
+    return {
+      accountHolderName: this.normalizeText(source.accountHolderName),
+      accountNumber: this.normalizeDigits(source.accountNumber) || "",
+      ifscCode: this.normalizeCode(source.ifscCode) || "",
+      bankName: this.normalizeText(source.bankName),
+      branchName: this.normalizeText(source.branchName),
+    };
+  }
+
   normalizeIdentityValues(payload = {}) {
     return {
       gstin: this.normalizeCode(payload.gstin || payload.gstNumber),
       pan: this.normalizeCode(payload.pan || payload.panNumber),
-      aadhaarNumber: this.normalizeText(payload.aadhaarNumber) || null,
+      aadhaarNumber: this.normalizeDigits(payload.aadhaarNumber) || null,
       registrationNumber: this.normalizeCode(payload.registrationNumber),
     };
   }
@@ -255,7 +271,6 @@ class SellerOrganizationService {
     if (!this.normalizeText(organization.businessType)) missing.push("businessType");
     if (!this.normalizeText(organization.supportEmail)) missing.push("supportEmail");
     if (!this.normalizeText(organization.supportPhone)) missing.push("supportPhone");
-    if (!this.normalizeText(organization.primaryContactName)) missing.push("primaryContactName");
     if (!this.normalizeText(organization.gstin)) missing.push("gstin");
     if (!this.normalizeText(organization.pan)) missing.push("pan");
     if (!this.normalizeText(organization.aadhaarNumber)) missing.push("aadhaarNumber");
@@ -325,9 +340,12 @@ class SellerOrganizationService {
     const metadata = {
       ...(payload.metadata || {}),
       ...(payload.udyogAadhaarNumber !== undefined
-        ? { udyogAadhaarNumber: this.normalizeText(payload.udyogAadhaarNumber) || null }
+        ? { udyogAadhaarNumber: this.normalizeCode(payload.udyogAadhaarNumber) }
         : {}),
     };
+    if (metadata.udyogAadhaarNumber !== undefined) {
+      metadata.udyogAadhaarNumber = this.normalizeCode(metadata.udyogAadhaarNumber);
+    }
 
     const normalized = {
       ...(legalBusinessName ? { legalBusinessName } : {}),
@@ -337,7 +355,7 @@ class SellerOrganizationService {
       ...(payload.supportEmail !== undefined ? { supportEmail: this.normalizeText(payload.supportEmail).toLowerCase() } : {}),
       ...(payload.supportPhone !== undefined ? { supportPhone: this.normalizeText(payload.supportPhone) } : {}),
       ...(payload.registrationNumber !== undefined ? { registrationNumber: this.normalizeText(payload.registrationNumber) || null } : {}),
-      ...(payload.aadhaarNumber !== undefined ? { aadhaarNumber: this.normalizeText(payload.aadhaarNumber) || null } : {}),
+      ...(payload.aadhaarNumber !== undefined ? { aadhaarNumber: this.normalizeDigits(payload.aadhaarNumber) || null } : {}),
       ...(payload.dateOfBirth !== undefined ? { dateOfBirth: payload.dateOfBirth || null } : {}),
       ...(payload.businessWebsite !== undefined ? { businessWebsite: this.normalizeText(payload.businessWebsite) || null } : {}),
       ...(payload.primaryContactName !== undefined ? { primaryContactName: this.normalizeText(payload.primaryContactName) } : {}),
@@ -350,7 +368,7 @@ class SellerOrganizationService {
       ...(payload.documents !== undefined || payload.kycDocuments !== undefined
         ? { documents: this.normalizeDocuments(this.firstObjectWithValue(payload.documents, payload.kycDocuments)) }
         : {}),
-      ...(payload.bankDetails !== undefined ? { bankDetails: payload.bankDetails || {} } : {}),
+      ...(payload.bankDetails !== undefined ? { bankDetails: this.normalizeBankDetails(payload.bankDetails || {}) } : {}),
       ...(payload.billingAddress !== undefined || payload.businessAddress !== undefined
         ? { billingAddress: this.normalizeAddress(this.firstObjectWithValue(payload.billingAddress, payload.businessAddress)) }
         : {}),
@@ -958,7 +976,7 @@ class SellerOrganizationService {
     const organizationPayload = {
       sellerId,
       legalBusinessName,
-      storeDisplayName: sellerProfile.displayName || sellerProfile.businessName || legalBusinessName,
+      storeDisplayName: sellerProfile.legalBusinessName || sellerProfile.businessName || legalBusinessName,
       businessType: sellerProfile.businessType || null,
       description: sellerProfile.description || null,
       supportEmail: sellerProfile.supportEmail || null,
@@ -967,7 +985,6 @@ class SellerOrganizationService {
       aadhaarNumber: sellerProfile.aadhaarNumber || null,
       dateOfBirth: sellerProfile.dateOfBirth || null,
       businessWebsite: sellerProfile.businessWebsite || null,
-      primaryContactName: sellerProfile.primaryContactName || null,
       gstin: this.normalizeCode(sellerProfile.gstNumber),
       pan: this.normalizeCode(sellerProfile.panNumber),
       kycStatus: sellerProfile.kycStatus === "verified" ? "verified" : "submitted",
@@ -1415,13 +1432,12 @@ class SellerOrganizationService {
         ...(profile.legalBusinessName || profile.businessName
           ? { legalBusinessName: profile.legalBusinessName || profile.businessName }
           : {}),
-        ...(profile.displayName || profile.businessName
-          ? { storeDisplayName: profile.displayName || profile.businessName }
+        ...(profile.legalBusinessName || profile.businessName
+          ? { storeDisplayName: profile.legalBusinessName || profile.businessName }
           : {}),
         ...(profile.businessType ? { businessType: profile.businessType } : {}),
         ...(profile.supportEmail ? { supportEmail: profile.supportEmail } : {}),
         ...(profile.supportPhone ? { supportPhone: profile.supportPhone } : {}),
-        ...(profile.primaryContactName ? { primaryContactName: profile.primaryContactName } : {}),
         ...(!this.normalizeText(existing.gstin) && profile.gstNumber ? { gstin: profile.gstNumber } : {}),
         ...(!this.normalizeText(existing.pan) && profile.panNumber ? { pan: profile.panNumber } : {}),
         ...(!this.normalizeText(existing.aadhaarNumber) && profile.aadhaarNumber ? { aadhaarNumber: profile.aadhaarNumber } : {}),
