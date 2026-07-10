@@ -84,7 +84,12 @@ class SellerService {
       ...profile,
       ...profileFields,
       ...(bankDetails
-        ? { bankDetails: { ...(profile.bankDetails || {}), ...bankDetails } }
+        ? {
+          bankDetails: sellerOrganizationService.normalizeBankDetails({
+            ...(profile.bankDetails || {}),
+            ...bankDetails,
+          }),
+        }
         : {}),
       ...(businessAddress
         ? { businessAddress: { ...(profile.businessAddress || {}), ...businessAddress } }
@@ -177,7 +182,7 @@ class SellerService {
         sellerProfile.businessName ||
         organization.legalBusinessName,
       storeDisplayName:
-        sellerProfile.displayName ||
+        sellerProfile.legalBusinessName ||
         sellerProfile.businessName ||
         organization.storeDisplayName,
       businessType: sellerProfile.businessType || organization.businessType || null,
@@ -188,7 +193,6 @@ class SellerService {
       aadhaarNumber: sellerProfile.aadhaarNumber || organization.aadhaarNumber || null,
       dateOfBirth: sellerProfile.dateOfBirth || organization.dateOfBirth || null,
       businessWebsite: sellerProfile.businessWebsite || organization.businessWebsite || null,
-      primaryContactName: sellerProfile.primaryContactName || organization.primaryContactName || null,
       gstin: sellerProfile.gstNumber || organization.gstin || null,
       pan: sellerProfile.panNumber || organization.pan || null,
       documents: sellerOrganizationService.normalizeDocuments(
@@ -258,11 +262,18 @@ class SellerService {
 
   async submitKyc(payload, actor) {
     const sellerId = this.getSellerId(actor);
+    const normalizedPayload = {
+      ...payload,
+      panNumber: sellerOrganizationService.normalizeCode(payload.panNumber),
+      gstNumber: sellerOrganizationService.normalizeCode(payload.gstNumber),
+      aadhaarNumber: sellerOrganizationService.normalizeDigits(payload.aadhaarNumber),
+      bankDetails: sellerOrganizationService.normalizeBankDetails(payload.bankDetails || {}),
+    };
     await sellerOrganizationService.assertNoIdentityConflicts(
       {
-        gstin: payload.gstNumber,
-        pan: payload.panNumber,
-        aadhaarNumber: payload.aadhaarNumber,
+        gstin: normalizedPayload.gstNumber,
+        pan: normalizedPayload.panNumber,
+        aadhaarNumber: normalizedPayload.aadhaarNumber,
       },
       {
         sellerId,
@@ -274,7 +285,7 @@ class SellerService {
     );
     const documents = await this.uploadKycDocuments(payload.documents || {}, actor);
     const record = await this.sellerRepository.upsertKyc({
-      ...payload,
+      ...normalizedPayload,
       documents,
       sellerId,
       verificationStatus: KYC_STATUS.SUBMITTED,
@@ -285,8 +296,8 @@ class SellerService {
       const existingProfile = this.mergeSellerProfile(
         this.mergeKycIntoSellerProfile(seller.sellerProfile || {}, record),
         {
-          bankDetails: payload.bankDetails || {},
-          ...(payload.dateOfBirth ? { dateOfBirth: payload.dateOfBirth } : {}),
+          bankDetails: normalizedPayload.bankDetails || {},
+          ...(normalizedPayload.dateOfBirth ? { dateOfBirth: normalizedPayload.dateOfBirth } : {}),
         },
       );
       await this.sellerRepository.updateSellerProfile(
@@ -299,12 +310,12 @@ class SellerService {
         seller,
         actor,
         {
-          legalBusinessName: payload.legalName,
-          gstin: payload.gstNumber || existingProfile.gstNumber || null,
-          pan: payload.panNumber || existingProfile.panNumber || null,
+          legalBusinessName: normalizedPayload.legalName,
+          gstin: normalizedPayload.gstNumber || existingProfile.gstNumber || null,
+          pan: normalizedPayload.panNumber || existingProfile.panNumber || null,
           documents,
           kycStatus: KYC_STATUS.SUBMITTED,
-          bankVerificationStatus: this.hasCompleteBankDetails(payload.bankDetails || {})
+          bankVerificationStatus: this.hasCompleteBankDetails(normalizedPayload.bankDetails || {})
             ? "submitted"
             : existingProfile.bankVerificationStatus || "not_submitted",
           approvalStatus: "pending_review",
@@ -519,7 +530,6 @@ class SellerService {
         supportEmail: profile.supportEmail || null,
         supportPhone: profile.supportPhone || null,
         businessWebsite: profile.businessWebsite || null,
-        primaryContactName: profile.primaryContactName || null,
       },
       onboarding: {
         status: onboardingState.onboardingStatus,

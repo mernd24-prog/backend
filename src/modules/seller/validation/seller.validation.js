@@ -20,6 +20,20 @@ const organizationStatuses = ["draft", "pending_review", "resubmitted", "approve
 const organizationKycStatuses = ["not_submitted", "submitted", "under_review", "verified", "rejected"];
 const organizationBankStatuses = ["not_submitted", "submitted", "verified", "rejected"];
 const organizationGoLiveStatuses = ["pending", "ready", "live", "blocked", "rejected"];
+const personNamePattern = /^[A-Za-z][A-Za-z .'-]{1,119}$/;
+const bankNamePattern = /^[A-Za-z][A-Za-z .&'-]{1,119}$/;
+const branchNamePattern = /^[A-Za-z0-9][A-Za-z0-9 .,&'/-]{1,119}$/;
+const businessNamePattern = /^[A-Za-z0-9][A-Za-z0-9 .,&'()/-]{1,179}$/;
+const udyogAadhaarPattern = /^UDYAM-[A-Z0-9-]{1,14}$/;
+const optionalUdyogAadhaarSchema = Joi.string()
+  .uppercase()
+  .empty("")
+  .empty("UDYAM")
+  .empty("UDYAM-")
+  .pattern(udyogAadhaarPattern)
+  .allow(null);
+const ifscPattern = /^[A-Z0-9]{11}$/;
+const bankAccountPattern = /^[0-9]{9,18}$/;
 
 const sellerOrganizationAddressSchema = Joi.object({
   line1: Joi.string().allow("", null),
@@ -31,31 +45,31 @@ const sellerOrganizationAddressSchema = Joi.object({
 });
 
 const sellerOrganizationBankSchema = Joi.object({
-  accountHolderName: Joi.string().allow("", null),
-  accountNumber: Joi.string().allow("", null),
-  ifscCode: Joi.string().allow("", null),
-  bankName: Joi.string().allow("", null),
-  branchName: Joi.string().allow("", null),
+  accountHolderName: Joi.string().pattern(personNamePattern).allow("", null),
+  accountNumber: Joi.string().pattern(bankAccountPattern).allow("", null),
+  ifscCode: Joi.string().uppercase().pattern(ifscPattern).allow("", null),
+  bankName: Joi.string().pattern(bankNamePattern).allow("", null),
+  branchName: Joi.string().pattern(branchNamePattern).allow("", null),
 });
 
 const sellerOrganizationBodySchema = Joi.object({
-  legalBusinessName: Joi.string().min(2).max(180),
-  legalName: Joi.string().min(2).max(180),
-  storeDisplayName: Joi.string().min(2).max(180),
-  displayName: Joi.string().min(2).max(180),
-  businessName: Joi.string().min(2).max(180),
+  legalBusinessName: Joi.string().pattern(businessNamePattern).min(2).max(180),
+  legalName: Joi.string().pattern(personNamePattern).min(2).max(180),
+  storeDisplayName: Joi.string().pattern(businessNamePattern).min(2).max(180),
+  displayName: Joi.string().pattern(businessNamePattern).min(2).max(180),
+  businessName: Joi.string().pattern(businessNamePattern).min(2).max(180),
   businessType: Joi.string().valid("individual", "proprietorship", "partnership", "private_limited", "llp", "public_limited").allow("", null),
   description: Joi.string().max(2000).allow("", null),
   supportEmail: Joi.string().email(),
   supportPhone: Joi.string().pattern(/^\d{10,15}$/),
   registrationNumber: Joi.string().max(128).allow("", null),
-  udyogAadhaarNumber: Joi.string().max(128).allow("", null),
+  udyogAadhaarNumber: optionalUdyogAadhaarSchema,
   aadhaarNumber: Joi.string().pattern(aadhaarPattern).allow("", null),
   dateOfBirth: Joi.date().iso().allow("", null),
   businessWebsite: Joi.string().uri().allow("", null),
-  primaryContactName: Joi.string().min(2).max(180),
-  gstin: Joi.string().pattern(gstPattern).allow("", null),
-  gstNumber: Joi.string().pattern(gstPattern).allow("", null),
+  primaryContactName: Joi.string().pattern(personNamePattern).min(2).max(180),
+  gstin: Joi.string().uppercase().pattern(gstPattern).allow("", null),
+  gstNumber: Joi.string().uppercase().pattern(gstPattern).allow("", null),
   pan: Joi.string().pattern(panPattern).allow("", null),
   panNumber: Joi.string().pattern(panPattern).allow("", null),
   documents: makeKycDocumentsSchema(sellerKycDocumentKeys),
@@ -69,7 +83,9 @@ const sellerOrganizationBodySchema = Joi.object({
   invoiceSettings: Joi.object().default({}),
   payoutSettings: Joi.object().default({}),
   complianceSettings: Joi.object().default({}),
-  metadata: Joi.object().default({}),
+  metadata: Joi.object({
+    udyogAadhaarNumber: optionalUdyogAadhaarSchema,
+  }).unknown(true).default({}),
   isDefault: Joi.boolean(),
 });
 
@@ -77,7 +93,6 @@ const createSellerOrganizationSchema = Joi.object({
   body: sellerOrganizationBodySchema
     .fork([
       "legalBusinessName",
-      "storeDisplayName",
       "businessType",
       "supportEmail",
       "supportPhone",
@@ -85,7 +100,6 @@ const createSellerOrganizationSchema = Joi.object({
       "pan",
       "aadhaarNumber",
       "dateOfBirth",
-      "primaryContactName",
       "documents",
       "bankDetails",
       "billingAddress",
@@ -154,7 +168,6 @@ const adminCreateSellerOrganizationSchema = Joi.object({
     })
     .fork([
       "legalBusinessName",
-      "storeDisplayName",
       "businessType",
       "supportEmail",
       "supportPhone",
@@ -162,7 +175,6 @@ const adminCreateSellerOrganizationSchema = Joi.object({
       "pan",
       "aadhaarNumber",
       "dateOfBirth",
-      "primaryContactName",
       "documents",
       "bankDetails",
       "billingAddress",
@@ -218,7 +230,9 @@ const adminReviewSellerOrganizationSchema = Joi.object({
       documents: Joi.string().max(500).allow("", null),
     }).allow(null).default(null),
     notes: Joi.string().allow("", null),
-    metadata: Joi.object().default({}),
+    metadata: Joi.object({
+      udyogAadhaarNumber: optionalUdyogAadhaarSchema,
+    }).unknown(true).default({}),
   }).or("approvalStatus", "status", "kycStatus", "bankVerificationStatus", "goLiveStatus").required(),
   query: Joi.object({}).required(),
   params: Joi.object({
@@ -230,19 +244,13 @@ const adminReviewSellerOrganizationSchema = Joi.object({
 const submitKycSchema = Joi.object({
   body: Joi.object({
     panNumber: Joi.string().pattern(panPattern).required(),
-    gstNumber: Joi.string().pattern(gstPattern).allow("", null),
+    gstNumber: Joi.string().uppercase().pattern(gstPattern).allow("", null),
     aadhaarNumber: Joi.string().pattern(aadhaarPattern).allow("", null),
-    legalName: Joi.string().min(2).max(120).required(),
+    legalName: Joi.string().pattern(personNamePattern).min(2).max(120).required(),
     businessType: Joi.string().valid("individual", "proprietorship", "partnership", "private_limited"),
     dateOfBirth: Joi.date().iso().allow("", null),
     documents: makeKycDocumentsSchema(sellerKycDocumentKeys),
-    bankDetails: Joi.object({
-      accountHolderName: Joi.string().allow("", null),
-      accountNumber: Joi.string().allow("", null),
-      ifscCode: Joi.string().allow("", null),
-      bankName: Joi.string().allow("", null),
-      branchName: Joi.string().allow("", null),
-    }).default({}),
+    bankDetails: sellerOrganizationBankSchema.default({}),
   }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),
@@ -271,27 +279,21 @@ const reviewSellerKycSchema = Joi.object({
 
 const updateSellerProfileSchema = Joi.object({
   body: Joi.object({
-    displayName: Joi.string().min(2).max(120).required(),
-    businessName: Joi.string().min(2).max(160).allow("", null),
-    legalBusinessName: Joi.string().min(2).max(160).required(),
+    displayName: Joi.string().pattern(businessNamePattern).min(2).max(120).allow("", null),
+    businessName: Joi.string().pattern(businessNamePattern).min(2).max(160).allow("", null),
+    legalBusinessName: Joi.string().pattern(businessNamePattern).min(2).max(160).required(),
     description: Joi.string().max(2000).allow("", null),
     supportEmail: Joi.string().email().required(),
-    supportPhone: Joi.string().min(10).max(15).required(),
+    supportPhone: Joi.string().pattern(/^\d{10,15}$/).required(),
     businessType: Joi.string().valid("individual", "proprietorship", "partnership", "private_limited", "llp", "public_limited").allow("", null),
     registrationNumber: Joi.string().allow("", null),
-    gstNumber: Joi.string().pattern(gstPattern).allow("", null),
+    gstNumber: Joi.string().uppercase().pattern(gstPattern).allow("", null),
     panNumber: Joi.string().pattern(panPattern).allow("", null),
     aadhaarNumber: Joi.string().pattern(aadhaarPattern).allow("", null),
     dateOfBirth: Joi.date().iso().allow("", null),
     businessWebsite: Joi.string().uri().allow("", null),
-    primaryContactName: Joi.string().max(120).allow("", null),
-    bankDetails: Joi.object({
-      accountHolderName: Joi.string().allow("", null),
-      accountNumber: Joi.string().allow("", null),
-      ifscCode: Joi.string().allow("", null),
-      bankName: Joi.string().allow("", null),
-      branchName: Joi.string().allow("", null),
-    }).default({}),
+    primaryContactName: Joi.string().pattern(personNamePattern).max(120).allow("", null),
+    bankDetails: sellerOrganizationBankSchema.default({}),
     businessAddress: Joi.object({
       line1: Joi.string().allow("", null),
       line2: Joi.string().allow("", null),

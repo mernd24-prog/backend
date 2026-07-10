@@ -9,6 +9,7 @@ const { PlatformBatchModel } = require("../models/platform-batch.model");
 const { PlatformProductOptionModel } = require("../models/platform-product-option.model");
 const { PlatformProductOptionValueModel } = require("../models/platform-product-option-value.model");
 const { ProductReviewModel } = require("../models/product-review.model");
+const { ProductModel } = require("../../product/models/product.model");
 const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
 
 function makeCodeOrIdFilter(value, codeField = "code") {
@@ -357,7 +358,59 @@ class PlatformRepository {
       PlatformBrandModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
       PlatformBrandModel.countDocuments(filter),
     ]);
-    return { items, total };
+    const productCounts = await this.getProductCountsByBrands(items);
+    return {
+      items: items.map((item) => {
+        const plainItem = typeof item.toObject === "function" ? item.toObject() : item;
+        return {
+          ...plainItem,
+          productCount: productCounts.get(String(plainItem._id)) || 0,
+        };
+      }),
+      total,
+    };
+  }
+
+  async getProductCountsByBrands(brands = []) {
+    const brandKeys = new Map();
+    for (const brand of brands) {
+      const plainBrand = typeof brand.toObject === "function" ? brand.toObject() : brand;
+      const keys = [plainBrand?._id, plainBrand?.name, plainBrand?.slug]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
+
+      for (const key of keys) {
+        const normalizedKey = key.toLowerCase();
+        if (!brandKeys.has(normalizedKey)) brandKeys.set(normalizedKey, new Set());
+        brandKeys.get(normalizedKey).add(String(plainBrand._id));
+      }
+    }
+
+    const lookupKeys = [...brandKeys.keys()];
+    if (!lookupKeys.length) return new Map();
+
+    const counts = await ProductModel.aggregate([
+      {
+        $match: {
+          brand: { $type: "string", $ne: "" },
+          $expr: { $in: [{ $toLower: "$brand" }, lookupKeys] },
+        },
+      },
+      {
+        $group: {
+          _id: { $toLower: "$brand" },
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const result = new Map();
+    for (const { _id, count } of counts) {
+      for (const brandId of brandKeys.get(_id) || []) {
+        result.set(brandId, (result.get(brandId) || 0) + count);
+      }
+    }
+    return result;
   }
 
   async deleteBrand(brandId) {

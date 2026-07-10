@@ -34,7 +34,7 @@ const valuesToOptions = (values = []) =>
 
 const SYSTEM_DROPDOWNS = {
   "account-types": valuesToOptions(["buyer", "seller"]),
-  "business-types": valuesToOptions(["individual", "proprietorship", "partnership", "private_limited", "llp", "public_limited"]),
+  "business-types": valuesToOptions(["individual", "proprietorship", "partnership", "private_limited"]),
   "bank-review-statuses": valuesToOptions(["verified", "submitted", "rejected"]),
   "coupon-types": valuesToOptions(Object.values(COUPON_TYPE)),
   "delivery-statuses": valuesToOptions(Object.values(DELIVERY_STATUS)),
