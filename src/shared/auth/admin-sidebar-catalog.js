@@ -16,12 +16,8 @@ const SIDEBAR_MODULES = [
   { moduleName: "Product Variants", moduleKey: "product-variants", moduleSlug: "product-variants", icon: "MdGridView", routePath: "/app/product-variants", moduleType: "page", order: 27, parentModule: "catalog-masters", requiredModule: "platform" },
   { moduleName: "Product Reviews", moduleKey: "product-reviews", moduleSlug: "product-reviews", icon: "MdReviews", routePath: "/app/product-reviews", moduleType: "page", order: 28, parentModule: "catalog-masters", requiredModule: "reviews" },
 
-  { moduleName: "Inventory Operations", moduleKey: "inventory-management", moduleSlug: "inventory-management", icon: "MdWarehouse", moduleType: "group", order: 50, parentModule: null, requiredModule: "inventory" },
-  { moduleName: "Stock Overview", moduleKey: "inventory-overview", moduleSlug: "inventory-overview", icon: "MdDashboard", routePath: "/app/inventory-overview", moduleType: "page", order: 51, parentModule: "inventory-management", requiredModule: "inventory" },
-  { moduleName: "Variant Inventory", moduleKey: "variant-inventory", moduleSlug: "variant-inventory", icon: "MdGridView", routePath: "/app/variant-inventory", moduleType: "page", order: 52, parentModule: "inventory-management", requiredModule: "inventory" },
-  { moduleName: "Seller Product Inventory", moduleKey: "seller-product-inventory", moduleSlug: "seller-product-inventory", icon: "MdStorefront", routePath: "/app/seller-product-inventory", moduleType: "page", order: 53, parentModule: "inventory-management", requiredModule: "inventory" },
-  { moduleName: "Inventory Adjustment", moduleKey: "inventory-adjustment", moduleSlug: "inventory-adjustment", icon: "MdTune", routePath: "/app/inventory-adjustment", moduleType: "page", order: 54, parentModule: "inventory-management", requiredModule: "inventory" },
-  { moduleName: "Inventory Transactions", moduleKey: "inventory-transactions", moduleSlug: "inventory-transactions", icon: "MdHistory", routePath: "/app/inventory-transactions", moduleType: "page", order: 55, parentModule: "inventory-management", requiredModule: "inventory" },
+  { moduleName: "Inventory Management", moduleKey: "inventory-management", moduleSlug: "inventory-management", icon: "MdWarehouse", moduleType: "group", order: 50, parentModule: null, requiredModule: "inventory" },
+  { moduleName: "Inventory", moduleKey: "inventory", moduleSlug: "inventory", icon: "MdInventory", routePath: "/app/inventory", moduleType: "page", order: 51, parentModule: "inventory-management", requiredModule: "inventory" },
 
   { moduleName: "Orders Management", moduleKey: "orders-management", moduleSlug: "orders-management", icon: "MdShoppingCart", moduleType: "group", order: 70, parentModule: null, requiredModule: "orders" },
   { moduleName: "Orders", moduleKey: "orders", moduleSlug: "orders", icon: "MdReceipt", routePath: "/app/orders", moduleType: "page", order: 71, parentModule: "orders-management", requiredModule: "orders" },
@@ -144,7 +140,7 @@ const SELLER_SIDEBAR_MODULES = [
   { moduleName: "Product Reviews", moduleKey: "seller-product-reviews", moduleSlug: "seller-product-reviews", icon: "MdStar", routePath: "/app/product-reviews", moduleType: "page", order: 12, parentModule: "seller-catalog-management", requiredModule: "reviews" },
 
   { moduleName: "Seller Inventory", moduleKey: "seller-inventory-management", moduleSlug: "seller-inventory-management", icon: "MdWarehouse", moduleType: "group", order: 20, parentModule: null, requiredModule: "inventory" },
-  { moduleName: "Inventory", moduleKey: "seller-inventory-products", moduleSlug: "seller-inventory-products", icon: "MdDashboard", routePath: "/app/seller-product-inventory", moduleType: "page", order: 21, parentModule: "seller-inventory-management", requiredModule: "inventory" },
+  { moduleName: "Inventory", moduleKey: "seller-inventory-products", moduleSlug: "seller-inventory-products", icon: "MdInventory", routePath: "/app/inventory", moduleType: "page", order: 21, parentModule: "seller-inventory-management", requiredModule: "inventory" },
 
   { moduleName: "Seller Orders", moduleKey: "seller-orders-management", moduleSlug: "seller-orders-management", icon: "MdShoppingCart", moduleType: "group", order: 30, parentModule: null, requiredModule: "orders" },
   { moduleName: "Seller Order List", moduleKey: "seller-orders", moduleSlug: "seller-orders", icon: "MdReceipt", routePath: "/app/orders", moduleType: "page", order: 31, parentModule: "seller-orders-management", requiredModule: "orders" },
@@ -238,19 +234,11 @@ const ROUTE_METADATA_BY_KEY = {
 	      "/app/product-catalog/view/:id",
 	    ],
   },
-  "inventory-overview": {
-    supportedRoutes: [
-      "/app/warehouse",
-      "/app/low-stock-alerts",
-      "/app/threshold-products",
-      "/app/inventory-audit",
-    ],
-  },
-  "seller-product-inventory": {
-    supportedRoutes: ["/app/seller-product-inventory", "/app/seller-Product-Inventory"],
+  inventory: {
+    supportedRoutes: ["/app/inventory", "/app/inventory/:productId"],
   },
   "seller-inventory-products": {
-    supportedRoutes: ["/app/seller-product-inventory", "/app/seller-Product-Inventory"],
+    supportedRoutes: ["/app/inventory", "/app/inventory/:productId"],
   },
   orders: { supportedRoutes: ["/app/orders/view/:id", "/app/view-orders"] },
   "seller-orders": { supportedRoutes: ["/app/orders/view/:id", "/app/view-orders"] },

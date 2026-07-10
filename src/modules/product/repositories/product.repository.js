@@ -34,7 +34,7 @@ class ProductRepository {
   }
 
   async findBySku(sku, sellerId = null) {
-    const filter = { sku };
+    const filter = { $or: [{ sku }, { "variants.sku": sku }] };
     if (sellerId) filter.sellerId = sellerId;
     return ProductModel.findOne(filter);
   }
@@ -76,6 +76,38 @@ class ProductRepository {
 
   async paginateBySeller(sellerId, filter, pagination, options = {}) {
     return this.paginate({ ...filter, sellerId }, pagination, options);
+  }
+
+  async listInventoryProducts(filter = {}, pagination = {}) {
+    const safePage = Math.max(1, Number(pagination.page || 1));
+    const safeLimit = Math.min(200, Math.max(1, Number(pagination.limit || 50)));
+    const sortDir = pagination.sortDir === "asc" ? 1 : -1;
+    const sortMap = {
+      productName: "title",
+      title: "title",
+      sku: "sku",
+      status: "status",
+      updatedAt: "updatedAt",
+      createdAt: "createdAt",
+    };
+    const sortBy = sortMap[pagination.sortBy] || "updatedAt";
+
+    const query = {
+      ...filter,
+      variants: { $exists: true, $ne: [] },
+    };
+
+    const [items, total] = await Promise.all([
+      ProductModel.find(query)
+        .select("title sku sellerId organizationId organizationSnapshot category categoryId brand status visibility variants inventorySettings updatedAt createdAt")
+        .sort({ [sortBy]: sortDir })
+        .skip((safePage - 1) * safeLimit)
+        .limit(safeLimit)
+        .lean({ virtuals: true }),
+      ProductModel.countDocuments(query),
+    ]);
+
+    return { items, total, page: safePage, limit: safeLimit };
   }
 
   _buildSort(sortBy = "newest", sortDir = "desc") {

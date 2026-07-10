@@ -113,6 +113,9 @@ const PRODUCT_LIST_PROJECTION = {
 
 const buildProductListProjection = (query = {}) => ({
   ...PRODUCT_LIST_PROJECTION,
+  variants: 1,
+  hasVariants: 1,
+  variantAxes: 1,
   ...(
     query.includeVariants === true ||
     query.includeVariants === "true" ||
@@ -500,19 +503,15 @@ class ProductService {
 
   normalizeProductMedia(payload = {}) {
     const normalized = { ...payload };
-    const imageSources = [
-      payload.images,
-      payload.imageUrls,
-      payload.product_image_id?.images,
-      payload.media?.images,
-      payload.image,
-      payload.thumbnail,
-      payload.thumbnailUrl,
-    ].filter((source) => source !== undefined);
-
-    if (imageSources.length) {
-      normalized.images = this.normalizeImages(imageSources.flat());
-    }
+    delete normalized.images;
+    delete normalized.imageUrls;
+    delete normalized.product_image_id;
+    delete normalized.media;
+    delete normalized.image;
+    delete normalized.thumbnail;
+    delete normalized.thumbnailUrl;
+    delete normalized.documents;
+    delete normalized.catalogsUrls;
     if (Object.prototype.hasOwnProperty.call(payload, "variants")) {
       normalized.variants = (payload.variants || []).map((v) => ({
         ...v,
@@ -2721,10 +2720,47 @@ class ProductService {
 
   toPlainObject(value = {}) {
     if (!value) return {};
-    if (typeof value.toObject === "function") {
-      return value.toObject({ depopulate: true, flattenMaps: true });
-    }
-    return { ...value };
+    const plain = typeof value.toObject === "function"
+      ? value.toObject({ depopulate: true, flattenMaps: true })
+      : { ...value };
+    return this.applyVariantDisplayFields(plain);
+  }
+
+  getDisplayVariant(product = {}) {
+    const variants = Array.isArray(product?.variants) ? product.variants : [];
+    if (!variants.length) return null;
+    return variants.find((variant) => variant?.isDefault === true) ||
+      variants.find((variant) => variant?.status !== "inactive") ||
+      variants[0] ||
+      null;
+  }
+
+  applyVariantDisplayFields(product = {}) {
+    const variant = this.getDisplayVariant(product);
+    if (!variant) return product;
+
+    const variantPrice = this.toVariantNumber(variant.price, null);
+    const variantMrp = this.toVariantNumber(variant.mrp, variantPrice);
+    const variantSalePrice = this.hasPayloadValue(variant, "salePrice")
+      ? this.toVariantNumber(variant.salePrice, null)
+      : null;
+    const variantStock = this.toVariantNumber(variant.stock, 0);
+    const variantReservedStock = this.toVariantNumber(variant.reservedStock, 0);
+    const variantImages = this.normalizeImages(variant.images || []);
+
+    return {
+      ...product,
+      sku: variant.sku || product.sku,
+      price: variantPrice ?? product.price,
+      mrp: variantMrp ?? product.mrp,
+      salePrice: variantSalePrice,
+      stock: variantStock,
+      reservedStock: variantReservedStock,
+      availableStock: Math.max(0, variantStock - variantReservedStock),
+      images: variantImages,
+      image: variantImages[0] || "",
+      color: variant.attributes?.color || variant.attributes?.Color || product.color,
+    };
   }
 
   buildStatusHistoryEntry({

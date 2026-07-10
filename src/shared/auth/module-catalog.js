@@ -157,7 +157,7 @@ const MODULE_CATALOG = [
     tab: "Inventory Management",
     slug: "inventory",
     name: "Inventory Management",
-    description: "Stock levels, variant inventory, adjustments, and warehouses",
+    description: "Unified variant stock, reservations, adjustments, and history",
     icon: "warehouse",
     order: 4,
     forPlatform: true,

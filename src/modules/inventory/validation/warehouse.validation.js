@@ -44,6 +44,52 @@ const listInventoryTransactionsSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
+const listVariantInventorySchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    q: Joi.string().allow(""),
+    keyWord: Joi.string().allow(""),
+    search: Joi.string().allow(""),
+    page: Joi.number().integer().min(1),
+    limit: Joi.number().integer().min(1).max(100),
+    size: Joi.number().integer().min(1).max(100),
+    sellerId: Joi.string().allow(""),
+    status: Joi.string().allow(""),
+    variantStatus: Joi.string().valid("active", "inactive", "out_of_stock").allow(""),
+    stockStatus: Joi.string().valid("in_stock", "low_stock", "out_of_stock").allow(""),
+    variantSku: Joi.string().allow(""),
+    sortBy: Joi.string().valid("updatedAt", "createdAt", "productName", "title", "sku", "status"),
+    sortDir: Joi.string().valid("asc", "desc"),
+  }).required(),
+  params: Joi.object({}).required(),
+});
+
+const productInventorySchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    variantSku: Joi.string().allow(""),
+    historyLimit: Joi.number().integer().min(1).max(200),
+  }).required(),
+  params: Joi.object({ productId: Joi.string().required() }).required(),
+});
+
+const adjustVariantInventorySchema = Joi.object({
+  body: Joi.object({
+    adjustmentType: Joi.string().valid("add", "remove", "set"),
+    quantity: Joi.number().min(0),
+    adjustment: Joi.number(),
+    reason: Joi.string().trim().max(500).allow("", null),
+    note: Joi.string().trim().max(1000).allow("", null),
+    reference: Joi.string().trim().max(200).allow("", null),
+    showAllHistory: Joi.boolean(),
+  }).or("quantity", "adjustment").required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    productId: Joi.string().required(),
+    variantSku: Joi.string().required(),
+  }).required(),
+});
+
 const warehouseBody = {
   name: Joi.string().trim().required(),
   code: Joi.string().trim().pattern(/^[A-Za-z0-9_-]+$/).required(),
@@ -125,6 +171,9 @@ const releaseExpiredReservationsSchema = Joi.object({
 module.exports = {
   listWarehousesSchema,
   listInventoryTransactionsSchema,
+  listVariantInventorySchema,
+  productInventorySchema,
+  adjustVariantInventorySchema,
   createWarehouseSchema,
   updateWarehouseSchema,
   warehouseParamSchema,

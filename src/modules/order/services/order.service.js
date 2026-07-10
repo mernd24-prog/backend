@@ -46,8 +46,11 @@ class OrderService {
     if (deliveryStatus === "delivered") return "delivered";
     return {
       [ORDER_STATUS.PACKED]: "initiated",
+      [ORDER_STATUS.READY_TO_SHIP]: "manifested",
       [ORDER_STATUS.SHIPPED]: "in_transit",
+      [ORDER_STATUS.OUT_FOR_DELIVERY]: "out_for_delivery",
       [ORDER_STATUS.DELIVERED]: "delivered",
+      [ORDER_STATUS.FAILED_DELIVERY]: "failed",
       [ORDER_STATUS.FULFILLED]: "delivered",
     }[status] || null;
   }
@@ -711,11 +714,20 @@ class OrderService {
 
     await this.assertOrderTransitionAllowed(orderId, order, nextStatus, actor);
 
-    if ([ORDER_STATUS.PACKED, ORDER_STATUS.SHIPPED, ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED].includes(nextStatus)) {
+    const fulfillmentStatuses = [
+      ORDER_STATUS.PACKED,
+      ORDER_STATUS.READY_TO_SHIP,
+      ORDER_STATUS.SHIPPED,
+      ORDER_STATUS.OUT_FOR_DELIVERY,
+      ORDER_STATUS.DELIVERED,
+      ORDER_STATUS.FULFILLED,
+    ];
+
+    if (fulfillmentStatuses.includes(nextStatus)) {
       await this.inventoryService.assertCommittedForFulfillment(orderId);
     }
 
-    const trackingInfo = nextStatus === ORDER_STATUS.SHIPPED && actor.trackingNumber
+    const trackingInfo = [ORDER_STATUS.READY_TO_SHIP, ORDER_STATUS.SHIPPED, ORDER_STATUS.OUT_FOR_DELIVERY].includes(nextStatus) && actor.trackingNumber
       ? { trackingNumber: actor.trackingNumber, carrierName: actor.carrierName, carrierUrl: actor.carrierUrl }
       : null;
     const deliveryStatus = actor.deliveryStatus ||
@@ -727,7 +739,7 @@ class OrderService {
       actorRole: actor.role,
       reason: actor.reason || actor.cancellationReason || null,
       note: actor.note || null,
-      paymentStatus: actor.paymentStatus || undefined,
+      paymentStatus: actor.paymentStatus || (nextStatus === ORDER_STATUS.REFUNDED ? PAYMENT_STATUS.REFUNDED : undefined),
       deliveryStatus,
       metadata: actor.metadata || {},
       orderMetadata: trackingInfo
@@ -736,7 +748,7 @@ class OrderService {
     };
     const updatedOrder = await this.orderRepository.updateStatus(orderId, nextStatus, statusMetadata);
 
-    if ([ORDER_STATUS.PACKED, ORDER_STATUS.SHIPPED, ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED].includes(nextStatus)) {
+    if (fulfillmentStatuses.includes(nextStatus) || nextStatus === ORDER_STATUS.FAILED_DELIVERY) {
       try {
         await this.syncShipmentsForOrderStatus(orderId, nextStatus, actor, trackingInfo);
       } catch (error) {
@@ -765,7 +777,7 @@ class OrderService {
         logger.error({ orderId, error: error.message }, "Deal sale cancellation release failed"),
       );
       await this.walletService.release(order.buyer_id, orderId);
-      if (Number(order.wallet_discount_amount || 0) > 0 && [ORDER_STATUS.CONFIRMED, ORDER_STATUS.PACKED].includes(order.status)) {
+      if (Number(order.wallet_discount_amount || 0) > 0 && [ORDER_STATUS.CONFIRMED, ORDER_STATUS.PROCESSING, ORDER_STATUS.PACKED, ORDER_STATUS.READY_TO_SHIP].includes(order.status)) {
         await this.walletService.credit(order.buyer_id, Number(order.wallet_discount_amount), {
           referenceType: "order_cancellation",
           referenceId: orderId,
@@ -862,10 +874,34 @@ class OrderService {
     const allowedTransitions = new Set([
       `${ORDER_STATUS.PENDING_PAYMENT}->${ORDER_STATUS.CONFIRMED}`,
       `${ORDER_STATUS.PENDING_PAYMENT}->${ORDER_STATUS.PAYMENT_FAILED}`,
+      `${ORDER_STATUS.PENDING_PAYMENT}->${ORDER_STATUS.ON_HOLD}`,
       `${ORDER_STATUS.PAYMENT_FAILED}->${ORDER_STATUS.PENDING_PAYMENT}`,
+      `${ORDER_STATUS.PAYMENT_FAILED}->${ORDER_STATUS.ON_HOLD}`,
+      `${ORDER_STATUS.ON_HOLD}->${ORDER_STATUS.PENDING_PAYMENT}`,
+      `${ORDER_STATUS.ON_HOLD}->${ORDER_STATUS.CONFIRMED}`,
+      `${ORDER_STATUS.ON_HOLD}->${ORDER_STATUS.PROCESSING}`,
+      `${ORDER_STATUS.ON_HOLD}->${ORDER_STATUS.CANCELLED}`,
+      `${ORDER_STATUS.CONFIRMED}->${ORDER_STATUS.PROCESSING}`,
       `${ORDER_STATUS.CONFIRMED}->${ORDER_STATUS.PACKED}`,
-      `${ORDER_STATUS.PACKED}->${ORDER_STATUS.SHIPPED}`,
+      `${ORDER_STATUS.CONFIRMED}->${ORDER_STATUS.ON_HOLD}`,
+      `${ORDER_STATUS.PROCESSING}->${ORDER_STATUS.PACKED}`,
+      `${ORDER_STATUS.PROCESSING}->${ORDER_STATUS.CANCELLED}`,
+      `${ORDER_STATUS.PROCESSING}->${ORDER_STATUS.ON_HOLD}`,
+      `${ORDER_STATUS.PACKED}->${ORDER_STATUS.READY_TO_SHIP}`,
+      `${ORDER_STATUS.PACKED}->${ORDER_STATUS.ON_HOLD}`,
+      `${ORDER_STATUS.READY_TO_SHIP}->${ORDER_STATUS.SHIPPED}`,
+      `${ORDER_STATUS.READY_TO_SHIP}->${ORDER_STATUS.CANCELLED}`,
+      `${ORDER_STATUS.READY_TO_SHIP}->${ORDER_STATUS.ON_HOLD}`,
+      `${ORDER_STATUS.SHIPPED}->${ORDER_STATUS.OUT_FOR_DELIVERY}`,
       `${ORDER_STATUS.SHIPPED}->${ORDER_STATUS.DELIVERED}`,
+      `${ORDER_STATUS.SHIPPED}->${ORDER_STATUS.FAILED_DELIVERY}`,
+      `${ORDER_STATUS.SHIPPED}->${ORDER_STATUS.RETURN_REQUESTED}`,
+      `${ORDER_STATUS.OUT_FOR_DELIVERY}->${ORDER_STATUS.DELIVERED}`,
+      `${ORDER_STATUS.OUT_FOR_DELIVERY}->${ORDER_STATUS.FAILED_DELIVERY}`,
+      `${ORDER_STATUS.OUT_FOR_DELIVERY}->${ORDER_STATUS.RETURN_REQUESTED}`,
+      `${ORDER_STATUS.FAILED_DELIVERY}->${ORDER_STATUS.OUT_FOR_DELIVERY}`,
+      `${ORDER_STATUS.FAILED_DELIVERY}->${ORDER_STATUS.RETURNED}`,
+      `${ORDER_STATUS.FAILED_DELIVERY}->${ORDER_STATUS.CANCELLED}`,
       `${ORDER_STATUS.DELIVERED}->${ORDER_STATUS.FULFILLED}`,
       `${ORDER_STATUS.FULFILLED}->${ORDER_STATUS.RETURN_REQUESTED}`,
       `${ORDER_STATUS.CONFIRMED}->${ORDER_STATUS.CANCELLED}`,
@@ -876,7 +912,11 @@ class OrderService {
       `${ORDER_STATUS.RETURN_REQUESTED}->${ORDER_STATUS.PARTIALLY_RETURNED}`,
       `${ORDER_STATUS.PARTIALLY_RETURNED}->${ORDER_STATUS.RETURN_REQUESTED}`,
       `${ORDER_STATUS.PARTIALLY_RETURNED}->${ORDER_STATUS.FULFILLED}`,
+      `${ORDER_STATUS.PARTIALLY_RETURNED}->${ORDER_STATUS.REFUNDED}`,
       `${ORDER_STATUS.RETURN_REQUESTED}->${ORDER_STATUS.RETURNED}`,
+      `${ORDER_STATUS.RETURNED}->${ORDER_STATUS.REFUNDED}`,
+      `${ORDER_STATUS.RETURNED}->${ORDER_STATUS.FULFILLED}`,
+      `${ORDER_STATUS.REFUNDED}->${ORDER_STATUS.FULFILLED}`,
     ]);
 
     if (!allowedTransitions.has(transitionKey)) {
@@ -887,7 +927,7 @@ class OrderService {
       if (!isOwner && !isAdmin) {
         throw new AppError("Only the buyer or admin can cancel this order", 403);
       }
-      if (order.status === ORDER_STATUS.PACKED) {
+      if ([ORDER_STATUS.PACKED, ORDER_STATUS.READY_TO_SHIP].includes(order.status)) {
         const blockedByDeliveryStatus = order.delivery_status && !["initiated", "cancelled", "failed"].includes(order.delivery_status);
         const blockedByShipment = await this.orderRepository.hasNonCancellableShipment(orderId);
         if (blockedByDeliveryStatus || blockedByShipment) {
@@ -911,7 +951,7 @@ class OrderService {
       return;
     }
 
-    if ([ORDER_STATUS.PACKED, ORDER_STATUS.SHIPPED, ORDER_STATUS.FULFILLED].includes(nextStatus)) {
+    if ([ORDER_STATUS.PROCESSING, ORDER_STATUS.PACKED, ORDER_STATUS.READY_TO_SHIP, ORDER_STATUS.SHIPPED, ORDER_STATUS.OUT_FOR_DELIVERY, ORDER_STATUS.FAILED_DELIVERY, ORDER_STATUS.FULFILLED, ORDER_STATUS.ON_HOLD].includes(nextStatus)) {
       if (!isSeller && !isAdmin) {
         throw new AppError("Only seller or admin can update fulfillment states", 403);
       }
@@ -944,7 +984,7 @@ class OrderService {
       return;
     }
 
-    if ([ORDER_STATUS.RETURN_REQUESTED, ORDER_STATUS.PARTIALLY_RETURNED, ORDER_STATUS.RETURNED].includes(nextStatus)) {
+    if ([ORDER_STATUS.RETURN_REQUESTED, ORDER_STATUS.PARTIALLY_RETURNED, ORDER_STATUS.RETURNED, ORDER_STATUS.REFUNDED].includes(nextStatus)) {
       if (!isOwner && !isSeller && !isAdmin) {
         throw new AppError("You are not allowed to update this order", 403);
       }

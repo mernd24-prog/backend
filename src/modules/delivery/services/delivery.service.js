@@ -66,9 +66,11 @@ class DeliveryService {
 
   async getServiceability(pincode, options = {}) {
     const result = await this.deliveryRepository.getServiceability(pincode);
+    const platformServiceable = Boolean(result.serviceability?.serviceable) && result.exclusions.length === 0;
     const response = {
       pincode,
-      serviceable: Boolean(result.serviceability?.serviceable) && result.exclusions.length === 0,
+      serviceable: platformServiceable,
+      platformServiceable,
       codAvailable: Boolean(result.serviceability?.cod_available),
       estimatedDeliveryDays: result.serviceability?.estimated_delivery_days || null,
       city: result.serviceability?.city || null,
@@ -116,18 +118,8 @@ class DeliveryService {
             };
           }
 
-          if (!response.serviceable) {
-            return {
-              ...response,
-              serviceable: false,
-              sellerRuleBlocked: false,
-              shippingProfileId: profileId,
-              shippingProfileName: profile.name,
-            };
-          }
-
           // Profile-level COD override
-          const codAvailable = response.codAvailable && profile.codAvailable;
+          const codAvailable = (result.serviceability ? response.codAvailable : true) && profile.codAvailable !== false;
 
           // Use profile's ETA over pincode table value
           const etaMin = profile.etaMin ?? null;
@@ -142,7 +134,7 @@ class DeliveryService {
 
           return {
             ...response,
-            serviceable: response.serviceable,
+            serviceable: true,
             codAvailable,
             shippingProfileId: profileId,
             shippingProfileName: profile.name,
@@ -155,6 +147,8 @@ class DeliveryService {
               sellers: [{
                 sellerId: product.sellerId,
                 shippingProfileId: profileId,
+                shippingProfileName: profile.name,
+                shippingMethod: profile.shippingMethod || "standard",
                 chargeAmount: shippingCharge,
                 isFree: shippingCharge === 0,
                 estimatedDeliveryDays: { minDays: etaMin, maxDays: etaMax },
@@ -177,19 +171,20 @@ class DeliveryService {
     }
 
     try {
+      const pricedItem = {
+        productId: String(product._id),
+        title: product.title,
+        sku: product.sku || "",
+        sellerId: product.sellerId,
+        organizationId: product.organizationId || null,
+        category: product.category,
+        quantity: 1,
+        lineTotal: Number(product.salePrice ?? product.price ?? 0),
+        discountedLineTotal: Number(product.salePrice ?? product.price ?? 0),
+        shipping: product.shipping || {},
+      };
       const delivery = await sellerChargeSettingsService.calculateDeliveryCharges([
-        {
-          productId: String(product._id),
-          title: product.title,
-          sku: product.sku || "",
-          sellerId: product.sellerId,
-          organizationId: product.organizationId || null,
-          category: product.category,
-          quantity: 1,
-          lineTotal: Number(product.salePrice ?? product.price ?? 0),
-          discountedLineTotal: Number(product.salePrice ?? product.price ?? 0),
-          shipping: product.shipping || {},
-        },
+        pricedItem,
       ], {
         postalCode: pincode,
         pincode,
@@ -198,9 +193,20 @@ class DeliveryService {
         region: response.zoneCode,
         country: "India",
       });
+      const sellerCod = await sellerChargeSettingsService.evaluateCodForItems([
+        pricedItem,
+      ], {
+        postalCode: pincode,
+        pincode,
+        city: response.city,
+        state: response.state,
+        region: response.zoneCode,
+        country: "India",
+      }).catch(() => ({ allowed: response.codAvailable }));
       return {
         ...response,
-        serviceable: response.serviceable && delivery.amount >= 0,
+        serviceable: delivery.amount >= 0,
+        codAvailable: Boolean((result.serviceability ? response.codAvailable : true) && sellerCod.allowed),
         sellerDeliveryChargeAmount: delivery.amount,
         deliveryChargeBreakup: delivery.breakup,
       };
@@ -673,39 +679,12 @@ class DeliveryService {
     if (!this.isForwardShipment(shipment)) {
       return;
     }
-
-    let nextOrderStatus = null;
     let aggregateDeliveryStatus = shipment.status;
     if ([DELIVERY_STATUS.DELIVERED, DELIVERY_STATUS.DELIVERED_VERIFIED].includes(shipment.status)) {
       const progress = await this.getForwardDeliveryProgress(shipment.order_id);
       aggregateDeliveryStatus = progress.aggregateDeliveryStatus;
-      nextOrderStatus = progress.allDelivered ? ORDER_STATUS.DELIVERED : ORDER_STATUS.SHIPPED;
-    } else if ([DELIVERY_STATUS.IN_TRANSIT, DELIVERY_STATUS.OUT_FOR_DELIVERY].includes(shipment.status)) {
-      nextOrderStatus = ORDER_STATUS.SHIPPED;
     }
-
-    if (nextOrderStatus) {
-      const order = await this.orderRepository.findById(shipment.order_id);
-      if ([ORDER_STATUS.FULFILLED, ORDER_STATUS.RETURN_REQUESTED, ORDER_STATUS.PARTIALLY_RETURNED, ORDER_STATUS.RETURNED, ORDER_STATUS.CANCELLED].includes(order?.status)) {
-        await this.updateOrderDeliveryStatusOnly(shipment.order_id, aggregateDeliveryStatus, actor, shipment.id);
-        return;
-      }
-      await this.orderRepository.updateStatus(shipment.order_id, nextOrderStatus, {
-        actorId: actor.userId,
-        actorRole: actor.role,
-        reason: `delivery_${aggregateDeliveryStatus}`,
-        deliveryStatus: aggregateDeliveryStatus,
-        metadata: { shipmentId: shipment.id },
-      }).catch(async () => {
-        await this.updateOrderDeliveryStatusOnly(shipment.order_id, aggregateDeliveryStatus, actor, shipment.id);
-      });
-      if (nextOrderStatus === ORDER_STATUS.DELIVERED) {
-        await this.syncSellerFinanceForDeliveredOrder(shipment.order_id, actor);
-      }
-      return;
-    }
-
-    await this.updateOrderDeliveryStatusOnly(shipment.order_id, shipment.status, actor, shipment.id);
+    await this.updateOrderDeliveryStatusOnly(shipment.order_id, aggregateDeliveryStatus, actor, shipment.id);
   }
 
   isForwardShipment(shipment = {}) {

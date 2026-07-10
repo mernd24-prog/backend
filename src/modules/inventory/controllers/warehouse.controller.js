@@ -26,6 +26,47 @@ class WarehouseController {
   }
 
   list = async (req, res) => this.sendList(res, await this.warehouseService.list(req.query));
+  listVariantInventory = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.inventoryService.listVariantInventory(req.query, actor);
+    res.json(okResponse(result.items, {
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+      productTotal: result.productTotal,
+    }));
+  };
+
+  getProductInventory = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.inventoryService.getProductInventory(
+      req.params.productId,
+      req.query,
+      actor,
+    );
+    res.json(okResponse(result));
+  };
+
+  adjustVariantInventory = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.inventoryService.adjustVariantInventory(
+      req.params.productId,
+      req.params.variantSku,
+      req.body,
+      actor,
+    );
+    await auditService.record(req, {
+      module: "inventory",
+      action: "adjust",
+      entityType: "ProductVariant",
+      entityId: `${req.params.productId}:${req.params.variantSku}`,
+      newData: result,
+      reason: req.body?.reason || "variant_inventory_adjustment",
+      description: "Adjusted product variant inventory",
+    });
+    res.json(okResponse(result));
+  };
+
   listTransactions = async (req, res) => {
     const limit = Math.min(Number(req.query.limit || 100), 200);
     const offset = Number(req.query.offset || 0);

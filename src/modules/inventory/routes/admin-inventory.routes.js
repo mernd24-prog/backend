@@ -12,11 +12,32 @@ const {
   warehouseStatusSchema,
   warehouseDeleteSchema,
   releaseExpiredReservationsSchema,
+  listVariantInventorySchema,
+  productInventorySchema,
+  adjustVariantInventorySchema,
 } = require("../validation/warehouse.validation");
 
 const adminInventoryRoutes = express.Router();
 const warehouseController = new WarehouseController();
 
+adminInventoryRoutes.get(
+  "/variants",
+  allowPermissions("inventory:view"),
+  checkInput(listVariantInventorySchema),
+  catchErrors(warehouseController.listVariantInventory),
+);
+adminInventoryRoutes.get(
+  "/products/:productId",
+  allowPermissions("inventory:view"),
+  checkInput(productInventorySchema),
+  catchErrors(warehouseController.getProductInventory),
+);
+adminInventoryRoutes.patch(
+  "/products/:productId/variants/:variantSku/adjust",
+  allowPermissions("inventory:adjust"),
+  checkInput(adjustVariantInventorySchema),
+  catchErrors(warehouseController.adjustVariantInventory),
+);
 adminInventoryRoutes.get(
   "/stats",
   allowPermissions("inventory:view"),

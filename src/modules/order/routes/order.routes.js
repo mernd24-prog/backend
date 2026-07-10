@@ -58,7 +58,7 @@ orderRoutes.post(
 orderRoutes.patch(
   "/:orderId/status",
   authenticate,
-  allowActions(ACTIONS.ORDER_MANAGE),
+  allowPermissions("orders:status_change"),
   checkInput(updateOrderStatusSchema),
   catchErrors(orderController.updateStatus),
 );

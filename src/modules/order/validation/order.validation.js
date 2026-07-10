@@ -1,22 +1,10 @@
 const Joi = require("joi");
-const { PAYMENT_PROVIDER } = require("../../../shared/domain/commerce-constants");
+const { ORDER_STATUS, PAYMENT_PROVIDER } = require("../../../shared/domain/commerce-constants");
 
 const objectId = Joi.string().hex().length(24);
 
 const orderFilterQuerySchema = Joi.object({
-  status: Joi.string().valid(
-    "pending_payment",
-    "payment_failed",
-    "confirmed",
-    "packed",
-    "shipped",
-    "delivered",
-    "fulfilled",
-    "return_requested",
-    "partially_returned",
-    "returned",
-    "cancelled",
-  ),
+  status: Joi.string().valid(...Object.values(ORDER_STATUS)),
   paymentStatus: Joi.string().valid("initiated", "authorized", "captured", "failed", "partially_refunded", "refunded", "cancelled"),
   deliveryStatus: Joi.string().max(64),
   sellerId: Joi.string().max(128),
@@ -98,19 +86,7 @@ const adminQuoteOrderSchema = Joi.object({
 const updateOrderStatusSchema = Joi.object({
   body: Joi.object({
     status: Joi.string()
-      .valid(
-        "pending_payment",
-        "payment_failed",
-        "confirmed",
-        "cancelled",
-        "packed",
-        "shipped",
-        "delivered",
-        "fulfilled",
-        "return_requested",
-        "partially_returned",
-        "returned",
-      )
+      .valid(...Object.values(ORDER_STATUS))
       .required(),
     reason: Joi.when("status", {
       is: "cancelled",

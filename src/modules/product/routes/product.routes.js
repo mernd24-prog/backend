@@ -2,8 +2,9 @@ const express = require("express");
 const { ProductController } = require("../controllers/product.controller");
 const { catchErrors } = require("../../../shared/middleware/catch-errors");
 const { authenticate } = require("../../../shared/middleware/authenticate");
-const { allowActions } = require("../../../shared/middleware/access");
+const { allowActions, allowPermissions } = require("../../../shared/middleware/access");
 const { checkInput } = require("../../../shared/middleware/check-input");
+const { WarehouseController } = require("../../inventory/controllers/warehouse.controller");
 const {
   createProductSchema,
   updateProductSchema,
@@ -23,10 +24,16 @@ const {
   myReviewSchema,
   reviewParamSchema,
 } = require("../validation/product.validation");
+const {
+  listVariantInventorySchema,
+  productInventorySchema,
+  adjustVariantInventorySchema,
+} = require("../../inventory/validation/warehouse.validation");
 const { ACTIONS } = require("../../../shared/constants/actions");
 
 const productRoutes = express.Router();
 const productController = new ProductController();
+const inventoryController = new WarehouseController();
 
 // ── Public ────────────────────────────────────────────────────────────────────
 
@@ -149,6 +156,27 @@ productRoutes.post(
 
 // ── Inventory ─────────────────────────────────────────────────────────────────
 
+productRoutes.get(
+  "/inventory/variants",
+  authenticate,
+  allowPermissions("inventory:view"),
+  checkInput(listVariantInventorySchema),
+  catchErrors(inventoryController.listVariantInventory),
+);
+productRoutes.get(
+  "/inventory/products/:productId",
+  authenticate,
+  allowPermissions("inventory:view"),
+  checkInput(productInventorySchema),
+  catchErrors(inventoryController.getProductInventory),
+);
+productRoutes.patch(
+  "/inventory/products/:productId/variants/:variantSku/adjust",
+  authenticate,
+  allowPermissions("inventory:adjust"),
+  checkInput(adjustVariantInventorySchema),
+  catchErrors(inventoryController.adjustVariantInventory),
+);
 productRoutes.patch(
   "/:productId/inventory",
   authenticate,

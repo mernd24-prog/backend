@@ -5,6 +5,37 @@ const { eventPublisher } = require("../../../infrastructure/events/event-publish
 const { ProductRepository } = require("../../product/repositories/product.repository");
 const { InventoryRepository } = require("../repositories/inventory.repository");
 
+const LOW_STOCK_DEFAULT = 5;
+
+const isSellerRole = (actor = {}) =>
+  ["seller", "seller-admin", "seller-sub-admin"].includes(actor.role);
+
+const isScopedSellerRole = (actor = {}) =>
+  ["seller-admin", "seller-sub-admin"].includes(actor.role);
+
+const toPlain = (value = {}) =>
+  value?.toObject ? value.toObject({ depopulate: true, flattenMaps: true }) : value;
+
+const toNumber = (value) => Number(value || 0);
+
+const normalizeText = (value) => String(value || "").trim();
+
+const variantLabel = (variant = {}) => {
+  const attrs = variant.attributes instanceof Map
+    ? Object.fromEntries(variant.attributes.entries())
+    : variant.attributes || {};
+  const values = Object.values(attrs)
+    .map((value) => normalizeText(value))
+    .filter(Boolean);
+  return normalizeText(variant.title) || values.join(" / ") || "Default variant";
+};
+
+const stockStatus = (available, threshold) => {
+  if (available <= 0) return "out_of_stock";
+  if (available <= threshold) return "low_stock";
+  return "in_stock";
+};
+
 class InventoryService {
   constructor({
     inventoryRepository = new InventoryRepository(),
@@ -280,6 +311,210 @@ class InventoryService {
     return this.inventoryRepository.listTransactions(filter, pagination);
   }
 
+  buildInventoryProductFilter(query = {}, actor = {}) {
+    const filter = {};
+    const search = normalizeText(query.search || query.q || query.keyWord);
+
+    if (search) {
+      filter.$or = [
+        { title: { $regex: search, $options: "i" } },
+        { sku: { $regex: search, $options: "i" } },
+        { "variants.sku": { $regex: search, $options: "i" } },
+        { "variants.title": { $regex: search, $options: "i" } },
+      ];
+    }
+
+    if (query.status) {
+      filter.status = query.status;
+    }
+
+    if (isSellerRole(actor)) {
+      filter.sellerId = actor.ownerSellerId || actor.userId;
+      if (isScopedSellerRole(actor)) {
+        filter.createdBy = actor.userId;
+      }
+      if (actor.organizationId) {
+        filter.organizationId = actor.organizationId;
+      }
+      return filter;
+    }
+
+    if (query.sellerId) {
+      filter.sellerId = query.sellerId;
+    }
+
+    return filter;
+  }
+
+  assertInventoryProductAccess(product = {}, actor = {}) {
+    if (!actor.userId || actor.isSuperAdmin || ["admin", "super-admin"].includes(actor.role)) {
+      return;
+    }
+
+    if (
+      isSellerRole(actor) &&
+      String(product.sellerId || "") === String(actor.ownerSellerId || actor.userId)
+    ) {
+      if (
+        isScopedSellerRole(actor) &&
+        String(product.createdBy || "") !== String(actor.userId || "")
+      ) {
+        throw new AppError("Permission denied", 403);
+      }
+      if (
+        actor.organizationId &&
+        String(product.organizationId || "") !== String(actor.organizationId)
+      ) {
+        throw new AppError("Product does not belong to the selected organization", 403);
+      }
+      return;
+    }
+
+    throw new AppError("Permission denied", 403);
+  }
+
+  toVariantInventoryRow(productInput, variantInput = {}) {
+    const product = toPlain(productInput) || {};
+    const variant = toPlain(variantInput) || {};
+    const stock = toNumber(variant.stock);
+    const reservedStock = toNumber(variant.reservedStock);
+    const availableStock = Math.max(0, stock - reservedStock);
+    const threshold = toNumber(product.inventorySettings?.lowStockThreshold) || LOW_STOCK_DEFAULT;
+    const variantSku = normalizeText(variant.sku);
+    const image = Array.isArray(variant.images) && variant.images.length ? variant.images[0] : "";
+
+    return {
+      id: `${product._id || product.id}:${variant._id || variantSku}`,
+      productId: String(product._id || product.id || ""),
+      productName: product.title || product.name || "Untitled product",
+      productSku: product.sku || "",
+      variantId: String(variant._id || ""),
+      variantName: variantLabel(variant),
+      variantSku,
+      sku: variantSku,
+      image,
+      currentStock: stock,
+      stock,
+      reservedStock,
+      availableStock,
+      status: stockStatus(availableStock, threshold),
+      variantStatus: variant.status || product.status || "inactive",
+      productStatus: product.status || "",
+      sellerId: product.sellerId || "",
+      seller: product.organizationSnapshot?.name ||
+        product.organizationSnapshot?.businessName ||
+        product.organizationSnapshot?.displayName ||
+        product.sellerId ||
+        "",
+      lastUpdated: variant.updatedAt || product.updatedAt || product.createdAt || null,
+      category: product.category?.name || product.category?.title || product.category || "",
+      brand: product.brand?.name || product.brand || "",
+    };
+  }
+
+  async listVariantInventory(query = {}, actor = {}) {
+    const page = Math.max(1, Number(query.page || 1));
+    const limit = Math.min(100, Math.max(1, Number(query.limit || query.size || 20)));
+    const productFilter = this.buildInventoryProductFilter(query, actor);
+    const batchLimit = Math.min(200, Math.max(limit * 5, limit));
+    const products = await this.productRepository.listInventoryProducts(productFilter, {
+      page: 1,
+      limit: batchLimit,
+      sortBy: query.sortBy,
+      sortDir: query.sortDir,
+    });
+
+    let rows = [];
+    for (const product of products.items || []) {
+      for (const variant of product.variants || []) {
+        rows.push(this.toVariantInventoryRow(product, variant));
+      }
+    }
+
+    if (query.variantSku) {
+      const sku = normalizeText(query.variantSku).toLowerCase();
+      rows = rows.filter((row) => row.variantSku.toLowerCase() === sku);
+    }
+
+    if (query.stockStatus) {
+      rows = rows.filter((row) => row.status === query.stockStatus);
+    }
+
+    if (query.variantStatus) {
+      rows = rows.filter((row) => row.variantStatus === query.variantStatus);
+    }
+
+    const rowOffset = (page - 1) * limit;
+    const pagedRows = rows.slice(rowOffset, rowOffset + limit);
+    return {
+      items: pagedRows,
+      total: rows.length,
+      page,
+      limit,
+      productTotal: products.total,
+    };
+  }
+
+  async getProductInventory(productId, query = {}, actor = {}) {
+    const product = await this.productRepository.findById(productId);
+    if (!product) throw new AppError("Product not found", 404);
+    this.assertInventoryProductAccess(product, actor);
+
+    const plain = toPlain(product);
+    const rows = (plain.variants || []).map((variant) => this.toVariantInventoryRow(plain, variant));
+    const transactions = await this.inventoryRepository.listTransactions(
+      {
+        productId: String(productId),
+        ...(query.variantSku ? { variantSku: query.variantSku } : {}),
+        sortBy: "createdAt",
+        sortDir: "desc",
+      },
+      {
+        limit: Math.min(200, Math.max(1, Number(query.historyLimit || 100))),
+        offset: 0,
+      },
+    );
+
+    return {
+      product: {
+        id: String(plain._id || plain.id || ""),
+        productId: String(plain._id || plain.id || ""),
+        name: plain.title || plain.name || "Untitled product",
+        sku: plain.sku || "",
+        status: plain.status || "",
+        sellerId: plain.sellerId || "",
+        seller: plain.organizationSnapshot?.name ||
+          plain.organizationSnapshot?.businessName ||
+          plain.organizationSnapshot?.displayName ||
+          plain.sellerId ||
+          "",
+        image: rows[0]?.image || "",
+        updatedAt: plain.updatedAt || null,
+      },
+      variants: rows,
+      transactions,
+    };
+  }
+
+  async adjustVariantInventory(productId, variantSku, payload = {}, actor = {}) {
+    const sku = normalizeText(variantSku || payload.variantSku);
+    if (!sku) {
+      throw new AppError("Variant SKU is required for inventory adjustment", 400);
+    }
+
+    const product = await this.productRepository.findById(productId);
+    if (!product) throw new AppError("Product not found", 404);
+    this.assertInventoryProductAccess(product, actor);
+
+    const variant = (product.variants || []).find((item) => item.sku === sku);
+    if (!variant) {
+      throw new AppError("Variant SKU not found for this product", 404);
+    }
+
+    await this.adjustProductInventory(productId, { ...payload, variantSku: sku }, actor);
+    return this.getProductInventory(productId, { variantSku: payload.showAllHistory ? "" : sku }, actor);
+  }
+
   resolveManualAdjustment(product, payload = {}) {
     const requestedVariantSku = payload.variantSku || "";
     const defaultVariant = Array.isArray(product.variants) && product.variants.length
@@ -324,6 +559,10 @@ class InventoryService {
     const requestedVariantSku = payload.variantSku || "";
     let variantSku = requestedVariantSku;
     let usesGeneratedDefaultVariant = false;
+
+    if (hasVariants && !variantSku) {
+      throw new AppError("Variant SKU is required for inventory adjustment", 400);
+    }
 
     if (!variantSku && !hasVariants) {
       const defaultVariant = await this.productRepository.ensureDefaultVariant(productId);

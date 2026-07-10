@@ -14,6 +14,7 @@ const optionalString = () => Joi.string().trim().allow("", null);
 const optionalPositiveNumber = () => Joi.number().positive().allow(null).empty("");
 const optionalNonNegativeInteger = () => Joi.number().integer().min(0).allow(null).empty("");
 const optionalNonNegativeNumber = () => Joi.number().min(0).allow(null).empty("");
+const deprecatedRootVariantField = () => Joi.any().strip();
 
 // ─── Reusable sub-schemas ────────────────────────────────────────────────────
 
@@ -200,9 +201,9 @@ const productBodyBase = {
   scheduledAt: Joi.date().allow(null),
 
   // Pricing
-  price: Joi.number().min(0),
-  mrp: Joi.number().min(0),
-  salePrice: optionalNonNegativeNumber(),
+  price: deprecatedRootVariantField(),
+  mrp: deprecatedRootVariantField(),
+  salePrice: deprecatedRootVariantField(),
   costPrice: optionalNonNegativeNumber(),
   gstRate: Joi.number().min(0).max(100),
   gstInclusive: Joi.boolean(),
@@ -218,9 +219,9 @@ const productBodyBase = {
   badges: Joi.array().items(badgeSchema).default([]),
 
   // Identifiers
-  sku: optionalString(),
+  sku: deprecatedRootVariantField(),
   barcode: optionalString(),
-  color: optionalString(),
+  color: deprecatedRootVariantField(),
 
   // Attributes & variants
   attributes: Joi.object().default({}),
@@ -240,9 +241,9 @@ const productBodyBase = {
   specifications: Joi.object().default({}),
 
   // Media
-  images: Joi.array().items(Joi.string().uri()).default([]),
+  images: deprecatedRootVariantField(),
   videos: Joi.array().items(Joi.string().uri()).default([]),
-  documents: Joi.array().items(Joi.string().uri()).default([]),
+  documents: deprecatedRootVariantField(),
 
   // Physical
   dimensions: dimensionsSchema.default({}),
@@ -252,7 +253,7 @@ const productBodyBase = {
   warranty: warrantySchema.default({}),
 
   // Inventory
-  stock: Joi.number().integer().min(0),
+  stock: deprecatedRootVariantField(),
   inventorySettings: inventorySettingsSchema.default({}),
 
   // Shipping
@@ -283,10 +284,8 @@ const createProductSchema = Joi.object({
     ...productBodyBase,
     title: Joi.string().min(3).max(200).trim().required(),
     description: Joi.string().min(10).required(),
-    price: Joi.number().min(0).required(),
-    mrp: Joi.number().min(0).required(),
     category: Joi.string().required(),
-    stock: Joi.number().integer().min(0).required(),
+    variants: Joi.array().items(variantSchema).min(1).required(),
     organizationId: Joi.string().required(),
     gstInclusive: Joi.boolean().default(true),
     productType: Joi.string().valid(...Object.values(PRODUCT_TYPE)).default(PRODUCT_TYPE.SIMPLE),
@@ -536,7 +535,7 @@ const updateInventorySchema = Joi.object({
     reason: Joi.string().trim().max(200).allow("", null),
     note: Joi.string().trim().max(1000).allow("", null),
     reference: Joi.string().trim().allow("", null),
-    variantSku: optionalString(),
+    variantSku: Joi.string().trim().required(),
   }).or("adjustment", "quantity").required(),
   query: Joi.object({}).required(),
   params: Joi.object({
