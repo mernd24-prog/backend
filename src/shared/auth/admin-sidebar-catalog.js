@@ -137,11 +137,11 @@ const SELLER_SIDEBAR_MODULES = [
 
   { moduleName: "Seller Catalog", moduleKey: "seller-catalog-management", moduleSlug: "seller-catalog-management", icon: "MdInventory", moduleType: "group", order: 10, parentModule: null, requiredModule: "products" },
   { moduleName: "Seller Products", moduleKey: "seller-product-catalog", moduleSlug: "seller-product-catalog", icon: "MdViewList", routePath: "/app/product-catalog", moduleType: "page", order: 11, parentModule: "seller-catalog-management", requiredModule: "products" },
-  { moduleName: "Product Reviews", moduleKey: "seller-product-reviews", moduleSlug: "seller-product-reviews", icon: "MdStar", routePath: "/app/product-reviews", moduleType: "page", order: 12, parentModule: "seller-catalog-management", requiredModule: "reviews" },
+  { moduleName: "Special Price Manager", moduleKey: "seller-special-price-manager", moduleSlug: "seller-special-price-manager", icon: "MdPriceChange", routePath: "/app/seller-special-price-manager", moduleType: "page", order: 12, parentModule: "seller-catalog-management", requiredModule: "products" },
+  { moduleName: "Product Reviews", moduleKey: "seller-product-reviews", moduleSlug: "seller-product-reviews", icon: "MdStar", routePath: "/app/product-reviews", moduleType: "page", order: 13, parentModule: "seller-catalog-management", requiredModule: "reviews" },
 
   { moduleName: "Seller Inventory", moduleKey: "seller-inventory-management", moduleSlug: "seller-inventory-management", icon: "MdWarehouse", moduleType: "group", order: 20, parentModule: null, requiredModule: "inventory" },
   { moduleName: "Inventory", moduleKey: "seller-inventory-products", moduleSlug: "seller-inventory-products", icon: "MdInventory", routePath: "/app/inventory", moduleType: "page", order: 21, parentModule: "seller-inventory-management", requiredModule: "inventory" },
-
   { moduleName: "Seller Orders", moduleKey: "seller-orders-management", moduleSlug: "seller-orders-management", icon: "MdShoppingCart", moduleType: "group", order: 30, parentModule: null, requiredModule: "orders" },
   { moduleName: "Seller Order List", moduleKey: "seller-orders", moduleSlug: "seller-orders", icon: "MdReceipt", routePath: "/app/orders", moduleType: "page", order: 31, parentModule: "seller-orders-management", requiredModule: "orders" },
   { moduleName: "Returns", moduleKey: "seller-returns", moduleSlug: "seller-returns", icon: "MdAssignmentReturn", routePath: "/app/returns", moduleType: "page", order: 32, parentModule: "seller-orders-management", requiredModule: "returns" },

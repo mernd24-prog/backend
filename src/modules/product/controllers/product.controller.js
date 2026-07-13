@@ -219,6 +219,20 @@ class ProductController {
     res.json(okResponse(result));
   };
 
+  bulkUpdateSpecialPrices = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const updates = Array.isArray(req.body?.updates) ? req.body.updates : req.body;
+    const result = await this.productService.bulkUpdateSpecialPrices(updates, actor);
+    await auditService.record(req, {
+      module: "products",
+      action: "bulk_special_price_update",
+      entityType: "Product",
+      newData: result,
+      reason: "bulk_special_price_update",
+    });
+    res.json(okResponse(result));
+  };
+
   // ─── Inventory ────────────────────────────────────────────────────────────
 
   adjustInventory = async (req, res) => {

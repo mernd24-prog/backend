@@ -267,7 +267,7 @@ class ProductService {
     }
   }
 
-  validatePricing(payload = {}, existingProduct = null) {
+  validatePricing(payload = {}, existingProduct = null, context = {}) {
     const source = existingProduct ? this.toPlainObject(existingProduct) : {};
     const price = payload.price !== undefined ? Number(payload.price) : Number(source.price || 0);
     const mrp = payload.mrp !== undefined ? Number(payload.mrp) : Number(source.mrp || 0);
@@ -277,10 +277,21 @@ class ProductService {
       : Number(salePriceValue);
 
     if (Number.isFinite(price) && Number.isFinite(mrp) && price > mrp) {
-      throw new AppError("Selling price must be less than or equal to MRP", 400);
+      const contextStr = context.productTitle ? ` for "${context.productTitle}"` : "";
+      throw new AppError(
+        `Selling price (₹${price}) must be less than or equal to MRP (₹${mrp})${contextStr}. ` +
+        "Pricing hierarchy: MRP ≥ Selling Price ≥ Special Price",
+        400
+      );
     }
     if (salePrice !== null && Number.isFinite(salePrice) && Number.isFinite(price) && salePrice > price) {
-      throw new AppError("Special price must be less than or equal to selling price", 400);
+      const contextStr = context.productTitle ? ` for "${context.productTitle}"` : "";
+      const variantStr = context.variantTitle ? ` [${context.variantTitle}]` : "";
+      throw new AppError(
+        `Special price (₹${salePrice}) must be less than or equal to selling price (₹${price})${variantStr}${contextStr}. ` +
+        "Pricing hierarchy: MRP ≥ Selling Price ≥ Special Price",
+        400
+      );
     }
   }
 
@@ -443,9 +454,10 @@ class ProductService {
     const explicitVariants = Array.isArray(payload.variants) ? payload.variants : [];
     const variants = explicitVariants.length
       ? explicitVariants.map((variant, index) => {
-          const attributes = this.normalizeVariantAttributes(variant.attributes || {});
+          const plainVariant = this.toPlainVariant(variant);
+          const attributes = this.normalizeVariantAttributes(plainVariant.attributes || {});
           return {
-            ...variant,
+            ...plainVariant,
             attributes,
             title: variant.title || Object.values(attributes).join(" / "),
             isDefault: variant.isDefault === true || (!explicitVariants.some((v) => v.isDefault) && index === 0),
@@ -2434,6 +2446,121 @@ class ProductService {
     await Promise.allSettled(updatedProducts.map((product) => this._indexProduct(product)));
     this._invalidateProductCache();
     return { updated: productIds.length, visibility };
+  }
+
+  async bulkUpdateSpecialPrices(updates = [], actor = {}) {
+    const normalizedUpdates = Array.isArray(updates) ? updates : [];
+    if (!normalizedUpdates.length) {
+      throw new AppError("No special price updates were provided", 400);
+    }
+
+    const productIds = normalizedUpdates
+      .map((entry) => entry?.productId)
+      .filter(Boolean)
+      .map((id) => String(id));
+    const requestedCount = new Set(productIds).size;
+    if (!requestedCount) {
+      throw new AppError("No valid product ids were provided for special price updates", 400);
+    }
+
+    const products = await this.productRepository.findByIds(productIds);
+    if (!products.length || products.length !== requestedCount) {
+      throw new AppError("One or more products were not found for special price update", 404);
+    }
+
+    const productMap = new Map(products.map((product) => [String(product._id || product.id), product]));
+    const updatedProductIds = [];
+
+    for (const entry of normalizedUpdates) {
+      const productId = String(entry?.productId || "");
+      if (!productId) continue;
+
+      const product = productMap.get(productId);
+      if (!product) {
+        throw new AppError(`Product ${productId} was not found`, 404);
+      }
+      this.assertCanAccessManagementProduct(product, actor);
+
+      const hasVariantUpdates = Array.isArray(entry?.variants) && entry.variants.length > 0;
+      const payload = {};
+
+      if (hasVariantUpdates) {
+        const variants = Array.isArray(product.variants) ? product.variants : [];
+        if (!variants.length) {
+          throw new AppError("Product does not have variants for special price update", 400);
+        }
+
+        payload.variants = variants.map((variant) => {
+          const plainVariant = this.toPlainVariant(variant);
+          const matchingUpdate = entry.variants.find((item) => {
+            const variantId = String(item?.variantId || "");
+            const variantSku = String(item?.variantSku || "");
+            const currentVariantId = String(plainVariant._id || plainVariant.id || "");
+            const currentVariantSku = String(plainVariant.sku || "");
+            return (
+              (variantId && currentVariantId === variantId) ||
+              (variantSku && currentVariantSku === variantSku)
+            );
+          });
+
+          if (!matchingUpdate) return plainVariant;
+          const nextValue = matchingUpdate.salePrice === undefined || matchingUpdate.salePrice === null || matchingUpdate.salePrice === ""
+            ? null
+            : Number(matchingUpdate.salePrice);
+          
+          // Pre-validate pricing before updating
+          if (nextValue !== null && Number.isFinite(nextValue) && Number.isFinite(plainVariant.price)) {
+            if (nextValue > plainVariant.price) {
+              throw new AppError(
+                `Invalid special price for variant "${plainVariant.title}" in "${product.title}". ` +
+                `Special price (₹${nextValue}) must be ≤ selling price (₹${plainVariant.price}). ` +
+                "Pricing hierarchy: MRP ≥ Selling Price ≥ Special Price",
+                400
+              );
+            }
+          }
+          
+          return { ...plainVariant, salePrice: nextValue };
+        });
+      } else if (Object.prototype.hasOwnProperty.call(entry, "salePrice")) {
+        const nextValue = entry.salePrice === undefined || entry.salePrice === null || entry.salePrice === ""
+          ? null
+          : Number(entry.salePrice);
+        
+        // Pre-validate pricing before updating
+        if (nextValue !== null && Number.isFinite(nextValue) && Number.isFinite(product.price)) {
+          if (nextValue > product.price) {
+            throw new AppError(
+              `Invalid special price for "${product.title}". ` +
+              `Special price (₹${nextValue}) must be ≤ selling price (₹${product.price}). ` +
+              "Pricing hierarchy: MRP ≥ Selling Price ≥ Special Price",
+              400
+            );
+          }
+        }
+        
+        payload.salePrice = nextValue;
+      }
+
+      if (!Object.keys(payload).length) continue;
+
+      try {
+        const updatedProduct = await this.updateProduct(productId, payload, actor);
+        updatedProductIds.push(String(updatedProduct._id || updatedProduct.id));
+      } catch (err) {
+        // Enhance error with product context if validation error
+        if (err.message && err.statusCode === 400) {
+          throw new AppError(
+            `Failed to update "${product.title}" (SKU: ${product.sku}): ${err.message}`,
+            400
+          );
+        }
+        throw err;
+      }
+    }
+
+    this._invalidateProductCache();
+    return { updated: updatedProductIds.length, updates: normalizedUpdates.length };
   }
 
   // ─── Inventory management ─────────────────────────────────────────────────

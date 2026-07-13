@@ -17,6 +17,7 @@ const {
   productStatusSchema,
   productLifecycleSchema,
   bulkProductSchema,
+  specialPriceBulkUpdateSchema,
   updateInventorySchema,
   productParamSchema,
   submitReviewSchema,
@@ -152,6 +153,13 @@ productRoutes.post(
   allowActions(ACTIONS.CATALOG_REVIEW),
   checkInput(bulkProductSchema),
   catchErrors(productController.bulkUpdate),
+);
+productRoutes.post(
+  "/special-prices/bulk",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(specialPriceBulkUpdateSchema),
+  catchErrors(productController.bulkUpdateSpecialPrices),
 );
 
 // ── Inventory ─────────────────────────────────────────────────────────────────

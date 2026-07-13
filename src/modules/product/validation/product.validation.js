@@ -484,6 +484,26 @@ const bulkProductSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
+const specialPriceBulkUpdateSchema = Joi.object({
+  body: Joi.object({
+    updates: Joi.array().items(
+      Joi.object({
+        productId: Joi.string().required(),
+        salePrice: optionalNonNegativeNumber(),
+        variants: Joi.array().items(
+          Joi.object({
+            variantId: optionalString(),
+            variantSku: optionalString(),
+            salePrice: optionalNonNegativeNumber(),
+          }),
+        ).default([]),
+      }).or("salePrice", "variants"),
+    ).min(1).required(),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
 const productPrefillSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
@@ -614,6 +634,7 @@ module.exports = {
   productStatusSchema,
   productLifecycleSchema,
   bulkProductSchema,
+  specialPriceBulkUpdateSchema,
   updateInventorySchema,
   productParamSchema,
   submitReviewSchema,
