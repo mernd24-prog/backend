@@ -4,7 +4,10 @@ const { AppError } = require("../../../shared/errors/app-error");
 const { ROLES } = require("../../../shared/constants/roles");
 const { UserModel } = require("../../user/models/user.model");
 const { cleanModuleName } = require("../../../shared/auth/module-access");
-const { DEFAULT_SELLER_MODULES } = require("../../../shared/auth/module-catalog");
+const {
+  DEFAULT_PLATFORM_MODULES,
+  DEFAULT_SELLER_MODULES,
+} = require("../../../shared/auth/module-catalog");
 const {
   PERMISSION_ACTIONS,
   SIDEBAR_PERMISSION_ACTIONS,
@@ -175,9 +178,14 @@ class RbacService {
       actor.role === ROLES.SELLER
         ? DEFAULT_SELLER_MODULES.map(cleanModuleName)
         : [];
+    const ownerPlatformModules =
+      isSuperAdmin || actor.role === ROLES.ADMIN
+        ? DEFAULT_PLATFORM_MODULES.map(cleanModuleName)
+        : [];
     const viewModuleScope = new Set([
       ...viewModules,
       ...allowedModules,
+      ...ownerPlatformModules,
       ...ownerSellerModules,
     ]);
 
