@@ -36,6 +36,24 @@ const stockStatus = (available, threshold) => {
   return "in_stock";
 };
 
+const sellerDisplayName = (product = {}) => {
+  const organization = product.organizationSnapshot || {};
+  const seller = product.sellerSnapshot || {};
+  return normalizeText(
+    organization.storeDisplayName ||
+      organization.legalBusinessName ||
+      organization.legalName ||
+      organization.name ||
+      organization.businessName ||
+      organization.displayName ||
+      seller.displayName ||
+      seller.businessName ||
+      seller.legalBusinessName ||
+      seller.name ||
+      product.sellerName,
+  );
+};
+
 class InventoryService {
   constructor({
     inventoryRepository = new InventoryRepository(),
@@ -401,11 +419,8 @@ class InventoryService {
       variantStatus: variant.status || product.status || "inactive",
       productStatus: product.status || "",
       sellerId: product.sellerId || "",
-      seller: product.organizationSnapshot?.name ||
-        product.organizationSnapshot?.businessName ||
-        product.organizationSnapshot?.displayName ||
-        product.sellerId ||
-        "",
+      sellerName: sellerDisplayName(product),
+      seller: sellerDisplayName(product),
       lastUpdated: variant.updatedAt || product.updatedAt || product.createdAt || null,
       category: product.category?.name || product.category?.title || product.category || "",
       brand: product.brand?.name || product.brand || "",
@@ -483,11 +498,8 @@ class InventoryService {
         sku: plain.sku || "",
         status: plain.status || "",
         sellerId: plain.sellerId || "",
-        seller: plain.organizationSnapshot?.name ||
-          plain.organizationSnapshot?.businessName ||
-          plain.organizationSnapshot?.displayName ||
-          plain.sellerId ||
-          "",
+        sellerName: sellerDisplayName(plain),
+        seller: sellerDisplayName(plain),
         image: rows[0]?.image || "",
         updatedAt: plain.updatedAt || null,
       },

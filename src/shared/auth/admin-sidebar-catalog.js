@@ -91,6 +91,7 @@ const SIDEBAR_MODULES = [
 
   { moduleName: "Settings", moduleKey: "settings-menu", moduleSlug: "settings-menu", icon: "CiSettings", moduleType: "group", order: 190, parentModule: null, requiredModule: "cms_pages" },
   { moduleName: "CMS Pages", moduleKey: "content-pages", moduleSlug: "content-pages", icon: "MdPages", routePath: "/app/content-pages", moduleType: "page", order: 192, parentModule: "settings-menu", requiredModule: "cms_pages" },
+  { moduleName: "Auth Testimonials", moduleKey: "auth-testimonials", moduleSlug: "auth-testimonials", icon: "MdReviews", routePath: "/app/auth-testimonials", moduleType: "page", order: 193, parentModule: "settings-menu", requiredModule: "cms_pages" },
 
   // Catalog Masters additions
   { moduleName: "Collections", moduleKey: "collections", moduleSlug: "collections", icon: "MdCollections", routePath: "/app/collections", moduleType: "page", order: 201, parentModule: "catalog-masters", requiredModule: "platform" },
