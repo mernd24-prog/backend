@@ -64,8 +64,12 @@ class OrderService {
     return items.reduce((groups, item) => {
       const sellerId = String(item.seller_id || item.sellerId || "");
       if (!sellerId) return groups;
-      if (!groups.has(sellerId)) groups.set(sellerId, []);
-      groups.get(sellerId).push(item);
+      const organizationId = item.organization_id || item.organizationId || null;
+      const key = `${sellerId}:${organizationId || "default"}`;
+      if (!groups.has(key)) {
+        groups.set(key, { sellerId, organizationId, items: [] });
+      }
+      groups.get(key).items.push(item);
       return groups;
     }, new Map());
   }
@@ -123,7 +127,8 @@ class OrderService {
     const actorIsSeller = ["seller", "seller-admin", "seller-sub-admin"].includes(actor.role);
     const actorSellerId = String(actor.ownerSellerId || actor.sellerId || actor.userId || "");
 
-    for (const [sellerId, sellerItems] of itemsBySeller.entries()) {
+    for (const group of itemsBySeller.values()) {
+      const { sellerId, organizationId, items: sellerItems } = group;
       if (actorIsSeller && String(sellerId) !== actorSellerId) continue;
       const fulfillment = this.getFulfillmentSnapshotForItems(sellerItems);
       await this.orderRepository.createShipment({
@@ -144,11 +149,49 @@ class OrderService {
         metadata: {
           source: "order_status_sync",
           orderStatus: nextStatus,
+          organizationId: organizationId || null,
+          orderItemIds: sellerItems.map((item) => item.id).filter(Boolean),
         },
-        idempotencyKey: `order-status:${orderId}:${sellerId}`,
+        idempotencyKey: `order-status:${orderId}:${sellerId}:${organizationId || "default"}`,
         createdBy: actor.userId || null,
         updatedBy: actor.userId || null,
         note: `Order moved to ${nextStatus}`,
+      });
+    }
+  }
+
+  async ensureShipmentsForConfirmedOrder(orderId, actor = {}, reason = "order_confirmed") {
+    const order = await this.orderRepository.findByIdWithItems(orderId);
+    if (!order || order.status !== ORDER_STATUS.CONFIRMED) return;
+
+    const itemsBySeller = this.groupOrderItemsBySeller(order.items || []);
+    for (const group of itemsBySeller.values()) {
+      const { sellerId, organizationId, items: sellerItems } = group;
+      const fulfillment = this.getFulfillmentSnapshotForItems(sellerItems);
+      await this.orderRepository.createShipment({
+        orderId,
+        sellerId,
+        status: "initiated",
+        orderStatus: ORDER_STATUS.CONFIRMED,
+        cod: order.payment_provider === PAYMENT_PROVIDER.COD,
+        provider: "manual",
+        shipToSnapshot: this.normalizeJson(order.shipping_address, {}),
+        dealId: fulfillment.dealId,
+        fulfillmentModel: fulfillment.fulfillmentModel,
+        verificationRequired: true,
+        verificationMethods: fulfillment.verificationMethods.length
+          ? fulfillment.verificationMethods
+          : ["otp"],
+        metadata: {
+          source: "order_confirmation_auto_shipment",
+          reason,
+          organizationId: organizationId || null,
+          orderItemIds: sellerItems.map((item) => item.id).filter(Boolean),
+        },
+        idempotencyKey: `order-confirmed:${orderId}:${sellerId}:${organizationId || "default"}`,
+        createdBy: actor.userId || order.buyer_id || null,
+        updatedBy: actor.userId || order.buyer_id || null,
+        note: "Shipment created after payment confirmation",
       });
     }
   }
@@ -231,11 +274,23 @@ class OrderService {
               taxPayableAmount: pricedOrder.pricing.taxPayableAmount,
               deliveryChargeAmount: pricedOrder.pricing.deliveryChargeAmount,
               shippingFeeAmount: pricedOrder.pricing.shippingFeeAmount,
+              sellerCommission: pricedOrder.pricing.sellerPlatformFeeAmount,
+              sellerCommissionGST: pricedOrder.pricing.sellerPlatformFeeTaxAmount,
+              totalSellerDeduction: pricedOrder.pricing.totalSellerDeduction,
+              sellerReceivable: pricedOrder.pricing.sellerPayoutAmount,
+              customerPlatformFee: pricedOrder.pricing.customerPlatformFeeAmount,
+              customerPlatformFeeGST: pricedOrder.pricing.customerPlatformFeeTaxAmount,
+              totalPaid: pricedOrder.pricing.payableAmount,
               sellerPlatformFeeAmount: pricedOrder.pricing.sellerPlatformFeeAmount,
+              sellerPlatformFeeTaxAmount: pricedOrder.pricing.sellerPlatformFeeTaxAmount,
               customerPlatformFeeAmount: pricedOrder.pricing.customerPlatformFeeAmount,
               customerPlatformFeeTaxAmount: pricedOrder.pricing.customerPlatformFeeTaxAmount,
+              sellerCommissionAmount: pricedOrder.pricing.sellerPlatformFeeAmount,
+              totalSellerDeductionAmount: pricedOrder.pricing.totalSellerDeduction,
+              customerPaid: pricedOrder.pricing.payableAmount,
               platformFeeChargedToCustomer: Number(pricedOrder.pricing.customerPlatformFeeAmount || 0) > 0,
               sellerPayoutAmount: pricedOrder.pricing.sellerPayoutAmount,
+              sellerSettlementBreakup: pricedOrder.pricing.sellerSettlementBreakup,
             },
             idempotencyKey: payload.idempotencyKey || undefined,
             referral: pricedOrder.referralContext
@@ -297,6 +352,7 @@ class OrderService {
             },
           ),
         );
+        await this.ensureShipmentsForConfirmedOrder(orderId, actor, "zero_payable_order_confirmed");
       }
       return this.filterOrderForBuyer(await this.orderRepository.findByIdWithItems(order.id));
     } catch (error) {
@@ -337,7 +393,15 @@ class OrderService {
         taxIncludedAmount: pricing.taxIncludedAmount,
         taxPayableAmount: pricing.taxPayableAmount,
         platformFeeAmount: pricing.platformFeeAmount,
+        sellerCommission: pricing.sellerPlatformFeeAmount,
+        sellerCommissionGST: pricing.sellerPlatformFeeTaxAmount,
+        totalSellerDeduction: pricing.totalSellerDeduction,
+        sellerReceivable: pricing.sellerPayoutAmount,
+        customerPlatformFee: pricing.customerPlatformFeeAmount,
+        customerPlatformFeeGST: pricing.customerPlatformFeeTaxAmount,
+        totalPaid: pricing.payableAmount,
         sellerPlatformFeeAmount: pricing.sellerPlatformFeeAmount,
+        sellerPlatformFeeTaxAmount: pricing.sellerPlatformFeeTaxAmount,
         customerPlatformFeeAmount: pricing.customerPlatformFeeAmount,
         customerPlatformFeeTaxAmount: pricing.customerPlatformFeeTaxAmount,
         codChargeAmount: pricing.codChargeAmount,
@@ -374,7 +438,15 @@ class OrderService {
         taxIncludedAmount: pricing.taxIncludedAmount,
         taxPayableAmount: pricing.taxPayableAmount,
         platformFeeAmount: pricing.platformFeeAmount,
+        sellerCommission: pricing.sellerPlatformFeeAmount,
+        sellerCommissionGST: pricing.sellerPlatformFeeTaxAmount,
+        totalSellerDeduction: pricing.totalSellerDeduction,
+        sellerReceivable: pricing.sellerPayoutAmount,
+        customerPlatformFee: pricing.customerPlatformFeeAmount,
+        customerPlatformFeeGST: pricing.customerPlatformFeeTaxAmount,
+        totalPaid: pricing.payableAmount,
         sellerPlatformFeeAmount: pricing.sellerPlatformFeeAmount,
+        sellerPlatformFeeTaxAmount: pricing.sellerPlatformFeeTaxAmount,
         customerPlatformFeeAmount: pricing.customerPlatformFeeAmount,
         customerPlatformFeeTaxAmount: pricing.customerPlatformFeeTaxAmount,
         codChargeAmount: pricing.codChargeAmount,
@@ -473,14 +545,18 @@ class OrderService {
         metadata,
         created_by,
         updated_by,
-        seller_id,
         buyer_id,
         delivery_agent_id,
         ...visible
       } = shipment;
       const agent = shipment.delivery_agent_snapshot || {};
+      const shipmentMetadata = this.normalizeJson(metadata, {});
       return {
         ...visible,
+        seller_id: shipment.seller_id || null,
+        sellerId: shipment.seller_id || null,
+        organizationId: shipment.organization_id || shipmentMetadata.organizationId || null,
+        orderItemIds: Array.isArray(shipmentMetadata.orderItemIds) ? shipmentMetadata.orderItemIds : [],
         seller: shipment.seller ? {
           displayName: shipment.seller.displayName || shipment.seller.businessName || shipment.seller.email || "Seller",
           businessName: shipment.seller.businessName || shipment.seller.sellerProfile?.businessName || null,
@@ -543,15 +619,25 @@ class OrderService {
         invoices: relations.invoices || [],
         shipments: (relations.shipments || []).map(sanitizeShipment),
         sellerFulfillmentGroups: (relations.sellerFulfillmentGroups || []).map((group) => ({
+          sellerId: group.sellerId,
+          organizationId: group.organizationId,
           sellerName: group.sellerName,
+          organizationName: group.organizationName,
           organizationSnapshot: group.organizationSnapshot,
+          itemIds: group.itemIds || group.orderItemIds,
+          orderItemIds: group.orderItemIds || group.itemIds,
+          shipmentIds: group.shipmentIds,
           itemCount: group.itemCount,
           quantity: group.quantity,
           deliveryStatus: group.deliveryStatus,
+          shipmentStatus: group.shipmentStatus,
           expectedDeliveryAt: group.expectedDeliveryAt,
           latestTrackingEvent: group.latestTrackingEvent ? sanitizeTrackingEvent(group.latestTrackingEvent) : null,
           requiresVerification: group.requiresVerification,
           verificationComplete: group.verificationComplete,
+          returnLifecycle: group.returnLifecycle,
+          payoutStatus: group.payoutStatus,
+          payoutEligibleAt: group.payoutEligibleAt,
         })),
         eWayBill: relations.eWayBill ? {
           status: relations.eWayBill.status,
@@ -761,6 +847,7 @@ class OrderService {
       await this.dealService.commitOrderSales(orderId, actor).catch((error) =>
         logger.error({ orderId, error: error.message }, "Deal sale commit failed"),
       );
+      await this.ensureShipmentsForConfirmedOrder(orderId, actor, actor.reason || "order_confirmed");
     }
 
     if (nextStatus === ORDER_STATUS.PAYMENT_FAILED) {
@@ -981,6 +1068,20 @@ class OrderService {
       if (!isAdmin) {
         throw new AppError("Only admin can mark an order delivered from order status", 403);
       }
+      const fullOrder = await this.orderRepository.findByIdWithItems(orderId);
+      const sellerIds = new Set((fullOrder?.items || []).map((item) => String(item.seller_id || "")).filter(Boolean));
+      const forwardShipments = (fullOrder?.relations?.shipments || [])
+        .filter((shipment) => String(shipment.direction || "forward") !== "reverse" && String(shipment.shipment_type || "forward") !== "return");
+      const verifiedSellerIds = new Set(
+        forwardShipments
+          .filter((shipment) => shipment.status === "delivered_verified")
+          .map((shipment) => String(shipment.seller_id || ""))
+          .filter(Boolean),
+      );
+      const allVerified = sellerIds.size > 0 && Array.from(sellerIds).every((sellerId) => verifiedSellerIds.has(sellerId));
+      if (!allVerified) {
+        throw new AppError("Order can be marked delivered only after delivery OTP is verified for all seller shipments", 409);
+      }
       return;
     }
 
@@ -1127,6 +1228,7 @@ class OrderService {
           ),
         );
         await this.clearPurchasedCartItems(orderId, order.buyer_id, [], actor, "payment_captured");
+        await this.ensureShipmentsForConfirmedOrder(orderId, actor, "payment_captured");
         return this.orderRepository.findByIdWithItems(updatedOrder.id);
       }
       throw new AppError(`Cannot capture payment for order in ${order.status} status`, 409);
@@ -1175,6 +1277,7 @@ class OrderService {
       if (order.status === ORDER_STATUS.CONFIRMED || order.payment_status === PAYMENT_STATUS.AUTHORIZED) {
         await this.taxService.createInvoice(orderId);
         await this.clearPurchasedCartItems(orderId, order.buyer_id, [], actor, "payment_authorized");
+        await this.ensureShipmentsForConfirmedOrder(orderId, actor, "payment_authorized");
         return this.orderRepository.findByIdWithItems(orderId);
       }
       throw new AppError(`Cannot authorize payment for order in ${order.status} status`, 409);

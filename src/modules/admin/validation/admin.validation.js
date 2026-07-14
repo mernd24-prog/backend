@@ -655,57 +655,6 @@ const updatePlatformSubscriptionStatusSchema = Joi.object({
   }).required(),
 });
 
-const createPlatformFeeConfigSchema = Joi.object({
-  body: Joi.object({
-    category: Joi.string().trim().required(),
-    commissionPercent: Joi.number().min(0).max(100).required(),
-    fixedFeeAmount: Joi.number().min(0).default(0),
-    closingFeeAmount: Joi.number().min(0).default(0),
-    active: Joi.boolean().default(true),
-    effectiveFrom: Joi.date().iso().allow(null),
-    effectiveTo: Joi.date().iso().allow(null),
-  }).required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({}).required(),
-});
-
-const listPlatformFeeConfigSchema = Joi.object({
-  body: Joi.object({}).required(),
-  query: Joi.object({
-    active: Joi.boolean(),
-    category: Joi.string(),
-    limit: Joi.number().integer().min(1).max(500),
-    offset: Joi.number().integer().min(0),
-  }).required(),
-  params: Joi.object({}).required(),
-});
-
-const platformFeeConfigParamSchema = Joi.object({
-  body: Joi.object({}).default({}),
-  query: Joi.object({}).required(),
-  params: Joi.object({
-    configId: Joi.string().guid({ version: "uuidv4" }).required(),
-  }).required(),
-});
-
-const updatePlatformFeeConfigSchema = Joi.object({
-  body: Joi.object({
-    category: Joi.string().trim(),
-    commissionPercent: Joi.number().min(0).max(100),
-    fixedFeeAmount: Joi.number().min(0),
-    closingFeeAmount: Joi.number().min(0),
-    active: Joi.boolean(),
-    effectiveFrom: Joi.date().iso().allow(null),
-    effectiveTo: Joi.date().iso().allow(null),
-  })
-    .min(1)
-    .required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({
-    configId: Joi.string().guid({ version: "uuidv4" }).required(),
-  }).required(),
-});
-
 const listAccessModulesSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
@@ -872,10 +821,6 @@ module.exports = {
   updateSubscriptionPlanSchema,
   listPlatformSubscriptionsSchema,
   updatePlatformSubscriptionStatusSchema,
-  createPlatformFeeConfigSchema,
-  listPlatformFeeConfigSchema,
-  platformFeeConfigParamSchema,
-  updatePlatformFeeConfigSchema,
   listAccessModulesSchema,
   createAdminSchema,
   listAdminsSchema,

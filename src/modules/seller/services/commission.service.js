@@ -12,16 +12,7 @@ const { documentRendererService } = require("../../../shared/services/document-r
 const { UserModel } = require("../../user/models/user.model");
 
 class SellerCommissionService {
-  constructor() {
-    this.defaultCommissionRates = {
-      bronze: 0.15,
-      silver: 0.12,
-      gold: 0.1,
-      platinum: 0.08,
-    };
-    this.defaultSellerTier = "bronze";
-    this.commissionTaxRate = 0.18;
-  }
+  constructor() {}
 
   round(value) {
     return Math.round(Number(value || 0) * 100) / 100;
@@ -52,12 +43,68 @@ class SellerCommissionService {
     }
   }
 
-  getCommissionRate(sellerTier = this.defaultSellerTier) {
-    return this.defaultCommissionRates[sellerTier] ?? this.defaultCommissionRates[this.defaultSellerTier];
-  }
-
   normalizeMoney(value) {
     return Number(Number(value || 0).toFixed(2));
+  }
+
+  numberOrNull(value) {
+    if (value === undefined || value === null || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  firstNumber(...values) {
+    for (const value of values) {
+      const number = this.numberOrNull(value);
+      if (number !== null) return number;
+    }
+    return 0;
+  }
+
+  resolveSellerFeeAmount(row = {}, pricing = {}) {
+    const componentFee = this.firstNumber(pricing.commissionFee) +
+      this.firstNumber(pricing.fixedFee) +
+      this.firstNumber(pricing.closingFee);
+    if (componentFee > 0) {
+      return this.round(componentFee);
+    }
+
+    const explicitSellerFee = this.numberOrNull(
+      pricing.sellerPlatformFeeAmount ??
+      pricing.sellerFeeAmount ??
+      pricing.sellerFeeTotal,
+    );
+    if (explicitSellerFee !== null) {
+      return this.round(explicitSellerFee);
+    }
+
+    const rowSellerFee = this.numberOrNull(row.platform_fee_amount);
+    if (rowSellerFee !== null) {
+      return this.round(rowSellerFee);
+    }
+
+    const platformFee = this.firstNumber(pricing.platformFeeAmount);
+    const customerFee = this.firstNumber(
+      pricing.customerPlatformFeeAmount,
+      pricing.customerPlatformFee,
+      pricing.customerFeeTotal,
+    );
+    return this.round(Math.max(0, platformFee - customerFee));
+  }
+
+  resolveSellerFeeTaxAmount(row = {}, pricing = {}, financeSnapshot = {}) {
+    const chargeToSeller = pricing.chargePlatformFeeTaxToSeller ?? financeSnapshot.chargePlatformFeeTaxToSeller ?? true;
+    if (chargeToSeller === false) return 0;
+
+    const explicitTax = this.numberOrNull(pricing.platformFeeTaxAmount);
+    if (explicitTax !== null) {
+      return this.round(explicitTax);
+    }
+
+    const taxRate = this.firstNumber(pricing.platformFeeTaxRate, financeSnapshot.platformFeeTaxRate);
+    if (taxRate <= 0) return 0;
+
+    return this.round((this.resolveSellerFeeAmount(row, pricing) * taxRate) / 100);
   }
 
   normalizePagination(query = {}) {
@@ -123,7 +170,7 @@ class SellerCommissionService {
   getPayoutPolicy(settings = {}) {
     const finance = settings.finance || settings || {};
     return {
-      releaseMilestone: finance.payoutReleaseMilestone || "delivered_or_fulfilled",
+      releaseMilestone: finance.payoutReleaseMilestone || "return_window_closed",
       releaseDaysAfterDelivery: Math.max(Number(finance.payoutReleaseDaysAfterDelivery || 0), 0),
       schedule: finance.payoutSchedule || "manual",
       manualApprovalRequired: finance.payoutManualApprovalRequired !== false,
@@ -352,21 +399,13 @@ class SellerCommissionService {
     };
   }
 
-  async getOrderSellerGroups(orderId, sellerId = null, orderAmount = null, sellerTier = this.defaultSellerTier, organizationId = null) {
+  async getOrderSellerGroups(orderId, sellerId = null, orderAmount = null, sellerTier = null, organizationId = null) {
     if (!orderId) {
       throw new AppError("Invalid commission input", 400);
     }
 
-    const commerceSettings = await commerceSettingsService.getSettings();
-    const commissionTaxRate = commerceSettings.finance.chargePlatformFeeTaxToSeller
-      ? Number(commerceSettings.finance.platformFeeTaxRate || 0) / 100
-      : 0;
-
     if (sellerId && Number(orderAmount || 0) > 0) {
-      const rate = this.getCommissionRate(sellerTier);
       const amount = this.round(orderAmount);
-      const commissionAmount = this.round(amount * rate);
-      const taxAmount = this.round(commissionAmount * commissionTaxRate);
       return [{
         sellerId,
         organizationId: organizationId || null,
@@ -374,19 +413,17 @@ class SellerCommissionService {
         orderId,
         orderItemIds: [],
         amount,
-        commissionRate: rate,
-        commissionAmount,
-        taxAmount,
+        commissionRate: 0,
+        commissionAmount: 0,
+        taxAmount: 0,
         refundAmount: 0,
-        netAmount: this.round(amount - commissionAmount - taxAmount),
+        netAmount: amount,
         currency: "INR",
         sourceStatus: "manual",
         metadata: {
           source: "manual_commission_input",
           organizationId: organizationId || null,
-          sellerPayoutBase: commerceSettings.finance.sellerPayoutBase,
-          platformFeeTaxRate: Number(commerceSettings.finance.platformFeeTaxRate || 0),
-          chargePlatformFeeTaxToSeller: Boolean(commerceSettings.finance.chargePlatformFeeTaxToSeller),
+          note: "Manual payouts use the supplied seller receivable amount without recalculating commission.",
         },
       }];
     }
@@ -438,6 +475,7 @@ class SellerCommissionService {
         commissionFeeAmount: 0,
         fixedFeeAmount: 0,
         closingFeeAmount: 0,
+        sellerReceivableAmount: 0,
         hasPricingSnapshot: false,
         quantity: 0,
         currency: row.currency || "INR",
@@ -448,23 +486,32 @@ class SellerCommissionService {
       const lineTotal = Number(row.line_total || 0);
       const discountAmount = Number(row.discount_amount || 0);
       const grossAfterDiscount = Math.max(lineTotal - discountAmount, 0);
-      const taxBreakup = this.parseJson(row.tax_breakup, {});
       const pricing = this.parseJson(row.pricing_snapshot, {});
-      const itemGross = Number(
-        (
-          pricing.sellerPayoutBaseAmount ??
-          (commerceSettings.finance.sellerPayoutBase === "taxable_ex_gst"
-            ? taxBreakup.taxableAmount
-            : grossAfterDiscount)
-        ) || 0,
+      const taxBreakup = this.parseJson(row.tax_breakup, {});
+      const orderMetadata = this.parseJson(row.order_metadata, {});
+      const financeSnapshot = orderMetadata?.commerceSettings?.finance || {};
+      const itemGross = Number((pricing.sellerPayoutBaseAmount ?? grossAfterDiscount) || 0);
+      const sellerFeeAmount = this.resolveSellerFeeAmount(row, pricing);
+      const sellerFeeTaxAmount = this.resolveSellerFeeTaxAmount(row, pricing, financeSnapshot);
+      const customerFeeAmount = this.firstNumber(
+        pricing.customerPlatformFeeAmount,
+        pricing.customerPlatformFee,
+        pricing.customerFeeTotal,
+      );
+      const customerFeeTaxAmount = this.firstNumber(pricing.customerPlatformFeeTaxAmount);
+      const itemSellerReceivable = Number(
+        Math.max(0, itemGross - sellerFeeAmount - sellerFeeTaxAmount).toFixed(2),
       );
       current.orderItemIds.push(row.id);
       current.amount += itemGross;
-      current.platformFeeAmount += Number(row.platform_fee_amount || 0);
-      current.platformFeeTaxAmount += Number(pricing.platformFeeTaxAmount || 0);
+      current.platformFeeAmount += sellerFeeAmount;
+      current.platformFeeTaxAmount += sellerFeeTaxAmount;
+      current.customerPlatformFeeAmount = Number(current.customerPlatformFeeAmount || 0) + customerFeeAmount;
+      current.customerPlatformFeeTaxAmount = Number(current.customerPlatformFeeTaxAmount || 0) + customerFeeTaxAmount;
       current.commissionFeeAmount += Number(pricing.commissionFee || 0);
       current.fixedFeeAmount += Number(pricing.fixedFee || 0);
       current.closingFeeAmount += Number(pricing.closingFee || 0);
+      current.sellerReceivableAmount += itemSellerReceivable;
       current.hasPricingSnapshot = current.hasPricingSnapshot || Object.keys(pricing).length > 0;
       current.quantity += Number(row.quantity || 0);
       current.products.push({
@@ -474,36 +521,31 @@ class SellerCommissionService {
         amount: this.round(itemGross),
         grossAfterDiscount: this.round(grossAfterDiscount),
         taxableAmount: this.round(taxBreakup.taxableAmount ?? grossAfterDiscount),
-        sellerPayoutBase: pricing.sellerPayoutBase || commerceSettings.finance.sellerPayoutBase,
-        platformFeeAmount: this.round(row.platform_fee_amount || 0),
-        platformFeeTaxAmount: this.round(pricing.platformFeeTaxAmount || 0),
+        sellerPayoutBase: pricing.sellerPayoutBase || "gross_customer_price",
+        platformFeeAmount: this.round(sellerFeeAmount),
+        platformFeeTaxAmount: this.round(sellerFeeTaxAmount),
+        customerPlatformFeeAmount: this.round(customerFeeAmount),
+        customerPlatformFeeTaxAmount: this.round(customerFeeTaxAmount),
+        sellerReceivable: this.round(itemSellerReceivable),
       });
       grouped.set(key, current);
     });
 
     return Array.from(grouped.values()).map((group) => {
-      const rate = this.getCommissionRate(sellerTier);
       const amount = this.round(group.amount);
-      const platformFeeAmount = this.round(group.platformFeeAmount);
-      const commissionAmount = group.hasPricingSnapshot
-        ? platformFeeAmount
-        : this.round(amount * rate);
-      const effectiveRate = amount > 0 ? this.round(commissionAmount / amount) : rate;
-      const taxAmount = group.hasPricingSnapshot
-        ? this.round(group.platformFeeTaxAmount)
-        : this.round(commissionAmount * commissionTaxRate);
-      const financeSnapshot = group.orderMetadata?.commerceSettings?.finance || commerceSettings.finance;
-      const shippingPolicy = financeSnapshot.shippingPolicy || "not_in_seller_payout";
-      const sellerDeliveryCharge = (group.orderMetadata?.deliveryCharge?.sellers || []).find((entry) =>
+      const financeSnapshot = group.orderMetadata?.commerceSettings?.finance || {};
+      const sellerSettlement = (group.orderMetadata?.pricingSummary?.sellerSettlementBreakup || []).find((entry) =>
         String(entry.sellerId || entry.seller_id || "") === String(group.sellerId) &&
         String(entry.organizationId || entry.organization_id || "default") === String(group.organizationId || "default"));
-      const sellerDeliveryChargeAmount = this.round(sellerDeliveryCharge?.chargeAmount || 0);
-      const shippingReimbursementAmount = shippingPolicy === "reimburse_seller" ? sellerDeliveryChargeAmount : 0;
-      const shippingDeductionAmount = shippingPolicy === "deduct_from_seller" ? sellerDeliveryChargeAmount : 0;
-      const netAmount = this.round(Math.max(
-        0,
-        amount - commissionAmount - taxAmount + shippingReimbursementAmount - shippingDeductionAmount,
-      ));
+      const platformFeeAmount = this.round(sellerSettlement?.platformFeeAmount ?? group.platformFeeAmount);
+      const commissionAmount = platformFeeAmount;
+      const effectiveRate = amount > 0 ? this.round(commissionAmount / amount) : 0;
+      const taxAmount = this.round(sellerSettlement?.platformFeeTaxAmount ?? group.platformFeeTaxAmount);
+      const shippingPolicy = financeSnapshot.shippingPolicy || "not_in_seller_payout";
+      const sellerDeliveryChargeAmount = this.round(sellerSettlement?.sellerDeliveryChargeAmount || 0);
+      const shippingReimbursementAmount = this.round(sellerSettlement?.shippingReimbursementAmount || 0);
+      const shippingDeductionAmount = this.round(sellerSettlement?.shippingDeductionAmount || 0);
+      const netAmount = this.round(sellerSettlement?.sellerPayoutAmount ?? group.sellerReceivableAmount);
       return {
         sellerId: group.sellerId,
         organizationId: group.organizationId || null,
@@ -528,6 +570,8 @@ class SellerCommissionService {
           fixedFeeAmount: this.round(group.fixedFeeAmount),
           closingFeeAmount: this.round(group.closingFeeAmount),
           platformFeeTaxAmount: taxAmount,
+          customerPlatformFeeAmount: this.round(group.customerPlatformFeeAmount),
+          customerPlatformFeeTaxAmount: this.round(group.customerPlatformFeeTaxAmount),
           sellerPayoutBase: financeSnapshot.sellerPayoutBase,
           platformFeeTaxRate: Number(financeSnapshot.platformFeeTaxRate || 0),
           chargePlatformFeeTaxToSeller: Boolean(financeSnapshot.chargePlatformFeeTaxToSeller),
@@ -535,7 +579,8 @@ class SellerCommissionService {
           sellerDeliveryChargeAmount,
           shippingReimbursementAmount,
           shippingDeductionAmount,
-          pricingSource: group.hasPricingSnapshot ? "checkout_snapshot" : "legacy_fallback",
+          pricingSource: "checkout_snapshot",
+          sellerReceivable: netAmount,
           products: group.products,
         },
       };
@@ -548,7 +593,7 @@ class SellerCommissionService {
         sellerId: sellerIdOrOptions.sellerId,
         organizationId: sellerIdOrOptions.organizationId,
         orderAmount: sellerIdOrOptions.orderAmount,
-        sellerTier: sellerIdOrOptions.sellerTier || sellerTier || this.defaultSellerTier,
+        sellerTier: sellerIdOrOptions.sellerTier || sellerTier || null,
         actor: sellerIdOrOptions.actor || {},
         sourceStatus: sellerIdOrOptions.sourceStatus,
       };
@@ -557,13 +602,13 @@ class SellerCommissionService {
       sellerId: sellerIdOrOptions,
       organizationId: null,
       orderAmount,
-      sellerTier: sellerTier || this.defaultSellerTier,
+      sellerTier: sellerTier || null,
       actor: {},
       sourceStatus: null,
     };
   }
 
-  async calculateCommission(orderId, sellerIdOrOptions, orderAmount, sellerTier = this.defaultSellerTier) {
+  async calculateCommission(orderId, sellerIdOrOptions, orderAmount, sellerTier = null) {
     const options = this.normalizeCalculateArgs(sellerIdOrOptions, orderAmount, sellerTier);
     const groups = await this.getOrderSellerGroups(
       orderId,

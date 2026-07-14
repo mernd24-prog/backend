@@ -15,10 +15,6 @@ const {
   updatePlanSchema,
   listSubscriptionsAdminSchema,
   updateSubscriptionStatusAdminSchema,
-  createPlatformFeeConfigSchema,
-  listPlatformFeeConfigSchema,
-  platformFeeConfigIdParamSchema,
-  updatePlatformFeeConfigSchema,
 } = require("../validation/subscription.validation");
 
 const subscriptionRoutes = express.Router();
@@ -100,40 +96,4 @@ subscriptionRoutes.patch(
   checkInput(updateSubscriptionStatusAdminSchema),
   catchErrors(subscriptionController.updateSubscriptionStatusAdmin),
 );
-subscriptionRoutes.post(
-  "/admin/platform-fee-config",
-  authenticate,
-  allowRoles(ROLES.ADMIN),
-  checkInput(createPlatformFeeConfigSchema),
-  catchErrors(subscriptionController.createPlatformFeeConfig),
-);
-subscriptionRoutes.get(
-  "/admin/platform-fee-config",
-  authenticate,
-  allowRoles(ROLES.ADMIN),
-  checkInput(listPlatformFeeConfigSchema),
-  catchErrors(subscriptionController.listPlatformFeeConfigs),
-);
-subscriptionRoutes.get(
-  "/admin/platform-fee-config/:configId",
-  authenticate,
-  allowRoles(ROLES.ADMIN),
-  checkInput(platformFeeConfigIdParamSchema),
-  catchErrors(subscriptionController.getPlatformFeeConfig),
-);
-subscriptionRoutes.patch(
-  "/admin/platform-fee-config/:configId",
-  authenticate,
-  allowRoles(ROLES.ADMIN),
-  checkInput(updatePlatformFeeConfigSchema),
-  catchErrors(subscriptionController.updatePlatformFeeConfig),
-);
-subscriptionRoutes.delete(
-  "/admin/platform-fee-config/:configId",
-  authenticate,
-  allowRoles(ROLES.ADMIN),
-  checkInput(platformFeeConfigIdParamSchema),
-  catchErrors(subscriptionController.deletePlatformFeeConfig),
-);
-
 module.exports = { subscriptionRoutes };
