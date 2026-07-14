@@ -961,7 +961,16 @@ class PlatformService {
   }
 
   async createBrand(payload, req) {
-    const item = await this.platformRepository.createBrand(payload);
+    await this.ensureBrandNameAvailable(payload.name);
+    // Only the admin catalog endpoint uses this method, so its records are
+    // immediately approved and can be enabled/disabled by the admin.
+    const item = await this.platformRepository.createBrand({
+      ...payload,
+      nameKey: this.brandNameKey(payload.name),
+      approvalStatus: "approved",
+      active: payload.active !== false,
+      rejectionReason: "",
+    });
     this.invalidateCatalogCaches();
     auditService.create(req, { module: "brands", entityId: item?._id, entityType: "Brand", newData: payload });
     return item;
@@ -970,7 +979,13 @@ class PlatformService {
   async updateBrand(brandId, payload, req) {
     const item = await this.platformRepository.getBrand(brandId);
     if (!item) throw AppError.notFound("Brand");
-    const updated = await this.platformRepository.updateBrand(brandId, payload);
+    if (payload.name && String(payload.name).trim().toLowerCase() !== String(item.name).trim().toLowerCase()) {
+      await this.ensureBrandNameAvailable(payload.name, brandId);
+    }
+    const updated = await this.platformRepository.updateBrand(brandId, {
+      ...payload,
+      ...(payload.name ? { nameKey: this.brandNameKey(payload.name) } : {}),
+    });
     this.invalidateCatalogCaches();
     auditService.update(req, { module: "brands", entityId: brandId, entityType: "Brand", oldData: item, newData: payload });
     return updated;
@@ -989,7 +1004,82 @@ class PlatformService {
       searchFields:["name"],
     });
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
+    if (query.approvalStatus) filter.approvalStatus = query.approvalStatus;
     return this.platformRepository.listBrands(filter, pagination);
+  }
+
+  async submitBrand(payload, actor = {}, req) {
+    await this.ensureBrandNameAvailable(payload.name);
+    const sellerId = String(actor.ownerSellerId || actor.userId || actor.sub || "");
+    if (!sellerId) throw AppError.ownershipDenied();
+    const item = await this.platformRepository.createBrand({
+      ...payload,
+      nameKey: this.brandNameKey(payload.name),
+      active: false,
+      approvalStatus: "pending",
+      submittedBySellerId: sellerId,
+      submittedByUserId: String(actor.userId || actor.sub || ""),
+      rejectionReason: "",
+    });
+    this.invalidateCatalogCaches();
+    auditService.create(req, { module: "brands", entityId: item?._id, entityType: "Brand submission", newData: item });
+    return item;
+  }
+
+  async resubmitBrand(brandId, payload, actor = {}, req) {
+    const item = await this.platformRepository.getBrand(brandId);
+    if (!item) throw AppError.notFound("Brand submission");
+    const sellerId = String(actor.ownerSellerId || actor.userId || actor.sub || "");
+    if (String(item.submittedBySellerId || "") !== sellerId) throw AppError.ownershipDenied();
+    if (item.approvalStatus !== "rejected") throw new AppError("Only rejected brand submissions can be resubmitted", 400);
+    if (payload.name && String(payload.name).trim().toLowerCase() !== String(item.name).trim().toLowerCase()) {
+      await this.ensureBrandNameAvailable(payload.name, brandId);
+    }
+    const updated = await this.platformRepository.updateBrand(brandId, {
+      ...payload,
+      ...(payload.name ? { nameKey: this.brandNameKey(payload.name) } : {}),
+      active: false,
+      approvalStatus: "pending",
+      rejectionReason: "",
+      reviewedBy: "",
+      reviewedAt: null,
+      submittedByUserId: String(actor.userId || actor.sub || ""),
+    });
+    this.invalidateCatalogCaches();
+    auditService.update(req, { module: "brands", entityId: brandId, entityType: "Brand resubmission", oldData: item, newData: updated });
+    return updated;
+  }
+
+  async listMyBrandSubmissions(actor = {}) {
+    const sellerId = String(actor.ownerSellerId || actor.userId || actor.sub || "");
+    if (!sellerId) throw AppError.ownershipDenied();
+    return this.platformRepository.listBrands({ submittedBySellerId: sellerId }, { skip: 0, limit: 100, sortBy: "updatedAt", sortDir: "desc" });
+  }
+
+  async reviewBrandSubmission(brandId, { action, rejectionReason }, req) {
+    const item = await this.platformRepository.getBrand(brandId);
+    if (!item) throw AppError.notFound("Brand submission");
+    if (item.approvalStatus !== "pending") throw new AppError("Only pending brand submissions can be reviewed", 400);
+    const approved = action === "approve";
+    const updated = await this.platformRepository.updateBrand(brandId, {
+      approvalStatus: approved ? "approved" : "rejected",
+      active: approved,
+      rejectionReason: approved ? "" : String(rejectionReason || "").trim(),
+      reviewedBy: String(actorIdFromRequest(req) || ""),
+      reviewedAt: new Date(),
+    });
+    this.invalidateCatalogCaches();
+    auditService.update(req, { module: "brands", entityId: brandId, entityType: "Brand approval", oldData: item, newData: updated });
+    return updated;
+  }
+
+  async ensureBrandNameAvailable(name, excludeBrandId = null) {
+    const existing = await this.platformRepository.findBrandByName(name, excludeBrandId);
+    if (existing) throw new AppError("A brand with this name already exists", 409);
+  }
+
+  brandNameKey(name) {
+    return String(name || "").trim().toLocaleLowerCase();
   }
 
   async deleteBrand(brandId, req) {
@@ -1180,7 +1270,10 @@ class PlatformService {
 
   async getCatalogPrefillData(query = {}) {
     const categories = (await this.platformRepository.listCategories({}, { skip: 0, limit: 5000 })).items || [];
-    const brands = (await this.platformRepository.listBrands(query.includeInactive ? {} : { active: true }, { skip: 0, limit: 500 })).items || [];
+    const brandFilter = query.includeInactive
+      ? {}
+      : { active: true, approvalStatus: { $nin: ["pending", "rejected"] } };
+    const brands = (await this.platformRepository.listBrands(brandFilter, { skip: 0, limit: 500 })).items || [];
     const families = (await this.platformRepository.listProductFamilies({}, { skip: 0, limit: 500 })).items || [];
     const variants = (await this.platformRepository.listProductVariants({}, { skip: 0, limit: 500 })).items || [];
     const hsnCodes = (await this.platformRepository.listHsnCodes({ active: true }, { skip: 0, limit: 1000 })).items || [];

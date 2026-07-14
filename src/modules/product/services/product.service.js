@@ -886,7 +886,18 @@ class ProductService {
     const brand = payload.brand;
     if (brand) {
       const brandRecord = await this.platformRepository.getBrandByValue(brand);
-      if (!brandRecord || brandRecord.active === false) {
+      const sellerId = String(actor.ownerSellerId || actor.userId || actor.sub || "");
+      const isOwnPendingBrand =
+        isSellerRole(actor) &&
+        brandRecord?.approvalStatus === "pending" &&
+        String(brandRecord.submittedBySellerId || "") === sellerId;
+
+      if (
+        !brandRecord ||
+        brandRecord.approvalStatus === "rejected" ||
+        (!isOwnPendingBrand && brandRecord.active === false) ||
+        (!isOwnPendingBrand && brandRecord.approvalStatus === "pending")
+      ) {
         throw new AppError("Brand must be an active approved master record", 400);
       }
     }

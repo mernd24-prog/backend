@@ -571,9 +571,41 @@ const listBrandsSchema = Joi.object({
   query: listQuery.concat(
     Joi.object({
       active: Joi.boolean(),
+      approvalStatus: Joi.string().valid("pending", "approved", "rejected"),
     }),
   ),
   params: Joi.object({}).required(),
+});
+
+const sellerBrandSubmissionSchema = Joi.object({
+  body: Joi.object({
+    name: v.name({ label: "Brand name", max: 200 }),
+    slug: v.slug().optional(),
+    description: v.text({ max: 1000 }),
+    logo: v.url({ required: false }),
+    logoUrl: v.url({ required: false }),
+    thumbnails: v.url({ required: false }),
+    imageUrl: v.url({ required: false }),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
+const sellerBrandResubmissionSchema = sellerBrandSubmissionSchema.keys({
+  params: Joi.object({ brandId: Joi.string().required() }).required(),
+});
+
+const reviewBrandSubmissionSchema = Joi.object({
+  body: Joi.object({
+    action: Joi.string().valid("approve", "reject").required(),
+    rejectionReason: Joi.when("action", {
+      is: "reject",
+      then: Joi.string().trim().min(2).max(1000).required(),
+      otherwise: Joi.string().trim().allow("", null).optional(),
+    }),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({ brandId: Joi.string().required() }).required(),
 });
 
 const brandIdSchema = Joi.object({
@@ -800,6 +832,9 @@ module.exports = {
   createBrandSchema,
   updateBrandSchema,
   listBrandsSchema,
+  sellerBrandSubmissionSchema,
+  sellerBrandResubmissionSchema,
+  reviewBrandSubmissionSchema,
   brandIdSchema,
   createBatchSchema,
   updateBatchSchema,

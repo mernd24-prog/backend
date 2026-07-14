@@ -5,6 +5,7 @@ const { allowActions } = require("../../../shared/middleware/access");
 const { catchErrors } = require("../../../shared/middleware/catch-errors");
 const { checkInput } = require("../../../shared/middleware/check-input");
 const { ACTIONS } = require("../../../shared/constants/actions");
+const { ROLES } = require("../../../shared/constants/roles");
 const {
   createCategorySchema,
   updateCategorySchema,
@@ -30,6 +31,9 @@ const {
   updateBrandSchema,
   listBrandsSchema,
   brandIdSchema,
+  sellerBrandSubmissionSchema,
+  sellerBrandResubmissionSchema,
+  reviewBrandSubmissionSchema,
   createBatchSchema,
   updateBatchSchema,
   listBatchesSchema,
@@ -56,6 +60,14 @@ const {
 const platformRoutes = express.Router();
 const cmsRoutes = express.Router();
 const platformController = new PlatformController();
+
+// Brand submissions are a narrow seller capability, not catalog-master access.
+// Keep it outside the `brands` module scope so a seller cannot inherit create,
+// edit, or delete rights for the shared master catalog.
+const allowSellerBrandSubmission = (req, res, next) => {
+  if ([ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(req.auth?.role)) return next();
+  return res.status(403).json({ success: false, message: "Seller access required" });
+};
 
 platformRoutes.get("/catalog-prefill", catchErrors(platformController.getCatalogPrefillData));
 
@@ -186,6 +198,35 @@ platformRoutes.delete(
 
 platformRoutes.get("/brands", checkInput(listBrandsSchema), catchErrors(platformController.listBrands));
 platformRoutes.get("/brands/:brandId", checkInput(brandIdSchema), catchErrors(platformController.getBrand));
+// Seller submissions are deliberately separate from catalog management: sellers
+// can request a brand without gaining access to master-brand administration.
+platformRoutes.get(
+  "/brands/submissions/mine",
+  authenticate,
+  allowSellerBrandSubmission,
+  catchErrors(platformController.listMyBrandSubmissions),
+);
+platformRoutes.post(
+  "/brands/submissions",
+  authenticate,
+  allowSellerBrandSubmission,
+  checkInput(sellerBrandSubmissionSchema),
+  catchErrors(platformController.submitBrand),
+);
+platformRoutes.patch(
+  "/brands/submissions/:brandId",
+  authenticate,
+  allowSellerBrandSubmission,
+  checkInput(sellerBrandResubmissionSchema),
+  catchErrors(platformController.resubmitBrand),
+);
+platformRoutes.patch(
+  "/brands/:brandId/approval",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(reviewBrandSubmissionSchema),
+  catchErrors(platformController.reviewBrandSubmission),
+);
 platformRoutes.post(
   "/brands",
   authenticate,

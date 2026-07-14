@@ -341,6 +341,16 @@ class PlatformRepository {
     });
   }
 
+  async findBrandByName(name, excludeBrandId = null) {
+    const normalized = String(name || "").trim();
+    if (!normalized) return null;
+    const filter = { name: new RegExp(`^${escapeRegExp(normalized)}$`, "i") };
+    if (excludeBrandId && mongoose.Types.ObjectId.isValid(String(excludeBrandId))) {
+      filter._id = { $ne: excludeBrandId };
+    }
+    return PlatformBrandModel.findOne(filter);
+  }
+
   async listBrands(filter = {}, pagination = {}) {
     const sort = buildSort(
       pagination.sortBy,
@@ -348,6 +358,7 @@ class PlatformRepository {
       {
         name: "name",
         active: "active",
+        approvalStatus: "approvalStatus",
         sortOrder: "sortOrder",
         createdAt: "createdAt",
         updatedAt: "updatedAt",

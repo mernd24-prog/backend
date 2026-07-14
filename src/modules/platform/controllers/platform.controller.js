@@ -204,6 +204,26 @@ class PlatformController {
     res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
   };
 
+  submitBrand = async (req, res) => {
+    const item = await this.platformService.submitBrand(req.body, req.auth || {}, req);
+    res.status(201).json(okResponse(item, { message: "Brand submitted for approval." }));
+  };
+
+  resubmitBrand = async (req, res) => {
+    const item = await this.platformService.resubmitBrand(req.params.brandId, req.body, req.auth || {}, req);
+    res.json(okResponse(item, { message: "Brand resubmitted for approval." }));
+  };
+
+  listMyBrandSubmissions = async (req, res) => {
+    const result = await this.platformService.listMyBrandSubmissions(req.auth || {});
+    res.json(okResponse(result.items, { pagination: paginationMeta(1, 100, result.total) }));
+  };
+
+  reviewBrandSubmission = async (req, res) => {
+    const item = await this.platformService.reviewBrandSubmission(req.params.brandId, req.body, req);
+    res.json(okResponse(item, { message: `Brand ${req.body.action === "approve" ? "approved" : "rejected"}.` }));
+  };
+
   deleteBrand = async (req, res) => {
     const item = await this.platformService.deleteBrand(req.params.brandId, req);
     res.json(okResponse(item, { message: "Brand deleted successfully." }));
