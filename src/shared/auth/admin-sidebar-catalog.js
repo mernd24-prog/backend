@@ -27,6 +27,7 @@ const SIDEBAR_MODULES = [
 
   { moduleName: "Payments & Finance", moduleKey: "payments-finance", moduleSlug: "payments-finance", icon: "MdPayment", moduleType: "group", order: 80, parentModule: null, requiredModule: "payments" },
   { moduleName: "Payments", moduleKey: "payments", moduleSlug: "payments", icon: "MdPayment", routePath: "/app/payments", moduleType: "page", order: 81, parentModule: "payments-finance", requiredModule: "payments" },
+  { moduleName: "COD Collections", moduleKey: "cod-collections", moduleSlug: "cod-collections", icon: "MdPayments", routePath: "/app/cod-collections", moduleType: "page", order: 81.5, parentModule: "payments-finance", requiredModule: "payments" },
   { moduleName: "Chargebacks", moduleKey: "chargebacks", moduleSlug: "chargebacks", icon: "MdSecurityUpdate", routePath: "/app/chargebacks", moduleType: "page", order: 82, parentModule: "payments-finance", requiredModule: "fraud" },
   { moduleName: "Fraud Cases", moduleKey: "fraud-cases", moduleSlug: "fraud-cases", icon: "MdGppBad", routePath: "/app/fraud-cases", moduleType: "page", order: 83, parentModule: "payments-finance", requiredModule: "fraud" },
   { moduleName: "Admin Wallet", moduleKey: "wallet-management", moduleSlug: "wallet-management", icon: "MdAccountBalanceWallet", routePath: "/app/wallet-management", moduleType: "page", order: 84, parentModule: "payments-finance", requiredModule: "wallets" },
@@ -155,6 +156,7 @@ const SELLER_SIDEBAR_MODULES = [
   { moduleName: "My Finance & Payouts", moduleKey: "seller-finance-management", moduleSlug: "seller-finance-management", icon: "MdAccountBalanceWallet", moduleType: "group", order: 70, parentModule: null, requiredModule: "sellers/commissions" },
   { moduleName: "Finance Summary", moduleKey: "seller-finance-summary", moduleSlug: "seller-finance-summary", icon: "MdAccountBalanceWallet", routePath: "/app/seller-finance", moduleType: "page", order: 71, parentModule: "seller-finance-management", requiredModule: "sellers/commissions" },
   { moduleName: "Payouts", moduleKey: "seller-my-payouts", moduleSlug: "seller-my-payouts", icon: "MdPayments", routePath: "/app/seller-payouts", moduleType: "page", order: 72, parentModule: "seller-finance-management", requiredModule: "sellers/commissions" },
+  { moduleName: "COD Collections", moduleKey: "seller-cod-collections", moduleSlug: "seller-cod-collections", icon: "MdPayments", routePath: "/app/seller-cod-collections", moduleType: "page", order: 72.5, parentModule: "seller-finance-management", requiredModule: "sellers/commissions" },
 
   // { moduleName: "Seller Invoices", moduleKey: "seller-tax-management", moduleSlug: "seller-tax-management", icon: "MdReceiptLong", moduleType: "group", order: 80, parentModule: null, requiredModule: "tax" },
   // { moduleName: "Tax Invoices", moduleKey: "seller-tax-invoices", moduleSlug: "seller-tax-invoices", icon: "MdReceipt", routePath: "/app/tax-invoices", moduleType: "page", order: 81, parentModule: "seller-tax-management", requiredModule: "tax-invoices" },

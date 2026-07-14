@@ -4,6 +4,8 @@ const { v4: uuidv4 } = require("uuid");
 const { knex } = require("../../src/infrastructure/postgres/postgres-client");
 
 const STATUS_TO_SHIPMENT_STATUS = {
+  pending_payment: "initiated",
+  confirmed: "initiated",
   packed: "initiated",
   shipped: "in_transit",
   delivered: "delivered",
@@ -179,8 +181,11 @@ async function main() {
     await knex.transaction(async (trx) => {
       const items = await trx("order_items").where("order_id", order.id);
       const itemsBySeller = items.reduce((groups, item) => {
-        const sellerId = String(item.seller_id || "");
-        if (!sellerId) return groups;
+        const sellerSnapshot = normalizeJson(item.seller_snapshot, {});
+        const productSnapshot = normalizeJson(item.product_snapshot, {});
+        const sellerId = String(
+          item.seller_id || sellerSnapshot.sellerId || productSnapshot.sellerId || "platform",
+        );
         if (!groups.has(sellerId)) groups.set(sellerId, []);
         groups.get(sellerId).push(item);
         return groups;

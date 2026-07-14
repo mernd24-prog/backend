@@ -13,7 +13,11 @@ const {
   paymentParamSchema,
   manualPaymentApprovalSchema,
   manualPaymentRejectionSchema,
+  codCollectionListSchema,
+  codCollectionSubmitSchema,
+  codCollectionVerifySchema,
 } = require("../validation/payment.validation");
+const { settlementLifecycleService } = require("../../seller/services/settlement-lifecycle.service");
 
 const paymentRoutes = express.Router();
 const paymentController = new PaymentController();
@@ -50,6 +54,46 @@ paymentRoutes.get(
   allowPermissions("payments:view"),
   checkInput(paymentParamSchema),
   catchErrors(paymentController.getAdminPayment),
+);
+paymentRoutes.get(
+  "/cod-collections",
+  authenticate,
+  allowPermissions("payments:view"),
+  checkInput(codCollectionListSchema),
+  catchErrors(async (req, res) => {
+    const collections = await settlementLifecycleService.listCodCollections(req.query, req.auth);
+    res.json({ success: true, data: { items: collections, total: collections.length } });
+  }),
+);
+paymentRoutes.get(
+  "/cod-collections/mine",
+  authenticate,
+  allowPermissions("sellers/commissions:view"),
+  checkInput(codCollectionListSchema),
+  catchErrors(async (req, res) => {
+    const collections = await settlementLifecycleService.listCodCollections(req.query, req.auth);
+    res.json({ success: true, data: { items: collections, total: collections.length } });
+  }),
+);
+paymentRoutes.post(
+  "/cod-collections/shipments/:shipmentId/submit",
+  authenticate,
+  allowPermissions("sellers/commissions:view"),
+  checkInput(codCollectionSubmitSchema),
+  catchErrors(async (req, res) => {
+    const collection = await settlementLifecycleService.submitSellerCodCollection(req.params.shipmentId, req.body, req.auth);
+    res.json({ success: true, message: "COD collection submitted for verification", data: collection });
+  }),
+);
+paymentRoutes.post(
+  "/cod-collections/:collectionId/verify",
+  authenticate,
+  allowPermissions("payments:approve"),
+  checkInput(codCollectionVerifySchema),
+  catchErrors(async (req, res) => {
+    const collection = await settlementLifecycleService.verifyCodCollection(req.params.collectionId, req.body, req.auth);
+    res.json({ success: true, message: "COD collection verified", data: collection });
+  }),
 );
 paymentRoutes.post(
   "/initiate",

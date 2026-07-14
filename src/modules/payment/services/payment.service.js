@@ -15,6 +15,7 @@ const { CancellationService } = require("../../cancellation/services/cancellatio
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
 const { sellerChargeSettingsService } = require("../../seller/services/seller-charge-settings.service");
 const { UserModel } = require("../../user/models/user.model");
+const { settlementLifecycleService } = require("../../seller/services/settlement-lifecycle.service");
 
 const PROVIDER_RECEIPT_MAX_LENGTH = 40;
 
@@ -906,6 +907,9 @@ class PaymentService {
       role: actor.role,
       metadata: { provider: payment.provider, paymentId },
     });
+    // A captured COD payment is the platform/courier collection confirmation.
+    // Seller-direct COD remains pending until the seller submits it and Admin verifies it.
+    await settlementLifecycleService.verifyPlatformCollectionsForPayment(updatedPayment, actor);
 
     return mapPaymentResponse(updatedPayment);
   }

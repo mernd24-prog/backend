@@ -43,6 +43,12 @@ const DEFAULT_SETTINGS = {
     minOrderAmount: null,
     maxOrderAmount: null,
   },
+  returns: {
+    // One platform-owned policy is snapshotted when delivery is verified.
+    defaultWindowDays: 7,
+    allowSellerOverrides: false,
+    maxSellerOverrideDays: 7,
+  },
   shippingDefaults: {
     defaultCharge: 0,
     freeShippingThreshold: null,
@@ -72,8 +78,7 @@ const DEFAULT_SETTINGS = {
     sellerPayoutBase: "gross_customer_price",
     platformFeeTaxRate: 18,
     chargePlatformFeeTaxToSeller: true,
-    payoutReleaseMilestone: "delivered_or_fulfilled",
-    payoutReleaseDaysAfterDelivery: 7,
+    payoutReleaseMilestone: "return_window_closed",
     payoutSchedule: "manual",
     payoutManualApprovalRequired: true,
     minimumPayoutAmount: 0,
@@ -104,12 +109,13 @@ const ALLOWED = {
     availabilityMode: ["all_pincodes", "allowlist", "blocklist", "disabled"],
     collectionPolicy: ["platform_or_courier", "seller_direct", "hybrid"],
   },
+  returns: {},
   wallet: {
     partialPaymentMode: ["user_opt_in", "auto_apply", "disabled"],
   },
   finance: {
     sellerPayoutBase: ["gross_customer_price", "taxable_ex_gst"],
-    payoutReleaseMilestone: ["confirmed", "delivered_or_fulfilled", "return_window_closed"],
+    payoutReleaseMilestone: ["return_window_closed"],
     payoutSchedule: ["manual", "daily", "weekly", "monthly"],
     shippingPolicy: ["not_in_seller_payout", "reimburse_seller", "deduct_from_seller"],
   },
@@ -304,6 +310,11 @@ class CommerceSettingsService {
           ? null
           : Math.max(num(source.cod.maxOrderAmount, 0), 0),
       },
+      returns: {
+        defaultWindowDays: Math.min(Math.max(num(source.returns.defaultWindowDays, 7), 1), 60),
+        allowSellerOverrides: bool(source.returns.allowSellerOverrides, false),
+        maxSellerOverrideDays: Math.min(Math.max(num(source.returns.maxSellerOverrideDays, 7), 1), 60),
+      },
       shippingDefaults: {
         defaultCharge: Math.max(num(source.shippingDefaults.defaultCharge, 0), 0),
         freeShippingThreshold: source.shippingDefaults.freeShippingThreshold === "" || source.shippingDefaults.freeShippingThreshold === undefined || source.shippingDefaults.freeShippingThreshold === null
@@ -339,10 +350,6 @@ class CommerceSettingsService {
           ALLOWED.finance.payoutReleaseMilestone,
           DEFAULT_SETTINGS.finance.payoutReleaseMilestone,
         ),
-        payoutReleaseDaysAfterDelivery: Math.min(Math.max(
-          num(source.finance.payoutReleaseDaysAfterDelivery, DEFAULT_SETTINGS.finance.payoutReleaseDaysAfterDelivery),
-          0,
-        ), 365),
         payoutSchedule: pickAllowed(
           source.finance.payoutSchedule,
           ALLOWED.finance.payoutSchedule,

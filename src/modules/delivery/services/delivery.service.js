@@ -20,6 +20,7 @@ const { logger } = require("../../../shared/logger/logger");
 const { ProductModel } = require("../../product/models/product.model");
 const { sellerChargeSettingsService } = require("../../seller/services/seller-charge-settings.service");
 const { ShippingProfilesService } = require("./shipping-profiles.service");
+const { settlementLifecycleService } = require("../../seller/services/settlement-lifecycle.service");
 
 const shippingProfilesService = new ShippingProfilesService();
 
@@ -698,6 +699,13 @@ class DeliveryService {
           verifiedBy: actor.userId || null,
         },
       });
+      // Return eligibility and COD collection are financial facts, so snapshot them exactly
+      // once delivery is verified rather than re-reading mutable seller/product settings later.
+      await settlementLifecycleService.ensureOrderDeliveryLifecycle(
+        shipment.order_id,
+        new Date(),
+        shipment,
+      );
       await this.syncSellerFinanceForDeliveredOrder(shipment.order_id, actor);
       return;
     }

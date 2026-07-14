@@ -171,7 +171,6 @@ class SellerCommissionService {
     const finance = settings.finance || settings || {};
     return {
       releaseMilestone: finance.payoutReleaseMilestone || "return_window_closed",
-      releaseDaysAfterDelivery: Math.max(Number(finance.payoutReleaseDaysAfterDelivery || 0), 0),
       schedule: finance.payoutSchedule || "manual",
       manualApprovalRequired: finance.payoutManualApprovalRequired !== false,
       minimumPayoutAmount: this.round(finance.minimumPayoutAmount || 0),
@@ -238,9 +237,9 @@ class SellerCommissionService {
     ));
     if (!orderIds.length) return new Map();
 
-    const [orders, releaseRows] = await Promise.all([
+    const [orders, releaseRows, codCollections] = await Promise.all([
       client("orders")
-        .select("id", "status", "payment_status", "payment_provider", "created_at", "updated_at")
+        .select("id", "status", "payment_status", "payment_provider", "return_eligible_until", "fulfillment_eligible_at", "created_at", "updated_at")
         .whereIn("id", orderIds),
       client("order_status_history")
         .select("order_id")
@@ -249,6 +248,10 @@ class SellerCommissionService {
         .whereIn("to_status", [ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED])
         .groupBy("order_id")
         .catch(() => []),
+      client("cod_collections")
+        .select("order_id", "seller_id", "collection_mode", "status")
+        .whereIn("order_id", orderIds)
+        .catch(() => []),
     ]);
 
     const releaseData = new Map();
@@ -256,12 +259,20 @@ class SellerCommissionService {
       releaseData.set(String(order.id), {
         order,
         releaseStatusAt: null,
+        codCollections: [],
       });
     });
     releaseRows.forEach((row) => {
       const key = String(row.order_id);
       const current = releaseData.get(key) || { order: { id: row.order_id }, releaseStatusAt: null };
       current.releaseStatusAt = row.release_status_at || null;
+      releaseData.set(key, current);
+    });
+    codCollections.forEach((collection) => {
+      const key = String(collection.order_id);
+      const current = releaseData.get(key) || { order: { id: collection.order_id }, releaseStatusAt: null, codCollections: [] };
+      current.codCollections = current.codCollections || [];
+      current.codCollections.push(collection);
       releaseData.set(key, current);
     });
 
@@ -274,6 +285,8 @@ class SellerCommissionService {
     const orderData = releaseData.get(String(commission.order_id || "")) || {};
     const order = orderData.order || {};
     const orderStatus = String(order.status || commission.source_status || "");
+    const codCollections = (orderData.codCollections || []).filter((row) =>
+      String(row.seller_id || "") === String(commission.seller_id || ""));
     const deliveredAt =
       this.toDate(orderData.releaseStatusAt) ||
       (this.isReleasedOrderStatus(orderStatus)
@@ -314,34 +327,21 @@ class SellerCommissionService {
       return { ...base, releaseStatus: "blocked", reason: "waiting_for_cod_collection_confirmation" };
     }
 
-    if (policy.releaseMilestone === "confirmed") {
-      if (this.isConfirmedOrLaterStatus(orderStatus)) {
-        return { ...base, releaseStatus: "available", available: true, eligibleAt: new Date().toISOString() };
+    if (order.payment_provider === PAYMENT_PROVIDER.COD && codCollections.length) {
+      const pendingDirectCollection = codCollections.some((collection) =>
+        ["seller_direct", "hybrid"].includes(collection.collection_mode) &&
+        !["verified", "remitted"].includes(collection.status));
+      if (pendingDirectCollection) {
+        return { ...base, releaseStatus: "blocked", reason: "waiting_for_seller_cod_reconciliation" };
       }
-      return { ...base, reason: "waiting_for_order_confirmation" };
     }
 
-    if (!this.isReleasedOrderStatus(orderStatus)) {
-      return { ...base, reason: "waiting_for_delivery_or_fulfillment" };
-    }
-
-    if (policy.releaseMilestone === "return_window_closed") {
-      const eligibleAt = this.addDays(deliveredAt || commission.updated_at || commission.created_at, policy.releaseDaysAfterDelivery);
-      if (!eligibleAt) {
-        return { ...base, reason: "missing_delivery_timestamp" };
-      }
-      if (eligibleAt.getTime() > now.getTime()) {
-        return {
-          ...base,
-          eligibleAt: eligibleAt.toISOString(),
-          reason: "waiting_for_return_window",
-        };
-      }
+    const eligibleAt = this.toDate(order.fulfillment_eligible_at || order.return_eligible_until);
+    if (orderStatus !== ORDER_STATUS.FULFILLED) {
       return {
         ...base,
-        releaseStatus: "available",
-        available: true,
-        eligibleAt: eligibleAt.toISOString(),
+        eligibleAt: eligibleAt?.toISOString() || null,
+        reason: eligibleAt ? "waiting_for_return_window" : "waiting_for_delivery_or_fulfillment",
       };
     }
 
@@ -349,7 +349,7 @@ class SellerCommissionService {
       ...base,
       releaseStatus: "available",
       available: true,
-      eligibleAt: (deliveredAt || new Date()).toISOString(),
+      eligibleAt: (eligibleAt || deliveredAt || new Date()).toISOString(),
     };
   }
 

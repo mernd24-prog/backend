@@ -62,9 +62,15 @@ class OrderService {
 
   groupOrderItemsBySeller(items = []) {
     return items.reduce((groups, item) => {
-      const sellerId = String(item.seller_id || item.sellerId || "");
-      if (!sellerId) return groups;
-      const organizationId = item.organization_id || item.organizationId || null;
+      const sellerSnapshot = this.normalizeJson(item.seller_snapshot || item.sellerSnapshot, {});
+      const productSnapshot = this.normalizeJson(item.product_snapshot || item.productSnapshot, {});
+      // Older/platform catalog products may not have seller_id on the order
+      // item. They still need a forward shipment record, grouped as platform.
+      const sellerId = String(
+        item.seller_id || item.sellerId || sellerSnapshot.sellerId || productSnapshot.sellerId || "platform",
+      );
+      const organizationId = item.organization_id || item.organizationId ||
+        sellerSnapshot.organizationId || productSnapshot.organizationId || null;
       const key = `${sellerId}:${organizationId || "default"}`;
       if (!groups.has(key)) {
         groups.set(key, { sellerId, organizationId, items: [] });
@@ -160,9 +166,9 @@ class OrderService {
     }
   }
 
-  async ensureShipmentsForConfirmedOrder(orderId, actor = {}, reason = "order_confirmed") {
+  async ensureShipmentsForOrder(orderId, actor = {}, reason = "order_created") {
     const order = await this.orderRepository.findByIdWithItems(orderId);
-    if (!order || order.status !== ORDER_STATUS.CONFIRMED) return;
+    if (!order || [ORDER_STATUS.CANCELLED, ORDER_STATUS.PAYMENT_FAILED].includes(order.status)) return;
 
     const itemsBySeller = this.groupOrderItemsBySeller(order.items || []);
     for (const group of itemsBySeller.values()) {
@@ -172,7 +178,7 @@ class OrderService {
         orderId,
         sellerId,
         status: "initiated",
-        orderStatus: ORDER_STATUS.CONFIRMED,
+        orderStatus: order.status,
         cod: order.payment_provider === PAYMENT_PROVIDER.COD,
         provider: "manual",
         shipToSnapshot: this.normalizeJson(order.shipping_address, {}),
@@ -183,17 +189,23 @@ class OrderService {
           ? fulfillment.verificationMethods
           : ["otp"],
         metadata: {
-          source: "order_confirmation_auto_shipment",
+          source: "order_auto_shipment",
           reason,
           organizationId: organizationId || null,
           orderItemIds: sellerItems.map((item) => item.id).filter(Boolean),
         },
-        idempotencyKey: `order-confirmed:${orderId}:${sellerId}:${organizationId || "default"}`,
+        idempotencyKey: `order-shipment:${orderId}:${sellerId}:${organizationId || "default"}`,
         createdBy: actor.userId || order.buyer_id || null,
         updatedBy: actor.userId || order.buyer_id || null,
-        note: "Shipment created after payment confirmation",
+        note: `Shipment created for order ${reason}`,
       });
     }
+  }
+
+  async ensureShipmentsForConfirmedOrder(orderId, actor = {}, reason = "order_confirmed") {
+    const order = await this.orderRepository.findByIdWithItems(orderId);
+    if (!order || order.status !== ORDER_STATUS.CONFIRMED) return;
+    return this.ensureShipmentsForOrder(orderId, actor, reason);
   }
 
   async createOrder(payload, actor) {
@@ -317,6 +329,10 @@ class OrderService {
         userId: actor.userId,
         role: actor.role || "buyer",
       });
+      // Create one forward shipment per seller as soon as the order exists.
+      // Confirmation later reuses the same shipment through repository
+      // idempotency rather than inserting a duplicate.
+      await this.ensureShipmentsForOrder(order.id, actor, "order_created");
 
       await this.referralService.recordInfluencerReferralOrder({
         orderId: order.id,

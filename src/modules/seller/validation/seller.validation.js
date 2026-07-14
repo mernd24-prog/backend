@@ -335,7 +335,6 @@ const updateSellerSettingsSchema = Joi.object({
   body: Joi.object({
     autoAcceptOrders: Joi.boolean(),
     handlingTimeHours: Joi.number().integer().min(1).max(168),
-    returnWindowDays: Joi.number().integer().min(1).max(60),
     ndrResponseHours: Joi.number().integer().min(1).max(72),
     shippingModes: Joi.array().items(Joi.string().valid("standard", "express", "same_day", "hyperlocal")),
     payoutSchedule: Joi.string().valid("daily", "weekly", "biweekly", "monthly"),

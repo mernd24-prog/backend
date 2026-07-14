@@ -3,6 +3,7 @@ const { logger } = require("../../shared/logger/logger");
 const { outboxProcessor } = require("../events/outbox-processor");
 const { ProductService } = require("../../modules/product/services/product.service");
 const { CommissionService } = require("../../modules/seller/services/commission.service");
+const { settlementLifecycleService } = require("../../modules/seller/services/settlement-lifecycle.service");
 
 function runPeriodicJob(name, callback, intervalMs) {
   let running = false;
@@ -40,6 +41,9 @@ function registerCronJobs() {
   runPeriodicJob("seller-payout-scheduler", async () => {
     await CommissionService.processScheduledPayouts();
   }, 6 * 60 * 60 * 1000);
+  runPeriodicJob("return-window-fulfillment", async () => {
+    await settlementLifecycleService.finalizeEligibleOrders();
+  }, 60 * 60 * 1000);
   runPeriodicJob("outbox-flush", async () => outboxProcessor.flushPending(), 15 * 1000);
 }
 

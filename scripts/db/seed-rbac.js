@@ -9,6 +9,8 @@
 
 const { v4: uuidv4 } = require("uuid");
 const { sequelize } = require("../../src/infrastructure/sequelize/sequelize-client");
+const { connectMongo, mongoose } = require("../../src/infrastructure/mongo/mongo-client");
+const { UserModel } = require("../../src/modules/user/models/user.model");
 const {
   MODULE_CATALOG,
   DEFAULT_SELLER_MODULES,
@@ -466,6 +468,7 @@ async function syncRolePermissions(roleId, desiredPermissionIds, transaction) {
 
 async function seedRbac() {
   const transaction = await sequelize.transaction();
+  let committed = false;
 
   try {
     await sequelize.authenticate();
@@ -849,6 +852,20 @@ async function seedRbac() {
     console.log(`✓ Upserted ${PERMISSION_TEMPLATES.length} permission templates`);
 
     await transaction.commit();
+    committed = true;
+
+    // Role permissions are stored in PostgreSQL while request permission scopes
+    // are cached using each Mongo user document's permissionVersion. Refresh the
+    // version after this direct SQL seed so existing Admin/Seller sessions fetch
+    // the newly seeded permissions instead of rendering an empty sidebar.
+    await connectMongo();
+    const roleSlugs = SYSTEM_ROLES.map((role) => role.slug);
+    const refreshedUsers = await UserModel.updateMany(
+      { role: { $in: roleSlugs } },
+      { $inc: { permissionVersion: 1 } },
+    );
+    await mongoose.disconnect();
+    console.log(`✓ Refreshed permission scope for ${refreshedUsers.modifiedCount || 0} users`);
 
     console.log("\n✅ RBAC seeding completed successfully!\n");
 
@@ -881,7 +898,7 @@ async function seedRbac() {
 
     process.exit(0);
   } catch (error) {
-    await transaction.rollback();
+    if (!committed) await transaction.rollback();
 
     console.error("\n❌ Error seeding RBAC:", error.message);
     console.error(error);
@@ -889,6 +906,7 @@ async function seedRbac() {
     process.exit(1);
   } finally {
     await sequelize.close();
+    if (mongoose.connection.readyState !== 0) await mongoose.disconnect();
   }
 }
 

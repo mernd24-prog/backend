@@ -128,6 +128,42 @@ const manualPaymentRejectionSchema = Joi.object({
   }).required(),
 });
 
+const codCollectionListSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    status: Joi.string().valid("pending", "submitted", "verified", "remitted", "disputed"),
+    orderId: uuid,
+    sellerId: Joi.string().max(64),
+    limit: Joi.number().integer().min(1).max(500).default(100),
+  }).required(),
+  params: Joi.object({}).required(),
+});
+
+const codCollectionSubmitSchema = Joi.object({
+  body: Joi.object({
+    collectedAmount: Joi.number().positive().required(),
+    collectionDate: Joi.date().iso().allow(null),
+    referenceId: Joi.string().trim().min(3).max(180).required(),
+    proofUrl: Joi.string().uri().allow("", null),
+    notes: Joi.string().max(1000).allow("", null),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({ shipmentId: uuid.required() }).required(),
+});
+
+const codCollectionVerifySchema = Joi.object({
+  body: Joi.object({
+    collectedAmount: Joi.number().positive().allow(null),
+    collectionDate: Joi.date().iso().allow(null),
+    referenceId: Joi.string().trim().min(3).max(180).required(),
+    proofUrl: Joi.string().uri().allow("", null),
+    notes: Joi.string().max(1000).allow("", null),
+    markRemitted: Joi.boolean().default(false),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({ collectionId: uuid.required() }).required(),
+});
+
 module.exports = {
   createPaymentSchema,
   verifyPaymentSchema,
@@ -137,4 +173,7 @@ module.exports = {
   paymentParamSchema,
   manualPaymentApprovalSchema,
   manualPaymentRejectionSchema,
+  codCollectionListSchema,
+  codCollectionSubmitSchema,
+  codCollectionVerifySchema,
 };

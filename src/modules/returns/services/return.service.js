@@ -9,12 +9,12 @@ const { InventoryService } = require("../../inventory/services/inventory.service
 const { TaxService } = require("../../tax/services/tax.service");
 const { CommissionService } = require("../../seller/services/commission.service");
 const { DeliveryRepository } = require("../../delivery/repositories/delivery.repository");
-const { UserModel } = require("../../user/models/user.model");
 const { shippingProviderRegistry } = require("../../../infrastructure/shipping/provider-registry");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { RazorpayProvider } = require("../../../infrastructure/payments/providers/razorpay.provider");
+const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
 
 const VALID_TRANSITIONS = {
   requested: ["approved", "rejected", "closed"],
@@ -454,7 +454,6 @@ class ReturnServiceClass {
   }
 
   async resolveReturnPolicy(order, orderItems) {
-    const orderMetadata = this.parseJson(order.metadata, {});
     const policies = orderItems.map((item) => {
       const snapshot = this.parseJson(item.product_snapshot, {});
       return snapshot.returnPolicy || snapshot.return_policy || snapshot.commercialPolicy?.returnPolicy || {};
@@ -462,19 +461,15 @@ class ReturnServiceClass {
     if (policies.some((policy) => policy.returnable === false || policy.eligible === false)) {
       throw new AppError("One or more selected items are not returnable", 409);
     }
-    const sellerPolicies = await this.loadSellerReturnPolicies(
-      orderItems.map((item) => item.seller_id).filter(Boolean),
+    const commerceSettings = await commerceSettingsService.getSettings();
+    // The platform owns the policy. Delivered orders use their immutable snapshot;
+    // legacy orders fall back to the current global policy only.
+    const returnWindowDays = Number(
+      order.return_window_days || order.returnWindowDays || commerceSettings.returns?.defaultWindowDays || 7,
     );
-    const configuredWindows = policies
-      .map((policy) => Number(policy.returnWindowDays || policy.windowDays || policy.days || 0))
-      .concat(sellerPolicies.map((policy) => Number(policy.returnWindowDays || 0)))
-      .filter((days) => days > 0);
-    const returnWindowDays = configuredWindows.length
-      ? Math.min(...configuredWindows)
-      : Number(orderMetadata.returnWindowDays || 7);
     const deliveredAt = this.resolveDeliveredAt(order);
-    const eligibleUntil = new Date(deliveredAt);
-    eligibleUntil.setDate(eligibleUntil.getDate() + returnWindowDays);
+    const eligibleUntil = new Date(order.return_eligible_until || order.returnEligibleUntil || deliveredAt);
+    if (!order.return_eligible_until && !order.returnEligibleUntil) eligibleUntil.setDate(eligibleUntil.getDate() + returnWindowDays);
     if (eligibleUntil.getTime() < Date.now()) {
       throw new AppError(`Return window expired on ${eligibleUntil.toISOString()}`, 409);
     }
@@ -485,21 +480,15 @@ class ReturnServiceClass {
       eligibleUntil,
       shippingPaidBy: policies.find((policy) => policy.shippingPaidBy)?.shippingPaidBy || "platform_policy",
       requiresQc: !policies.some((policy) => policy.requiresQc === false),
-      source: configuredWindows.length ? "product_or_seller_policy" : "order_default",
-      sellerPolicyWindows: sellerPolicies,
+      source: order.return_eligible_until || order.returnEligibleUntil ? "order_snapshot" : "platform_global_policy",
+      sellerPolicyWindows: [],
     };
   }
 
   getOrderItemReturnPolicy(orderItem = {}, fallback = {}) {
     const snapshot = this.parseJson(orderItem.product_snapshot, {});
     const policy = snapshot.returnPolicy || snapshot.return_policy || snapshot.commercialPolicy?.returnPolicy || {};
-    const returnWindowDays = Number(
-      policy.returnWindowDays ||
-      policy.windowDays ||
-      policy.days ||
-      fallback.returnWindowDays ||
-      7,
-    );
+    const returnWindowDays = Number(fallback.returnWindowDays || 7);
 
     return {
       ...policy,
@@ -512,21 +501,6 @@ class ReturnServiceClass {
       inspectionRequired: policy.inspectionRequired ?? policy.requiresQc ?? fallback.requiresQc ?? true,
       source: policy.source || fallback.source || "product_snapshot",
     };
-  }
-
-  async loadSellerReturnPolicies(sellerIds = []) {
-    const uniqueIds = Array.from(new Set(sellerIds.map((sellerId) => String(sellerId || "")).filter(Boolean)));
-    const objectIds = uniqueIds.filter((sellerId) => UserModel.db.base.Types.ObjectId.isValid(sellerId));
-    if (!objectIds.length) return [];
-
-    const sellers = await UserModel.find({ _id: { $in: objectIds } })
-      .select("sellerSettings.returnWindowDays sellerSettings.shippingModes")
-      .lean();
-    return sellers.map((seller) => ({
-      sellerId: String(seller._id),
-      returnWindowDays: Number(seller.sellerSettings?.returnWindowDays || 0),
-      source: "seller_settings",
-    }));
   }
 
   findOrderItem(orderItems, requestedItem) {

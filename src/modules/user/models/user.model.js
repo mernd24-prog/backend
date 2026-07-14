@@ -120,7 +120,6 @@ const userSchema = new mongoose.Schema(
     sellerSettings: {
       autoAcceptOrders: { type: Boolean, default: false },
       handlingTimeHours: { type: Number, default: 24 },
-      returnWindowDays: { type: Number, default: 7 },
       ndrResponseHours: { type: Number, default: 24 },
       shippingModes: [{ type: String }],
       payoutSchedule: {

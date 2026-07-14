@@ -105,7 +105,7 @@ class PricingService {
           ...productReturnPolicy,
           returnable: productReturnPolicy.returnable ?? productReturnPolicy.eligible ?? true,
           eligible: productReturnPolicy.eligible ?? productReturnPolicy.returnable ?? true,
-          returnWindowDays: Number(productReturnPolicy.returnWindowDays || productReturnPolicy.windowDays || productReturnPolicy.days || 7),
+          // The platform return window is snapshotted at delivery, not configured per product.
           requiresImages: Boolean(productReturnPolicy.requiresImages || productReturnPolicy.requires_images),
           inspectionRequired: productReturnPolicy.inspectionRequired ?? productReturnPolicy.requiresQc ?? true,
         };
