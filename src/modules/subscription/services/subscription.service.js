@@ -121,43 +121,6 @@ class SubscriptionService {
     return this.subscriptionRepository.updateSubscriptionStatus(subscriptionId, status);
   }
 
-  async createPlatformFeeConfig(payload) {
-    return this.subscriptionRepository.createPlatformFeeConfig(payload);
-  }
-
-  async listPlatformFeeConfigs(query) {
-    const active = query.active === undefined ? null : String(query.active).toLowerCase() === "true";
-    return this.subscriptionRepository.listPlatformFeeConfigs({
-      active,
-      category: query.category || null,
-      limit: Number(query.limit || 100),
-      offset: Number(query.offset || 0),
-    });
-  }
-
-  async getPlatformFeeConfig(configId) {
-    const config = await this.subscriptionRepository.getPlatformFeeConfigById(configId);
-    if (!config) {
-      throw new AppError("Platform fee config not found", 404);
-    }
-    return config;
-  }
-
-  async updatePlatformFeeConfig(configId, payload) {
-    const updated = await this.subscriptionRepository.updatePlatformFeeConfig(configId, payload);
-    if (!updated) {
-      throw new AppError("Platform fee config not found", 404);
-    }
-    return updated;
-  }
-
-  async deletePlatformFeeConfig(configId) {
-    const deleted = await this.subscriptionRepository.deletePlatformFeeConfig(configId);
-    if (!deleted) {
-      throw new AppError("Platform fee config not found", 404);
-    }
-    return deleted;
-  }
 }
 
 module.exports = { SubscriptionService };

@@ -490,6 +490,30 @@ class ReturnServiceClass {
     };
   }
 
+  getOrderItemReturnPolicy(orderItem = {}, fallback = {}) {
+    const snapshot = this.parseJson(orderItem.product_snapshot, {});
+    const policy = snapshot.returnPolicy || snapshot.return_policy || snapshot.commercialPolicy?.returnPolicy || {};
+    const returnWindowDays = Number(
+      policy.returnWindowDays ||
+      policy.windowDays ||
+      policy.days ||
+      fallback.returnWindowDays ||
+      7,
+    );
+
+    return {
+      ...policy,
+      returnable: policy.returnable ?? policy.eligible ?? fallback.returnable ?? true,
+      eligible: policy.eligible ?? policy.returnable ?? fallback.returnable ?? true,
+      returnWindowDays,
+      eligibleUntil: fallback.eligibleUntil || null,
+      deliveredAt: fallback.deliveredAt || null,
+      requiresImages: Boolean(policy.requiresImages || policy.requires_images),
+      inspectionRequired: policy.inspectionRequired ?? policy.requiresQc ?? fallback.requiresQc ?? true,
+      source: policy.source || fallback.source || "product_snapshot",
+    };
+  }
+
   async loadSellerReturnPolicies(sellerIds = []) {
     const uniqueIds = Array.from(new Set(sellerIds.map((sellerId) => String(sellerId || "")).filter(Boolean)));
     const objectIds = uniqueIds.filter((sellerId) => UserModel.db.base.Types.ObjectId.isValid(sellerId));
@@ -560,6 +584,7 @@ class ReturnServiceClass {
       const lineTotal = this.round(unitPrice * quantity);
       const orderItemTax = Number(orderItem.tax_amount || 0);
       const taxAmount = this.round(orderItemTax * (quantity / Math.max(Number(orderItem.quantity || 1), 1)));
+      const itemPolicySnapshot = this.getOrderItemReturnPolicy(orderItem, policySnapshot);
       return {
         orderItemId: orderItem.id,
         productId: orderItem.product_id,
@@ -580,6 +605,11 @@ class ReturnServiceClass {
         refundAmount: 0,
         qcResult: "pending",
         photos: item.photos || [],
+        policySnapshot: itemPolicySnapshot,
+        returnWindowDays: itemPolicySnapshot.returnWindowDays,
+        returnEligibleUntil: itemPolicySnapshot.eligibleUntil,
+        requiresImages: itemPolicySnapshot.requiresImages,
+        inspectionRequired: itemPolicySnapshot.inspectionRequired,
       };
     });
 

@@ -396,14 +396,12 @@ class DeliveryService {
       ? await this.resolveAssignableDeliveryAgent(payload.deliveryAgentId, sellerId, actor)
       : null;
     const dealFulfillment = this.resolveDealFulfillment(order, sellerId, payload);
-    const verificationRequired = Boolean(payload.verificationRequired || dealFulfillment.deliveryVerificationRequired);
-    const verificationMethods = verificationRequired
-      ? this.normalizeVerificationMethods(
-          payload.verificationMethods?.length
-            ? payload.verificationMethods
-            : dealFulfillment.deliveryVerificationMethods,
-        )
-      : [];
+    const verificationRequired = true;
+    const verificationMethods = this.normalizeVerificationMethods(
+      payload.verificationMethods?.length
+        ? payload.verificationMethods
+        : (dealFulfillment.deliveryVerificationMethods?.length ? dealFulfillment.deliveryVerificationMethods : ["otp"]),
+    );
     const provider = shippingProviderRegistry.get(payload.provider || "manual");
     const providerResult = await provider.createShipment(payload);
     const initialStatus = this.resolveInitialShipmentStatus(payload.status, order.status);
@@ -582,7 +580,7 @@ class DeliveryService {
     }
 
     await this.assertCanManageShipment(shipment, actor);
-    if (payload.status === DELIVERY_STATUS.DELIVERED && shipment.verification_required) {
+    if (payload.status === DELIVERY_STATUS.DELIVERED) {
       throw new AppError("Delivery verification is required. Use the delivery confirmation endpoint.", 409);
     }
     if (payload.status === DELIVERY_STATUS.DELIVERED_VERIFIED) {
@@ -609,7 +607,7 @@ class DeliveryService {
     if (!shipment) {
       return { acknowledged: true, ignored: true };
     }
-    if (payload.status === DELIVERY_STATUS.DELIVERED && shipment.verification_required) {
+    if (payload.status === DELIVERY_STATUS.DELIVERED) {
       return { acknowledged: true, ignored: true, reason: "delivery_verification_required" };
     }
     if (payload.status === DELIVERY_STATUS.DELIVERED_VERIFIED) {
@@ -680,9 +678,28 @@ class DeliveryService {
       return;
     }
     let aggregateDeliveryStatus = shipment.status;
+    let progress = null;
     if ([DELIVERY_STATUS.DELIVERED, DELIVERY_STATUS.DELIVERED_VERIFIED].includes(shipment.status)) {
-      const progress = await this.getForwardDeliveryProgress(shipment.order_id);
+      progress = await this.getForwardDeliveryProgress(shipment.order_id);
       aggregateDeliveryStatus = progress.aggregateDeliveryStatus;
+    }
+    if (
+      progress?.allVerified &&
+      ![ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED].includes(progress.order?.status)
+    ) {
+      await this.orderRepository.updateStatus(shipment.order_id, ORDER_STATUS.DELIVERED, {
+        actorId: actor.userId,
+        actorRole: actor.role,
+        reason: "delivery_otp_verified",
+        deliveryStatus: DELIVERY_STATUS.DELIVERED_VERIFIED,
+        metadata: {
+          shipmentId: shipment.id,
+          deliveredVerifiedAt: new Date().toISOString(),
+          verifiedBy: actor.userId || null,
+        },
+      });
+      await this.syncSellerFinanceForDeliveredOrder(shipment.order_id, actor);
+      return;
     }
     await this.updateOrderDeliveryStatusOnly(shipment.order_id, aggregateDeliveryStatus, actor, shipment.id);
   }
@@ -698,9 +715,14 @@ class DeliveryService {
 
   async getForwardDeliveryProgress(orderId) {
     const order = await this.orderRepository.findByIdWithItems(orderId);
+    const groupKey = (sellerId, organizationId = null) => `${String(sellerId)}:${organizationId || "default"}`;
     const sellerIds = new Set(
       (order?.items || [])
-        .map((item) => String(item.seller_id || item.sellerId || ""))
+        .map((item) => {
+          const sellerId = item.seller_id || item.sellerId || "";
+          if (!sellerId) return "";
+          return groupKey(sellerId, item.organization_id || item.organizationId || null);
+        })
         .filter(Boolean),
     );
     const forwardShipments = (order?.relations?.shipments || [])
@@ -708,12 +730,24 @@ class DeliveryService {
     const deliveredSellerIds = new Set(
       forwardShipments
         .filter((item) => this.isDeliveredShipmentStatus(item.status))
-        .map((item) => String(item.seller_id || item.sellerId || ""))
+        .map((item) => {
+          const metadata = this.normalizeJson(item.metadata, {});
+          return groupKey(
+            item.seller_id || item.sellerId || "",
+            item.organization_id || item.organizationId || metadata.organizationId || null,
+          );
+        })
         .filter(Boolean),
     );
     const allDelivered = sellerIds.size > 0 && Array.from(sellerIds).every((sellerId) => deliveredSellerIds.has(sellerId));
     const allVerified = allDelivered && forwardShipments
-      .filter((item) => sellerIds.has(String(item.seller_id || item.sellerId || "")))
+      .filter((item) => {
+        const metadata = this.normalizeJson(item.metadata, {});
+        return sellerIds.has(groupKey(
+          item.seller_id || item.sellerId || "",
+          item.organization_id || item.organizationId || metadata.organizationId || null,
+        ));
+      })
       .every((item) => item.status === DELIVERY_STATUS.DELIVERED_VERIFIED);
 
     return {

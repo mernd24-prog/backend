@@ -100,6 +100,16 @@ class PricingService {
         const lineTotal = unitPrice * item.quantity;
         const gstInclusive = Boolean(product.gstInclusive ?? product.gst_inclusive ?? true);
 
+        const productReturnPolicy = product.warranty?.returnPolicy || {};
+        const returnPolicySnapshot = {
+          ...productReturnPolicy,
+          returnable: productReturnPolicy.returnable ?? productReturnPolicy.eligible ?? true,
+          eligible: productReturnPolicy.eligible ?? productReturnPolicy.returnable ?? true,
+          returnWindowDays: Number(productReturnPolicy.returnWindowDays || productReturnPolicy.windowDays || productReturnPolicy.days || 7),
+          requiresImages: Boolean(productReturnPolicy.requiresImages || productReturnPolicy.requires_images),
+          inspectionRequired: productReturnPolicy.inspectionRequired ?? productReturnPolicy.requiresQc ?? true,
+        };
+
         return {
           productId: String(product.id),
           title: product.title,
@@ -153,9 +163,9 @@ class PricingService {
             warehouseId: product.warehouseId || null,
             shipping: product.shipping || {},
             warranty: product.warranty || {},
-            returnPolicy: product.warranty?.returnPolicy || {},
+            returnPolicy: returnPolicySnapshot,
             commercialPolicy: {
-              returnPolicy: product.warranty?.returnPolicy || {},
+              returnPolicy: returnPolicySnapshot,
             },
           },
         };
@@ -175,6 +185,8 @@ class PricingService {
       subtotalAmount,
       discountAmount: discount.discountAmount,
       customerItemsAmount: Number((subtotalAmount - discount.discountAmount).toFixed(2)),
+      totalAmount: Number((subtotalAmount - discount.discountAmount + taxBreakup.taxPayableAmount).toFixed(2)),
+      commerceSettings,
     });
     for (const item of pricedItems) {
       const fee = platformFee.breakup.find((entry) => entry.productId === item.productId);
@@ -183,9 +195,10 @@ class PricingService {
         ? Number(((platformFeeAmount * Number(commerceSettings.finance.platformFeeTaxRate || 0)) / 100).toFixed(2))
         : 0;
       const discountedLineTotal = Number(item.discountedLineTotal ?? item.lineTotal ?? 0);
+      const sellerGrossLineTotal = Number(item.lineTotal || 0);
       const sellerPayoutBaseAmount = commerceSettings.finance.sellerPayoutBase === "taxable_ex_gst"
-        ? Number(item.taxableAmount || 0)
-        : discountedLineTotal;
+        ? Number(item.taxableAmountBeforeDiscount || item.taxableAmount || 0)
+        : sellerGrossLineTotal;
       item.platformFeeAmount = platformFeeAmount;
       item.platformFeeTaxAmount = platformFeeTaxAmount;
       item.sellerPayoutBaseAmount = Number(sellerPayoutBaseAmount.toFixed(2));
@@ -199,6 +212,7 @@ class PricingService {
         commissionFee: fee?.commissionFee || 0,
         fixedFee: fee?.fixedFee || 0,
         customerPlatformFee: fee?.customerFeeTotal || 0,
+        customerPlatformFeeTaxAmount: fee?.customerFeeTaxAmount || 0,
         closingFee: fee?.closingFee || 0,
         platformFeeAmount,
         platformFeeTaxAmount,
@@ -206,7 +220,11 @@ class PricingService {
         chargePlatformFeeTaxToSeller: Boolean(commerceSettings.finance.chargePlatformFeeTaxToSeller),
         sellerPayoutBase: commerceSettings.finance.sellerPayoutBase,
         sellerPayoutBaseAmount: item.sellerPayoutBaseAmount,
+        sellerGrossLineTotal,
+        adminFundedDiscountAmount: Number(item.discountAmount || 0),
         productTaxLiabilityAmount: item.productTaxLiabilityAmount,
+        sellerReceivable: item.settlementAmount,
+        source: fee?.source || "platform_commission",
       };
     }
     const customerItemsAmount = Number((subtotalAmount - discount.discountAmount).toFixed(2));
@@ -257,6 +275,8 @@ class PricingService {
         taxBreakup,
         platformFeeAmount: platformFee.totalFeeAmount,
         sellerPlatformFeeAmount: platformFee.sellerFeeAmount,
+        sellerPlatformFeeTaxAmount: Number(pricedItems.reduce((sum, item) => sum + Number(item.platformFeeTaxAmount || 0), 0).toFixed(2)),
+        totalSellerDeduction: Number(pricedItems.reduce((sum, item) => sum + Number(item.platformFeeAmount || 0) + Number(item.platformFeeTaxAmount || 0), 0).toFixed(2)),
         customerPlatformFeeAmount: platformFee.customerFeeAmount,
         customerPlatformFeeTaxAmount: platformFee.customerFeeTaxAmount,
         platformFeeBreakup: platformFee.breakup,
@@ -275,6 +295,7 @@ class PricingService {
         referralDiscountAmount: discount.discountSource === "influencer" ? discount.discountAmount : 0,
         commerceSettingsSnapshot: {
           finance: commerceSettings.finance,
+          platformFees: commerceSettings.platformFees,
           wallet: commerceSettings.wallet,
           cod: commerceSettings.cod,
           checkout: commerceSettings.checkout,
@@ -428,205 +449,60 @@ class PricingService {
     };
   }
 
-  normalizeRuleText(value) {
-    return String(value || "").trim().toLowerCase();
-  }
-
-  normalizeRuleId(value) {
-    return String(value || "").trim();
-  }
-
-  getRulePercentage(rule = {}) {
-    if (rule.percentage !== undefined && rule.percentage !== null && rule.percentage !== "") {
-      return Number(rule.percentage || 0);
+  calculateConfiguredFee(type, value, baseAmount, quantity = 1) {
+    const amount = Number(value || 0);
+    if (String(type || "percentage") === "fixed") {
+      return Number((amount * Number(quantity || 1)).toFixed(2));
     }
-    if (rule.commissionPercent !== undefined) return Number(rule.commissionPercent || 0);
-    if (rule.commission_percent !== undefined) return Number(rule.commission_percent || 0);
-    return Number(rule.rate || 0) * 100;
+    return Number(((Number(baseAmount || 0) * amount) / 100).toFixed(2));
   }
 
-  getRuleFixedFee(rule = {}) {
-    return Number(
-      rule.fixedFeeAmount ??
-      rule.fixed_fee_amount ??
-      rule.fixedFee ??
-      rule.fixed_fee ??
-      rule.amount ??
-      0,
-    );
-  }
-
-  ruleScope(rule = {}) {
-    if (rule.ruleScope) return rule.ruleScope;
-    if (rule.productId || rule.productSku) return "product";
-    if (rule.categoryId || rule.categoryName || rule.category) return "category";
-    if (rule.sellerId) return "seller";
-    if (rule.organizationId) return "organization";
-    return "global";
-  }
-
-  ruleSpecificity(scope) {
-    return {
-      product: 500,
-      category: 400,
-      seller: 300,
-      organization: 250,
-      global: 100,
-    }[scope] || 0;
-  }
-
-  ruleMatchesItem(rule = {}, item = {}) {
-    if (rule.isActive === false || rule.status === "inactive") return false;
-    const scope = this.ruleScope(rule);
-    const productId = this.normalizeRuleId(rule.productId);
-    const productSku = this.normalizeRuleText(rule.productSku);
-    const categoryName = this.normalizeRuleText(rule.categoryName || rule.category);
-    const sellerId = this.normalizeRuleId(rule.sellerId);
-    const organizationId = this.normalizeRuleId(rule.organizationId);
-
-    if (scope === "product") {
-      return Boolean(
-        (productId && productId === this.normalizeRuleId(item.productId)) ||
-        (productSku && productSku === this.normalizeRuleText(item.sku || item.variantSku)),
-      );
-    }
-    if (scope === "category") {
-      if (categoryName && categoryName !== "default" && categoryName !== "*") {
-        return categoryName === this.normalizeRuleText(item.category);
-      }
-      return Boolean(rule.categoryId) ? this.normalizeRuleId(rule.categoryId) === this.normalizeRuleId(item.categoryId) : true;
-    }
-    if (scope === "seller") {
-      return sellerId && sellerId === this.normalizeRuleId(item.sellerId);
-    }
-    if (scope === "organization") {
-      return organizationId && organizationId === this.normalizeRuleId(item.organizationId);
-    }
-    return true;
-  }
-
-  pickBestRule(rules = [], item = {}) {
-    const matches = (rules || [])
-      .filter((rule) => this.ruleMatchesItem(rule, item))
-      .map((rule) => ({
-        rule,
-        score: this.ruleSpecificity(this.ruleScope(rule)) + Number(rule.priority || 0),
-      }))
-      .sort((a, b) => b.score - a.score);
-    return matches[0]?.rule || null;
-  }
-
-  getFeeBaseAmount(rule = {}, item = {}, context = {}) {
-    const applyOn = rule.applyOn || "product_amount";
+  resolvePlatformFeeBase(item = {}, context = {}, calculationBase = "subtotal") {
     const lineAmount = Number(item.discountedLineTotal ?? item.lineTotal ?? 0);
     const subtotal = Number(context.customerItemsAmount ?? context.subtotalAmount ?? lineAmount);
+    const total = Number(context.totalAmount ?? subtotal);
     const proportion = subtotal > 0 ? lineAmount / subtotal : 1;
 
-    if (applyOn === "order_subtotal" || applyOn === "final_paid_amount") {
-      const base = Number(context.customerItemsAmount ?? context.subtotalAmount ?? lineAmount);
-      return Number((base * proportion).toFixed(2));
+    if (calculationBase === "order_total") {
+      return Number((total * proportion).toFixed(2));
     }
-
+    if (calculationBase === "subtotal") {
+      return Number((subtotal * proportion).toFixed(2));
+    }
     return Number(lineAmount.toFixed(2));
   }
 
-  computeRuleFee(rule = {}, item = {}, context = {}) {
-    const type = rule.commissionType || rule.feeType || "percentage";
-    const percentage = this.getRulePercentage(rule);
-    const fixedFeeAmount = this.getRuleFixedFee(rule);
-    const feeBaseAmount = this.getFeeBaseAmount(rule, item, context);
-    const orderAmount = Number(context.customerItemsAmount ?? context.subtotalAmount ?? feeBaseAmount);
-    const minOrderAmount = Number(rule.minOrderAmount || 0);
-    if (minOrderAmount > 0 && orderAmount < minOrderAmount) {
-      return {
-        feeBaseAmount,
-        commissionPercent: percentage,
-        commissionFee: 0,
-        fixedFee: 0,
-        closingFee: 0,
-        feeTaxAmount: 0,
-        total: 0,
-      };
-    }
-    const includePercentage = type === "percentage" || type === "mixed" || (!type && percentage > 0);
-    const includeFixed = type === "fixed" || type === "flat" || type === "mixed";
-    const commissionFee = includePercentage
-      ? Number(((feeBaseAmount * percentage) / 100).toFixed(2))
-      : 0;
-    const fixedFee = includeFixed
-      ? Number((fixedFeeAmount * Number(item.quantity || 1)).toFixed(2))
-      : 0;
-    const capAmount = rule.maxFeeAmount !== null && rule.maxFeeAmount !== undefined && rule.maxFeeAmount !== ""
-      ? Number(rule.maxFeeAmount)
-      : null;
-    const rawTotal = Number((commissionFee + fixedFee).toFixed(2));
-    const total = capAmount !== null ? Math.min(rawTotal, capAmount) : rawTotal;
-    const rawTaxRate = Number(rule.taxRate || 0);
-    const taxRate = rawTaxRate > 0 && rawTaxRate <= 1 ? rawTaxRate * 100 : rawTaxRate;
-    const feeTaxAmount = rule.taxHandling === "exclusive"
-      ? Number(((total * taxRate) / 100).toFixed(2))
-      : 0;
-
-    return {
-      feeBaseAmount,
-      commissionPercent: percentage,
-      commissionFee,
-      fixedFee,
-      closingFee: 0,
-      feeTaxAmount,
-      total,
-    };
-  }
-
-  async calculateModernPlatformFees(pricedItems = [], context = {}) {
-    const [commissionRules, platformFeeRules] = await Promise.all([
-      this.pricingRepository.listActiveCommissionRules(),
-      this.pricingRepository.listActiveCustomerPlatformFeeRules(),
-    ]);
-    if (!commissionRules.length && !platformFeeRules.length) {
-      return null;
-    }
-
+  async calculatePlatformFee(pricedItems, context = {}) {
+    const settings = context.commerceSettings || await commerceSettingsService.getSettings();
+    const config = settings.platformFees || {};
+    const calculationBase = config.calculationBase || "subtotal";
+    const sellerCommissionType = config.sellerCommissionType || config.sellerFeeType || "percentage";
+    const sellerCommissionValue = Number(config.sellerCommissionValue ?? config.sellerFeeValue ?? 0);
+    const customerFeeType = config.customerFeeType || "fixed";
+    const customerFeeValue = Number(config.customerFeeValue || 0);
     const breakup = [];
     let sellerFeeAmount = 0;
     let customerFeeAmount = 0;
     let customerFeeTaxAmount = 0;
 
     for (const item of pricedItems) {
-      const dealRule = item.dealSnapshot?.commissionRuleSnapshot || {};
-      const hasDealCommission = Boolean(item.dealId && (
-        dealRule.id ||
-        dealRule.commission_percent !== undefined ||
-        dealRule.commissionPercent !== undefined ||
-        dealRule.fixed_fee !== undefined ||
-        dealRule.fixedFee !== undefined
-      ));
-      const commissionRule = hasDealCommission ? {
-        ...dealRule,
-        name: dealRule.name || "Deal commission",
-        commissionType: Number(dealRule.fixed_fee ?? dealRule.fixedFee ?? 0) > 0 ? "mixed" : "percentage",
-        percentage: Number(dealRule.commission_percent ?? dealRule.commissionPercent ?? 0),
-        fixedFeeAmount: Number(dealRule.fixed_fee ?? dealRule.fixedFee ?? 0),
-        applyOn: "product_amount",
-        source: "deal_commission_rule",
-      } : this.pickBestRule(commissionRules, item);
-      const platformFeeRule = this.pickBestRule(platformFeeRules, item);
-
-      const commission = commissionRule
-        ? this.computeRuleFee(commissionRule, item, context)
-        : { feeBaseAmount: Number(item.discountedLineTotal ?? item.lineTotal ?? 0), commissionPercent: 0, commissionFee: 0, fixedFee: 0, closingFee: 0, feeTaxAmount: 0, total: 0 };
-      const platformFee = platformFeeRule
-        ? this.computeRuleFee(platformFeeRule, item, context)
-        : { feeBaseAmount: commission.feeBaseAmount, commissionPercent: 0, commissionFee: 0, fixedFee: 0, closingFee: 0, feeTaxAmount: 0, total: 0 };
-
-      const sellerPlatformFee = platformFeeRule?.chargeToCustomer ? 0 : platformFee.total;
-      const customerPlatformFee = platformFeeRule?.chargeToCustomer ? platformFee.total : 0;
+      const feeBaseAmount = this.resolvePlatformFeeBase(item, context, calculationBase);
+      const sellerCommission = this.calculateConfiguredFee(
+        sellerCommissionType,
+        sellerCommissionValue,
+        feeBaseAmount,
+        item.quantity,
+      );
+      const customerPlatformFee = this.calculateConfiguredFee(
+        customerFeeType,
+        customerFeeValue,
+        feeBaseAmount,
+        item.quantity,
+      );
       const customerPlatformFeeTax = 0;
-      const sellerFeeTotal = Number((commission.total + sellerPlatformFee).toFixed(2));
-      const itemCustomerFeeTotal = Number(customerPlatformFee.toFixed(2));
 
-      sellerFeeAmount += sellerFeeTotal;
-      customerFeeAmount += itemCustomerFeeTotal;
+      sellerFeeAmount += sellerCommission;
+      customerFeeAmount += customerPlatformFee;
       customerFeeTaxAmount += customerPlatformFeeTax;
 
       breakup.push({
@@ -636,134 +512,31 @@ class PricingService {
         dealId: item.dealId || null,
         category: item.category,
         quantity: item.quantity,
-        feeBaseAmount: commission.feeBaseAmount,
-        commissionPercent: commission.commissionPercent,
-        commissionFee: commission.commissionFee,
-        fixedFee: Number((commission.fixedFee + sellerPlatformFee).toFixed(2)),
+        feeBaseAmount,
+        commissionPercent: sellerCommissionType === "percentage" ? sellerCommissionValue : 0,
+        commissionFee: sellerCommissionType === "percentage" ? sellerCommission : 0,
+        fixedFee: sellerCommissionType === "fixed" ? sellerCommission : 0,
         closingFee: 0,
-        sellerFeeTotal,
-        customerFeeTotal: itemCustomerFeeTotal,
+        sellerFeeTotal: Number(sellerCommission.toFixed(2)),
+        customerFeeTotal: Number(customerPlatformFee.toFixed(2)),
         customerFeeTaxAmount: Number(customerPlatformFeeTax.toFixed(2)),
-        totalFee: Number((sellerFeeTotal + itemCustomerFeeTotal).toFixed(2)),
-        commissionRuleId: commissionRule?._id || commissionRule?.id || null,
-        commissionRuleName: commissionRule?.name || null,
-        platformFeeRuleId: platformFeeRule?._id || platformFeeRule?.id || null,
-        platformFeeRuleName: platformFeeRule?.name || null,
-        platformFeeChargedToCustomer: Boolean(platformFeeRule?.chargeToCustomer),
-        applyOn: commissionRule?.applyOn || platformFeeRule?.applyOn || "product_amount",
-        taxHandling: platformFeeRule?.taxHandling || commissionRule?.taxHandling || "exclusive",
-        source: hasDealCommission
-          ? "deal_commission_rule"
-          : commissionRule || platformFeeRule
-            ? "commission_fee_rule"
-            : "none",
+        totalFee: Number((sellerCommission + customerPlatformFee).toFixed(2)),
+        platformFeeChargedToCustomer: customerPlatformFee > 0,
+        applyOn: calculationBase,
+        taxHandling: "exclusive",
+        source: "platform_commission",
       });
     }
 
-    const totalFeeAmount = Number((sellerFeeAmount + customerFeeAmount).toFixed(2));
+    const sellerFeeTotal = Number(sellerFeeAmount.toFixed(2));
+    const customerFeeTotal = Number(customerFeeAmount.toFixed(2));
     return {
-      totalFeeAmount,
-      sellerFeeAmount: Number(sellerFeeAmount.toFixed(2)),
-      customerFeeAmount: Number(customerFeeAmount.toFixed(2)),
+      totalFeeAmount: Number((sellerFeeTotal + customerFeeTotal).toFixed(2)),
+      sellerFeeAmount: sellerFeeTotal,
+      customerFeeAmount: customerFeeTotal,
       customerFeeTaxAmount: Number(customerFeeTaxAmount.toFixed(2)),
       breakup,
     };
-  }
-
-  async calculateLegacyPlatformFee(pricedItems = []) {
-    const categories = pricedItems.map((item) => item.category).filter(Boolean);
-    const rules = await this.pricingRepository.listActivePlatformFeeRules(categories);
-    if (!rules.length) {
-      return { totalFeeAmount: 0, sellerFeeAmount: 0, customerFeeAmount: 0, customerFeeTaxAmount: 0, breakup: [] };
-    }
-
-    const perCategory = new Map();
-    let defaultRule = null;
-
-    for (const rule of rules) {
-      const key = String(rule.category || "").trim().toLowerCase();
-      if (key === "default" || key === "*") {
-        if (!defaultRule) {
-          defaultRule = rule;
-        }
-      } else if (!perCategory.has(key)) {
-        perCategory.set(key, rule);
-      }
-    }
-
-    const breakup = [];
-    let totalFeeAmount = 0;
-
-    for (const item of pricedItems) {
-      const dealRule = item.dealSnapshot?.commissionRuleSnapshot || {};
-      const hasDealCommission = Boolean(item.dealId && (
-        dealRule.id ||
-        dealRule.commission_percent !== undefined ||
-        dealRule.commissionPercent !== undefined ||
-        dealRule.fixed_fee !== undefined ||
-        dealRule.fixedFee !== undefined
-      ));
-      const key = String(item.category || "").trim().toLowerCase();
-      const rule = hasDealCommission ? null : perCategory.get(key) || defaultRule;
-      if (!rule && !hasDealCommission) {
-        continue;
-      }
-
-      const commissionPercent = hasDealCommission
-        ? Number(dealRule.commission_percent ?? dealRule.commissionPercent ?? 0)
-        : Number(rule.commission_percent || 0);
-      const fixedFeeAmount = hasDealCommission
-        ? Number(dealRule.fixed_fee ?? dealRule.fixedFee ?? 0)
-        : Number(rule.fixed_fee_amount || 0);
-      const closingFeeAmount = hasDealCommission ? 0 : Number(rule.closing_fee_amount || 0);
-      const capAmount = hasDealCommission && dealRule.cap_amount !== null && dealRule.cap_amount !== undefined
-        ? Number(dealRule.cap_amount)
-        : hasDealCommission && dealRule.capAmount !== null && dealRule.capAmount !== undefined
-          ? Number(dealRule.capAmount)
-          : null;
-
-      const feeBaseAmount = Number(item.discountedLineTotal ?? item.lineTotal ?? 0);
-      const commissionFee = Number(((feeBaseAmount * commissionPercent) / 100).toFixed(2));
-      const fixedFee = Number((fixedFeeAmount * item.quantity).toFixed(2));
-      const closingFee = Number((closingFeeAmount * item.quantity).toFixed(2));
-      const rawItemFeeTotal = Number((commissionFee + fixedFee + closingFee).toFixed(2));
-      const itemFeeTotal = capAmount !== null ? Math.min(rawItemFeeTotal, capAmount) : rawItemFeeTotal;
-
-      totalFeeAmount += itemFeeTotal;
-      breakup.push({
-        productId: item.productId,
-        sellerId: item.sellerId,
-        organizationId: item.organizationId || null,
-        dealId: item.dealId || null,
-        category: item.category,
-        quantity: item.quantity,
-        feeBaseAmount,
-        commissionPercent,
-        commissionFee,
-        fixedFee,
-        closingFee,
-        sellerFeeTotal: itemFeeTotal,
-        customerFeeTotal: 0,
-        totalFee: itemFeeTotal,
-        configId: hasDealCommission ? dealRule.id || item.dealId : rule.id,
-        source: hasDealCommission ? "deal_commission_rule" : "legacy_platform_fee_config",
-      });
-    }
-
-    const sellerFeeAmount = Number(totalFeeAmount.toFixed(2));
-    return {
-      totalFeeAmount: sellerFeeAmount,
-      sellerFeeAmount,
-      customerFeeAmount: 0,
-      customerFeeTaxAmount: 0,
-      breakup,
-    };
-  }
-
-  async calculatePlatformFee(pricedItems, context = {}) {
-    const modern = await this.calculateModernPlatformFees(pricedItems, context);
-    if (modern) return modern;
-    return this.calculateLegacyPlatformFee(pricedItems);
   }
 
   async finalizeCouponUsage(couponId) {
@@ -774,33 +547,33 @@ class PricingService {
     return this.pricingRepository.incrementCouponUsage(couponId);
   }
 
-  getSellerCouponScope(actor = {}) {
-    if (!["seller", "seller-admin", "seller-sub-admin"].includes(actor.role)) {
-      return {};
+  isAdminActor(actor = {}) {
+    return ["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin;
+  }
+
+  assertAdminCouponManager(actor = {}) {
+    if (!this.isAdminActor(actor)) {
+      throw new AppError("Coupons and discounts are managed by admin only", 403);
     }
-    const sellerId = actor.ownerSellerId || actor.userId;
-    return {
-      sellerId,
-      ...(["seller-admin", "seller-sub-admin"].includes(actor.role)
-        ? { createdBy: actor.userId }
-        : {}),
-    };
   }
 
   async createCoupon(payload, actor = {}) {
+    this.assertAdminCouponManager(actor);
     return this.pricingRepository.createCoupon({
       ...this.normalizeCouponPayload(payload),
-      ...this.getSellerCouponScope(actor),
-      createdBy: actor.userId || this.getSellerCouponScope(actor).createdBy,
+      sellerId: null,
+      createdBy: actor.userId || null,
     });
   }
 
   async listCoupons(actor = {}) {
-    return this.pricingRepository.listCoupons(this.getSellerCouponScope(actor));
+    this.assertAdminCouponManager(actor);
+    return this.pricingRepository.listCoupons({});
   }
 
   async getCoupon(couponId, actor = {}) {
-    const coupon = await this.pricingRepository.findCouponById(couponId, this.getSellerCouponScope(actor));
+    this.assertAdminCouponManager(actor);
+    const coupon = await this.pricingRepository.findCouponById(couponId, {});
     if (!coupon) {
       throw new AppError("Coupon not found", 404);
     }
@@ -808,10 +581,11 @@ class PricingService {
   }
 
   async updateCoupon(couponId, payload, actor = {}) {
+    this.assertAdminCouponManager(actor);
     const coupon = await this.pricingRepository.updateCoupon(
       couponId,
       this.normalizeCouponPayload(payload),
-      this.getSellerCouponScope(actor),
+      {},
     );
     if (!coupon) {
       throw new AppError("Coupon not found", 404);
@@ -830,7 +604,8 @@ class PricingService {
   }
 
   async deleteCoupon(couponId, actor = {}) {
-    const coupon = await this.pricingRepository.deleteCoupon(couponId, this.getSellerCouponScope(actor));
+    this.assertAdminCouponManager(actor);
+    const coupon = await this.pricingRepository.deleteCoupon(couponId, {});
     if (!coupon) {
       throw new AppError("Coupon not found", 404);
     }
@@ -866,7 +641,9 @@ class PricingService {
       const proportion = subtotalAmount > 0 ? item.lineTotal / subtotalAmount : 0;
       const itemDiscount = Number((discountAmount * proportion).toFixed(2));
       const discountedLineTotal = Number((item.lineTotal - itemDiscount).toFixed(2));
+      const grossLineTotal = Number(item.lineTotal || 0);
       let taxableAmount = discountedLineTotal;
+      let taxableAmountBeforeDiscount = grossLineTotal;
       item.discountAmount = itemDiscount;
       item.discountedLineTotal = discountedLineTotal;
 
@@ -897,9 +674,13 @@ class PricingService {
           taxableAmount = totalRate > 0
             ? Number(((discountedLineTotal * 100) / (100 + totalRate)).toFixed(2))
             : discountedLineTotal;
+          taxableAmountBeforeDiscount = totalRate > 0
+            ? Number(((grossLineTotal * 100) / (100 + totalRate)).toFixed(2))
+            : grossLineTotal;
           itemTax = Number((taxableAmount * (item.gstRate / 100)).toFixed(2));
           itemCess = Number((discountedLineTotal - taxableAmount - itemTax).toFixed(2));
         } else {
+          taxableAmountBeforeDiscount = grossLineTotal;
           itemTax = Number((taxableAmount * (item.gstRate / 100)).toFixed(2));
           itemCess = Number((taxableAmount * (item.cessRate / 100)).toFixed(2));
         }
@@ -927,6 +708,7 @@ class PricingService {
         lineTotal: item.lineTotal,
         discountedLineTotal,
         taxableAmount,
+        taxableAmountBeforeDiscount,
         gstRate: item.gstRate,
         cessRate: item.cessRate,
         gstInclusive: Boolean(item.gstInclusive),
@@ -944,10 +726,10 @@ class PricingService {
       if (itemTax) {
         item.taxAmount = itemTax.taxAmount + itemTax.cessAmount;
         item.taxableAmount = itemTax.taxableAmount;
+        item.taxableAmountBeforeDiscount = itemTax.taxableAmountBeforeDiscount;
         item.taxIncludedAmount = itemTax.taxIncludedAmount;
         item.taxPayableAmount = itemTax.taxPayableAmount;
         item.taxBreakup = itemTax;
-        item.settlementAmount = Number(Math.max(0, itemTax.taxableAmount - Number(item.platformFeeAmount || 0)).toFixed(2));
       }
     }
 

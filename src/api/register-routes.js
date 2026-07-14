@@ -24,7 +24,6 @@ const returnRoutes = require("../modules/returns/routes/return.routes");
 const fraudRoutes = require("../modules/fraud/routes/fraud.routes");
 const dynamicPricingRoutes = require("../modules/pricing/routes/dynamic-pricing.routes");
 const commissionRoutes = require("../modules/seller/routes/commission.routes");
-const { adminFinanceRoutes } = require("../modules/seller/routes/admin-finance.routes");
 const notificationPreferenceRoutes = require("../modules/notification/routes/notification-preference.routes");
 const { deliveryRoutes } = require("../modules/delivery/routes/delivery.routes");
 const { shippingProfilesRoutes } = require("../modules/delivery/routes/shipping-profiles.routes");
@@ -74,7 +73,6 @@ function registerRoutes(app) {
   app.use(`${env.apiPrefix}/fraud`, fraudRoutes);
   app.use(`${env.apiPrefix}/dynamic-pricing`, dynamicPricingRoutes);
   app.use(`${env.apiPrefix}/sellers/commissions`, commissionRoutes);
-  app.use(`${env.apiPrefix}/admin/finance`, adminFinanceRoutes);
   app.use(`${env.apiPrefix}/notifications`, notificationPreferenceRoutes);
   app.use(`${env.apiPrefix}/delivery`, deliveryRoutes);
   app.use(`${env.apiPrefix}/shipping-profiles`, shippingProfilesRoutes);

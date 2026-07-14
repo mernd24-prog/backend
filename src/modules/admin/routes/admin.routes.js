@@ -84,10 +84,6 @@ const {
   updateSubscriptionPlanSchema,
   listPlatformSubscriptionsSchema,
   updatePlatformSubscriptionStatusSchema,
-  createPlatformFeeConfigSchema,
-  listPlatformFeeConfigSchema,
-  platformFeeConfigParamSchema,
-  updatePlatformFeeConfigSchema,
   listAccessModulesSchema,
   createAdminSchema,
   listAdminsSchema,
@@ -838,32 +834,6 @@ adminRoutes.patch(
   checkInput(updatePlatformSubscriptionStatusSchema),
   catchErrors(adminController.updatePlatformSubscriptionStatus),
 );
-adminRoutes.post(
-  "/platform/fee-config",
-  checkInput(createPlatformFeeConfigSchema),
-  catchErrors(adminController.createPlatformFeeConfig),
-);
-adminRoutes.get(
-  "/platform/fee-config",
-  checkInput(listPlatformFeeConfigSchema),
-  catchErrors(adminController.listPlatformFeeConfigs),
-);
-adminRoutes.get(
-  "/platform/fee-config/:configId",
-  checkInput(platformFeeConfigParamSchema),
-  catchErrors(adminController.getPlatformFeeConfig),
-);
-adminRoutes.patch(
-  "/platform/fee-config/:configId",
-  checkInput(updatePlatformFeeConfigSchema),
-  catchErrors(adminController.updatePlatformFeeConfig),
-);
-adminRoutes.delete(
-  "/platform/fee-config/:configId",
-  checkInput(platformFeeConfigParamSchema),
-  catchErrors(adminController.deletePlatformFeeConfig),
-);
-
 // Platform Management Routes
 adminRoutes.get(
   "/platform/catalog-prefill",

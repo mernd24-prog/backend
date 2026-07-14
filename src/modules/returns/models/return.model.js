@@ -31,6 +31,11 @@ const returnItemSchema = new mongoose.Schema(
     restockedQuantity: { type: Number, default: 0 },
     damagedQuantity: { type: Number, default: 0 },
     photos: [String],
+    policySnapshot: { type: Object, default: {} },
+    returnWindowDays: Number,
+    returnEligibleUntil: Date,
+    requiresImages: { type: Boolean, default: false },
+    inspectionRequired: { type: Boolean, default: true },
   },
   { _id: false },
 );

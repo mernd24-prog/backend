@@ -27,8 +27,8 @@ const DEFAULT_SETTINGS = {
   platformFees: {
     customerFeeType: "fixed",
     customerFeeValue: 0,
-    sellerFeeType: "percentage",
-    sellerFeeValue: 0,
+    sellerCommissionType: "percentage",
+    sellerCommissionValue: 0,
     gstRate: 18,
     calculationBase: "subtotal",
   },
@@ -265,12 +265,15 @@ class CommerceSettingsService {
           DEFAULT_SETTINGS.platformFees.customerFeeType,
         ),
         customerFeeValue: Math.max(num(source.platformFees.customerFeeValue, 0), 0),
-        sellerFeeType: pickAllowed(
-          source.platformFees.sellerFeeType,
+        sellerCommissionType: pickAllowed(
+          source.platformFees.sellerCommissionType || source.platformFees.sellerFeeType,
           ALLOWED.platformFees.feeType,
-          DEFAULT_SETTINGS.platformFees.sellerFeeType,
+          DEFAULT_SETTINGS.platformFees.sellerCommissionType,
         ),
-        sellerFeeValue: Math.max(num(source.platformFees.sellerFeeValue, 0), 0),
+        sellerCommissionValue: Math.max(num(
+          source.platformFees.sellerCommissionValue ?? source.platformFees.sellerFeeValue,
+          0,
+        ), 0),
         gstRate: Math.min(Math.max(num(source.platformFees.gstRate, 18), 0), 100),
         calculationBase: pickAllowed(
           source.platformFees.calculationBase,

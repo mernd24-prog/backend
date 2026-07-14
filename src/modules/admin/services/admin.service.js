@@ -1611,26 +1611,6 @@ class AdminService {
     );
   }
 
-  async createPlatformFeeConfig(payload) {
-    return this.subscriptionService.createPlatformFeeConfig(payload);
-  }
-
-  async listPlatformFeeConfigs(query) {
-    return this.subscriptionService.listPlatformFeeConfigs(query);
-  }
-
-  async getPlatformFeeConfig(configId) {
-    return this.subscriptionService.getPlatformFeeConfig(configId);
-  }
-
-  async updatePlatformFeeConfig(configId, payload) {
-    return this.subscriptionService.updatePlatformFeeConfig(configId, payload);
-  }
-
-  async deletePlatformFeeConfig(configId) {
-    return this.subscriptionService.deletePlatformFeeConfig(configId);
-  }
-
   formatModuleName(moduleName) {
     return String(moduleName || "")
       .split("/")

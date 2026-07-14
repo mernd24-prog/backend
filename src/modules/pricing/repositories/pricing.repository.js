@@ -1,7 +1,5 @@
 const { CouponModel } = require("../models/coupon.model");
 const { postgresPool } = require("../../../infrastructure/postgres/postgres-client");
-const { CommissionRuleModel } = require("../../seller/models/commission-rule.model");
-const { PlatformFeeRuleModel } = require("../../seller/models/platform-fee-rule.model");
 
 class PricingRepository {
   async createCoupon(payload) {
@@ -47,64 +45,6 @@ class PricingRepository {
     }
   }
 
-  async listActivePlatformFeeRules(categories = []) {
-    try {
-      const normalized = Array.from(
-        new Set((categories || []).map((category) => String(category || "").trim().toLowerCase()).filter(Boolean)),
-      );
-      const lookup = normalized.length ? normalized : ["default"];
-
-      const { rows } = await postgresPool.query(
-        `SELECT *
-         FROM platform_fee_config
-         WHERE active = true
-           AND (effective_from IS NULL OR effective_from <= NOW())
-           AND (effective_to IS NULL OR effective_to >= NOW())
-           AND (LOWER(category) = ANY($1) OR LOWER(category) IN ('default', '*'))
-         ORDER BY updated_at DESC`,
-        [lookup],
-      );
-      return rows;
-    } catch (error) {
-      return [];
-    }
-  }
-
-  async listActiveCommissionRules() {
-    try {
-      const now = new Date();
-      return CommissionRuleModel.find({
-        isActive: { $ne: false },
-        status: { $ne: "inactive" },
-        $and: [
-          { $or: [{ effectiveFrom: null }, { effectiveFrom: { $exists: false } }, { effectiveFrom: { $lte: now } }] },
-          { $or: [{ effectiveTo: null }, { effectiveTo: { $exists: false } }, { effectiveTo: { $gte: now } }] },
-        ],
-      })
-        .sort({ priority: -1, updatedAt: -1 })
-        .lean();
-    } catch (error) {
-      return [];
-    }
-  }
-
-  async listActiveCustomerPlatformFeeRules() {
-    try {
-      const now = new Date();
-      return PlatformFeeRuleModel.find({
-        isActive: { $ne: false },
-        status: { $ne: "inactive" },
-        $and: [
-          { $or: [{ effectiveFrom: null }, { effectiveFrom: { $exists: false } }, { effectiveFrom: { $lte: now } }] },
-          { $or: [{ effectiveTo: null }, { effectiveTo: { $exists: false } }, { effectiveTo: { $gte: now } }] },
-        ],
-      })
-        .sort({ priority: -1, updatedAt: -1 })
-        .lean();
-    } catch (error) {
-      return [];
-    }
-  }
 }
 
 module.exports = { PricingRepository };

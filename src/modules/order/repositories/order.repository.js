@@ -343,11 +343,22 @@ class OrderRepository {
 
     const trx = await knex.transaction();
     try {
+      const organizationId = payload.organizationId ||
+        payload.organization_id ||
+        payload.metadata?.organizationId ||
+        null;
       const [existing] = await trx("shipments")
         .where("order_id", payload.orderId)
         .where("seller_id", String(payload.sellerId))
         .where((builder) => {
           builder.where("direction", "forward").orWhereNull("direction");
+        })
+        .where((builder) => {
+          if (organizationId) {
+            builder.whereRaw("metadata->>'organizationId' = ?", [String(organizationId)]);
+          } else {
+            builder.whereRaw("COALESCE(metadata->>'organizationId', '') = ''");
+          }
         })
         .orderBy("created_at", "desc")
         .limit(1)
@@ -453,6 +464,7 @@ class OrderRepository {
           idempotency_key: payload.idempotencyKey || null,
           metadata: {
             ...(payload.metadata || {}),
+            organizationId: organizationId || payload.metadata?.organizationId || null,
             ...(payload.carrierUrl ? { carrierUrl: payload.carrierUrl } : {}),
           },
           created_by: payload.createdBy || null,
@@ -1114,7 +1126,11 @@ class OrderRepository {
 
     for (const shipment of shipments) {
       const sellerId = String(shipment.seller_id || shipment.sellerId || "platform");
-      const organizationId = shipment.organization_id || shipment.organizationId || null;
+      const shipmentMetadata = this.parseJson(shipment.metadata, {});
+      const organizationId = shipment.organization_id ||
+        shipment.organizationId ||
+        shipmentMetadata.organizationId ||
+        null;
       const key = groupKey(sellerId, organizationId);
       if (!shipmentsByGroup.has(key)) {
         shipmentsByGroup.set(key, { sellerId, organizationId, shipments: [] });

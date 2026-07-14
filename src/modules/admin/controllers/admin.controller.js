@@ -369,38 +369,6 @@ class AdminController {
     res.json(okResponse(subscription));
   };
 
-  createPlatformFeeConfig = async (req, res) => {
-    const config = await this.adminService.createPlatformFeeConfig(req.body);
-    res.status(201).json(okResponse(config));
-  };
-
-  listPlatformFeeConfigs = async (req, res) => {
-    const configs = await this.adminService.listPlatformFeeConfigs(req.query);
-    res.json(okResponse(configs));
-  };
-
-  getPlatformFeeConfig = async (req, res) => {
-    const config = await this.adminService.getPlatformFeeConfig(
-      req.params.configId,
-    );
-    res.json(okResponse(config));
-  };
-
-  updatePlatformFeeConfig = async (req, res) => {
-    const config = await this.adminService.updatePlatformFeeConfig(
-      req.params.configId,
-      req.body,
-    );
-    res.json(okResponse(config));
-  };
-
-  deletePlatformFeeConfig = async (req, res) => {
-    const config = await this.adminService.deletePlatformFeeConfig(
-      req.params.configId,
-    );
-    res.json(okResponse(config));
-  };
-
   listAccessModules = async (req, res) => {
     const actor = getCurrentUser(req);
     const modules = await this.adminService.listAccessModules(req.query, actor);

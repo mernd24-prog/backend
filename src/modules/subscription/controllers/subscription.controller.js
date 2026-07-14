@@ -80,30 +80,6 @@ class SubscriptionController {
     res.json(okResponse(subscription));
   };
 
-  createPlatformFeeConfig = async (req, res) => {
-    const config = await this.subscriptionService.createPlatformFeeConfig(req.body);
-    res.status(201).json(okResponse(config));
-  };
-
-  listPlatformFeeConfigs = async (req, res) => {
-    const configs = await this.subscriptionService.listPlatformFeeConfigs(req.query);
-    res.json(okResponse(configs));
-  };
-
-  getPlatformFeeConfig = async (req, res) => {
-    const config = await this.subscriptionService.getPlatformFeeConfig(req.params.configId);
-    res.json(okResponse(config));
-  };
-
-  updatePlatformFeeConfig = async (req, res) => {
-    const config = await this.subscriptionService.updatePlatformFeeConfig(req.params.configId, req.body);
-    res.json(okResponse(config));
-  };
-
-  deletePlatformFeeConfig = async (req, res) => {
-    const config = await this.subscriptionService.deletePlatformFeeConfig(req.params.configId);
-    res.json(okResponse(config));
-  };
 }
 
 module.exports = { SubscriptionController };
