@@ -1006,13 +1006,29 @@ class PlatformService {
   }
 
   async listBrands(query) {
-    const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir || query.sortOrder };
+    const page = Math.max(Number(query.page || 1), 1);
+    const limit = Math.min(Math.max(Number(query.limit || 20), 1), 5000);
+    const pagination = {
+      page,
+      limit,
+      skip: (page - 1) * limit,
+      sortBy: query.sortBy,
+      sortDir: query.sortDir || query.sortOrder,
+    };
     const filter = buildMongoFilter({
       search:      query.q || query.keyWord || query.search,
       searchFields:["name"],
     });
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
-    if (query.approvalStatus) filter.approvalStatus = query.approvalStatus;
+    if (query.approvalStatus) {
+      if (query.approvalStatus === "approved") {
+        filter.approvalStatus = "approved";
+      } else if (query.approvalStatus === "pending") {
+        filter.approvalStatus = { $in: ["pending", null, ""] };
+      } else {
+        filter.approvalStatus = query.approvalStatus;
+      }
+    }
     return this.platformRepository.listBrands(filter, pagination);
   }
 
@@ -1067,7 +1083,13 @@ class PlatformService {
   async reviewBrandSubmission(brandId, { action, rejectionReason }, req) {
     const item = await this.platformRepository.getBrand(brandId);
     if (!item) throw AppError.notFound("Brand submission");
-    if (item.approvalStatus !== "pending") throw new AppError("Only pending brand submissions can be reviewed", 400);
+    const needsLegacyReview =
+      typeof item.$isDefault === "function" &&
+      item.$isDefault("approvalStatus");
+    const reviewableStatuses = new Set(["pending", "", null, undefined]);
+    if (!needsLegacyReview && !reviewableStatuses.has(item.approvalStatus)) {
+      throw new AppError("Only pending or legacy unreviewed brands can be reviewed", 400);
+    }
     const approved = action === "approve";
     const updated = await this.platformRepository.updateBrand(brandId, {
       approvalStatus: approved ? "approved" : "rejected",

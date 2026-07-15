@@ -2,6 +2,12 @@ const { okResponse, paginationMeta } = require("../../../shared/http/reply");
 const { getPage } = require("../../../shared/tools/page");
 const { PlatformService } = require("../services/platform.service");
 
+const getBrandPage = (query = {}) => {
+  const page = Math.max(Number(query.page || 1), 1);
+  const limit = Math.min(Math.max(Number(query.limit || 20), 1), 5000);
+  return { page, limit };
+};
+
 class PlatformController {
   constructor({ platformService = new PlatformService() } = {}) {
     this.platformService = platformService;
@@ -199,7 +205,7 @@ class PlatformController {
   };
 
   listBrands = async (req, res) => {
-    const { page, limit } = getPage(req.query);
+    const { page, limit } = getBrandPage(req.query);
     const result = await this.platformService.listBrands(req.query);
     res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
   };
