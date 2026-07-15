@@ -494,8 +494,8 @@ const specialPriceBulkUpdateSchema = Joi.object({
           Joi.object({
             variantId: optionalString(),
             variantSku: optionalString(),
-            salePrice: optionalNonNegativeNumber(),
-          }),
+            salePrice: optionalNonNegativeNumber().required(),
+          }).or("variantId", "variantSku").required(),
         ).default([]),
       }).or("salePrice", "variants"),
     ).min(1).required(),

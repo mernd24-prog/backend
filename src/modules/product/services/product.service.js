@@ -2347,6 +2347,7 @@ class ProductService {
     return {
       ...this.toPlainObject(product),
       sellerName,
+      sellerEmail: seller?.email || null,
       pendingRevision: pendingRevision ? this.toPlainObject(pendingRevision) : null,
     };
   }
@@ -2626,13 +2627,19 @@ class ProductService {
       throw new AppError("One or more products were not found for special price update", 404);
     }
 
+    if (productIds.length !== requestedCount) {
+      throw new AppError("Duplicate product rows are not allowed in a special price update", 400);
+    }
+
     const productMap = new Map(products.map((product) => [String(product._id || product.id), product]));
+    const updatePlans = [];
     const updatedProductIds = [];
 
+    // Validate the complete request before performing the first write. This
+    // prevents an invalid/edited Excel identity later in the file from causing
+    // a partially applied import.
     for (const entry of normalizedUpdates) {
       const productId = String(entry?.productId || "");
-      if (!productId) continue;
-
       const product = productMap.get(productId);
       if (!product) {
         throw new AppError(`Product ${productId} was not found`, 404);
@@ -2647,38 +2654,67 @@ class ProductService {
         if (!variants.length) {
           throw new AppError("Product does not have variants for special price update", 400);
         }
+        const seenVariants = new Set();
+        const updatesByVariantId = new Map();
 
-        payload.variants = variants.map((variant) => {
-          const plainVariant = this.toPlainVariant(variant);
-          const matchingUpdate = entry.variants.find((item) => {
-            const variantId = String(item?.variantId || "");
-            const variantSku = String(item?.variantSku || "");
+        entry.variants.forEach((item) => {
+          const variantId = String(item?.variantId || "");
+          const variantSku = String(item?.variantSku || "");
+          const matchingVariants = variants.filter((variant) => {
+            const plainVariant = this.toPlainVariant(variant);
             const currentVariantId = String(plainVariant._id || plainVariant.id || "");
             const currentVariantSku = String(plainVariant.sku || "");
             return (
-              (variantId && currentVariantId === variantId) ||
-              (variantSku && currentVariantSku === variantSku)
+              (!variantId || currentVariantId === variantId) &&
+              (!variantSku || currentVariantSku === variantSku)
             );
           });
 
-          if (!matchingUpdate) return plainVariant;
-          const nextValue = matchingUpdate.salePrice === undefined || matchingUpdate.salePrice === null || matchingUpdate.salePrice === ""
-            ? null
-            : Number(matchingUpdate.salePrice);
-          
-          // Pre-validate pricing before updating
-          if (nextValue !== null && Number.isFinite(nextValue) && Number.isFinite(plainVariant.price)) {
-            if (nextValue > plainVariant.price) {
-              throw new AppError(
-                `Invalid special price for variant "${plainVariant.title}" in "${product.title}". ` +
-                `Special price (₹${nextValue}) must be ≤ selling price (₹${plainVariant.price}). ` +
-                "Pricing hierarchy: MRP ≥ Selling Price ≥ Special Price",
-                400
-              );
-            }
+          if (matchingVariants.length !== 1) {
+            throw new AppError(
+              `Variant identity does not match product "${product.title}". Re-export the template and do not edit ID or SKU columns.`,
+              400,
+            );
           }
-          
-          return { ...plainVariant, salePrice: nextValue };
+
+          const plainVariant = this.toPlainVariant(matchingVariants[0]);
+          const currentVariantId = String(plainVariant._id || plainVariant.id || "");
+          if (seenVariants.has(currentVariantId)) {
+            throw new AppError(`Duplicate variant update for "${plainVariant.title || plainVariant.sku}"`, 400);
+          }
+          seenVariants.add(currentVariantId);
+
+          const nextValue = item.salePrice === undefined || item.salePrice === null || item.salePrice === ""
+            ? null
+            : Number(item.salePrice);
+          if (nextValue !== null && (!Number.isFinite(nextValue) || nextValue < 0)) {
+            throw new AppError("Special price must be a non-negative number or null", 400);
+          }
+          const sellingPrice = Number(plainVariant.price);
+          const minimumSpecialPrice = Math.ceil(sellingPrice * 0.5 * 100) / 100;
+          if (nextValue !== null && nextValue < minimumSpecialPrice) {
+            throw new AppError(
+              `Invalid special price for variant "${plainVariant.title}" in "${product.title}". ` +
+              `Special price (₹${nextValue}) must be at least 50% of selling price (₹${minimumSpecialPrice}).`,
+              400,
+            );
+          }
+          if (nextValue !== null && (!Number.isFinite(sellingPrice) || sellingPrice <= 0 || nextValue >= sellingPrice)) {
+            throw new AppError(
+              `Invalid special price for variant "${plainVariant.title}" in "${product.title}". ` +
+              `Special price (₹${nextValue}) must be less than selling price (₹${sellingPrice || 0}).`,
+              400,
+            );
+          }
+          updatesByVariantId.set(currentVariantId, nextValue);
+        });
+
+        payload.variants = variants.map((variant) => {
+          const plainVariant = this.toPlainVariant(variant);
+          const currentVariantId = String(plainVariant._id || plainVariant.id || "");
+          return updatesByVariantId.has(currentVariantId)
+            ? { ...plainVariant, salePrice: updatesByVariantId.get(currentVariantId) }
+            : plainVariant;
         });
       } else if (Object.prototype.hasOwnProperty.call(entry, "salePrice")) {
         const nextValue = entry.salePrice === undefined || entry.salePrice === null || entry.salePrice === ""
@@ -2686,22 +2722,36 @@ class ProductService {
           : Number(entry.salePrice);
         
         // Pre-validate pricing before updating
-        if (nextValue !== null && Number.isFinite(nextValue) && Number.isFinite(product.price)) {
-          if (nextValue > product.price) {
-            throw new AppError(
-              `Invalid special price for "${product.title}". ` +
-              `Special price (₹${nextValue}) must be ≤ selling price (₹${product.price}). ` +
-              "Pricing hierarchy: MRP ≥ Selling Price ≥ Special Price",
-              400
-            );
-          }
+        const sellingPrice = Number(product.price);
+        if (nextValue !== null && (!Number.isFinite(nextValue) || nextValue < 0)) {
+          throw new AppError("Special price must be a non-negative number or null", 400);
+        }
+        const minimumSpecialPrice = Math.ceil(sellingPrice * 0.5 * 100) / 100;
+        if (nextValue !== null && nextValue < minimumSpecialPrice) {
+          throw new AppError(
+            `Invalid special price for "${product.title}". ` +
+            `Special price (₹${nextValue}) must be at least 50% of selling price (₹${minimumSpecialPrice}).`,
+            400,
+          );
+        }
+        if (nextValue !== null && (!Number.isFinite(sellingPrice) || sellingPrice <= 0 || nextValue >= sellingPrice)) {
+          throw new AppError(
+            `Invalid special price for "${product.title}". ` +
+            `Special price (₹${nextValue}) must be less than selling price (₹${sellingPrice || 0}).`,
+            400,
+          );
         }
         
         payload.salePrice = nextValue;
       }
 
-      if (!Object.keys(payload).length) continue;
+      if (!Object.keys(payload).length) {
+        throw new AppError(`No special price was provided for product ${productId}`, 400);
+      }
+      updatePlans.push({ productId, product, payload });
+    }
 
+    for (const { productId, product, payload } of updatePlans) {
       try {
         const updatedProduct = await this.updateProduct(productId, payload, actor);
         updatedProductIds.push(String(updatedProduct._id || updatedProduct.id));
