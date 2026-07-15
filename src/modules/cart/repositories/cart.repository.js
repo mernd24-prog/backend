@@ -16,13 +16,18 @@ class CartRepository {
   }
 
   async _populateItemsProduct(cartDoc) {
-    if (!cartDoc || !Array.isArray(cartDoc.items) || cartDoc.items.length === 0) {
+    if (!cartDoc) {
       return cartDoc;
+    }
+
+    const cart = cartDoc.toObject ? cartDoc.toObject() : { ...cartDoc };
+    if (!Array.isArray(cart.items) || cart.items.length === 0) {
+      return cart;
     }
 
     const objectIdProductIds = [
       ...new Set(
-        cartDoc.items
+        cart.items
           .map((item) => item.productId)
           .filter((id) => typeof id === "string" && mongoose.Types.ObjectId.isValid(id))
           .map((id) => new mongoose.Types.ObjectId(id)),
@@ -30,13 +35,12 @@ class CartRepository {
     ];
 
     if (objectIdProductIds.length === 0) {
-      return cartDoc;
+      return cart;
     }
 
     const products = await ProductModel.find({ _id: { $in: objectIdProductIds } }).lean();
     const productById = new Map(products.map((product) => [String(product._id), product]));
 
-    const cart = cartDoc.toObject ? cartDoc.toObject() : { ...cartDoc };
     cart.items = cart.items.map((item) => ({
       ...item,
       productId: productById.get(String(item.productId)) || item.productId,
@@ -100,7 +104,7 @@ class CartRepository {
   }
 
   async clearCart(cartId, metadata = {}) {
-    return CartModel.findByIdAndUpdate(
+    const cart = await CartModel.findByIdAndUpdate(
       cartId,
       {
         $set: {
@@ -114,6 +118,7 @@ class CartRepository {
       },
       { new: true },
     ).exec();
+    return this._populateItemsProduct(cart);
   }
 
   async removePurchasedItemsForUser(userId, purchasedItems = [], metadata = {}) {

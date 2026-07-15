@@ -1803,16 +1803,7 @@ class ProductService {
     this.applyDateFilters(filter, query);
     this.applyStockFilters(filter, query);
 
-    const searchTerm = query.q || query.keyWord || query.search;
-    if (searchTerm) {
-      filter.$or = [
-        { title: { $regex: searchTerm, $options: "i" } },
-        { description: { $regex: searchTerm, $options: "i" } },
-        { sku: { $regex: searchTerm, $options: "i" } },
-        { brand: { $regex: searchTerm, $options: "i" } },
-        { tags: { $regex: searchTerm, $options: "i" } },
-      ];
-    }
+    this.applySearchFilter(filter, query);
 
     if (query.country) filter["origin.country"] = query.country;
     if (query.state) filter["origin.state"] = query.state;
@@ -1890,10 +1881,36 @@ class ProductService {
     this.applyDateFilters(filter, query);
     this.applyStockFilters(filter, query);
     this.applyAttributeFilters(filter, query);
+    this.applySearchFilter(filter, query);
     return this.productRepository.paginateBySeller(sellerId, filter, pagination, {
       projection: buildProductListProjection(query),
       lean: true,
     });
+  }
+
+  applySearchFilter(filter, query = {}) {
+    const searchTerm = String(query.q || query.keyWord || query.search || "").trim();
+    if (!searchTerm) return;
+
+    const regex = new RegExp(escapeRegExp(searchTerm), "i");
+    filter.$or = [
+      { title: regex },
+      { name: regex },
+      { description: regex },
+      { shortDescription: regex },
+      { sku: regex },
+      { brand: regex },
+      { hsnCode: regex },
+      { category: regex },
+      { categoryId: regex },
+      { productFamilyCode: regex },
+      { tags: regex },
+      { "variants.sku": regex },
+      { "variants.title": regex },
+      { "variants.attributes.color": regex },
+      { "variants.attributes.storage": regex },
+      { "variants.attributes.ram": regex },
+    ];
   }
 
   applyStockFilters(filter, query = {}) {

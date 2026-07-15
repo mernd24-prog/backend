@@ -15,10 +15,11 @@ const upsertCartSchema = Joi.object({
           quantity: Joi.number().integer().min(1).required(),
           price: Joi.number().min(0),
         }),
-      )
-      .required(),
-    wishlist: Joi.array().items(objectId).default([]),
-  }).required(),
+      ),
+    wishlist: Joi.array().items(objectId),
+  })
+    .or("items", "wishlist")
+    .required(),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),
 });

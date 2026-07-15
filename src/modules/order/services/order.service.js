@@ -80,6 +80,31 @@ class OrderService {
     }, new Map());
   }
 
+  sellerIdsFromItems(items = []) {
+    return [...new Set(
+      items
+        .map((item) => item.sellerId || item.seller_id)
+        .filter((sellerId) => sellerId && String(sellerId) !== "platform")
+        .map(String),
+    )];
+  }
+
+  notificationItemsFromOrderItems(items = []) {
+    return items.map((item) => ({
+      sellerId: item.sellerId || item.seller_id || null,
+      productId: item.productId || item.product_id || null,
+      quantity: Number(item.quantity || 0),
+    }));
+  }
+
+  async getOrderNotificationSellerPayload(orderId) {
+    const items = await this.orderRepository.findItemsByOrderId(orderId).catch(() => []);
+    return {
+      sellerIds: this.sellerIdsFromItems(items),
+      items: this.notificationItemsFromOrderItems(items),
+    };
+  }
+
   getFulfillmentSnapshotForItems(items = []) {
     const result = {
       verificationRequired: false,
@@ -234,6 +259,7 @@ class OrderService {
       {
         orderId,
         buyerId: actor.userId,
+        sellerIds: this.sellerIdsFromItems(pricedOrder.items),
         totalAmount: pricedOrder.pricing.totalAmount,
         payableAmount: pricedOrder.pricing.payableAmount,
         platformFeeAmount: pricedOrder.pricing.platformFeeAmount,
@@ -241,6 +267,7 @@ class OrderService {
         shippingFeeAmount: pricedOrder.pricing.shippingFeeAmount,
         currency: payload.currency || "INR",
         itemCount: pricedOrder.items.length,
+        items: this.notificationItemsFromOrderItems(pricedOrder.items),
       },
       {
         source: "order-module",
@@ -352,12 +379,14 @@ class OrderService {
         });
         await this.taxService.createInvoice(orderId);
         await this.clearPurchasedCartItems(orderId, actor.userId, pricedOrder.items, actor, "zero_payable_order_confirmed");
+        const notificationSellerPayload = await this.getOrderNotificationSellerPayload(orderId);
         await eventPublisher.publish(
           makeEvent(
             DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
             {
               orderId,
               buyerId: actor.userId,
+              ...notificationSellerPayload,
               previousStatus: ORDER_STATUS.PENDING_PAYMENT,
               status: ORDER_STATUS.CONFIRMED,
               updatedBy: actor.userId,
@@ -922,12 +951,14 @@ class OrderService {
       );
     }
 
+    const notificationSellerPayload = await this.getOrderNotificationSellerPayload(orderId);
     await eventPublisher.publish(
       makeEvent(
         DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
         {
           orderId,
           buyerId: order.buyer_id,
+          ...notificationSellerPayload,
           previousStatus: order.status,
           status: nextStatus,
           updatedBy: actor.userId,
@@ -946,6 +977,7 @@ class OrderService {
           {
             orderId,
             buyerId: order.buyer_id,
+            ...notificationSellerPayload,
             previousStatus: order.status,
             status: nextStatus,
             reason: actor.cancellationReason || actor.reason || null,
@@ -1230,12 +1262,14 @@ class OrderService {
           logger.error({ orderId, error: error.message }, "Deal sale capture commit failed"),
         );
         const invoice = await this.taxService.createInvoice(orderId);
+        const notificationSellerPayload = await this.getOrderNotificationSellerPayload(orderId);
         await eventPublisher.publish(
           makeEvent(
             DOMAIN_EVENTS.ORDER_PAID_V1 || DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
             {
               orderId,
               buyerId: order.buyer_id,
+              ...notificationSellerPayload,
               status: ORDER_STATUS.CONFIRMED,
               paymentStatus: PAYMENT_STATUS.CAPTURED,
               invoiceId: invoice?.id || null,
@@ -1265,12 +1299,14 @@ class OrderService {
     });
     const invoice = await this.taxService.createInvoice(orderId);
 
+    const notificationSellerPayload = await this.getOrderNotificationSellerPayload(orderId);
     await eventPublisher.publish(
       makeEvent(
         DOMAIN_EVENTS.ORDER_PAID_V1 || DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
         {
           orderId,
           buyerId: order.buyer_id,
+          ...notificationSellerPayload,
           status: ORDER_STATUS.CONFIRMED,
           paymentStatus: PAYMENT_STATUS.CAPTURED,
           invoiceId: invoice?.id || null,
@@ -1340,12 +1376,14 @@ class OrderService {
       metadata: actor.metadata || {},
     });
 
+    const notificationSellerPayload = await this.getOrderNotificationSellerPayload(orderId);
     await eventPublisher.publish(
       makeEvent(
         DOMAIN_EVENTS.ORDER_PAYMENT_FAILED_V1 || DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
         {
           orderId,
           buyerId: order.buyer_id,
+          ...notificationSellerPayload,
           status: ORDER_STATUS.PAYMENT_FAILED,
           paymentStatus: PAYMENT_STATUS.FAILED,
           reason: actor.reason || "payment_failed",

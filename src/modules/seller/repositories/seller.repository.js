@@ -225,6 +225,11 @@ class SellerRepository {
     const { rows } = await postgresPool.query(
       `SELECT
          COUNT(DISTINCT o.id)::INT AS total_orders,
+         COUNT(DISTINCT CASE
+           WHEN o.created_at >= $3::date
+            AND o.created_at < ($3::date + INTERVAL '1 day')
+           THEN o.id
+         END)::INT AS orders_today,
          COALESCE(SUM(oi.quantity), 0)::INT AS units_sold,
          COALESCE(SUM(oi.line_total), 0)::NUMERIC AS gmv,
          COALESCE(SUM(CASE WHEN o.status = 'delivered' THEN oi.line_total ELSE 0 END), 0)::NUMERIC AS delivered_revenue,
