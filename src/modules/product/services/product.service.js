@@ -1270,36 +1270,36 @@ class ProductService {
       version: (existingProduct.version || 1) + 1,
     };
 
-    if (
-      isSellerRole(actor) &&
-      existingProduct.status === PRODUCT_STATUS.ACTIVE
-    ) {
-      return this.createPendingRevision(existingProduct, updatePayload, actor);
-    }
+    // if (
+    //   isSellerRole(actor) &&
+    //   existingProduct.status === PRODUCT_STATUS.ACTIVE
+    // ) {
+    //   return this.createPendingRevision(existingProduct, updatePayload, actor);
+    // }
 
-    if (isSellerRole(actor)) {
-      const requestedStatus = payload.status;
-      const shouldSubmitForReview =
-        existingProduct.status === PRODUCT_STATUS.REJECTED ||
-        (
-          requestedStatus !== undefined &&
-          requestedStatus !== PRODUCT_STATUS.DRAFT
-        );
+    // if (isSellerRole(actor)) {
+    //   const requestedStatus = payload.status;
+    //   const shouldSubmitForReview =
+    //     existingProduct.status === PRODUCT_STATUS.REJECTED ||
+    //     (
+    //       requestedStatus !== undefined &&
+    //       requestedStatus !== PRODUCT_STATUS.DRAFT
+    //     );
 
-      if (shouldSubmitForReview) {
-        updatePayload.status = PRODUCT_STATUS.PENDING_APPROVAL;
-        updatePayload.rejectionReason = null;
-        updatePayload["moderation.submittedAt"] = new Date();
-        updatePayload["moderation.rejectionReason"] = null;
-        updatePayload["moderation.notes"] = null;
-        if (existingProduct.status === PRODUCT_STATUS.REJECTED) {
-          updatePayload["moderation.revisionCount"] =
-            (existingProduct.moderation?.revisionCount || 0) + 1;
-        }
-      } else if (requestedStatus === PRODUCT_STATUS.DRAFT) {
-        updatePayload.status = PRODUCT_STATUS.DRAFT;
-      }
-    }
+    //   if (shouldSubmitForReview) {
+    //     updatePayload.status = PRODUCT_STATUS.PENDING_APPROVAL;
+    //     updatePayload.rejectionReason = null;
+    //     updatePayload["moderation.submittedAt"] = new Date();
+    //     updatePayload["moderation.rejectionReason"] = null;
+    //     updatePayload["moderation.notes"] = null;
+    //     if (existingProduct.status === PRODUCT_STATUS.REJECTED) {
+    //       updatePayload["moderation.revisionCount"] =
+    //         (existingProduct.moderation?.revisionCount || 0) + 1;
+    //     }
+    //   } else if (requestedStatus === PRODUCT_STATUS.DRAFT) {
+    //     updatePayload.status = PRODUCT_STATUS.DRAFT;
+    //   }
+    // }
 
     if (updatePayload.status && updatePayload.status !== existingProduct.status) {
       updatePayload.statusHistory = this.appendStatusHistory(existingProduct, {
@@ -2167,9 +2167,27 @@ class ProductService {
     const product = await this.productRepository.findById(productId);
     if (!product) throw new AppError("Product not found", 404);
     this.assertCanAccessManagementProduct(product, actor);
-    const pendingRevision = await this.productRepository.findPendingRevision(productId);
+    const sellerId = String(product.sellerId || "");
+    const [pendingRevision, seller] = await Promise.all([
+      this.productRepository.findPendingRevision(productId),
+      mongoose.Types.ObjectId.isValid(sellerId)
+        ? UserModel.findById(sellerId)
+            .select("email profile sellerProfile")
+            .lean()
+        : null,
+    ]);
+    const sellerName = seller
+      ? seller.sellerProfile?.displayName ||
+        seller.sellerProfile?.legalBusinessName ||
+        seller.sellerProfile?.businessName ||
+        [seller.profile?.firstName, seller.profile?.lastName].filter(Boolean).join(" ") ||
+        seller.email ||
+        null
+      : null;
+
     return {
       ...this.toPlainObject(product),
+      sellerName,
       pendingRevision: pendingRevision ? this.toPlainObject(pendingRevision) : null,
     };
   }
