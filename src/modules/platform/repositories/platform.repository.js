@@ -372,9 +372,13 @@ class PlatformRepository {
     const productCounts = await this.getProductCountsByBrands(items);
     return {
       items: items.map((item) => {
+        const needsApprovalReview =
+          typeof item.$isDefault === "function" &&
+          item.$isDefault("approvalStatus");
         const plainItem = typeof item.toObject === "function" ? item.toObject() : item;
         return {
           ...plainItem,
+          ...(needsApprovalReview ? { approvalStatus: null, needsApprovalReview: true } : {}),
           productCount: productCounts.get(String(plainItem._id)) || 0,
         };
       }),
