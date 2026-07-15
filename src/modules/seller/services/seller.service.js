@@ -799,6 +799,7 @@ class SellerService {
       organization: sellerOrganizationService.buildPublicSummary(organization),
       metrics: {
         totalOrders,
+        ordersToday: Number(summary?.orders_today || 0),
         unitsSold: Number(summary?.units_sold || 0),
         gmv,
         deliveredRevenue: Number(summary?.delivered_revenue || 0),

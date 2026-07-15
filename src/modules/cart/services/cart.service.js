@@ -39,10 +39,20 @@ class CartService {
   }
 
   async upsertCart(userId, payload) {
+    const hasItems = Object.prototype.hasOwnProperty.call(payload, "items");
+    const hasWishlist = Object.prototype.hasOwnProperty.call(payload, "wishlist");
+    const existingCart = hasItems && hasWishlist
+      ? null
+      : await this.cartRepository.getByUserId(userId);
+
     return this.refreshCartAvailability(await this.cartRepository.upsertCart(userId, {
       $set: {
-        items: await this.mergeItems(payload.items || []),
-        wishlist: await this.normalizeWishlist(payload.wishlist || []),
+        items: await this.mergeItems(
+          hasItems ? payload.items || [] : existingCart?.items || [],
+        ),
+        wishlist: await this.normalizeWishlist(
+          hasWishlist ? payload.wishlist || [] : existingCart?.wishlist || [],
+        ),
       },
     }));
   }

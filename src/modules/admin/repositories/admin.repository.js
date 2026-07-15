@@ -143,6 +143,9 @@ class AdminRepository {
     const performanceValues = fromDate || toDate ? [fromDate || toDate, toDate || fromDate] : [];
     const performanceStartSql = fromDate || toDate ? "$1::date" : performanceStart;
     const performanceEndSql = fromDate || toDate ? "$2::date" : performanceEnd;
+    const ordersTodayDate = toDate || null;
+    const ordersSummaryValues = [...ordersRange.values, ordersTodayDate];
+    const ordersTodayDateSql = `$${ordersSummaryValues.length}::date`;
     const [
       totalUsers,
       totalSellers,
@@ -164,7 +167,10 @@ class AdminRepository {
       this.safePostgresQuery(
         `SELECT
            COUNT(*)::INT AS total_orders,
-           COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)::INT AS orders_today,
+           COUNT(*) FILTER (
+             WHERE o.created_at >= COALESCE(${ordersTodayDateSql}, CURRENT_DATE)
+               AND o.created_at < (COALESCE(${ordersTodayDateSql}, CURRENT_DATE) + INTERVAL '1 day')
+           )::INT AS orders_today,
            COUNT(*) FILTER (WHERE LOWER(status) IN ('returned', 'partially_returned', 'return_requested', 'return_approved', 'refunded', 'partially_refunded'))::INT AS returned_orders,
            COALESCE(SUM(COALESCE(payable_amount, total_amount, 0)), 0)::NUMERIC AS gmv,
            COALESCE(SUM(COALESCE(platform_fee_amount, 0)), 0)::NUMERIC AS total_platform_fees,
@@ -176,7 +182,7 @@ class AdminRepository {
            GROUP BY order_id
          ) oi ON oi.order_id = o.id
          ${ordersRange.where}`,
-        ordersRange.values,
+        ordersSummaryValues,
       ),
       this.safePostgresQuery(
         `SELECT

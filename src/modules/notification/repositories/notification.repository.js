@@ -27,10 +27,31 @@ class NotificationRepository {
   }
 
   async listByUser(userId, options = {}) {
-    return NotificationModel.find({
-      userId,
+    const userIds = Array.isArray(userId)
+      ? userId.map((id) => String(id || "").trim()).filter(Boolean)
+      : [String(userId || "").trim()].filter(Boolean);
+    const filter = {
+      userId: userIds.length > 1 ? { $in: userIds } : userIds[0],
       ...(options.channel ? { channel: options.channel } : {}),
-    }).sort({ createdAt: -1 });
+      ...(options.search
+        ? {
+            $or: [
+              { title: { $regex: options.search, $options: "i" } },
+              { subject: { $regex: options.search, $options: "i" } },
+              { template: { $regex: options.search, $options: "i" } },
+            ],
+          }
+        : {}),
+    };
+
+    const limit = Math.min(Math.max(Number(options.limit || 50), 1), 100);
+    const page = Math.max(Number(options.page || 1), 1);
+    const skip = (page - 1) * limit;
+    const [items, total] = await Promise.all([
+      NotificationModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      NotificationModel.countDocuments(filter),
+    ]);
+    return { items, total, page, limit };
   }
 
   async listAll({ page = 1, limit = 50, type, userId, search } = {}) {

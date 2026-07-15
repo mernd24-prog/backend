@@ -24,6 +24,7 @@ const personNamePattern = /^[A-Za-z][A-Za-z .'-]{1,119}$/;
 const bankNamePattern = /^[A-Za-z][A-Za-z .&'-]{1,119}$/;
 const branchNamePattern = /^[A-Za-z0-9][A-Za-z0-9 .,&'/-]{1,119}$/;
 const businessNamePattern = /^[A-Za-z0-9][A-Za-z0-9 .,&'()/-]{1,179}$/;
+const legalBusinessNamePattern = /^[A-Za-z][A-Za-z ]{1,179}$/;
 const udyogAadhaarPattern = /^UDYAM-[A-Z0-9-]{1,14}$/;
 const optionalUdyogAadhaarSchema = Joi.string()
   .uppercase()
@@ -32,7 +33,7 @@ const optionalUdyogAadhaarSchema = Joi.string()
   .empty("UDYAM-")
   .pattern(udyogAadhaarPattern)
   .allow(null);
-const ifscPattern = /^[A-Z0-9]{11}$/;
+const ifscPattern = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const bankAccountPattern = /^[0-9]{9,18}$/;
 
 const sellerOrganizationAddressSchema = Joi.object({
@@ -53,7 +54,7 @@ const sellerOrganizationBankSchema = Joi.object({
 });
 
 const sellerOrganizationBodySchema = Joi.object({
-  legalBusinessName: Joi.string().pattern(businessNamePattern).min(2).max(180),
+  legalBusinessName: Joi.string().pattern(legalBusinessNamePattern).min(2).max(180),
   legalName: Joi.string().pattern(personNamePattern).min(2).max(180),
   storeDisplayName: Joi.string().pattern(businessNamePattern).min(2).max(180),
   displayName: Joi.string().pattern(businessNamePattern).min(2).max(180),
@@ -281,7 +282,7 @@ const updateSellerProfileSchema = Joi.object({
   body: Joi.object({
     displayName: Joi.string().pattern(businessNamePattern).min(2).max(120).allow("", null),
     businessName: Joi.string().pattern(businessNamePattern).min(2).max(160).allow("", null),
-    legalBusinessName: Joi.string().pattern(businessNamePattern).min(2).max(160).required(),
+    legalBusinessName: Joi.string().pattern(legalBusinessNamePattern).min(2).max(160).required(),
     description: Joi.string().max(2000).allow("", null),
     supportEmail: Joi.string().email().required(),
     supportPhone: Joi.string().pattern(/^\d{10,15}$/).required(),
@@ -416,7 +417,7 @@ const updateSellerBankSchema = Joi.object({
   body: Joi.object({
     accountHolderName: Joi.string().required(),
     accountNumber: Joi.string().required(),
-    ifscCode: Joi.string().required(),
+    ifscCode: Joi.string().uppercase().pattern(ifscPattern).required(),
     bankName: Joi.string().required(),
     branchName: Joi.string().allow("", null),
   }).required(),

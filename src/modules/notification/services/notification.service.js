@@ -6,9 +6,15 @@ const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { makeEvent } = require("../../../contracts/events/event");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { NotificationPreferenceModel } = require("../models/notification-preference.model");
+const { ROLES } = require("../../../shared/constants/roles");
 
 const notificationQueue = createQueue("notifications");
 let subscribersRegistered = false;
+const SELLER_ROLES = new Set([
+  ROLES.SELLER,
+  ROLES.SELLER_ADMIN,
+  ROLES.SELLER_SUB_ADMIN,
+]);
 
 class NotificationService {
   constructor({ notificationRepository = new NotificationRepository() } = {}) {
@@ -63,35 +69,101 @@ class NotificationService {
     definitions.forEach(([eventName, subject, templateBuilder]) => {
       eventBus.subscribe(eventName, async (event) => {
         const userId = event.payload.buyerId || event.payload.userId;
-        if (!userId) return;
-        await this.createNotification({
-          userId,
+        if (userId) {
+          await this.createNotification({
+            userId,
+            channel: "in_app",
+            subject,
+            template: templateBuilder(event.payload),
+            payload: {
+              eventName,
+              eventId: event.id,
+              recipientType: "buyer",
+              ...event.payload,
+            },
+            status: "queued",
+            idempotencyKey: `${eventName}:${event.id}:${userId}:buyer:in_app`,
+          });
+
+          await notificationQueue.add("commerce-email-placeholder", {
+            userId,
+            subject,
+            eventName,
+            eventId: event.id,
+          });
+          await notificationQueue.add("commerce-sms-placeholder", {
+            userId,
+            subject,
+            eventName,
+            eventId: event.id,
+          });
+        }
+
+        const sellerIds = this.extractSellerRecipientIds(event.payload)
+          .filter((sellerId) => String(sellerId) !== String(userId || ""));
+        await Promise.all(sellerIds.map((sellerId) => this.createNotification({
+          userId: sellerId,
           channel: "in_app",
           subject,
-          template: templateBuilder(event.payload),
+          template: this.buildSellerCommerceMessage(eventName, event.payload, templateBuilder),
           payload: {
             eventName,
             eventId: event.id,
+            recipientType: "seller",
             ...event.payload,
           },
           status: "queued",
-          idempotencyKey: `${eventName}:${event.id}:${userId}:in_app`,
-        });
-
-        await notificationQueue.add("commerce-email-placeholder", {
-          userId,
-          subject,
-          eventName,
-          eventId: event.id,
-        });
-        await notificationQueue.add("commerce-sms-placeholder", {
-          userId,
-          subject,
-          eventName,
-          eventId: event.id,
-        });
+          idempotencyKey: `${eventName}:${event.id}:${sellerId}:seller:in_app`,
+        })));
       });
     });
+  }
+
+  extractSellerRecipientIds(payload = {}) {
+    const sellerIds = new Set();
+    const add = (value) => {
+      if (value === undefined || value === null || value === "" || value === "platform") return;
+      sellerIds.add(String(value));
+    };
+    const addFromObject = (entry = {}) => {
+      if (!entry || typeof entry !== "object") return;
+      add(entry.sellerId || entry.seller_id || entry.ownerSellerId || entry.userId || entry.id);
+    };
+
+    add(payload.sellerId || payload.seller_id || payload.ownerSellerId);
+    (Array.isArray(payload.sellerIds) ? payload.sellerIds : []).forEach(add);
+    (Array.isArray(payload.seller_ids) ? payload.seller_ids : []).forEach(add);
+    (Array.isArray(payload.items) ? payload.items : []).forEach(addFromObject);
+    (Array.isArray(payload.sellers) ? payload.sellers : []).forEach(addFromObject);
+    (Array.isArray(payload.shipments) ? payload.shipments : []).forEach(addFromObject);
+    add(payload.deal?.sellerId || payload.deal?.seller_id);
+    add(payload.metadata?.sellerId || payload.metadata?.seller_id);
+
+    return Array.from(sellerIds);
+  }
+
+  buildSellerCommerceMessage(eventName, payload = {}, buyerTemplateBuilder) {
+    const reference = payload.orderNumber || payload.orderId || payload.dealNumber || payload.dealId || payload.returnNumber || payload.returnId || "";
+    const status = String(payload.status || "").replace(/_/g, " ");
+    const messages = {
+      [DOMAIN_EVENTS.ORDER_CREATED_V1]: `New order ${reference} has been placed.`,
+      [DOMAIN_EVENTS.ORDER_PAID_V1]: `Payment received for order ${reference}.`,
+      [DOMAIN_EVENTS.ORDER_PAYMENT_FAILED_V1]: `Payment failed for order ${reference}.`,
+      [DOMAIN_EVENTS.ORDER_CANCELLED_V1]: `Order ${reference} was cancelled.`,
+      [DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1]: `Order ${reference} is now ${status}.`,
+      [DOMAIN_EVENTS.RETURN_REQUESTED_V1]: `Return requested for order ${payload.orderId || reference}.`,
+      [DOMAIN_EVENTS.RETURN_APPROVED_V1]: `Return ${reference} has been approved.`,
+      [DOMAIN_EVENTS.RETURN_REJECTED_V1]: `Return ${reference} has been rejected.`,
+      [DOMAIN_EVENTS.RETURN_RECEIVED_V1]: `Return ${reference} has been received.`,
+      [DOMAIN_EVENTS.RETURN_REFUNDED_V1]: `Refund processed for return ${reference}.`,
+      [DOMAIN_EVENTS.SHIPMENT_CREATED_V1]: `Shipment created for order ${payload.orderId || reference}.`,
+      [DOMAIN_EVENTS.SHIPMENT_TRACKING_UPDATED_V1]: `Shipment ${payload.shipmentId || reference} is ${status}.`,
+      [DOMAIN_EVENTS.SHIPMENT_DELIVERED_V1]: `Order ${payload.orderId || reference} has been delivered.`,
+      [DOMAIN_EVENTS.SHIPMENT_DELIVERY_VERIFIED_V1]: `Delivery verified for order ${payload.orderId || reference}.`,
+      [DOMAIN_EVENTS.SHIPMENT_FAILED_V1]: `Shipment failed for order ${payload.orderId || reference}.`,
+      [DOMAIN_EVENTS.SHIPMENT_RTO_V1]: `Shipment for order ${payload.orderId || reference} is returning to origin.`,
+    };
+    return messages[eventName] || buyerTemplateBuilder(payload);
   }
 
   async createNotification(payload) {
@@ -123,8 +195,18 @@ class NotificationService {
     return notification;
   }
 
-  async listMyNotifications(actor) {
-    return this.notificationRepository.listByUser(actor.userId, { channel: "in_app" });
+  async listMyNotifications(actor, query = {}) {
+    const userIds = [actor.userId];
+    if (SELLER_ROLES.has(actor.role) && actor.ownerSellerId) {
+      userIds.push(actor.ownerSellerId);
+    }
+
+    return this.notificationRepository.listByUser([...new Set(userIds.filter(Boolean))], {
+      channel: query.type || query.channel || null,
+      page: query.page,
+      limit: query.limit,
+      search: query.search || query.q || query.keyWord,
+    });
   }
 
   async getPreferences(userId) {
