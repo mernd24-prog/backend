@@ -39,6 +39,7 @@ const inventoryController = new WarehouseController();
 // ── Public ────────────────────────────────────────────────────────────────────
 
 productRoutes.get("/", checkInput(listProductSchema), catchErrors(productController.list));
+productRoutes.get("/discover", checkInput(listProductSchema), catchErrors(productController.discover));
 productRoutes.get("/search", checkInput(searchProductSchema), catchErrors(productController.search));
 productRoutes.get(
   "/prefill",

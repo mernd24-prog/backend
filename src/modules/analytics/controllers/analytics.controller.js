@@ -8,7 +8,11 @@ class AnalyticsController {
   }
 
   track = async (req, res) => {
-    const event = await this.analyticsService.track(req.body);
+    const actor = getCurrentUser(req);
+    const event = await this.analyticsService.track({
+      ...req.body,
+      actorId: actor.userId,
+    });
     res.status(201).json(okResponse(event));
   };
 

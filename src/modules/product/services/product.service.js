@@ -1754,7 +1754,7 @@ class ProductService {
     const pagination = { ...getPage(query), sortBy: query.sortBy || query.sort, sortDir: query.sortDir };
     const filter = {};
 
-    const category = query.category_id || query.category;
+    const category = query.category_id || query.categoryId || query.categorySlug || query.category;
     if (category) {
       const selectedCategories = this.parseProductFilterValues(category);
       const categoryKeys = new Set(selectedCategories);
@@ -1787,6 +1787,33 @@ class ProductService {
     }
     if (!publicOnly && query.visibility) filter.visibility = query.visibility;
     if (query.tags) filter.tags = { $in: this.parseProductFilterValues(query.tags) };
+    if (query.collectionIds || query.collection) {
+      filter.collectionIds = {
+        $in: this.parseProductFilterValues(query.collectionIds || query.collection),
+      };
+    }
+    const merchandisingFilters = [];
+    if (query.featured === true || query.featured === "true") {
+      merchandisingFilters.push({ "metadata.featured": true });
+    }
+    if (query.bestSeller === true || query.bestSeller === "true") {
+      merchandisingFilters.push({
+        $or: [{ "metadata.bestSeller": true }, { "metadata.isBestSeller": true }],
+      });
+    }
+    if (query.newArrival === true || query.newArrival === "true") {
+      merchandisingFilters.push({
+        createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+      });
+    }
+    if (merchandisingFilters.length) {
+      filter.$and = [
+        ...(filter.$and || []),
+        merchandisingFilters.length === 1
+          ? merchandisingFilters[0]
+          : { $or: merchandisingFilters },
+      ];
+    }
     const ratings = this.parseProductRatingFilter(query.min_rating ?? query.minRating ?? query.rating);
     if (ratings.length) filter.rating = { $gte: Math.min(...ratings) };
 
@@ -1795,13 +1822,21 @@ class ProductService {
     const minPrice = query.min_price ?? query.minPrice;
     const maxPrice = query.max_price ?? query.maxPrice;
     if (minPrice !== undefined || maxPrice !== undefined) {
-      filter.price = {};
-      if (minPrice !== undefined) filter.price.$gte = Number(minPrice);
-      if (maxPrice !== undefined) filter.price.$lte = Number(maxPrice);
+      if (publicOnly) {
+        const conditions = [];
+        if (minPrice !== undefined) conditions.push({ $gte: [this.getPublicEffectivePriceExpression(), Number(minPrice)] });
+        if (maxPrice !== undefined) conditions.push({ $lte: [this.getPublicEffectivePriceExpression(), Number(maxPrice)] });
+        this.appendExpressionFilter(filter, conditions.length === 1 ? conditions[0] : { $and: conditions });
+      } else {
+        filter.price = {};
+        if (minPrice !== undefined) filter.price.$gte = Number(minPrice);
+        if (maxPrice !== undefined) filter.price.$lte = Number(maxPrice);
+      }
     }
 
     this.applyDateFilters(filter, query);
-    this.applyStockFilters(filter, query);
+    if (publicOnly) this.applyPublicDiscoveryFilters(filter, query);
+    else this.applyStockFilters(filter, query);
 
     const searchTerm = query.q || query.keyWord || query.search;
     if (searchTerm) {
@@ -1843,19 +1878,12 @@ class ProductService {
     const projection = buildProductListProjection(query);
     const cacheKey = `products:${JSON.stringify({ filter: publicFilter, pagination, projection })}`;
     const result = await remember(cacheKey, 60, () =>
-      this.productRepository.paginate(publicFilter, pagination, {
-        projection,
-        lean: true,
-      }),
+      this.productRepository.aggregatePublicCatalog(publicFilter, pagination, projection),
     );
-    const facets = await this.buildProductFacets(publicFilter, projection, query);
-    const hasPostFilters = this.hasProductPostFilters(query);
-    const filteredItems = (result.items || []).filter((product) => this.productMatchesPostFilters(product, query));
     return {
       ...result,
-      total: hasPostFilters ? facets.total : result.total,
-      items: await this.enrichProductsWithActiveDeals(filteredItems),
-      facets,
+      items: await this.enrichProductsWithActiveDeals(result.items || []),
+      facets: result.facets || {},
     };
   }
 
@@ -1931,6 +1959,97 @@ class ProductService {
     }
   }
 
+  getPublicAvailableStockExpression() {
+    return {
+      $cond: [
+        { $gt: [{ $size: { $ifNull: ["$variants", []] } }, 0] },
+        {
+          $reduce: {
+            input: {
+              $filter: {
+                input: { $ifNull: ["$variants", []] },
+                as: "variant",
+                cond: { $eq: [{ $ifNull: ["$$variant.status", "active"] }, "active"] },
+              },
+            },
+            initialValue: 0,
+            in: {
+              $add: [
+                "$$value",
+                { $max: [0, { $subtract: [{ $ifNull: ["$$this.stock", 0] }, { $ifNull: ["$$this.reservedStock", 0] }] }] },
+              ],
+            },
+          },
+        },
+        { $max: [0, { $subtract: [{ $ifNull: ["$stock", 0] }, { $ifNull: ["$reservedStock", 0] }] }] },
+      ],
+    };
+  }
+
+  getPublicEffectivePriceExpression() {
+    return {
+      $cond: [
+        { $gt: [{ $size: { $ifNull: ["$variants", []] } }, 0] },
+        {
+          $min: {
+            $map: {
+              input: {
+                $filter: {
+                  input: { $ifNull: ["$variants", []] },
+                  as: "variant",
+                  cond: { $ne: [{ $ifNull: ["$$variant.status", "active"] }, "inactive"] },
+                },
+              },
+              as: "variant",
+              in: { $ifNull: ["$$variant.salePrice", "$$variant.price"] },
+            },
+          },
+        },
+        { $ifNull: ["$salePrice", "$price"] },
+      ],
+    };
+  }
+
+  applyPublicDiscoveryFilters(filter, query = {}) {
+    const availableStock = this.getPublicAvailableStockExpression();
+    const wantsInStock = query.inStock === true || query.inStock === "true";
+    const wantsOutOfStock =
+      query.outOfStock === true ||
+      query.outOfStock === "true" ||
+      query.out_of_stock === "true";
+    if (wantsInStock && !wantsOutOfStock) {
+      this.appendExpressionFilter(filter, { $gt: [availableStock, 0] });
+    }
+    if (wantsOutOfStock && !wantsInStock) {
+      this.appendExpressionFilter(filter, { $lte: [availableStock, 0] });
+    }
+    if (query.freeDelivery === true || query.freeDelivery === "true" || query.free_delivery === "true") {
+      filter.$and = [
+        ...(filter.$and || []),
+        {
+          $or: [
+            { "shipping.freeShipping": true },
+            { "shipping.shippingCharge": 0 },
+            { "shipping.additionalCost": 0 },
+          ],
+        },
+      ];
+    }
+    if (query.expressDelivery === true || query.expressDelivery === "true" || query.express_delivery === "true") {
+      filter.$and = [
+        ...(filter.$and || []),
+        {
+          $or: [
+            { "shipping.expressDelivery": true },
+            { "shipping.shippingMethod": /express/i },
+            { "shipping.shippingClass": /express/i },
+            { "shipping.estimatedDaysMax": { $lte: 2 } },
+          ],
+        },
+      ];
+    }
+  }
+
   applyDateFilters(filter, query = {}) {
     const from = query.dateFrom || query.createdFrom;
     const to = query.dateTo || query.createdTo;
@@ -1980,6 +2099,8 @@ class ProductService {
       "search",
       "category",
       "category_id",
+      "categoryId",
+      "categorySlug",
       "status",
       "productType",
       "hasVariants",
@@ -1996,6 +2117,11 @@ class ProductService {
       "sku",
       "brand",
       "tags",
+      "collection",
+      "collectionIds",
+      "featured",
+      "bestSeller",
+      "newArrival",
       "sellerId",
       "organizationId",
       "storeId",
@@ -2038,12 +2164,28 @@ class ProductService {
           : null;
 
       if (attributeKey) {
-        filter[`attributes.${attributeKey}`] = parseFilterValue(value);
+        filter.$and = [
+          ...(filter.$and || []),
+          {
+            $or: [
+              { [`attributes.${attributeKey}`]: parseFilterValue(value) },
+              { [`variants.attributes.${attributeKey}`]: parseFilterValue(value) },
+            ],
+          },
+        ];
         return;
       }
 
       if (!reserved.has(key)) {
-        filter[`attributes.${key}`] = parseFilterValue(value);
+        filter.$and = [
+          ...(filter.$and || []),
+          {
+            $or: [
+              { [`attributes.${key}`]: parseFilterValue(value) },
+              { [`variants.attributes.${key}`]: parseFilterValue(value) },
+            ],
+          },
+        ];
       }
     });
   }
@@ -2216,34 +2358,23 @@ class ProductService {
       return { items: result.items, total: result.total, source: "mongo" };
     };
 
-    if (!isElasticsearchEnabled()) {
-      return searchMongo();
-    }
+    if (!isElasticsearchEnabled()) return searchMongo();
 
     try {
       const esQuery = {
         bool: {
-          must: [
-            {
-              multi_match: {
-                query: query.q,
-                fields: [
-                  "title^4",
-                  "shortDescription^2",
-                  "brand^2",
-                  "category^2",
-                  "description",
-                  "sku^2",
-                  "tags^3",
-                  "color",
-                  "hsnCode",
-                  "productFamilyCode",
-                ],
-                fuzziness: "AUTO",
-                prefix_length: 2,
-              },
+          must: [{
+            multi_match: {
+              query: query.q,
+              fields: [
+                "title^4", "shortDescription^2", "brand^2", "category^2",
+                "description", "sku^2", "tags^3", "color", "hsnCode",
+                "productFamilyCode",
+              ],
+              fuzziness: "AUTO",
+              prefix_length: 2,
             },
-          ],
+          }],
           filter: buildPublicSearchFilters(),
         },
       };
@@ -2277,27 +2408,10 @@ class ProductService {
         const tagsFilter = buildProductSearchExactFilter(["tags.keyword", "tags"], query.tags);
         if (tagsFilter) esQuery.bool.filter.push(tagsFilter);
       }
-      [
-        "color",
-        "size",
-        "material",
-        "fit",
-        "storage",
-        "skinType",
-        "shade",
-        "finish",
-        "room",
-        "sport",
-        "concern",
-      ].forEach((key) => {
+      ["color", "size", "material", "fit", "storage", "skinType", "shade", "finish", "room", "sport", "concern"].forEach((key) => {
         if (!query[key]) return;
         const attributeFilter = buildProductSearchExactFilter(
-          [
-            `${key}.keyword`,
-            key,
-            `attributes.${key}.keyword`,
-            `attributes.${key}`,
-          ],
+          [`${key}.keyword`, key, `attributes.${key}.keyword`, `attributes.${key}`],
           query[key],
         );
         if (attributeFilter) esQuery.bool.filter.push(attributeFilter);
@@ -2324,7 +2438,6 @@ class ProductService {
         popular: [{ "analytics.purchases": "desc" }],
         _score: [{ _score: "desc" }, { "analytics.purchases": "desc" }],
       };
-
       const response = await elasticsearchClient.search({
         index: "products",
         from: (page - 1) * limit,
@@ -2332,7 +2445,6 @@ class ProductService {
         query: esQuery,
         sort: sortOptions[query.sort] || sortOptions._score,
       });
-
       return {
         items: response.hits.hits.map((hit) => ({ ...hit._source, _score: hit._score })),
         total: response.hits.total?.value ?? response.hits.hits.length,
@@ -3000,6 +3112,7 @@ class ProductService {
   assertSellerCanSetStatus(product, nextStatus) {
     const currentStatus = product.status;
     const allowedSellerStatuses = new Set([
+      PRODUCT_STATUS.ACTIVE,
       PRODUCT_STATUS.DRAFT,
       PRODUCT_STATUS.PENDING_APPROVAL,
       PRODUCT_STATUS.INACTIVE,
@@ -3008,6 +3121,16 @@ class ProductService {
 
     if (!allowedSellerStatuses.has(nextStatus)) {
       throw new AppError("Seller cannot directly approve or reject products", 403);
+    }
+
+    if (
+      nextStatus === PRODUCT_STATUS.ACTIVE &&
+      (currentStatus !== PRODUCT_STATUS.INACTIVE || !product.approvedAt)
+    ) {
+      throw new AppError(
+        "Only a previously approved inactive product can be reactivated by seller",
+        403,
+      );
     }
 
     if (currentStatus === PRODUCT_STATUS.ACTIVE && nextStatus !== PRODUCT_STATUS.INACTIVE && nextStatus !== PRODUCT_STATUS.ARCHIVED) {

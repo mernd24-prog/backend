@@ -38,7 +38,6 @@ analyticsRoutes.get(
 analyticsRoutes.post(
   "/events",
   authenticate,
-  allowActions(ACTIONS.ANALYTICS_VIEW),
   checkInput(trackEventSchema),
   catchErrors(analyticsController.track),
 );

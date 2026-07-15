@@ -78,6 +78,242 @@ class ProductRepository {
     return this.paginate({ ...filter, sellerId }, pagination, options);
   }
 
+  async aggregatePublicCatalog(filter = {}, pagination = {}, projection = null) {
+    const page = Math.max(1, Number(pagination.page || 1));
+    const limit = Math.min(100, Math.max(1, Number(pagination.limit || 20)));
+    const skip = Number.isFinite(Number(pagination.skip))
+      ? Number(pagination.skip)
+      : (page - 1) * limit;
+    const sort = this._buildSort(pagination.sortBy, pagination.sortDir);
+    const newArrivalCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const productProjection = projection
+      ? { ...projection, variants: 1, attributes: 1, collectionIds: 1, tags: 1 }
+      : {};
+
+    const [result = {}] = await ProductModel.aggregate([
+      { $match: filter },
+      { $lookup: { from: "categorytrees", localField: "category", foreignField: "categoryKey", as: "_activeCategory" } },
+      { $unwind: "$_activeCategory" },
+      { $match: { "_activeCategory.active": true } },
+      {
+        $set: {
+          _facetAvailableStock: {
+            $cond: [
+              { $gt: [{ $size: { $ifNull: ["$variants", []] } }, 0] },
+              {
+                $reduce: {
+                  input: {
+                    $filter: {
+                      input: { $ifNull: ["$variants", []] },
+                      as: "variant",
+                      cond: { $eq: [{ $ifNull: ["$$variant.status", "active"] }, "active"] },
+                    },
+                  },
+                  initialValue: 0,
+                  in: {
+                    $add: [
+                      "$$value",
+                      {
+                        $max: [
+                          0,
+                          { $subtract: [{ $ifNull: ["$$this.stock", 0] }, { $ifNull: ["$$this.reservedStock", 0] }] },
+                        ],
+                      },
+                    ],
+                  },
+                },
+              },
+              { $max: [0, { $subtract: [{ $ifNull: ["$stock", 0] }, { $ifNull: ["$reservedStock", 0] }] }] },
+            ],
+          },
+          _facetPrice: {
+            $cond: [
+              { $gt: [{ $size: { $ifNull: ["$variants", []] } }, 0] },
+              {
+                $min: {
+                  $map: {
+                    input: {
+                      $filter: {
+                        input: { $ifNull: ["$variants", []] },
+                        as: "variant",
+                        cond: { $ne: [{ $ifNull: ["$$variant.status", "active"] }, "inactive"] },
+                      },
+                    },
+                    as: "variant",
+                    in: { $ifNull: ["$$variant.salePrice", "$$variant.price"] },
+                  },
+                },
+              },
+              { $ifNull: ["$salePrice", "$price"] },
+            ],
+          },
+          _facetAttributeEntries: {
+            $concatArrays: [
+              { $objectToArray: { $ifNull: ["$attributes", {}] } },
+              {
+                $reduce: {
+                  input: { $ifNull: ["$variants", []] },
+                  initialValue: [],
+                  in: { $concatArrays: ["$$value", { $objectToArray: { $ifNull: ["$$this.attributes", {}] } }] },
+                },
+              },
+            ],
+          },
+        },
+      },
+      {
+        $facet: {
+          items: [
+            { $sort: sort },
+            { $skip: skip },
+            { $limit: limit },
+            ...(projection ? [{ $project: productProjection }] : []),
+          ],
+          total: [{ $count: "count" }],
+          categories: [
+            { $set: { directCategory: "$_activeCategory" } },
+            {
+              $graphLookup: {
+                from: "categorytrees",
+                startWith: "$directCategory.parentKey",
+                connectFromField: "parentKey",
+                connectToField: "categoryKey",
+                as: "ancestorCategories",
+                restrictSearchWithMatch: { active: true },
+              },
+            },
+            { $project: { productId: "$_id", nodes: { $concatArrays: [["$directCategory"], "$ancestorCategories"] } } },
+            { $unwind: "$nodes" },
+            { $group: { _id: "$nodes.categoryKey", node: { $first: "$nodes" }, products: { $addToSet: "$productId" } } },
+            { $project: { _id: 0, value: "$_id", key: "$_id", label: "$node.title", parentKey: "$node.parentKey", level: "$node.level", sortOrder: "$node.sortOrder", iconUrl: "$node.iconUrl", bannerUrl: "$node.bannerUrl", count: { $size: "$products" } } },
+            { $sort: { level: 1, sortOrder: 1, label: 1 } },
+          ],
+          brands: [
+            { $match: { brand: { $nin: [null, ""] } } },
+            { $group: { _id: "$brand", count: { $sum: 1 } } },
+            { $project: { _id: 0, value: "$_id", label: "$_id", count: 1 } },
+            { $sort: { count: -1, label: 1 } },
+          ],
+          collections: [
+            { $unwind: "$collectionIds" },
+            { $match: { collectionIds: { $nin: [null, ""] } } },
+            { $group: { _id: "$collectionIds", count: { $sum: 1 } } },
+            {
+              $lookup: {
+                from: "collections",
+                let: { collectionRef: { $toString: "$_id" } },
+                pipeline: [
+                  {
+                    $match: {
+                      $expr: {
+                        $and: [
+                          { $ne: ["$active", false] },
+                          {
+                            $or: [
+                              { $eq: [{ $toString: "$_id" }, "$$collectionRef"] },
+                              { $eq: ["$slug", "$$collectionRef"] },
+                              { $eq: ["$name", "$$collectionRef"] },
+                            ],
+                          },
+                        ],
+                      },
+                    },
+                  },
+                  { $limit: 1 },
+                ],
+                as: "collection",
+              },
+            },
+            { $unwind: "$collection" },
+            { $project: { _id: 0, value: { $toString: "$_id" }, label: { $ifNull: ["$collection.name", { $ifNull: ["$collection.title", "$collection.slug"] }] }, count: 1 } },
+            { $sort: { count: -1, label: 1 } },
+          ],
+          tags: [
+            { $unwind: "$tags" },
+            { $match: { tags: { $nin: [null, ""] } } },
+            { $group: { _id: "$tags", count: { $sum: 1 } } },
+            { $project: { _id: 0, value: "$_id", label: "$_id", count: 1 } },
+            { $sort: { count: -1, label: 1 } },
+          ],
+          attributes: [
+            { $unwind: "$_facetAttributeEntries" },
+            { $match: { "_facetAttributeEntries.k": { $nin: [null, ""] }, "_facetAttributeEntries.v": { $nin: [null, ""] } } },
+            {
+              $set: {
+                _facetAttributeDefinition: {
+                  $arrayElemAt: [
+                    {
+                      $filter: {
+                        input: { $ifNull: ["$_activeCategory.attributeSchema", []] },
+                        as: "definition",
+                        cond: {
+                          $and: [
+                            { $eq: ["$$definition.key", "$_facetAttributeEntries.k"] },
+                            { $eq: ["$$definition.isFilterable", true] },
+                            { $in: ["$$definition.type", ["select", "multi_select", "boolean"]] },
+                          ],
+                        },
+                      },
+                    },
+                    0,
+                  ],
+                },
+              },
+            },
+            { $match: { "_facetAttributeDefinition.key": { $nin: [null, ""] } } },
+            { $set: { _facetAttributeValues: { $cond: [{ $isArray: "$_facetAttributeEntries.v" }, "$_facetAttributeEntries.v", ["$_facetAttributeEntries.v"]] } } },
+            { $unwind: "$_facetAttributeValues" },
+            { $match: { _facetAttributeValues: { $nin: [null, ""] } } },
+            { $group: { _id: { key: "$_facetAttributeEntries.k", value: { $toString: "$_facetAttributeValues" } }, count: { $sum: 1 }, definition: { $first: "$_facetAttributeDefinition" } } },
+            { $group: { _id: "$_id.key", values: { $push: { value: "$_id.value", label: "$_id.value", count: "$count" } }, count: { $sum: "$count" }, definition: { $first: "$definition" } } },
+            { $project: { _id: 0, key: "$_id", label: { $ifNull: ["$definition.label", "$_id"] }, type: "$definition.type", searchable: { $ifNull: ["$definition.isSearchable", false] }, variant: { $ifNull: ["$definition.isVariantAttribute", false] }, count: 1, values: 1 } },
+            { $sort: { key: 1 } },
+          ],
+          price: [{ $match: { _facetPrice: { $type: "number", $gt: 0 } } }, { $group: { _id: null, min: { $min: "$_facetPrice" }, max: { $max: "$_facetPrice" } } }, { $project: { _id: 0, min: 1, max: 1 } }],
+          ratings: [{ $match: { rating: { $type: "number", $gt: 0 } } }, { $project: { rating: { $floor: "$rating" } } }, { $group: { _id: "$rating", count: { $sum: 1 } } }, { $project: { _id: 0, value: { $toString: "$_id" }, label: { $concat: [{ $toString: "$_id" }, "★ & up"] }, count: 1 } }, { $sort: { value: -1 } }],
+          availability: [{ $group: { _id: null, inStock: { $sum: { $cond: [{ $gt: ["$_facetAvailableStock", 0] }, 1, 0] } }, outOfStock: { $sum: { $cond: [{ $gt: ["$_facetAvailableStock", 0] }, 0, 1] } } } }, { $project: { _id: 0, inStock: 1, outOfStock: 1 } }],
+          merchandising: [{
+            $group: {
+              _id: null,
+              featured: { $sum: { $cond: [{ $eq: ["$metadata.featured", true] }, 1, 0] } },
+              bestSeller: { $sum: { $cond: [{ $or: [{ $eq: ["$metadata.bestSeller", true] }, { $eq: ["$metadata.isBestSeller", true] }] }, 1, 0] } },
+              newArrival: { $sum: { $cond: [{ $gte: ["$createdAt", newArrivalCutoff] }, 1, 0] } },
+            },
+          }, { $project: { _id: 0, featured: 1, bestSeller: 1, newArrival: 1 } }],
+        },
+      },
+    ]).allowDiskUse(true);
+
+    const ratingBuckets = result.ratings || [];
+    const ratings = [5, 4, 3, 2, 1]
+      .map((stars) => ({
+        value: String(stars),
+        label: `${stars}★ & up`,
+        count: ratingBuckets.reduce(
+          (total, bucket) =>
+            total + (Number(bucket.value) >= stars ? Number(bucket.count || 0) : 0),
+          0,
+        ),
+      }))
+      .filter((bucket) => bucket.count > 0);
+
+    return {
+      items: result.items || [],
+      total: result.total?.[0]?.count || 0,
+      facets: {
+        categories: result.categories || [],
+        brands: result.brands || [],
+        collections: result.collections || [],
+        tags: result.tags || [],
+        attributes: result.attributes || [],
+        price: result.price?.[0] || { min: null, max: null },
+        ratings,
+        availability: result.availability?.[0] || { inStock: 0, outOfStock: 0 },
+        merchandising: result.merchandising?.[0] || { featured: 0, bestSeller: 0, newArrival: 0 },
+      },
+    };
+  }
+
   async listInventoryProducts(filter = {}, pagination = {}) {
     const safePage = Math.max(1, Number(pagination.page || 1));
     const safeLimit = Math.min(200, Math.max(1, Number(pagination.limit || 50)));

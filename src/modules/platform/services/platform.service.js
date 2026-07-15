@@ -754,7 +754,11 @@ class PlatformService {
   }
 
   async listProductReviews(query = {}) {
-    const pagination = getPage(query);
+    const pagination = {
+      ...getPage(query),
+      sortBy: query.sortBy,
+      sortDir: query.sortDir || query.sortOrder,
+    };
     const filter = {};
     if (query.productId) filter.productId = query.productId;
     if (query.buyerId) filter.buyerId = { $in: [query.buyerId, `admin:${query.buyerId}`] };
@@ -778,7 +782,11 @@ class PlatformService {
   }
 
   async listSellerProductReviews(query = {}, actor = {}) {
-    const pagination = getPage(query);
+    const pagination = {
+      ...getPage(query),
+      sortBy: query.sortBy,
+      sortDir: query.sortDir || query.sortOrder,
+    };
     const sellerId = actor.ownerSellerId || actor.userId;
     if (!sellerId) throw AppError.forbidden("Seller context is required");
 

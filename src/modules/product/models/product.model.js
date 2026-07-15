@@ -447,6 +447,9 @@ productSchema.index({ category: 1, status: 1, price: 1 });
 productSchema.index({ productType: 1, status: 1 });
 productSchema.index({ brand: 1, status: 1 });
 productSchema.index({ tags: 1, status: 1 });
+productSchema.index({ status: 1, visibility: 1, publishedAt: 1, scheduledAt: 1 });
+productSchema.index({ status: 1, visibility: 1, category: 1, brand: 1 });
+productSchema.index({ status: 1, visibility: 1, price: 1, rating: 1 });
 productSchema.index({ "seo.keywords": 1 });
 productSchema.index({ scheduledAt: 1, status: 1 });
 

@@ -10,9 +10,10 @@ const dashboardQuerySchema = Joi.object({
 
 const trackEventSchema = Joi.object({
   body: Joi.object({
-    eventName: Joi.string().required(),
-    actorId: Joi.string().allow("", null),
-    metadata: Joi.object().default({}),
+    eventName: Joi.string().valid("product_view").required(),
+    metadata: Joi.object({
+      productId: Joi.string().required(),
+    }).required(),
   }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),

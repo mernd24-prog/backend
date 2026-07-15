@@ -43,6 +43,21 @@ class ProductController {
     }));
   };
 
+  discover = async (req, res) => {
+    const { page, limit } = getPage(req.query);
+    const result = await this.productService.listProducts(req.query, {
+      publicOnly: true,
+      actor: null,
+    });
+    res.json(okResponse({
+      products: result.items || [],
+      facets: result.facets || {},
+    }, {
+      pagination: paginationMeta(page, limit, result.total || 0),
+      meta: { facets: result.facets || {} },
+    }));
+  };
+
   listMine = async (req, res) => {
     const actor = getCurrentUser(req);
     const { page, limit } = getPage(req.query);

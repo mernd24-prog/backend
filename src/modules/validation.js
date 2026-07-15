@@ -20,7 +20,9 @@ const loyaltyValidation = {
 
 const recommendationValidation = {
   getRecommendations: Joi.object({
-    limit: Joi.number().default(10).max(50),
+    category: Joi.string().allow("", null).optional(),
+    period: Joi.string().valid("today", "week", "month").default("week"),
+    limit: Joi.number().integer().min(1).default(10).max(50),
   }),
   recordInteraction: Joi.object({
     productId: Joi.string().required(),
@@ -256,8 +258,10 @@ const returnValidation = {
 const dynamicPricingValidation = {
   getPriceForProduct: Joi.object({
     productId: Joi.string().required(),
+    variantId: Joi.string().allow("", null).optional(),
+    sku: Joi.string().allow("", null).optional(),
     userTier: Joi.string().valid("bronze", "silver", "gold", "platinum"),
-    quantity: Joi.number().default(1).min(1),
+    quantity: Joi.number().integer().default(1).min(1),
   }),
 
   adjustPrice: Joi.object({

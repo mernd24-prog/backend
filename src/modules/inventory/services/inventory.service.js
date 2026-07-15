@@ -459,6 +459,14 @@ class InventoryService {
       rows = rows.filter((row) => row.variantStatus === query.variantStatus);
     }
 
+    if (["currentStock", "reservedStock", "availableStock"].includes(query.sortBy)) {
+      const direction = query.sortDir === "asc" ? 1 : -1;
+      rows.sort(
+        (left, right) =>
+          (toNumber(left?.[query.sortBy]) - toNumber(right?.[query.sortBy])) * direction,
+      );
+    }
+
     const rowOffset = (page - 1) * limit;
     const pagedRows = rows.slice(rowOffset, rowOffset + limit);
     return {

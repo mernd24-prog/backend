@@ -15,11 +15,16 @@ class DynamicPricingService {
   // ==============================
   // Get Final Price
   // ==============================
-  async getPriceForProduct(productId, userTier = "standard", quantity = 1) {
+  async getPriceForProduct(
+    productId,
+    userTier = "standard",
+    quantity = 1,
+    { variantId = null, sku = null } = {},
+  ) {
     const product = await ProductModel.findById(productId)
       .select("price salePrice variants")
       .lean();
-    const productPrice = this.getProductPrice(product);
+    const productPrice = this.getProductPrice(product, { variantId, sku });
     const cacheKey = `dynamic-price:${productId}`;
 
     let pricing = await getCached(cacheKey);
@@ -175,11 +180,16 @@ class DynamicPricingService {
     return Math.round(price * 100) / 100;
   }
 
-  getProductPrice(product) {
+  getProductPrice(product, { variantId = null, sku = null } = {}) {
     if (!product) return null;
-    const defaultVariant = Array.isArray(product.variants)
-      ? product.variants.find((variant) => variant.isDefault) || product.variants[0]
-      : null;
+    const variants = Array.isArray(product.variants) ? product.variants : [];
+    const requestedVariant = variants.find(
+      (variant) =>
+        (variantId && String(variant._id || variant.id || "") === String(variantId)) ||
+        (sku && String(variant.sku || "") === String(sku)),
+    );
+    const defaultVariant =
+      requestedVariant || variants.find((variant) => variant.isDefault) || variants[0];
     return this.firstPrice(
       defaultVariant?.salePrice,
       defaultVariant?.price,
