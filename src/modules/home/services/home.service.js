@@ -2,6 +2,7 @@
 
 const { ProductRepository } = require("../../product/repositories/product.repository");
 const { DealRepository } = require("../../deal/repositories/deal.repository");
+const { PlatformRepository } = require("../../platform/repositories/platform.repository");
 const {
   applyPublicProductFilter,
   isPublicProduct,
@@ -87,7 +88,18 @@ const FALLBACK_CATEGORIES = {
 const firstDefined = (...values) =>
   values.find((value) => value !== undefined && value !== null && value !== "");
 
-const normalizeKey = (value = "") => String(value || "").trim().toLowerCase();
+const normalizeKey = (value = "") =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const uniqueValues = (values = []) => [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+
+const escapeRegex = (value = "") => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const categoryMatches = (product = {}, categoryCandidates = []) => {
   const allowed = new Set(categoryCandidates.map(normalizeKey).filter(Boolean));
@@ -98,6 +110,7 @@ const categoryMatches = (product = {}, categoryCandidates = []) => {
     product.category_id,
     product.categoryKey,
     product.categorySlug,
+    product.categoryName,
     product.dealCategory,
   ].some((value) => allowed.has(normalizeKey(value)));
 };
@@ -106,9 +119,102 @@ class HomeService {
   constructor({
     productRepository = new ProductRepository(),
     dealRepository = new DealRepository(),
+    platformRepository = new PlatformRepository(),
   } = {}) {
     this.productRepository = productRepository;
     this.dealRepository = dealRepository;
+    this.platformRepository = platformRepository;
+  }
+
+  async resolveCategoryCandidates(category, { includeAliases = true } = {}) {
+    if (!category) return [];
+    const seedCandidates = uniqueValues(includeAliases ? FALLBACK_CATEGORIES[category] || [category] : [category]);
+    const candidateKeys = new Set(seedCandidates);
+
+    await Promise.all(seedCandidates.map(async (categoryKey) => {
+      const descendants = await this.platformRepository
+        .getCategoryDescendantKeys(categoryKey)
+        .catch(() => []);
+      descendants.forEach((descendantKey) => {
+        if (descendantKey) candidateKeys.add(descendantKey);
+      });
+    }));
+
+    const keys = [...candidateKeys];
+    const categoryDocs = keys.length
+      ? await this.platformRepository
+        .listCategories({ categoryKey: { $in: keys } }, { skip: 0, limit: Math.max(keys.length, 1) })
+        .then((result) => result.items || [])
+        .catch(() => [])
+      : [];
+
+    const titleCandidates = categoryDocs.flatMap((item) => [
+      item.categoryKey,
+      item.title,
+      normalizeKey(item.title),
+      item.parentKey,
+    ]);
+
+    return uniqueValues([...keys, ...titleCandidates]);
+  }
+
+  async resolveActiveCategoryCandidates() {
+    const categories = await this.platformRepository
+      .listCategories({ active: true }, { skip: 0, limit: 5000 })
+      .then((result) => result.items || [])
+      .catch(() => []);
+
+    return uniqueValues(categories.flatMap((item) => [
+      item.categoryKey,
+      item.title,
+      normalizeKey(item.title),
+    ]));
+  }
+
+  async listDashboardCategoryConfigs(limit = 4) {
+    const categories = await this.platformRepository
+      .listCategories(
+        { active: true, isDashboardVisible: true },
+        { skip: 0, limit: Math.max(limit * 4, 16) },
+      )
+      .then((result) => result.items || [])
+      .catch(() => []);
+
+    return categories
+      .filter((category) => category?.categoryKey)
+      .sort((a, b) =>
+        Number(a.level || 0) - Number(b.level || 0) ||
+        Number(a.sortOrder || 0) - Number(b.sortOrder || 0) ||
+        String(a.title || "").localeCompare(String(b.title || "")),
+      )
+      .slice(0, limit)
+      .map((category, index) => ({
+        key: `category-collage-${category.categoryKey}`,
+        title: `${category.title || category.categoryKey} Picks`,
+        label: index === 0 ? "Featured" : index === 1 ? "Trending" : index === 2 ? "New In" : "Popular",
+        source: "products",
+        category: category.categoryKey,
+        strictCategory: true,
+        sort: index === 2 ? "newest" : "popular",
+      }));
+  }
+
+  buildCategoryFilter(categoryCandidates = []) {
+    const candidates = uniqueValues(categoryCandidates);
+    if (!candidates.length) return {};
+
+    const normalizedCandidates = uniqueValues(candidates.map(normalizeKey));
+    const regexCandidates = uniqueValues([...candidates, ...normalizedCandidates])
+      .slice(0, 100)
+      .map((value) => new RegExp(`^${escapeRegex(value)}$`, "i"));
+    const matchValues = uniqueValues([...candidates, ...normalizedCandidates]);
+    const fieldClauses = ["category", "categoryId", "category_id", "categoryKey", "categorySlug", "categoryName"]
+      .flatMap((field) => [
+        { [field]: { $in: matchValues } },
+        { [field]: { $in: regexCandidates } },
+      ]);
+
+    return { $or: fieldClauses };
   }
 
   productImage(product = {}) {
@@ -173,16 +279,20 @@ class HomeService {
     return unique.slice(0, limit);
   }
 
-  async listProductItems(config, limit) {
+  async listProductItems(config, limit, baseCategoryCandidates = []) {
     const hasCategory = Boolean(config.category);
     const categoryCandidates = hasCategory
-      ? FALLBACK_CATEGORIES[config.category] || [config.category]
-      : [];
+      ? await this.resolveCategoryCandidates(config.category, { includeAliases: config.strictCategory !== true })
+      : baseCategoryCandidates;
     const projection = {
       title: 1,
       slug: 1,
       category: 1,
       categoryId: 1,
+      category_id: 1,
+      categoryKey: 1,
+      categorySlug: 1,
+      categoryName: 1,
       images: 1,
       image: 1,
       thumbnail: 1,
@@ -215,30 +325,22 @@ class HomeService {
       return (result.items || []).map((product) => this.toCollageItem(product)).filter(Boolean);
     };
 
-    if (!hasCategory) return this.uniqueItems(await readItems({}, limit * 2), limit);
+    if (!hasCategory) {
+      const baseFilter = this.buildCategoryFilter(categoryCandidates);
+      return this.uniqueItems(await readItems(baseFilter, limit * 2), limit);
+    }
 
-    const categoryFilter = {
-      $or: [
-        { category: { $in: categoryCandidates } },
-        { categoryId: { $in: categoryCandidates } },
-        { category_id: { $in: categoryCandidates } },
-        { categoryKey: { $in: categoryCandidates } },
-        { categorySlug: { $in: categoryCandidates } },
-      ],
-    };
+    const categoryFilter = this.buildCategoryFilter(categoryCandidates);
     const categoryItems = await readItems(categoryFilter);
     const selectedCategoryItems = this.uniqueItems(categoryItems, limit);
-    if (selectedCategoryItems.length >= limit) return selectedCategoryItems;
-
-    const topUpItems = await readItems({}, limit * 2);
-    return this.uniqueItems([...selectedCategoryItems, ...topUpItems], limit);
+    return selectedCategoryItems;
   }
 
-  async listDealItems(config, limit) {
+  async listDealItems(config, limit, baseCategoryCandidates = []) {
     const hasCategory = Boolean(config.category);
     const categoryCandidates = hasCategory
-      ? FALLBACK_CATEGORIES[config.category] || [config.category]
-      : [];
+      ? await this.resolveCategoryCandidates(config.category, { includeAliases: config.strictCategory !== true })
+      : baseCategoryCandidates;
     const deals = await this.dealRepository.listActiveDealProducts({
       sortBy: config.sort === "discount" ? "discount_percent" : "priority",
       sortDir: config.sort === "discount" ? "desc" : "asc",
@@ -282,12 +384,15 @@ class HomeService {
       (product) => Number(product.discountPercent || 0) >= minDiscountPercent,
     );
     const sourceDeals = eligibleDeals.length >= limit ? eligibleDeals : dealProducts;
+    const shouldFilterCategory = hasCategory || categoryCandidates.length > 0;
+    const filteredSourceDeals = shouldFilterCategory
+      ? sourceDeals.filter((product) => categoryMatches(product, categoryCandidates))
+      : sourceDeals;
 
-    const categoryItems = sourceDeals
-      .filter((product) => !hasCategory || categoryMatches(product, categoryCandidates))
+    const categoryItems = filteredSourceDeals
       .map((product) => this.toCollageItem(product))
       .filter(Boolean);
-    const topUpItems = sourceDeals
+    const topUpItems = filteredSourceDeals
       .map((product) => this.toCollageItem(product))
       .filter(Boolean)
       .slice(0, limit * 2);
@@ -307,10 +412,10 @@ class HomeService {
       : config.title;
   }
 
-  async buildSection(config, perSectionLimit, usedProductIds = new Set()) {
+  async buildSection(config, perSectionLimit, usedProductIds = new Set(), baseCategoryCandidates = []) {
     const items = config.source === "deals"
-      ? await this.listDealItems(config, perSectionLimit + usedProductIds.size)
-      : await this.listProductItems(config, perSectionLimit + usedProductIds.size);
+      ? await this.listDealItems(config, perSectionLimit + usedProductIds.size, baseCategoryCandidates)
+      : await this.listProductItems(config, perSectionLimit + usedProductIds.size, baseCategoryCandidates);
     const selectedItems = items.slice(0, perSectionLimit);
     if (!selectedItems.length) return null;
     selectedItems.forEach((item) => {
@@ -330,10 +435,13 @@ class HomeService {
   async listCollectionCollages(query = {}) {
     const perSectionLimit = Math.min(8, Math.max(1, Number(query.itemsPerSection || query.itemLimit || 4)));
     const sectionLimit = Math.min(8, Math.max(1, Number(query.limit || 4)));
+    const activeCategoryCandidates = await this.resolveActiveCategoryCandidates();
+    const dashboardConfigs = await this.listDashboardCategoryConfigs(sectionLimit);
     const sections = [];
     const usedProductIds = new Set();
 
-    for (const config of SECTION_CONFIGS.slice(0, sectionLimit)) {
+    const primaryConfigs = dashboardConfigs.length ? dashboardConfigs : SECTION_CONFIGS;
+    for (const config of primaryConfigs.slice(0, sectionLimit)) {
       const section = await this.buildSection(config, perSectionLimit, usedProductIds);
       if (section) sections.push(section);
     }
@@ -341,7 +449,12 @@ class HomeService {
     for (const config of GENERIC_SECTION_CONFIGS) {
       if (sections.length >= sectionLimit) break;
       if (sections.some((section) => section.key === config.key)) continue;
-      const section = await this.buildSection(config, perSectionLimit, usedProductIds);
+      const section = await this.buildSection(
+        config,
+        perSectionLimit,
+        usedProductIds,
+        activeCategoryCandidates,
+      );
       if (section) sections.push(section);
     }
 
