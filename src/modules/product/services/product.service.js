@@ -228,44 +228,6 @@ class ProductService {
       .filter(Boolean);
   }
 
-  normalizeReturnPolicy(payload = {}, existingProduct = null) {
-    const existing = this.toPlainObject(existingProduct) || {};
-    const existingWarranty = existing.warranty || {};
-    const incomingWarranty = payload.warranty || {};
-    const existingPolicy = existingWarranty.returnPolicy || {};
-    const incomingPolicy = incomingWarranty.returnPolicy || {};
-    if (existingProduct && payload.warranty === undefined) return payload;
-
-    const policy = { ...existingPolicy, ...incomingPolicy };
-    const returnable = incomingPolicy.returnable ?? incomingPolicy.eligible ??
-      existingPolicy.returnable ?? existingPolicy.eligible ?? true;
-    const returnWindowDays = returnable
-      ? Math.max(Number(incomingPolicy.returnWindowDays ?? incomingPolicy.days ??
-        existingPolicy.returnWindowDays ?? existingPolicy.days ?? 7), 0)
-      : 0;
-
-    return {
-      ...payload,
-      warranty: {
-        ...existingWarranty,
-        ...incomingWarranty,
-        returnPolicy: {
-          ...policy,
-          returnable,
-          eligible: returnable,
-          returnWindowDays,
-          days: returnWindowDays,
-          type: returnable ? policy.type || "standard" : "non_returnable",
-          resolution: policy.resolution || "refund_or_replacement",
-          requiresImages: Boolean(policy.requiresImages || policy.requires_images),
-          inspectionRequired: policy.inspectionRequired ?? policy.requiresQc ?? true,
-          shippingPaidBy: policy.shippingPaidBy || "platform",
-          restockingFee: Math.max(Number(policy.restockingFee || 0), 0),
-        },
-      },
-    };
-  }
-
   normalizeVariantAttributes(attributes = {}) {
     const source = attributes instanceof Map ? Object.fromEntries(attributes) : attributes;
     return Object.entries(source || {}).reduce((acc, [key, value]) => {
@@ -552,9 +514,14 @@ class ProductService {
   }
 
   withPrimaryImageAlias(product = {}) {
-    const primaryImage = this.normalizeImageUrl(product.image) || this.normalizeImageUrl(product.images?.[0]);
+    const { variants, ...productWithoutVariants } = product || {};
+    const variantImage = (Array.isArray(variants) ? variants : [])
+      .map((variant) => this.normalizeImageUrl(variant?.image) || this.normalizeImageUrl(variant?.images?.[0]))
+      .find(Boolean);
+    const primaryImage = this.normalizeImageUrl(product.image) || this.normalizeImageUrl(product.images?.[0]) || variantImage;
     return {
-      ...product,
+      ...productWithoutVariants,
+      images: primaryImage ? [primaryImage] : [],
       image: product.image || primaryImage || null,
       imageUrl: product.imageUrl || primaryImage || null,
       thumbnail: product.thumbnail || primaryImage || null,
@@ -1163,7 +1130,6 @@ class ProductService {
       : payload.sellerId || actor.userId;
     const organizationContext = await this.resolveProductOrganization(payload, actor, sellerId);
 
-    payload = this.normalizeReturnPolicy(payload);
     payload = this.normalizeProductMedia(payload);
     payload = this.normalizeProductVariants(payload);
     payload = this.syncRootAndDefaultVariant(payload);
@@ -1277,7 +1243,6 @@ class ProductService {
       delete payload.organizationSnapshot;
     }
 
-    payload = this.normalizeReturnPolicy(payload, existingProduct);
     payload = this.normalizeProductMedia(payload);
     payload = this.normalizeProductVariants(payload);
     payload = this.syncRootAndDefaultVariant(payload, existingProduct);
@@ -3335,7 +3300,7 @@ class ProductService {
     const activeFilter = publicFilter.$or?.length ? publicFilter : categoryFilter;
 
     const results = await this.productRepository.paginate(activeFilter, { page: 1, limit, skip: 0, sortBy: "rating" }, {
-      projection: { title: 1, slug: 1, images: 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1, tags: 1 },
+      projection: { title: 1, slug: 1, images: 1, "variants.images": 1, "variants.image": 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1, tags: 1 },
       lean: true,
     });
 
@@ -3353,7 +3318,7 @@ class ProductService {
       : applyPublicProductFilter({ _id: { $ne: product._id }, category: { $ne: product.category } });
 
     const results = await this.productRepository.paginate(baseFilter, { page: 1, limit, skip: 0, sortBy: "newest" }, {
-      projection: { title: 1, slug: 1, images: 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1 },
+      projection: { title: 1, slug: 1, images: 1, "variants.images": 1, "variants.image": 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1 },
       lean: true,
     });
 
@@ -3378,11 +3343,11 @@ class ProductService {
     });
 
     const results = await this.productRepository.paginate(filter, { page: 1, limit, skip: 0, sortBy: "rating" }, {
-      projection: { title: 1, slug: 1, images: 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1 },
+      projection: { title: 1, slug: 1, images: 1, "variants.images": 1, "variants.image": 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1 },
       lean: true,
     });
 
-    return results.items || [];
+    return (results.items || []).map((item) => this.withPrimaryImageAlias(item));
   }
 
   computeCompletenessScore(product) {
