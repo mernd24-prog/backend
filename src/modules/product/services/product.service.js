@@ -513,6 +513,16 @@ class ProductService {
     );
   }
 
+  withPrimaryImageAlias(product = {}) {
+    const primaryImage = this.normalizeImageUrl(product.image) || this.normalizeImageUrl(product.images?.[0]);
+    return {
+      ...product,
+      image: product.image || primaryImage || null,
+      imageUrl: product.imageUrl || primaryImage || null,
+      thumbnail: product.thumbnail || primaryImage || null,
+    };
+  }
+
   normalizeProductMedia(payload = {}) {
     const normalized = { ...payload };
     delete normalized.images;
@@ -3289,7 +3299,7 @@ class ProductService {
       lean: true,
     });
 
-    return results.items || [];
+    return (results.items || []).map((item) => this.withPrimaryImageAlias(item));
   }
 
   async getCrossSellProducts(productId, { limit = 6 } = {}) {
@@ -3307,7 +3317,7 @@ class ProductService {
       lean: true,
     });
 
-    return results.items || [];
+    return (results.items || []).map((item) => this.withPrimaryImageAlias(item));
   }
 
   async getUpSellProducts(productId, { limit = 4 } = {}) {
