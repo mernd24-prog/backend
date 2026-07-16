@@ -9,12 +9,12 @@ const { InventoryService } = require("../../inventory/services/inventory.service
 const { TaxService } = require("../../tax/services/tax.service");
 const { CommissionService } = require("../../seller/services/commission.service");
 const { DeliveryRepository } = require("../../delivery/repositories/delivery.repository");
-const { shippingProviderRegistry } = require("../../../infrastructure/shipping/provider-registry");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { RazorpayProvider } = require("../../../infrastructure/payments/providers/razorpay.provider");
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
+const { knex } = require("../../../infrastructure/postgres/postgres-client");
 
 const VALID_TRANSITIONS = {
   requested: ["approved", "rejected", "closed"],
@@ -59,7 +59,6 @@ const REVERSE_STATUS_MAP = {
   in_transit: "in_reverse_transit",
   out_for_delivery: "in_reverse_transit",
   delivered: "received",
-  delivered_verified: "received",
   received: "received",
 };
 
@@ -454,52 +453,63 @@ class ReturnServiceClass {
   }
 
   async resolveReturnPolicy(order, orderItems) {
+    const commerceSettings = await commerceSettingsService.getSettings();
+    const deliveredAt = this.resolveDeliveredAt(order);
     const policies = orderItems.map((item) => {
       const snapshot = this.parseJson(item.product_snapshot, {});
-      return snapshot.returnPolicy || snapshot.return_policy || snapshot.commercialPolicy?.returnPolicy || {};
+      const storedPolicy = this.parseJson(item.return_policy_snapshot, {});
+      const productPolicy = snapshot.returnPolicy || snapshot.return_policy || snapshot.commercialPolicy?.returnPolicy || storedPolicy;
+      const returnable = productPolicy.returnable ?? productPolicy.eligible ?? item.returnable ?? true;
+      const returnWindowDays = returnable
+        ? Math.max(Number(productPolicy.returnWindowDays ?? productPolicy.days ?? item.return_window_days ?? commerceSettings.returns?.defaultWindowDays ?? 7), 0)
+        : 0;
+      const itemDeliveredAt = new Date(item.delivered_at || storedPolicy.deliveredAt || deliveredAt);
+      const eligibleUntil = new Date(item.return_eligible_until || storedPolicy.eligibleUntil || itemDeliveredAt);
+      if (!item.return_eligible_until && !storedPolicy.eligibleUntil) eligibleUntil.setDate(eligibleUntil.getDate() + returnWindowDays);
+      return { ...productPolicy, returnable, returnWindowDays, deliveredAt: itemDeliveredAt, eligibleUntil };
     });
     if (policies.some((policy) => policy.returnable === false || policy.eligible === false)) {
       throw new AppError("One or more selected items are not returnable", 409);
     }
-    const commerceSettings = await commerceSettingsService.getSettings();
-    // The platform owns the policy. Delivered orders use their immutable snapshot;
-    // legacy orders fall back to the current global policy only.
-    const returnWindowDays = Number(
-      order.return_window_days || order.returnWindowDays || commerceSettings.returns?.defaultWindowDays || 7,
-    );
-    const deliveredAt = this.resolveDeliveredAt(order);
-    const eligibleUntil = new Date(order.return_eligible_until || order.returnEligibleUntil || deliveredAt);
-    if (!order.return_eligible_until && !order.returnEligibleUntil) eligibleUntil.setDate(eligibleUntil.getDate() + returnWindowDays);
-    if (eligibleUntil.getTime() < Date.now()) {
-      throw new AppError(`Return window expired on ${eligibleUntil.toISOString()}`, 409);
+    const expiredPolicy = policies.find((policy) => policy.eligibleUntil.getTime() < Date.now());
+    if (expiredPolicy) {
+      throw new AppError(`Return window expired on ${expiredPolicy.eligibleUntil.toISOString()}`, 409);
     }
+    const returnWindowDays = Math.max(...policies.map((policy) => policy.returnWindowDays), 0);
+    const eligibleUntil = policies.reduce((latest, policy) => latest > policy.eligibleUntil ? latest : policy.eligibleUntil, deliveredAt);
     return {
       returnable: true,
       returnWindowDays,
       deliveredAt,
       eligibleUntil,
-      shippingPaidBy: policies.find((policy) => policy.shippingPaidBy)?.shippingPaidBy || "platform_policy",
+      shippingPaidBy: policies.find((policy) => policy.shippingPaidBy)?.shippingPaidBy || "platform",
       requiresQc: !policies.some((policy) => policy.requiresQc === false),
-      source: order.return_eligible_until || order.returnEligibleUntil ? "order_snapshot" : "platform_global_policy",
-      sellerPolicyWindows: [],
+      source: "product_item_policies",
+      sellerPolicyWindows: policies.map((policy) => ({
+        returnWindowDays: policy.returnWindowDays,
+        eligibleUntil: policy.eligibleUntil,
+      })),
     };
   }
 
   getOrderItemReturnPolicy(orderItem = {}, fallback = {}) {
     const snapshot = this.parseJson(orderItem.product_snapshot, {});
     const policy = snapshot.returnPolicy || snapshot.return_policy || snapshot.commercialPolicy?.returnPolicy || {};
-    const returnWindowDays = Number(fallback.returnWindowDays || 7);
+    const returnable = policy.returnable ?? policy.eligible ?? orderItem.returnable ?? fallback.returnable ?? true;
+    const returnWindowDays = returnable
+      ? Number(policy.returnWindowDays ?? policy.days ?? orderItem.return_window_days ?? fallback.returnWindowDays ?? 7)
+      : 0;
 
     return {
       ...policy,
-      returnable: policy.returnable ?? policy.eligible ?? fallback.returnable ?? true,
-      eligible: policy.eligible ?? policy.returnable ?? fallback.returnable ?? true,
+      returnable,
+      eligible: returnable,
       returnWindowDays,
-      eligibleUntil: fallback.eligibleUntil || null,
-      deliveredAt: fallback.deliveredAt || null,
+      eligibleUntil: orderItem.return_eligible_until || fallback.eligibleUntil || null,
+      deliveredAt: orderItem.delivered_at || fallback.deliveredAt || null,
       requiresImages: Boolean(policy.requiresImages || policy.requires_images),
       inspectionRequired: policy.inspectionRequired ?? policy.requiresQc ?? fallback.requiresQc ?? true,
-      source: policy.source || fallback.source || "product_snapshot",
+      source: policy.source || "product_snapshot",
     };
   }
 
@@ -642,6 +652,28 @@ class ReturnServiceClass {
     }
 
     await this.markOrderReturnRequested(order, createdReturns, actor);
+    const affectedItemIds = normalizedItems.map((item) => item.orderItemId).filter(Boolean);
+    if (affectedItemIds.length) {
+      await knex.transaction(async (trx) => {
+        const payoutRows = await trx("order_items").whereIn("id", affectedItemIds).whereNotNull("payout_id").select("payout_id");
+        await trx("order_items").whereIn("id", affectedItemIds).whereNot("payout_status", "released").update({
+          payout_status: "held",
+          payout_hold_reason: "open_return",
+        });
+        await trx("seller_commissions").whereIn("order_item_id", affectedItemIds).whereNot("status", "paid").update({
+          hold_reason: "open_return",
+          updated_at: trx.fn.now(),
+        });
+        const payoutIds = [...new Set(payoutRows.map((row) => row.payout_id).filter(Boolean))];
+        if (payoutIds.length) await trx("seller_payouts").whereIn("id", payoutIds).whereNotIn("status", ["completed", "failed", "cancelled"]).update({ status: "on_hold", updated_at: trx.fn.now() });
+        await trx("payout_status_history").insert(affectedItemIds.map((orderItemId) => ({
+          id: uuidv4(), order_id: orderId, order_item_id: orderItemId,
+          from_status: "pending", to_status: "held", reason: "return_requested",
+          actor_id: actor.userId || buyerId, actor_role: actor.role || "buyer",
+          metadata: { returnIds: createdReturns.map((item) => String(item._id)) },
+        })));
+      });
+    }
 
     logger.info({ orderId, returnIds: createdReturns.map((item) => item._id) }, "Return requested");
     return createdReturns.length === 1
@@ -758,6 +790,20 @@ class ReturnServiceClass {
     this.appendTimeline(returnRequest, "rejected", actor, { reason });
     await returnRequest.save();
     await this.publishReturnEvent(DOMAIN_EVENTS.RETURN_REJECTED_V1, returnRequest, actor, { reason });
+    const itemIds = (returnRequest.items || []).map((item) => item.orderItemId).filter(Boolean);
+    if (itemIds.length) {
+      const rows = await knex("order_items").whereIn("id", itemIds);
+      for (const item of rows) {
+        const nextStatus = item.payout_eligible_at && new Date(item.payout_eligible_at).getTime() <= Date.now()
+          ? "eligible"
+          : "pending";
+        await knex("order_items").where("id", item.id).where("payout_status", "held").update({
+          payout_status: nextStatus,
+          payout_hold_reason: null,
+        });
+        await knex("seller_commissions").where("order_item_id", item.id).whereNot("status", "paid").update({ hold_reason: null, updated_at: knex.fn.now() });
+      }
+    }
     return returnRequest;
   }
 
@@ -770,30 +816,28 @@ class ReturnServiceClass {
 
     if (!manualShipBack) {
       const order = await this.orderRepository.findByIdWithItems(returnRequest.orderId);
-      const provider = shippingProviderRegistry.get(payload.provider || "manual");
-      const providerResult = await provider.createShipment({
-        ...payload,
-        orderId: returnRequest.orderId,
-        returnId: String(returnRequest._id),
-      });
-      const trackingNumber = providerResult.trackingNumber || payload.trackingNumber || providerResult.awbNumber;
+      const trackingNumber = payload.trackingNumber || payload.awbNumber;
+      if (!payload.courierName || !trackingNumber) {
+        throw new AppError("Courier name and tracking number are required for reverse pickup", 400);
+      }
       const shipment = await this.deliveryRepository.createShipment({
         orderId: returnRequest.orderId,
         returnId: String(returnRequest._id),
         sellerId: returnRequest.sellerId || returnRequest.items[0]?.sellerId || "platform",
         shipmentType: "return",
         direction: "reverse",
-        provider: payload.provider || providerResult.provider || "manual",
+        provider: "manual",
         courierName: payload.courierName || null,
-        awbNumber: providerResult.awbNumber || payload.awbNumber || trackingNumber,
+        awbNumber: payload.awbNumber || trackingNumber,
         trackingNumber,
+        trackingUrl: payload.trackingUrl || null,
         status: "initiated",
         shippingMode: payload.shippingMode || "standard",
         packageSnapshot: payload.packageSnapshot || {},
         pickupAddressSnapshot: payload.pickupAddressSnapshot || returnRequest.shipFromSnapshot || {},
         shipToSnapshot: payload.warehouseAddressSnapshot || payload.shipToSnapshot || {},
         rateSnapshot: payload.rateSnapshot || {},
-        labelData: providerResult.labelData || payload.labelData || {},
+        labelData: payload.labelData || {},
         expectedDeliveryAt: payload.expectedDeliveryAt || null,
         idempotencyKey: payload.idempotencyKey || `return:${returnRequest._id}:reverse-shipment`,
         metadata: {
@@ -887,7 +931,7 @@ class ReturnServiceClass {
     returnRequest.reverseShipment.status = payload.status;
     returnRequest.reverseShipment.trackingNumber = result.shipment.tracking_number || returnRequest.reverseShipment.trackingNumber;
     if (payload.status === "picked_up") returnRequest.reverseShipment.pickedUpAt = payload.eventTime || new Date();
-    if (["delivered", "delivered_verified", "received"].includes(payload.status)) {
+    if (["delivered", "received"].includes(payload.status)) {
       const receivedAt = payload.eventTime || new Date();
       returnRequest.reverseShipment.deliveredToWarehouseAt = receivedAt;
       returnRequest.receivedAt = returnRequest.receivedAt || receivedAt;

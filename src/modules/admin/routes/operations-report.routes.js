@@ -28,11 +28,6 @@ adminReportRoutes.get(
   catchErrors(operationsReportController.exportShipments),
 );
 adminReportRoutes.get(
-  "/delivery-agents/export",
-  checkInput(reportExportSchema),
-  catchErrors(operationsReportController.exportDeliveryAgents),
-);
-adminReportRoutes.get(
   "/returns/export",
   checkInput(reportExportSchema),
   catchErrors(operationsReportController.exportReturns),

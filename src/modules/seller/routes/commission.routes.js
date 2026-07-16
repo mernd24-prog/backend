@@ -392,6 +392,15 @@ router.post("/payouts/:payoutId/fail", authenticate, platformFinanceOnly, financ
   }
 });
 
+router.post("/payouts/:payoutId/cancel", authenticate, platformFinanceOnly, financeManage, async (req, res, next) => {
+  try {
+    const result = await CommissionService.cancelPayout(req.params.payoutId, req.body?.reason, req.auth);
+    return res.status(200).json({ success: true, message: "Payout cancelled", data: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ==============================
 // Admin: Approve payout for processing
 // ==============================
@@ -537,6 +546,7 @@ router.post(
           periodStart: value.periodStart || req.body?.periodStart,
           periodEnd: value.periodEnd || req.body?.periodEnd,
           ...(value.organizationId ? { organizationId: value.organizationId } : {}),
+          commissionIds: value.commissionIds,
           paymentReference: req.body?.paymentReference,
           paymentMethod: req.body?.paymentMethod,
           note: value.note,

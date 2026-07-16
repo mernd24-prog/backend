@@ -12,16 +12,7 @@ const {
   listShipmentsSchema,
   createShipmentSchema,
   shipmentParamSchema,
-  listDeliveryAgentsSchema,
-  createDeliveryAgentSchema,
-  updateDeliveryAgentSchema,
-  deliveryAgentParamSchema,
-  assignDeliveryAgentSchema,
   trackingEventSchema,
-  trackingWebhookSchema,
-  deliveryOtpSchema,
-  confirmDeliverySchema,
-  createManifestSchema,
   orderDeliveryParamSchema,
   createEWayBillSchema,
   updateEWayBillStatusSchema,
@@ -50,50 +41,12 @@ deliveryRoutes.get(
   catchErrors(deliveryController.listShipments),
 );
 
-deliveryRoutes.get(
-  "/agents",
-  authenticate,
-  allowPermissions("delivery:view"),
-  checkInput(listDeliveryAgentsSchema),
-  catchErrors(deliveryController.listDeliveryAgents),
-);
-
-deliveryRoutes.post(
-  "/agents",
-  authenticate,
-  allowPermissions("delivery:create"),
-  checkInput(createDeliveryAgentSchema),
-  catchErrors(deliveryController.createDeliveryAgent),
-);
-
-deliveryRoutes.get(
-  "/agents/:deliveryAgentId",
-  authenticate,
-  allowPermissions("delivery:view"),
-  checkInput(deliveryAgentParamSchema),
-  catchErrors(deliveryController.getDeliveryAgent),
-);
-
-deliveryRoutes.patch(
-  "/agents/:deliveryAgentId",
-  authenticate,
-  allowPermissions("delivery:update"),
-  checkInput(updateDeliveryAgentSchema),
-  catchErrors(deliveryController.updateDeliveryAgent),
-);
-
 deliveryRoutes.post(
   "/shipments",
   authenticate,
   allowPermissions("delivery:create"),
   checkInput(createShipmentSchema),
   catchErrors(deliveryController.createShipment),
-);
-
-deliveryRoutes.post(
-  "/shipments/webhook",
-  checkInput(trackingWebhookSchema),
-  catchErrors(deliveryController.trackingWebhook),
 );
 
 deliveryRoutes.get(
@@ -105,43 +58,11 @@ deliveryRoutes.get(
 );
 
 deliveryRoutes.post(
-  "/shipments/:shipmentId/assign-agent",
-  authenticate,
-  allowPermissions("delivery:assign"),
-  checkInput(assignDeliveryAgentSchema),
-  catchErrors(deliveryController.assignDeliveryAgent),
-);
-
-deliveryRoutes.post(
   "/shipments/:shipmentId/tracking",
   authenticate,
   allowPermissions("delivery:status_change"),
   checkInput(trackingEventSchema),
   catchErrors(deliveryController.addTrackingEvent),
-);
-
-deliveryRoutes.post(
-  "/shipments/:shipmentId/delivery-otp",
-  authenticate,
-  allowPermissions("delivery:status_change"),
-  checkInput(deliveryOtpSchema),
-  catchErrors(deliveryController.generateDeliveryOtp),
-);
-
-deliveryRoutes.post(
-  "/shipments/:shipmentId/confirm-delivery",
-  authenticate,
-  allowPermissions("delivery:status_change"),
-  checkInput(confirmDeliverySchema),
-  catchErrors(deliveryController.confirmDelivery),
-);
-
-deliveryRoutes.post(
-  "/manifests",
-  authenticate,
-  allowPermissions("delivery:create"),
-  checkInput(createManifestSchema),
-  catchErrors(deliveryController.createManifest),
 );
 
 deliveryRoutes.get(

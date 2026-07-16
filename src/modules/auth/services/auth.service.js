@@ -226,13 +226,9 @@ class AuthService {
       ownerSellerId: user.ownerSellerId || null,
     };
 
-    if (user.role === ROLES.SUPER_ADMIN) {
-      payload.isSuperAdmin = true;
-    }
-
     try {
       const superAdminRecord = await this.rbacService.getSuperAdminByUserId(user.id);
-      if (superAdminRecord) {
+      if (superAdminRecord && superAdminRecord.isActive !== false) {
         payload.isSuperAdmin = true;
       }
     } catch (error) {
@@ -289,6 +285,40 @@ class AuthService {
     }
 
     await this.assertActiveRoleForLogin(user);
+  }
+
+  async assertAdminPanelLoginAllowed(user, requestContext = {}) {
+    const adminPanelRoles = new Set([ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.SUB_ADMIN]);
+    if (!adminPanelRoles.has(user.role)) {
+      return;
+    }
+
+    const superAdminRecord = await this.rbacService.getSuperAdminByUserId(user.id);
+    if (user.role === ROLES.SUPER_ADMIN) {
+      if (superAdminRecord && superAdminRecord.isActive !== false) {
+        return;
+      }
+      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
+        userId: user.id,
+        email: user.email,
+        provider: "password",
+        ...requestContext,
+        metadata: { reason: "super_admin_not_active" },
+      });
+      throw new AppError("This super admin account is no longer active", 403);
+    }
+
+    const hasActiveRole = await this.rbacService.hasActiveUserRole(user.id);
+    if (!hasActiveRole) {
+      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
+        userId: user.id,
+        email: user.email,
+        provider: "password",
+        ...requestContext,
+        metadata: { reason: "admin_role_not_assigned" },
+      });
+      throw new AppError("This admin account is no longer active", 403);
+    }
   }
 
   async register(payload, requestContext = {}) {
@@ -566,6 +596,8 @@ class AuthService {
       });
       throw new AppError("Invalid credentials", 401);
     }
+
+    await this.assertAdminPanelLoginAllowed(user, requestContext);
 
     const influencerSession = options.requireInfluencer
       ? await this.referralService.getInfluencerSessionByUserId(user.id)

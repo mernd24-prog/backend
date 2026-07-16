@@ -19,7 +19,6 @@ const reportExportSchema = Joi.object({
     orderId: Joi.string().allow("", null),
     productId: Joi.string().allow("", null),
     returnId: Joi.string().allow("", null),
-    deliveryAgentId: Joi.string().allow("", null),
     status: Joi.string().allow("", null),
     paymentStatus: Joi.string().allow("", null),
     deliveryStatus: Joi.string().allow("", null),

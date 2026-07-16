@@ -42,7 +42,6 @@ class OrderService {
   }
 
   orderStatusToShipmentStatus(status, deliveryStatus = null) {
-    if (deliveryStatus === "delivered_verified") return "delivered_verified";
     if (deliveryStatus === "delivered") return "delivered";
     return {
       [ORDER_STATUS.PACKED]: "initiated",
@@ -56,7 +55,6 @@ class OrderService {
   }
 
   orderStatusToDeliveryStatus(status, currentDeliveryStatus = null) {
-    if (currentDeliveryStatus === "delivered_verified") return currentDeliveryStatus;
     return this.orderStatusToShipmentStatus(status);
   }
 
@@ -107,8 +105,6 @@ class OrderService {
 
   getFulfillmentSnapshotForItems(items = []) {
     const result = {
-      verificationRequired: false,
-      verificationMethods: [],
       dealId: null,
       fulfillmentModel: null,
     };
@@ -118,16 +114,7 @@ class OrderService {
       const deal = this.normalizeJson(item.deal_snapshot || item.dealSnapshot, {});
       if (!result.dealId) result.dealId = item.deal_id || item.dealId || fulfillment.dealId || deal.dealId || null;
       if (!result.fulfillmentModel) result.fulfillmentModel = fulfillment.fulfillmentModel || deal.fulfillmentModel || null;
-      if (fulfillment.deliveryVerificationRequired || deal.deliveryVerificationRequired) {
-        result.verificationRequired = true;
-      }
-      const methods = fulfillment.deliveryVerificationMethods || deal.deliveryVerificationMethods || [];
-      if (Array.isArray(methods)) {
-        result.verificationMethods.push(...methods);
-      }
     }
-
-    result.verificationMethods = Array.from(new Set(result.verificationMethods.filter(Boolean)));
     return result;
   }
 
@@ -175,8 +162,6 @@ class OrderService {
         shipToSnapshot: this.normalizeJson(order.shipping_address, {}),
         dealId: fulfillment.dealId,
         fulfillmentModel: fulfillment.fulfillmentModel,
-        verificationRequired: fulfillment.verificationRequired,
-        verificationMethods: fulfillment.verificationMethods,
         metadata: {
           source: "order_status_sync",
           orderStatus: nextStatus,
@@ -209,10 +194,6 @@ class OrderService {
         shipToSnapshot: this.normalizeJson(order.shipping_address, {}),
         dealId: fulfillment.dealId,
         fulfillmentModel: fulfillment.fulfillmentModel,
-        verificationRequired: true,
-        verificationMethods: fulfillment.verificationMethods.length
-          ? fulfillment.verificationMethods
-          : ["otp"],
         metadata: {
           source: "order_auto_shipment",
           reason,
@@ -583,18 +564,14 @@ class OrderService {
     };
     const sanitizeShipment = (shipment = {}) => {
       const {
-        delivery_otp_hash,
-        delivery_otp_attempts,
         delivery_proof_snapshot,
         raw_payload,
         metadata,
         created_by,
         updated_by,
         buyer_id,
-        delivery_agent_id,
         ...visible
       } = shipment;
-      const agent = shipment.delivery_agent_snapshot || {};
       const shipmentMetadata = this.normalizeJson(metadata, {});
       return {
         ...visible,
@@ -608,19 +585,7 @@ class OrderService {
           supportEmail: shipment.seller.sellerProfile?.supportEmail || null,
           supportPhone: shipment.seller.sellerProfile?.supportPhone || null,
         } : null,
-        delivery_agent_snapshot: shipment.delivery_agent_id ? {
-          name: agent.name || null,
-          phone: agent.phone || null,
-          vehicleType: agent.vehicleType || null,
-          vehicleNumber: agent.vehicleNumber || null,
-        } : {},
         trackingEvents: (shipment.trackingEvents || []).map(sanitizeTrackingEvent),
-        verification: {
-          required: Boolean(shipment.verification_required),
-          methods: Array.isArray(shipment.verification_methods) ? shipment.verification_methods : [],
-          verifiedAt: shipment.delivered_verified_at || null,
-          otpExpiresAt: shipment.delivery_otp_expires_at || null,
-        },
       };
     };
     const items = (order.items || []).map((item) => {
@@ -1120,15 +1085,15 @@ class OrderService {
       const sellerIds = new Set((fullOrder?.items || []).map((item) => String(item.seller_id || "")).filter(Boolean));
       const forwardShipments = (fullOrder?.relations?.shipments || [])
         .filter((shipment) => String(shipment.direction || "forward") !== "reverse" && String(shipment.shipment_type || "forward") !== "return");
-      const verifiedSellerIds = new Set(
+      const deliveredSellerIds = new Set(
         forwardShipments
-          .filter((shipment) => shipment.status === "delivered_verified")
+          .filter((shipment) => shipment.status === "delivered")
           .map((shipment) => String(shipment.seller_id || ""))
           .filter(Boolean),
       );
-      const allVerified = sellerIds.size > 0 && Array.from(sellerIds).every((sellerId) => verifiedSellerIds.has(sellerId));
-      if (!allVerified) {
-        throw new AppError("Order can be marked delivered only after delivery OTP is verified for all seller shipments", 409);
+      const allDelivered = sellerIds.size > 0 && Array.from(sellerIds).every((sellerId) => deliveredSellerIds.has(sellerId));
+      if (!allDelivered) {
+        throw new AppError("Order can be marked delivered only after all seller shipments are delivered", 409);
       }
       return;
     }

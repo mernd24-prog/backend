@@ -408,9 +408,9 @@ const MODULE_CATALOG = [
     icon: "send",
     order: 14.1,
     forPlatform: true,
-      forSeller: true,
+    forSeller: false,
 
-    apiPath: "/admin/payouts",
+    apiPath: "/sellers/commissions/payouts",
   },
 
   // ── Marketing ─────────────────────────────────────────────────────────────
@@ -582,7 +582,7 @@ const MODULE_CATALOG = [
     tab: "Shipping & Fulfilment",
     slug: "delivery",
     name: "Delivery Management",
-    description: "Delivery serviceability, shipping rules, manifests, and tracking",
+    description: "Manual seller shipment details, serviceability, and tracking",
     icon: "truck",
     order: 22,
     forPlatform: true,

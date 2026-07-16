@@ -55,7 +55,6 @@ class NotificationService {
       [DOMAIN_EVENTS.SHIPMENT_CREATED_V1, "Shipment Created", (p) => `Shipment created for order ${p.orderId}.`],
       [DOMAIN_EVENTS.SHIPMENT_TRACKING_UPDATED_V1, "Shipment Updated", (p) => `Shipment ${p.shipmentId} is ${String(p.status || "").replace(/_/g, " ")}.`],
       [DOMAIN_EVENTS.SHIPMENT_DELIVERED_V1, "Shipment Delivered", (p) => `Order ${p.orderId} has been delivered.`],
-      [DOMAIN_EVENTS.SHIPMENT_DELIVERY_VERIFIED_V1, "Delivery Verified", (p) => `Delivery verified for order ${p.orderId}.`],
       [DOMAIN_EVENTS.DEAL_SUBMITTED_V1, "Deal Submitted", (p) => `Deal ${p.dealNumber || p.dealId} is waiting for approval.`],
       [DOMAIN_EVENTS.DEAL_APPROVED_V1, "Deal Approved", (p) => `Deal ${p.dealNumber || p.dealId} has been approved.`],
       [DOMAIN_EVENTS.DEAL_REJECTED_V1, "Deal Rejected", (p) => `Deal ${p.dealNumber || p.dealId} was rejected.`],
@@ -159,7 +158,6 @@ class NotificationService {
       [DOMAIN_EVENTS.SHIPMENT_CREATED_V1]: `Shipment created for order ${payload.orderId || reference}.`,
       [DOMAIN_EVENTS.SHIPMENT_TRACKING_UPDATED_V1]: `Shipment ${payload.shipmentId || reference} is ${status}.`,
       [DOMAIN_EVENTS.SHIPMENT_DELIVERED_V1]: `Order ${payload.orderId || reference} has been delivered.`,
-      [DOMAIN_EVENTS.SHIPMENT_DELIVERY_VERIFIED_V1]: `Delivery verified for order ${payload.orderId || reference}.`,
       [DOMAIN_EVENTS.SHIPMENT_FAILED_V1]: `Shipment failed for order ${payload.orderId || reference}.`,
       [DOMAIN_EVENTS.SHIPMENT_RTO_V1]: `Shipment for order ${payload.orderId || reference} is returning to origin.`,
     };

@@ -789,6 +789,21 @@ class RbacRepository {
     return rows.map((row) => row.userId).filter(Boolean);
   }
 
+  async hasActiveUserRole(userId) {
+    const count = await UserRole.count({
+      where: { userId, revokedAt: null },
+      include: [
+        {
+          model: Role,
+          as: "role",
+          where: { active: true },
+          required: true,
+        },
+      ],
+    });
+    return count > 0;
+  }
+
   async getUserEffectivePermissions(userId) {
     const query = `
       WITH denied AS (

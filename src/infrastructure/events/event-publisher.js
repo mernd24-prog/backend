@@ -5,7 +5,14 @@ const { domainEventLogService } = require("../../shared/logger/domain-event-log.
 class EventPublisher {
   async publish(event) {
     logger.info({ eventName: event.eventName, eventId: event.id }, "Publishing domain event");
-    await domainEventLogService.record(event);
+    try {
+      await domainEventLogService.record(event);
+    } catch (error) {
+      logger.error(
+        { err: error, eventName: event.eventName, eventId: event.id },
+        "Domain event log persistence failed",
+      );
+    }
     await eventBus.publish(event.eventName, event);
   }
 }

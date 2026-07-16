@@ -5,7 +5,6 @@ const {
   DEAL_STATUS,
   DEAL_TYPE,
   DEAL_FULFILLMENT_MODEL,
-  DEAL_VERIFICATION_METHODS,
   DEAL_PAYOUT_STATUS,
 } = require("../models/deal.model");
 
@@ -60,8 +59,6 @@ const dealBodySchema = Joi.object({
   startAt: Joi.date().iso().required(),
   endAt: Joi.date().iso().greater(Joi.ref("startAt")).required(),
   fulfillmentModel: Joi.string().valid(...Object.values(DEAL_FULFILLMENT_MODEL)).default(DEAL_FULFILLMENT_MODEL.SELLER_FULFILLED),
-  deliveryVerificationRequired: Joi.boolean().default(false),
-  deliveryVerificationMethods: Joi.array().items(Joi.string().valid(...DEAL_VERIFICATION_METHODS)).default(["otp"]),
   inventoryPolicy: Joi.object().unknown(true).default({}),
   financePolicy: Joi.object().unknown(true).default({}),
   sponsorshipPolicy: Joi.object().unknown(true).default({}),

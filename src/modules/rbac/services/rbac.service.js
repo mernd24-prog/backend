@@ -1115,6 +1115,10 @@ class RbacService {
     return permissions.some((p) => p.slug === permissionSlug);
   }
 
+  async hasActiveUserRole(userId) {
+    return this.rbacRepository.hasActiveUserRole(userId);
+  }
+
   async userHasRole(userId, roleSlug, actor = {}) {
     await this.assertCanViewUserAccess(actor, userId);
     const roles = await this.rbacRepository.getUserRoles(userId);

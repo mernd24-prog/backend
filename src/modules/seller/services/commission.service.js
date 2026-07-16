@@ -206,6 +206,31 @@ class SellerCommissionService {
     return new Date(date.getTime() + Math.max(Number(days || 0), 0) * 24 * 60 * 60 * 1000);
   }
 
+  async transitionPayoutItems(trx, payoutId, toStatus, context = {}) {
+    const commissions = await trx("seller_commissions")
+      .where("payout_id", payoutId)
+      .whereNotNull("order_item_id")
+      .select("id", "seller_id", "order_id", "order_item_id");
+    if (!commissions.length) return;
+    const itemIds = commissions.map((row) => row.order_item_id);
+    const items = await trx("order_items").whereIn("id", itemIds).select("id", "payout_status");
+    const currentById = new Map(items.map((item) => [String(item.id), item.payout_status]));
+    await trx("order_items").whereIn("id", itemIds).update({
+      payout_status: toStatus,
+      payout_id: payoutId,
+      payout_hold_reason: toStatus === "held" ? context.reason || "manual_hold" : null,
+    });
+    await trx("payout_status_history").insert(commissions.map((row) => ({
+      id: uuidv4(), seller_id: row.seller_id, order_id: row.order_id,
+      order_item_id: row.order_item_id, commission_id: row.id, payout_id: payoutId,
+      from_status: currentById.get(String(row.order_item_id)) || null,
+      to_status: toStatus, reason: context.reason || null,
+      actor_id: context.actor?.userId || context.actor?.sub || "system",
+      actor_role: context.actor?.role || "system",
+      metadata: this.jsonb(context.metadata || {}),
+    })));
+  }
+
   isReleasedOrderStatus(status) {
     return [ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED, ORDER_STATUS.PARTIALLY_RETURNED].includes(status);
   }
@@ -237,7 +262,8 @@ class SellerCommissionService {
     ));
     if (!orderIds.length) return new Map();
 
-    const [orders, releaseRows, codCollections] = await Promise.all([
+    const itemIds = Array.from(new Set(commissions.map((commission) => commission.order_item_id).filter(Boolean)));
+    const [orders, releaseRows, codCollections, orderItems] = await Promise.all([
       client("orders")
         .select("id", "status", "payment_status", "payment_provider", "return_eligible_until", "fulfillment_eligible_at", "created_at", "updated_at")
         .whereIn("id", orderIds),
@@ -252,6 +278,9 @@ class SellerCommissionService {
         .select("order_id", "seller_id", "collection_mode", "status")
         .whereIn("order_id", orderIds)
         .catch(() => []),
+      itemIds.length
+        ? client("order_items").select("id", "payout_status", "payout_eligible_at", "return_eligible_until").whereIn("id", itemIds)
+        : [],
     ]);
 
     const releaseData = new Map();
@@ -275,6 +304,8 @@ class SellerCommissionService {
       current.codCollections.push(collection);
       releaseData.set(key, current);
     });
+    const itemsById = new Map(orderItems.map((item) => [String(item.id), item]));
+    releaseData.itemsById = itemsById;
 
     return releaseData;
   }
@@ -284,6 +315,9 @@ class SellerCommissionService {
     const netAmount = this.round(commission.net_amount || 0);
     const orderData = releaseData.get(String(commission.order_id || "")) || {};
     const order = orderData.order || {};
+    const orderItem = commission.order_item_id
+      ? releaseData.itemsById?.get(String(commission.order_item_id))
+      : null;
     const orderStatus = String(order.status || commission.source_status || "");
     const codCollections = (orderData.codCollections || []).filter((row) =>
       String(row.seller_id || "") === String(commission.seller_id || ""));
@@ -325,6 +359,24 @@ class SellerCommissionService {
       order.payment_status !== PAYMENT_STATUS.CAPTURED
     ) {
       return { ...base, releaseStatus: "blocked", reason: "waiting_for_cod_collection_confirmation" };
+    }
+
+    if (orderItem) {
+      const eligibleAt = this.toDate(orderItem.payout_eligible_at || orderItem.return_eligible_until);
+      if (orderItem.payout_status !== "eligible") {
+        return {
+          ...base,
+          releaseStatus: orderItem.payout_status === "held" ? "held" : "pending",
+          eligibleAt: eligibleAt?.toISOString() || null,
+          reason: orderItem.payout_status === "held" ? "item_on_hold" : "waiting_for_item_return_window",
+        };
+      }
+      return {
+        ...base,
+        releaseStatus: "available",
+        available: true,
+        eligibleAt: (eligibleAt || now).toISOString(),
+      };
     }
 
     if (order.payment_provider === PAYMENT_PROVIDER.COD && codCollections.length) {
@@ -462,13 +514,14 @@ class SellerCommissionService {
     rows.forEach((row) => {
       if (!row.seller_id) return;
       const organizationId = row.organization_id ? String(row.organization_id) : null;
-      const key = `${String(row.seller_id)}:${organizationId || "default"}`;
+      const key = `${String(row.seller_id)}:${organizationId || "default"}:${row.id}`;
       const current = grouped.get(key) || {
         sellerId: String(row.seller_id),
         organizationId,
         organizationSnapshot: this.parseJson(row.organization_snapshot, {}),
         orderId,
         orderItemIds: [],
+        orderItemId: row.id,
         amount: 0,
         platformFeeAmount: 0,
         platformFeeTaxAmount: 0,
@@ -534,24 +587,22 @@ class SellerCommissionService {
     return Array.from(grouped.values()).map((group) => {
       const amount = this.round(group.amount);
       const financeSnapshot = group.orderMetadata?.commerceSettings?.finance || {};
-      const sellerSettlement = (group.orderMetadata?.pricingSummary?.sellerSettlementBreakup || []).find((entry) =>
-        String(entry.sellerId || entry.seller_id || "") === String(group.sellerId) &&
-        String(entry.organizationId || entry.organization_id || "default") === String(group.organizationId || "default"));
-      const platformFeeAmount = this.round(sellerSettlement?.platformFeeAmount ?? group.platformFeeAmount);
+      const platformFeeAmount = this.round(group.platformFeeAmount);
       const commissionAmount = platformFeeAmount;
       const effectiveRate = amount > 0 ? this.round(commissionAmount / amount) : 0;
-      const taxAmount = this.round(sellerSettlement?.platformFeeTaxAmount ?? group.platformFeeTaxAmount);
+      const taxAmount = this.round(group.platformFeeTaxAmount);
       const shippingPolicy = financeSnapshot.shippingPolicy || "not_in_seller_payout";
-      const sellerDeliveryChargeAmount = this.round(sellerSettlement?.sellerDeliveryChargeAmount || 0);
-      const shippingReimbursementAmount = this.round(sellerSettlement?.shippingReimbursementAmount || 0);
-      const shippingDeductionAmount = this.round(sellerSettlement?.shippingDeductionAmount || 0);
-      const netAmount = this.round(sellerSettlement?.sellerPayoutAmount ?? group.sellerReceivableAmount);
+      const sellerDeliveryChargeAmount = 0;
+      const shippingReimbursementAmount = 0;
+      const shippingDeductionAmount = 0;
+      const netAmount = this.round(group.sellerReceivableAmount);
       return {
         sellerId: group.sellerId,
         organizationId: group.organizationId || null,
         organizationSnapshot: group.organizationSnapshot || {},
         orderId,
         orderItemIds: group.orderItemIds,
+        orderItemId: group.orderItemId,
         amount,
         commissionRate: effectiveRate,
         commissionAmount,
@@ -627,6 +678,7 @@ class SellerCommissionService {
       for (const group of groups) {
         const existingQuery = trx("seller_commissions")
           .where({ seller_id: group.sellerId, order_id: orderId });
+        if (group.orderItemId) existingQuery.where("order_item_id", group.orderItemId);
         if (group.organizationId) {
           existingQuery.where("organization_id", group.organizationId);
         } else {
@@ -657,6 +709,7 @@ class SellerCommissionService {
           organization_snapshot: this.jsonb(group.organizationSnapshot || {}),
           order_id: orderId,
           order_item_ids: this.jsonb(group.orderItemIds, []),
+          order_item_id: group.orderItemId || null,
           amount: group.amount,
           commission_rate: group.commissionRate,
           commission_amount: group.commissionAmount,
@@ -677,6 +730,7 @@ class SellerCommissionService {
             .returning("*");
           updated += 1;
           items.push(row);
+          if (group.orderItemId) await trx("order_items").where("id", group.orderItemId).update({ commission_id: row.id });
         } else {
           const [row] = await trx("seller_commissions")
             .insert({
@@ -687,6 +741,7 @@ class SellerCommissionService {
             .returning("*");
           created += 1;
           items.push(row);
+          if (group.orderItemId) await trx("order_items").where("id", group.orderItemId).update({ commission_id: row.id });
         }
       }
 
@@ -760,12 +815,25 @@ class SellerCommissionService {
         })
         .whereIn("status", ["pending", "approved"])
         .whereNull("payout_id")
-        .whereBetween("created_at", [range.periodStart, `${range.periodEnd} 23:59:59`])
+        .modify((builder) => {
+          if (options.commissionIds?.length) builder.whereIn("id", options.commissionIds);
+        })
+        .modify((builder) => {
+          if (!options.commissionIds?.length) {
+            builder.whereBetween("created_at", [range.periodStart, `${range.periodEnd} 23:59:59`]);
+          }
+        })
         .forUpdate();
 
       if (!commissions.length) {
         throw new AppError("No commissions to payout", 400);
       }
+      const payoutRange = options.commissionIds?.length
+        ? this.buildDateRange(
+          commissions.reduce((earliest, row) => !earliest || new Date(row.created_at) < new Date(earliest) ? row.created_at : earliest, null),
+          commissions.reduce((latest, row) => !latest || new Date(row.created_at) > new Date(latest) ? row.created_at : latest, null),
+        )
+        : range;
 
       const { eligible: payoutCommissions, evaluations } = await this.filterPayoutEligibleCommissions(commissions, {
         settings: commerceSettings,
@@ -831,8 +899,8 @@ class SellerCommissionService {
         seller_id: sellerId,
         organization_id: organizationId,
         organization_snapshot: this.jsonb(payoutCommissions[0]?.organization_snapshot || {}),
-        period_start: range.periodStart,
-        period_end: range.periodEnd,
+        period_start: payoutRange.periodStart,
+        period_end: payoutRange.periodEnd,
         total_amount: this.round(totals.totalAmount),
         commission_amount: this.round(totals.commissionAmount),
         tax_amount: this.round(totals.taxAmount),
@@ -867,6 +935,11 @@ class SellerCommissionService {
           payout_id: payoutId,
           updated_at: knex.fn.now(),
         });
+      await this.transitionPayoutItems(trx, payoutId, "eligible", {
+        reason: "payout_prepared",
+        actor: options.actor,
+        metadata: { payoutStatus },
+      });
 
       if (recoveryRows.length) {
         await trx("seller_settlements")
@@ -929,6 +1002,11 @@ class SellerCommissionService {
           status: "paid",
           updated_at: knex.fn.now(),
         });
+      await this.transitionPayoutItems(trx, payoutId, "released", {
+        reason: "payout_completed",
+        actor: options.actor,
+        metadata: { paymentReference },
+      });
 
       await trx("seller_settlements").insert({
         id: uuidv4(),
@@ -998,6 +1076,10 @@ class SellerCommissionService {
         }),
         updated_at: knex.fn.now(),
       });
+      await this.transitionPayoutItems(trx, payoutId, "failed", {
+        reason: reason || "payout_failed",
+        actor,
+      });
       await trx("seller_commissions")
         .where("payout_id", payoutId)
         .update({ status: "pending", payout_id: null, updated_at: knex.fn.now() });
@@ -1016,6 +1098,30 @@ class SellerCommissionService {
           });
       }
       return { ...payout, status: "failed" };
+    });
+  }
+
+  async cancelPayout(payoutId, reason, actor = {}) {
+    if (!String(reason || "").trim()) throw new AppError("Cancellation reason is required", 400);
+    return knex.transaction(async (trx) => {
+      const payout = await trx("seller_payouts").where("id", payoutId).first().forUpdate();
+      if (!payout) throw new AppError("Payout not found", 404);
+      if (["completed", "cancelled"].includes(payout.status)) {
+        throw new AppError(`Payout cannot be cancelled from ${payout.status}`, 409);
+      }
+      const [updated] = await trx("seller_payouts").where("id", payoutId).update({
+        status: "cancelled",
+        metadata: this.jsonb({
+          ...this.parseJson(payout.metadata, {}), cancellationReason: reason,
+          cancelledBy: actor.userId || actor.sub || null, cancelledAt: new Date().toISOString(),
+        }),
+        updated_at: trx.fn.now(),
+      }).returning("*");
+      await this.transitionPayoutItems(trx, payoutId, "cancelled", { reason, actor });
+      await trx("seller_commissions").where("payout_id", payoutId).whereNot("status", "paid").update({
+        status: "cancelled", updated_at: trx.fn.now(),
+      });
+      return updated;
     });
   }
 
@@ -1071,6 +1177,7 @@ class SellerCommissionService {
           updated_at: knex.fn.now(),
         })
         .returning("*");
+      await this.transitionPayoutItems(trx, payoutId, "held", { reason, actor });
       return updated;
     });
   }
@@ -1095,6 +1202,10 @@ class SellerCommissionService {
           updated_at: knex.fn.now(),
         })
         .returning("*");
+      await this.transitionPayoutItems(trx, payoutId, "eligible", {
+        reason: options.note || "payout_hold_released",
+        actor: options.actor,
+      });
       return updated;
     });
   }
@@ -1309,7 +1420,22 @@ class SellerCommissionService {
     const { sellerId, organizationId, status, orderId, payoutId, fromDate, toDate, search } = filters;
     if (sellerId) query.where("seller_id", sellerId);
     if (organizationId) query.where("organization_id", organizationId);
-    if (status) query.where("status", status);
+    if (status === "return_window_open") query.whereExists(function openReturnWindowItem() {
+      this.select(1)
+        .from("order_items")
+        .whereRaw("order_items.id = seller_commissions.order_item_id")
+        .where("order_items.payout_status", "pending")
+        .whereNotNull("order_items.delivered_at")
+        .where("order_items.payout_eligible_at", ">", knex.fn.now());
+    });
+    else if (status === "eligible") query.whereExists(function eligibleItem() {
+      this.select(1).from("order_items").whereRaw("order_items.id = seller_commissions.order_item_id").where("order_items.payout_status", "eligible");
+    });
+    else if (status === "held") query.whereExists(function heldItem() {
+      this.select(1).from("order_items").whereRaw("order_items.id = seller_commissions.order_item_id").where("order_items.payout_status", "held");
+    });
+    else if (status === "released") query.where("status", "paid");
+    else if (status) query.where("status", status);
     if (orderId) query.where("order_id", orderId);
     if (payoutId) query.where("payout_id", payoutId);
     if (fromDate) query.where("created_at", ">=", fromDate);
@@ -1345,8 +1471,38 @@ class SellerCommissionService {
         .first(),
     ]);
 
+    const settings = await commerceSettingsService.getSettings();
+    const evaluations = await this.evaluateCommissionsRelease(items, settings);
+    const releaseById = new Map(evaluations.map(({ commission, release }) => [String(commission.id), release]));
+    const orderItemIds = items.map((item) => item.order_item_id).filter(Boolean);
+    const orderItems = orderItemIds.length
+      ? await knex("order_items")
+        .whereIn("id", orderItemIds)
+        .select("id", "delivered_at", "return_eligible_until", "payout_eligible_at", "payout_status", "payout_hold_reason")
+      : [];
+    const orderItemsById = new Map(orderItems.map((item) => [String(item.id), item]));
+    const enrichedItems = (await this.enrichFinanceRecords(items)).map((item) => {
+      const release = releaseById.get(String(item.id)) || {};
+      const orderItem = orderItemsById.get(String(item.order_item_id || "")) || {};
+      return {
+        ...item,
+        deliveredAt: orderItem.delivered_at || null,
+        returnWindowStartsAt: orderItem.delivered_at || null,
+        returnWindowEndsAt: orderItem.return_eligible_until || orderItem.payout_eligible_at || null,
+        itemPayoutStatus: orderItem.payout_status || null,
+        payoutHoldReason: orderItem.payout_hold_reason || null,
+        releaseStatus: release.releaseStatus,
+        releaseReason: release.reason,
+        eligibleAt: release.eligibleAt,
+        lifecycleStatus: release.releaseStatus === "available" ? "eligible"
+          : release.releaseStatus === "paid" ? "released"
+            : release.releaseStatus === "in_process" ? "pending"
+              : release.releaseStatus === "held" ? "held"
+                : release.releaseStatus || "pending",
+      };
+    });
     return {
-      items: await this.enrichFinanceRecords(items),
+      items: enrichedItems,
       total: Number(countRows?.[0]?.total || 0),
       limit,
       offset,
@@ -1364,7 +1520,9 @@ class SellerCommissionService {
     const { sellerId, organizationId, status, payoutId, fromDate, toDate, search } = filters;
     if (sellerId) query.where("seller_id", sellerId);
     if (organizationId) query.where("organization_id", organizationId);
-    if (status) query.where("status", status);
+    const statusMap = { pending: ["pending", "processing"], held: ["on_hold"], released: ["completed"], failed: ["failed"], cancelled: ["cancelled"] };
+    if (statusMap[status]) query.whereIn("status", statusMap[status]);
+    else if (status) query.where("status", status);
     if (payoutId) query.where("id", payoutId);
     if (fromDate) query.where("created_at", ">=", fromDate);
     if (toDate) query.where("created_at", "<=", toDate);
@@ -1401,7 +1559,14 @@ class SellerCommissionService {
     ]);
 
     return {
-      items: await this.enrichFinanceRecords(items),
+      items: (await this.enrichFinanceRecords(items)).map((item) => ({
+        ...item,
+        lifecycleStatus: item.status === "completed" ? "released"
+          : item.status === "on_hold" ? "held"
+            : item.status === "failed" ? "failed"
+              : item.status === "cancelled" ? "cancelled"
+                : "pending",
+      })),
       total: Number(countRows?.[0]?.total || 0),
       limit,
       offset,
@@ -1417,7 +1582,7 @@ class SellerCommissionService {
 
   async processBatchPayouts(sellerId, options = {}) {
     const range = this.buildDateRange(options.periodStart, options.periodEnd);
-    if (options.organizationId === undefined) {
+    if (options.organizationId === undefined && !options.commissionIds?.length) {
       const organizationRows = await knex("seller_commissions")
         .distinct("organization_id")
         .where("seller_id", sellerId)
@@ -2005,11 +2170,13 @@ class SellerCommissionService {
         itemMap.get(`${item.productId}:`) ||
         {};
       const organizationId = item.organizationId || item.organization_id || matchedItem.organization_id || null;
-      const key = `${String(sellerId)}:${organizationId || "default"}`;
+      const orderItemId = item.orderItemId || matchedItem.id || null;
+      const key = `${String(sellerId)}:${organizationId || "default"}:${orderItemId || item.productId}`;
       const amount = this.round(item.refundAmount || item.lineTotal || 0);
       const current = sellerRefunds.get(key) || {
         sellerId: String(sellerId),
         organizationId,
+        orderItemId,
         organizationSnapshot: this.parseJson(matchedItem.organization_snapshot, {}),
         amount: 0,
       };
@@ -2022,9 +2189,10 @@ class SellerCommissionService {
     const adjustments = [];
     await knex.transaction(async (trx) => {
       for (const refund of sellerRefunds.values()) {
-        const { sellerId, organizationId, organizationSnapshot, amount } = refund;
+        const { sellerId, organizationId, organizationSnapshot, orderItemId, amount } = refund;
         const commissionQuery = trx("seller_commissions")
           .where({ seller_id: sellerId, order_id: orderId });
+        if (orderItemId) commissionQuery.where("order_item_id", orderItemId);
         if (organizationId) {
           commissionQuery.where("organization_id", organizationId);
         } else {

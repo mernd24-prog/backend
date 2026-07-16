@@ -22,8 +22,6 @@ const DOMAIN_EVENTS = {
   SHIPMENT_CREATED_V1: "shipment.created.v1",
   SHIPMENT_TRACKING_UPDATED_V1: "shipment.tracking_updated.v1",
   SHIPMENT_DELIVERED_V1: "shipment.delivered.v1",
-  SHIPMENT_DELIVERY_OTP_GENERATED_V1: "shipment.delivery_otp_generated.v1",
-  SHIPMENT_DELIVERY_VERIFIED_V1: "shipment.delivery_verified.v1",
   SHIPMENT_FAILED_V1: "shipment.failed.v1",
   SHIPMENT_RTO_V1: "shipment.rto.v1",
   INVOICE_GENERATED_V1: "invoice.generated.v1",

@@ -101,13 +101,22 @@ class PricingService {
         const gstInclusive = Boolean(product.gstInclusive ?? product.gst_inclusive ?? true);
 
         const productReturnPolicy = product.warranty?.returnPolicy || {};
+        const returnable = productReturnPolicy.returnable ?? productReturnPolicy.eligible ?? true;
+        const returnWindowDays = returnable
+          ? Math.max(Number(productReturnPolicy.returnWindowDays ?? productReturnPolicy.days ?? 7), 0)
+          : 0;
         const returnPolicySnapshot = {
           ...productReturnPolicy,
-          returnable: productReturnPolicy.returnable ?? productReturnPolicy.eligible ?? true,
-          eligible: productReturnPolicy.eligible ?? productReturnPolicy.returnable ?? true,
-          // The platform return window is snapshotted at delivery, not configured per product.
+          returnable,
+          eligible: returnable,
+          returnWindowDays,
+          days: returnWindowDays,
+          type: returnable ? productReturnPolicy.type || "standard" : "non_returnable",
+          resolution: productReturnPolicy.resolution || "refund_or_replacement",
           requiresImages: Boolean(productReturnPolicy.requiresImages || productReturnPolicy.requires_images),
           inspectionRequired: productReturnPolicy.inspectionRequired ?? productReturnPolicy.requiresQc ?? true,
+          shippingPaidBy: productReturnPolicy.shippingPaidBy || "platform",
+          source: "product_snapshot",
         };
 
         return {

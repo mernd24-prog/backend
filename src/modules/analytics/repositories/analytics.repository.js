@@ -5,7 +5,7 @@ const { UserModel } = require("../../user/models/user.model");
 
 const DELIVERED_ORDER_STATUSES = ["delivered", "fulfilled", "completed"];
 const CANCELLED_ORDER_STATUSES = ["cancelled", "payment_failed"];
-const SUCCESS_SHIPMENT_STATUSES = ["delivered", "delivered_verified"];
+const SUCCESS_SHIPMENT_STATUSES = ["delivered"];
 const FAILED_SHIPMENT_STATUSES = ["failed", "cancelled", "rto", "lost", "damaged"];
 const RETURN_REFUNDED_STATUSES = ["refunded", "partially_refunded"];
 

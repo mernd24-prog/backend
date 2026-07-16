@@ -34,7 +34,6 @@ const SIDEBAR_MODULES = [
 
   { moduleName: "Shipping & Fulfilment", moduleKey: "shipping-fulfilment", moduleSlug: "shipping-fulfilment", icon: "MdLocalShipping", moduleType: "group", order: 85, parentModule: null, requiredModule: "delivery" },
   { moduleName: "Shipments", moduleKey: "shipment-tracking", moduleSlug: "shipment-tracking", icon: "MdLocalShipping", routePath: "/app/shipment-tracking", moduleType: "page", order: 86, parentModule: "shipping-fulfilment", requiredModule: "delivery" },
-  { moduleName: "Delivery Agents", moduleKey: "delivery-agents", moduleSlug: "delivery-agents", icon: "MdPeople", routePath: "/app/delivery-agents", moduleType: "page", order: 87, parentModule: "shipping-fulfilment", requiredModule: "delivery" },
   { moduleName: "Shipping Profiles", moduleKey: "shipping-profiles", moduleSlug: "shipping-profiles", icon: "MdLocalShipping", routePath: "/app/shipping-profiles", moduleType: "page", order: 88, parentModule: "shipping-fulfilment", requiredModule: "delivery" },
 
   { moduleName: "Returns & Cancellations", moduleKey: "returns-cancellations", moduleSlug: "returns-cancellations", icon: "MdAssignmentReturn", moduleType: "group", order: 90, parentModule: null, requiredModule: "returns" },
@@ -248,7 +247,6 @@ const ROUTE_METADATA_BY_KEY = {
       "/app/pickup-addresses",
     ],
   },
-  "delivery-agents": { supportedRoutes: ["/app/delivery-staff"] },
   "shipping-profiles": { supportedRoutes: ["/app/shipping-profiles"] },
   "seller-shipping-profiles": { supportedRoutes: ["/app/shipping-profiles"] },
   "wallet-management": { supportedRoutes: ["/app/wallet-transactions"] },

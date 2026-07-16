@@ -207,9 +207,23 @@ async function recreateSuperAdmin() {
     if (oldMongoUserIds.length > 0) {
       await UserModel.updateMany(
         { _id: { $in: oldMongoUserIds }, role: ROLES.SUPER_ADMIN },
-        { $set: { role: ROLES.ADMIN } },
+        {
+          $set: {
+            role: ROLES.ADMIN,
+            accountStatus: "deactivated",
+            refreshSessions: [],
+            deactivatedAt: new Date(),
+            forceLogoutAt: new Date(),
+            sessionInvalidationReason: "super_admin_replaced",
+          },
+          $inc: {
+            tokenVersion: 1,
+            sessionVersion: 1,
+            permissionVersion: 1,
+          },
+        },
       );
-      console.log("✓ Previous Mongo super admin user demoted");
+      console.log("✓ Previous Mongo super admin user deactivated");
     }
 
     console.log("\n✅ Super admin recreated successfully!");

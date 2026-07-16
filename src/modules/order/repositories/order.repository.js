@@ -57,7 +57,13 @@ class OrderRepository {
         created_by: payload.createdBy || payload.buyerId,
         updated_by: payload.updatedBy || payload.buyerId,
       });
-      const items = payload.items.map((item) => ({
+      const items = payload.items.map((item) => {
+        const returnPolicy = item.productSnapshot?.returnPolicy || item.productSnapshot?.commercialPolicy?.returnPolicy || {};
+        const returnable = returnPolicy.returnable ?? returnPolicy.eligible ?? true;
+        const returnWindowDays = returnable
+          ? Math.max(Number(returnPolicy.returnWindowDays ?? returnPolicy.days ?? 7), 0)
+          : 0;
+        return {
         id: uuidv4(),
         order_id: orderId,
         product_id: item.productId,
@@ -90,11 +96,23 @@ class OrderRepository {
         platform_fee_amount: item.platformFeeAmount || 0,
         pricing_snapshot: this.jsonb(item.pricingSnapshot),
         product_snapshot: this.jsonb(item.productSnapshot),
+        returnable,
+        return_window_days: returnWindowDays,
+        return_policy_snapshot: this.jsonb({
+          ...returnPolicy,
+          returnable,
+          eligible: returnable,
+          returnWindowDays,
+          days: returnWindowDays,
+          source: returnPolicy.source || "product_snapshot",
+        }),
+        payout_status: "pending",
         deal_id: item.dealId || null,
         deal_snapshot: this.jsonb(item.dealSnapshot),
         fulfillment_snapshot: this.jsonb(item.fulfillmentSnapshot),
         line_total: item.lineTotal,
-      }));
+        };
+      });
 
       await trx("order_items").insert(items);
       await this.insertStatusHistory(trx, {
@@ -323,7 +341,7 @@ class OrderRepository {
   advanceShipmentStatus(currentStatus, requestedStatus) {
     if (!requestedStatus) return currentStatus || "initiated";
     if (!currentStatus) return requestedStatus;
-    if (currentStatus === "delivered_verified") return currentStatus;
+    if (currentStatus === "delivered") return "delivered";
     const rank = new Map([
       ["initiated", 1],
       ["manifested", 2],
@@ -331,7 +349,6 @@ class OrderRepository {
       ["in_transit", 4],
       ["out_for_delivery", 5],
       ["delivered", 6],
-      ["delivered_verified", 7],
     ]);
     return (rank.get(requestedStatus) || 0) >= (rank.get(currentStatus) || 0)
       ? requestedStatus
@@ -372,30 +389,16 @@ class OrderRepository {
       if (existing) {
         const nextStatus = this.advanceShipmentStatus(existing.status, requestedStatus);
         const shouldWriteEvent = nextStatus !== existing.status;
-        const verifiedAt = nextStatus === "delivered_verified"
-          ? existing.delivered_verified_at || now
-          : existing.delivered_verified_at;
         const [updated] = await trx("shipments")
           .where("id", existing.id)
           .update({
             status: nextStatus,
-            delivered_verified_at: verifiedAt,
-            verified_by: nextStatus === "delivered_verified"
-              ? payload.updatedBy || payload.createdBy || existing.verified_by || null
-              : existing.verified_by,
+            delivered_at: nextStatus === "delivered" ? existing.delivered_at || now : existing.delivered_at,
             provider: payload.provider || existing.provider || "manual",
             courier_name: courierName || existing.courier_name,
             awb_number: trackingNumber || existing.awb_number,
             tracking_number: trackingNumber || existing.tracking_number,
             ship_to_snapshot: payload.shipToSnapshot || existing.ship_to_snapshot || {},
-            verification_required:
-              payload.verificationRequired === undefined
-                ? existing.verification_required
-                : Boolean(payload.verificationRequired),
-            verification_methods:
-              payload.verificationMethods === undefined
-                ? this.jsonb(existing.verification_methods, [])
-                : this.jsonb(payload.verificationMethods, []),
             metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [
               JSON.stringify({
                 ...(payload.metadata || {}),
@@ -454,11 +457,8 @@ class OrderRepository {
           return_id: payload.returnId || null,
           deal_id: payload.dealId || null,
           fulfillment_model: payload.fulfillmentModel || null,
-          verification_required: Boolean(payload.verificationRequired),
-          verification_methods: this.jsonb(payload.verificationMethods, []),
           delivery_proof_snapshot: payload.deliveryProofSnapshot || {},
-          delivered_verified_at: requestedStatus === "delivered_verified" ? now : null,
-          verified_by: requestedStatus === "delivered_verified" ? payload.updatedBy || payload.createdBy || null : null,
+          delivered_at: requestedStatus === "delivered" ? now : null,
           manifest_id: payload.manifestId || null,
           expected_delivery_at: payload.expectedDeliveryAt || null,
           idempotency_key: payload.idempotencyKey || null,
@@ -1158,12 +1158,6 @@ class OrderRepository {
       const deliveredShipmentCount = forwardShipments.filter((shipment) =>
         this.isDeliveredShipmentStatus(shipment.status),
       ).length;
-      const requiresVerification = forwardShipments.some((shipment) => Boolean(shipment.verification_required));
-      const verificationComplete = requiresVerification
-        ? forwardShipments.every((shipment) =>
-            !shipment.verification_required || shipment.status === DELIVERY_STATUS.DELIVERED_VERIFIED,
-          )
-        : null;
       const latestTrackingEvent = this.latestTrackingEvent(forwardShipments);
       const sellerReturnLifecycle = this.resolveSellerReturnLifecycle(returnLifecycle, sellerId, order);
 
@@ -1186,8 +1180,6 @@ class OrderRepository {
         pendingShipmentCount: Math.max(forwardShipments.length - deliveredShipmentCount, 0),
         isFullyDelivered: forwardShipments.length > 0 && deliveredShipmentCount === forwardShipments.length,
         isPartiallyDelivered: deliveredShipmentCount > 0 && deliveredShipmentCount < forwardShipments.length,
-        requiresVerification,
-        verificationComplete,
         expectedDeliveryAt: this.resolveExpectedDeliveryAt(forwardShipments),
         latestTrackingEvent,
         latestTrackingStatus: latestTrackingEvent?.status || deliveryStatus,
@@ -1204,7 +1196,7 @@ class OrderRepository {
   }
 
   isDeliveredShipmentStatus(status) {
-    return [DELIVERY_STATUS.DELIVERED, DELIVERY_STATUS.DELIVERED_VERIFIED].includes(status);
+    return status === DELIVERY_STATUS.DELIVERED;
   }
 
   resolveSellerDeliveryStatus(shipments = [], order = {}) {
@@ -1214,9 +1206,7 @@ class OrderRepository {
 
     const deliveredCount = statuses.filter((status) => this.isDeliveredShipmentStatus(status)).length;
     if (deliveredCount === shipments.length) {
-      return statuses.every((status) => status === DELIVERY_STATUS.DELIVERED_VERIFIED)
-        ? DELIVERY_STATUS.DELIVERED_VERIFIED
-        : DELIVERY_STATUS.DELIVERED;
+      return DELIVERY_STATUS.DELIVERED;
     }
     if (deliveredCount > 0) return "partially_delivered";
 

@@ -31,12 +31,11 @@ const DEAL_FULFILLMENT_MODEL = {
   HYBRID: "hybrid",
 };
 
-const DEAL_VERIFICATION_METHODS = ["otp", "signature", "photo", "qr", "courier_api"];
 
 const DEAL_SALE_STATUS = {
   RESERVED: "reserved",
   CONFIRMED: "confirmed",
-  DELIVERED_VERIFIED: "delivered_verified",
+  DELIVERED: "delivered",
   CANCELLED: "cancelled",
   REFUNDED: "refunded",
 };
@@ -73,7 +72,6 @@ module.exports = {
   DEAL_STATUS,
   DEAL_TYPE,
   DEAL_FULFILLMENT_MODEL,
-  DEAL_VERIFICATION_METHODS,
   DEAL_SALE_STATUS,
   DEAL_PAYOUT_STATUS,
   DEAL_TIMELINE_EVENT,

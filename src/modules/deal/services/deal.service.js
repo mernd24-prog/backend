@@ -142,9 +142,6 @@ class DealService {
     if (payload.dealType !== DEAL_TYPE.SPONSORED_PLACEMENT && price.dealPrice >= Number(payload.originalPrice || 0)) {
       throw new AppError("Deal price must be lower than original price", 400);
     }
-    const verificationMethods = payload.deliveryVerificationRequired
-      ? Array.from(new Set(payload.deliveryVerificationMethods || ["otp"]))
-      : [];
     return {
       ...payload,
       sellerId,
@@ -152,7 +149,6 @@ class DealService {
       discountPercent: price.discountPercent,
       status: payload.status && isAdmin ? payload.status : DEAL_STATUS.DRAFT,
       fulfillmentModel: payload.fulfillmentModel || DEAL_FULFILLMENT_MODEL.SELLER_FULFILLED,
-      deliveryVerificationMethods: verificationMethods,
       createdBy: actor.userId,
       updatedBy: actor.userId,
       metadata: {
@@ -213,8 +209,6 @@ class DealService {
       endAt: payload.endAt || existing.endAt,
       dealType: payload.dealType || existing.dealType,
       fulfillmentModel: payload.fulfillmentModel || existing.fulfillmentModel,
-      deliveryVerificationRequired: payload.deliveryVerificationRequired ?? existing.deliveryVerificationRequired,
-      deliveryVerificationMethods: payload.deliveryVerificationMethods || existing.deliveryVerificationMethods,
       updatedBy: actor.userId,
     };
     const priced = this.normalizeDealPayload(normalized, { ...actor, userId: existing.created_by || actor.userId });
@@ -806,8 +800,6 @@ class DealService {
       fulfillmentSnapshot: {
         dealId: deal.id,
         fulfillmentModel: deal.fulfillmentModel,
-        deliveryVerificationRequired: deal.deliveryVerificationRequired,
-        deliveryVerificationMethods: deal.deliveryVerificationMethods || [],
       },
     };
   }
@@ -840,7 +832,7 @@ class DealService {
 
   async markOrderDeliveryVerified(orderId, actor = {}) {
     return this.dealRepository.updateSalesForOrder(orderId, {
-      status: "delivered_verified",
+      status: "delivered",
       payoutEligible: true,
       eventType: DEAL_TIMELINE_EVENT.DELIVERY_VERIFIED,
       actor,

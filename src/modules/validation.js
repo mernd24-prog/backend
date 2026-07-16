@@ -130,7 +130,6 @@ const returnValidation = {
       "in_transit",
       "out_for_delivery",
       "delivered",
-      "delivered_verified",
       "received",
     ).required(),
     eventTime: Joi.date().iso(),
@@ -323,6 +322,7 @@ const commissionValidation = {
   processPayouts: Joi.object({
     sellerId: Joi.string().required(),
     organizationId: Joi.string().guid({ version: "uuidv4" }).allow(null),
+    commissionIds: Joi.array().items(Joi.string().guid({ version: "uuidv4" })).min(1).max(100),
     periodStart: Joi.date(),
     periodEnd: Joi.date(),
     paymentReference: Joi.string().trim().max(160),

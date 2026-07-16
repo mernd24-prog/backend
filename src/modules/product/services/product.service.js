@@ -228,6 +228,44 @@ class ProductService {
       .filter(Boolean);
   }
 
+  normalizeReturnPolicy(payload = {}, existingProduct = null) {
+    const existing = this.toPlainObject(existingProduct) || {};
+    const existingWarranty = existing.warranty || {};
+    const incomingWarranty = payload.warranty || {};
+    const existingPolicy = existingWarranty.returnPolicy || {};
+    const incomingPolicy = incomingWarranty.returnPolicy || {};
+    if (existingProduct && payload.warranty === undefined) return payload;
+
+    const policy = { ...existingPolicy, ...incomingPolicy };
+    const returnable = incomingPolicy.returnable ?? incomingPolicy.eligible ??
+      existingPolicy.returnable ?? existingPolicy.eligible ?? true;
+    const returnWindowDays = returnable
+      ? Math.max(Number(incomingPolicy.returnWindowDays ?? incomingPolicy.days ??
+        existingPolicy.returnWindowDays ?? existingPolicy.days ?? 7), 0)
+      : 0;
+
+    return {
+      ...payload,
+      warranty: {
+        ...existingWarranty,
+        ...incomingWarranty,
+        returnPolicy: {
+          ...policy,
+          returnable,
+          eligible: returnable,
+          returnWindowDays,
+          days: returnWindowDays,
+          type: returnable ? policy.type || "standard" : "non_returnable",
+          resolution: policy.resolution || "refund_or_replacement",
+          requiresImages: Boolean(policy.requiresImages || policy.requires_images),
+          inspectionRequired: policy.inspectionRequired ?? policy.requiresQc ?? true,
+          shippingPaidBy: policy.shippingPaidBy || "platform",
+          restockingFee: Math.max(Number(policy.restockingFee || 0), 0),
+        },
+      },
+    };
+  }
+
   normalizeVariantAttributes(attributes = {}) {
     const source = attributes instanceof Map ? Object.fromEntries(attributes) : attributes;
     return Object.entries(source || {}).reduce((acc, [key, value]) => {
@@ -1115,6 +1153,7 @@ class ProductService {
       : payload.sellerId || actor.userId;
     const organizationContext = await this.resolveProductOrganization(payload, actor, sellerId);
 
+    payload = this.normalizeReturnPolicy(payload);
     payload = this.normalizeProductMedia(payload);
     payload = this.normalizeProductVariants(payload);
     payload = this.syncRootAndDefaultVariant(payload);
@@ -1228,6 +1267,7 @@ class ProductService {
       delete payload.organizationSnapshot;
     }
 
+    payload = this.normalizeReturnPolicy(payload, existingProduct);
     payload = this.normalizeProductMedia(payload);
     payload = this.normalizeProductVariants(payload);
     payload = this.syncRootAndDefaultVariant(payload, existingProduct);

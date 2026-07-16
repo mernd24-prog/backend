@@ -11,7 +11,6 @@ const REPORT_TYPES = [
   "products",
   "inventory",
   "shipments",
-  "delivery-agents",
   "returns",
   "cancellations",
   "refunds",
@@ -37,7 +36,6 @@ class OperationsReportService {
       products: () => this.buildProductsReport(filters),
       inventory: () => this.buildInventoryReport(filters),
       shipments: () => this.buildShipmentsReport(filters),
-      "delivery-agents": () => this.buildDeliveryAgentsReport(filters),
       returns: () => this.buildReturnsReport(filters),
       cancellations: () => this.buildCancellationsReport(filters),
       refunds: () => this.buildRefundsReport(filters),
@@ -337,19 +335,18 @@ class OperationsReportService {
         filters,
         summary: [
           ["Shipments", rows.length],
-          ["Delivered", rows.filter((row) => ["delivered", "delivered_verified"].includes(row.status)).length],
+          ["Delivered", rows.filter((row) => row.status === "delivered").length],
           ["Failed/RTO", rows.filter((row) => ["failed", "rto", "lost", "damaged"].includes(row.status)).length],
           ["COD", rows.filter((row) => row.cod).length],
         ],
         headers: [
-          "Shipment ID", "Order ID", "Seller ID", "Agent ID", "Provider", "Courier",
+          "Shipment ID", "Order ID", "Seller ID", "Provider", "Courier",
           "AWB", "Tracking Number", "Status", "Mode", "COD", "Expected Delivery", "Created At",
         ],
         rows: rows.map((row) => [
           row.id,
           row.order_id,
           row.seller_id,
-          row.delivery_agent_id || "-",
           row.provider,
           row.courier_name || "-",
           row.awb_number || "-",
@@ -364,82 +361,6 @@ class OperationsReportService {
       }),
     };
   }
-
-  async buildDeliveryAgentsReport(filters) {
-    if (!(await this.hasTable("delivery_agents"))) {
-      return this.emptyReport("Delivery Agents Export", "delivery-agents-export", filters);
-    }
-
-    const query = knex("delivery_agents as da")
-      .leftJoin("shipments as s", "s.delivery_agent_id", "da.id")
-      .select(
-        "da.id",
-        "da.seller_id",
-        "da.name",
-        "da.phone",
-        "da.email",
-        "da.vehicle_type",
-        "da.vehicle_number",
-        "da.license_number",
-        "da.verification_status",
-        "da.active",
-        "da.created_at",
-      )
-      .select(knex.raw("COUNT(s.id)::INT AS assigned_shipments"))
-      .select(knex.raw("COUNT(s.id) FILTER (WHERE s.status IN ('delivered', 'delivered_verified'))::INT AS delivered_shipments"))
-      .groupBy("da.id");
-
-    if (filters.sellerId) query.where("da.seller_id", filters.sellerId);
-    if (filters.status) query.where("da.verification_status", filters.status);
-    if (filters.active !== undefined) query.where("da.active", filters.active === true || filters.active === "true");
-    if (filters.search) {
-      query.where((builder) => builder
-        .whereILike("da.name", `%${filters.search}%`)
-        .orWhereILike("da.phone", `%${filters.search}%`)
-        .orWhereILike("da.email", `%${filters.search}%`)
-        .orWhereILike("da.vehicle_number", `%${filters.search}%`)
-        .orWhereILike("da.license_number", `%${filters.search}%`));
-    }
-    this.applyDateRange(query, filters, "da.created_at");
-
-    const rows = await query.orderBy("da.created_at", "desc").limit(filters.limit).offset(filters.offset);
-    return {
-      rows,
-      document: this.buildDocument({
-        title: "Delivery Agents Export",
-        subtitle: `${rows.length} delivery agent row(s)`,
-        fileBaseName: "delivery-agents-export",
-        filters,
-        summary: [
-          ["Agents", rows.length],
-          ["Active", rows.filter((row) => row.active).length],
-          ["Verified", rows.filter((row) => row.verification_status === "verified").length],
-          ["Assigned Shipments", rows.reduce((sum, row) => sum + Number(row.assigned_shipments || 0), 0)],
-        ],
-        headers: [
-          "Agent ID", "Seller ID", "Name", "Phone", "Email", "Vehicle Type", "Vehicle Number",
-          "License Number", "Verification", "Active", "Assigned Shipments", "Delivered Shipments", "Created At",
-        ],
-        rows: rows.map((row) => [
-          row.id,
-          row.seller_id,
-          row.name,
-          row.phone,
-          row.email || "-",
-          row.vehicle_type || "-",
-          row.vehicle_number || "-",
-          row.license_number || "-",
-          row.verification_status,
-          Boolean(row.active),
-          row.assigned_shipments || 0,
-          row.delivered_shipments || 0,
-          row.created_at,
-        ]),
-        raw: rows,
-      }),
-    };
-  }
-
   async buildReturnsReport(filters) {
     const rows = await this.queryReturns(filters);
     return {
@@ -771,7 +692,6 @@ class OperationsReportService {
     if (filters.orderId) query.where("order_id", filters.orderId);
     if (filters.returnId) query.where("return_id", filters.returnId);
     if (filters.sellerId) query.where("seller_id", filters.sellerId);
-    if (filters.deliveryAgentId) query.where("delivery_agent_id", filters.deliveryAgentId);
     if (filters.status) query.where("status", filters.status);
     if (filters.shipmentType) query.where("shipment_type", filters.shipmentType);
     if (filters.direction) query.where("direction", filters.direction);
@@ -866,7 +786,7 @@ class OperationsReportService {
       .select("seller_id")
       .count({ total_shipments: "*" })
       .select(knex.raw(`
-        COUNT(*) FILTER (WHERE status IN ('delivered', 'delivered_verified'))::INT AS delivered_shipments,
+        COUNT(*) FILTER (WHERE status = 'delivered')::INT AS delivered_shipments,
         COUNT(*) FILTER (WHERE status IN ('failed', 'cancelled', 'rto', 'lost', 'damaged'))::INT AS failed_shipments
       `))
       .groupBy("seller_id");

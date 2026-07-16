@@ -48,8 +48,6 @@ function registerDomainHandlers() {
     [DOMAIN_EVENTS.SHIPMENT_CREATED_V1, "shipment", (p) => p.shipmentId],
     [DOMAIN_EVENTS.SHIPMENT_TRACKING_UPDATED_V1, "shipment", (p) => p.shipmentId],
     [DOMAIN_EVENTS.SHIPMENT_DELIVERED_V1, "shipment", (p) => p.shipmentId],
-    [DOMAIN_EVENTS.SHIPMENT_DELIVERY_OTP_GENERATED_V1, "shipment", (p) => p.shipmentId],
-    [DOMAIN_EVENTS.SHIPMENT_DELIVERY_VERIFIED_V1, "shipment", (p) => p.shipmentId],
     [DOMAIN_EVENTS.SHIPMENT_FAILED_V1, "shipment", (p) => p.shipmentId],
     [DOMAIN_EVENTS.SHIPMENT_RTO_V1, "shipment", (p) => p.shipmentId],
     [DOMAIN_EVENTS.INVOICE_GENERATED_V1, "invoice", (p) => p.invoiceId],

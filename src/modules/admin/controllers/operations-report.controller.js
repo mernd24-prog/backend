@@ -9,7 +9,6 @@ class OperationsReportController {
   exportProducts = (req, res) => this.sendReport(res, "products", req.query);
   exportInventory = (req, res) => this.sendReport(res, "inventory", req.query);
   exportShipments = (req, res) => this.sendReport(res, "shipments", req.query);
-  exportDeliveryAgents = (req, res) => this.sendReport(res, "delivery-agents", req.query);
   exportReturns = (req, res) => this.sendReport(res, "returns", req.query);
   exportCancellations = (req, res) => this.sendReport(res, "cancellations", req.query);
   exportRefunds = (req, res) => this.sendReport(res, "refunds", req.query);

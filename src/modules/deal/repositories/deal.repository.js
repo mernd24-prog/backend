@@ -58,8 +58,6 @@ class DealRepository {
       startAt: row.start_at,
       endAt: row.end_at,
       fulfillmentModel: row.fulfillment_model,
-      deliveryVerificationRequired: Boolean(row.delivery_verification_required),
-      deliveryVerificationMethods: this.parseJson(row.delivery_verification_methods, []),
       inventoryPolicy: this.parseJson(row.inventory_policy, {}),
       financePolicy: this.parseJson(row.finance_policy, {}),
       sponsorshipPolicy: this.parseJson(row.sponsorship_policy, {}),
@@ -97,8 +95,6 @@ class DealRepository {
       paused_at: payload.pausedAt || null,
       cancelled_at: payload.cancelledAt || null,
       fulfillment_model: payload.fulfillmentModel,
-      delivery_verification_required: Boolean(payload.deliveryVerificationRequired),
-      delivery_verification_methods: this.jsonb(payload.deliveryVerificationMethods || [], []),
       inventory_policy: this.jsonb(payload.inventoryPolicy || {}, {}),
       finance_policy: this.jsonb(payload.financePolicy || {}, {}),
       sponsorship_policy: this.jsonb(payload.sponsorshipPolicy || {}, {}),
@@ -524,7 +520,7 @@ class DealRepository {
             updated_at: knex.fn.now(),
           });
         }
-        if (["cancelled", "refunded"].includes(payload.status) && ["reserved", "confirmed", "delivered_verified"].includes(sale.sale_status)) {
+        if (["cancelled", "refunded"].includes(payload.status) && ["reserved", "confirmed", "delivered"].includes(sale.sale_status)) {
           const decrementColumn = sale.sale_status === "reserved" ? "reserved_quantity" : "sold_quantity";
           await trx("deals").where("id", sale.deal_id).update({
             [decrementColumn]: knex.raw(`GREATEST(${decrementColumn} - ?, 0)`, [Number(sale.quantity || 0)]),
@@ -628,7 +624,7 @@ class DealRepository {
     return knex.transaction(async (trx) => {
       const query = trx("deal_sales as ds")
         .innerJoin("deals as d", "d.id", "ds.deal_id")
-        .select("ds.*", "d.delivery_verification_required", "d.title as deal_title")
+        .select("ds.*", "d.title as deal_title")
         .whereBetween("ds.created_at", [payload.periodStart, `${payload.periodEnd} 23:59:59`])
         .whereNull("ds.payout_id")
         .whereNotIn("ds.sale_status", ["cancelled", "refunded"])
@@ -637,9 +633,9 @@ class DealRepository {
       if (payload.dealId) query.where("ds.deal_id", payload.dealId);
       const sales = await query;
       const eligible = sales.filter((sale) => {
-        if (payload.requireDeliveryVerified === false) return sale.sale_status === "confirmed" || sale.sale_status === "delivered_verified";
-        if (payload.requireDeliveryVerified === true || sale.delivery_verification_required) return sale.sale_status === "delivered_verified";
-        return sale.sale_status === "confirmed" || sale.sale_status === "delivered_verified";
+        if (payload.requireDeliveryVerified === false) return sale.sale_status === "confirmed" || sale.sale_status === "delivered";
+        if (payload.requireDeliveryVerified === true) return sale.sale_status === "delivered";
+        return sale.sale_status === "confirmed" || sale.sale_status === "delivered";
       });
       if (!eligible.length) {
         return { generated: 0, items: [], message: "No eligible deal sales found" };

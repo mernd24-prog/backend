@@ -10,7 +10,6 @@ const { TaxService } = require("../../tax/services/tax.service");
 const { DealService } = require("../../deal/services/deal.service");
 const { CommissionService } = require("../../seller/services/commission.service");
 const { RazorpayProvider } = require("../../../infrastructure/payments/providers/razorpay.provider");
-const { shippingProviderRegistry } = require("../../../infrastructure/shipping/provider-registry");
 const { CancellationRepository } = require("../repositories/cancellation.repository");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
@@ -238,8 +237,6 @@ class CancellationService {
       sellerIds.has(String(shipment.seller_id)) && shipment.direction !== "reverse" && shipment.status !== "cancelled",
     );
     for (const shipment of shipments) {
-      const provider = shippingProviderRegistry.get(shipment.provider || "manual");
-      await provider.cancelShipment({ shipmentId: shipment.id, trackingNumber: shipment.tracking_number });
       await this.deliveryRepository.addTrackingEvent(shipment.id, {
         status: "cancelled",
         note: cancellation.reason,

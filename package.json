@@ -10,7 +10,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "check": "node --check src/server.js",
-    "test": "node test/referral-commerce.test.js",
+    "test": "node --test test/*.test.js",
     "db:migrate": "node scripts/db/run-sequelize-migrations.js",
     "db:migrate:undo": "node scripts/db/rollback-sequelize-migration.js",
     "db:setup": "npm run db:migrate && npm run db:seed:rbac && npm run db:seed:commerce",

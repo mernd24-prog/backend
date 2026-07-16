@@ -47,28 +47,88 @@ class SettlementLifecycleService {
     const order = await knex("orders").where("id", orderId).first();
     if (!order) return null;
     const policy = await this.getPolicy();
+    const allOrderItems = await knex("order_items").where("order_id", orderId);
+    const shipmentMetadata = this.parseJson(shipment?.metadata, {});
+    const shipmentItemIds = new Set((shipmentMetadata.orderItemIds || []).map(String));
+    const shipmentOrganizationId = shipmentMetadata.organizationId || shipment?.organization_id || null;
+    const orderItems = shipment
+      ? allOrderItems.filter((item) => {
+        if (shipmentItemIds.size) return shipmentItemIds.has(String(item.id));
+        return String(item.seller_id) === String(shipment.seller_id) &&
+          (!shipmentOrganizationId || String(item.organization_id || "") === String(shipmentOrganizationId));
+      })
+      : allOrderItems;
+    if (!orderItems.length) return null;
+    const itemSnapshots = orderItems.map((item) => {
+      const productSnapshot = this.parseJson(item.product_snapshot, {});
+      const existingSnapshot = this.parseJson(item.return_policy_snapshot, {});
+      const productPolicy = productSnapshot.returnPolicy || productSnapshot.return_policy ||
+        productSnapshot.commercialPolicy?.returnPolicy || existingSnapshot;
+      const returnable = productPolicy.returnable ?? productPolicy.eligible ?? item.returnable ?? true;
+      const returnWindowDays = returnable
+        ? Math.max(Number(productPolicy.returnWindowDays ?? productPolicy.days ?? item.return_window_days ?? policy.returnWindowDays), 0)
+        : 0;
+      const itemDeliveredAt = item.delivered_at ? new Date(item.delivered_at) : new Date(deliveredAt);
+      const returnEligibleUntil = item.return_eligible_until
+        ? new Date(item.return_eligible_until)
+        : this.addDays(itemDeliveredAt, returnWindowDays);
+      return {
+        item,
+        returnable: Boolean(returnable),
+        returnWindowDays,
+        deliveredAt: itemDeliveredAt,
+        returnEligibleUntil,
+        snapshot: {
+          ...productPolicy,
+          returnable: Boolean(returnable),
+          eligible: Boolean(returnable),
+          returnWindowDays,
+          days: returnWindowDays,
+          deliveredAt: itemDeliveredAt.toISOString(),
+          eligibleUntil: returnEligibleUntil.toISOString(),
+          source: "product_snapshot",
+          shipmentId: shipment?.id || null,
+        },
+      };
+    });
+    const returnableItems = itemSnapshots.filter((entry) => entry.returnable);
+    const aggregateEligibleAt = (returnableItems.length ? returnableItems : itemSnapshots)
+      .reduce((latest, entry) => latest > entry.returnEligibleUntil ? latest : entry.returnEligibleUntil, new Date(deliveredAt));
     const existingUntil = order.return_eligible_until ? new Date(order.return_eligible_until) : null;
-    const returnEligibleUntil = existingUntil || this.addDays(deliveredAt, policy.returnWindowDays);
+    const returnEligibleUntil = existingUntil && existingUntil > aggregateEligibleAt
+      ? existingUntil
+      : aggregateEligibleAt;
+    const aggregateWindowDays = itemSnapshots.reduce(
+      (maximum, entry) => Math.max(maximum, entry.returnWindowDays),
+      Number(order.return_window_days || 0),
+    );
     const snapshot = {
-      returnWindowDays: policy.returnWindowDays,
+      returnWindowDays: aggregateWindowDays,
       deliveredAt: new Date(deliveredAt).toISOString(),
       eligibleUntil: returnEligibleUntil.toISOString(),
-      source: "platform_global_policy",
+      source: "product_item_policies",
       shipmentId: shipment?.id || null,
     };
 
-    await knex("orders").where("id", orderId).update({
-      return_window_days: policy.returnWindowDays,
-      return_eligible_until: returnEligibleUntil,
-      fulfillment_eligible_at: returnEligibleUntil,
-      return_policy_snapshot: snapshot,
-      metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({ settlementLifecycle: snapshot })]),
-      updated_at: knex.fn.now(),
-    });
-    await knex("order_items").where("order_id", orderId).update({
-      return_window_days: policy.returnWindowDays,
-      return_eligible_until: returnEligibleUntil,
-      return_policy_snapshot: snapshot,
+    await knex.transaction(async (trx) => {
+      await trx("orders").where("id", orderId).update({
+        return_window_days: aggregateWindowDays,
+        return_eligible_until: returnEligibleUntil,
+        fulfillment_eligible_at: returnEligibleUntil,
+        return_policy_snapshot: snapshot,
+        metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({ settlementLifecycle: snapshot })]),
+        updated_at: knex.fn.now(),
+      });
+      for (const entry of itemSnapshots) {
+        await trx("order_items").where("id", entry.item.id).update({
+          delivered_at: entry.deliveredAt,
+          returnable: entry.returnable,
+          return_window_days: entry.returnWindowDays,
+          return_eligible_until: entry.returnEligibleUntil,
+          payout_eligible_at: entry.returnEligibleUntil,
+          return_policy_snapshot: entry.snapshot,
+        });
+      }
     });
 
     if (shipment && order.payment_provider === PAYMENT_PROVIDER.COD) {
@@ -271,6 +331,49 @@ class SettlementLifecycleService {
         metadata: { automated: true, returnEligibleUntil: order.fulfillment_eligible_at }, created_at: knex.fn.now(),
       }).catch(() => {});
       results.push({ orderId: order.id, fulfilled: true });
+    }
+    return results;
+  }
+
+  async markEligibleOrderItems(limit = 500) {
+    const now = new Date();
+    const claimedItems = await knex.transaction(async (trx) => trx("order_items")
+      .where("payout_status", "pending")
+      .whereNotNull("payout_eligible_at")
+      .where("payout_eligible_at", "<=", now)
+      .orderBy("payout_eligible_at", "asc")
+      .limit(limit)
+      .forUpdate()
+      .skipLocked());
+    const results = [];
+    for (const item of claimedItems) {
+      const openReturn = await ReturnModel.exists({
+        orderId: String(item.order_id),
+        status: { $in: OPEN_RETURN_STATUSES },
+        items: { $elemMatch: { orderItemId: String(item.id) } },
+      }).catch(() => null);
+      if (openReturn) {
+        results.push({ orderItemId: item.id, eligible: false, reason: "open_return" });
+        continue;
+      }
+      await knex.transaction(async (trx) => {
+        const updated = await trx("order_items")
+          .where({ id: item.id, payout_status: "pending" })
+          .update({ payout_status: "eligible" });
+        if (!updated) return;
+        await trx("seller_commissions")
+          .where("order_item_id", item.id)
+          .whereIn("status", ["pending", "approved"])
+          .update({ eligible_at: item.payout_eligible_at, updated_at: trx.fn.now() });
+        await trx("payout_status_history").insert({
+          id: uuidv4(), seller_id: item.seller_id, order_id: item.order_id,
+          order_item_id: item.id, commission_id: item.commission_id || null,
+          from_status: "pending", to_status: "eligible", reason: "return_window_closed",
+          actor_id: "system", actor_role: "system",
+          metadata: { payoutEligibleAt: item.payout_eligible_at },
+        });
+      });
+      results.push({ orderItemId: item.id, eligible: true });
     }
     return results;
   }
