@@ -10,9 +10,38 @@ const {
 } = require("../../../shared/domain/commerce-constants");
 const { documentRendererService } = require("../../../shared/services/document-renderer.service");
 const { UserModel } = require("../../user/models/user.model");
+const { makeEvent } = require("../../../contracts/events/event");
+const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
+const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 
 class SellerCommissionService {
   constructor() {}
+
+  async publishPayoutEvent(payout = {}, actor = {}) {
+    if (!payout?.id || !payout?.seller_id) return;
+    await eventPublisher.publish(
+      makeEvent(
+        DOMAIN_EVENTS.SELLER_PAYOUT_STATUS_UPDATED_V1,
+        {
+          payoutId: payout.id,
+          sellerId: payout.seller_id,
+          organizationId: payout.organization_id || null,
+          status: payout.status,
+          netAmount: payout.net_amount,
+          totalAmount: payout.total_amount,
+          currency: payout.currency || "INR",
+          paymentReference: payout.payment_reference || null,
+          processedAt: payout.processed_at || null,
+          viewUrl: `/app/seller-payouts?payoutId=${encodeURIComponent(payout.id)}`,
+          updatedBy: actor.userId || actor.sub || null,
+        },
+        {
+          source: "seller-commission-module",
+          aggregateId: payout.id,
+        },
+      ),
+    );
+  }
 
   round(value) {
     return Math.round(Number(value || 0) * 100) / 100;
@@ -962,6 +991,16 @@ class SellerCommissionService {
         "Payout initiated"
       );
 
+      await this.publishPayoutEvent({
+        id: payoutId,
+        seller_id: sellerId,
+        organization_id: organizationId,
+        status: payoutStatus,
+        net_amount: this.round(totals.netAmount),
+        total_amount: this.round(totals.totalAmount),
+        currency: options.currency || payoutCommissions[0]?.currency || "INR",
+      }, options.actor);
+
       return payoutId;
     });
   }
@@ -1056,7 +1095,9 @@ class SellerCommissionService {
         "Payout completed"
       );
 
-      return { ...payout, status: "completed", payment_reference: paymentReference };
+      const result = { ...payout, status: "completed", payment_reference: paymentReference, payment_method: options.paymentMethod || payout.payment_method || null, processed_at: new Date() };
+      await this.publishPayoutEvent(result, options.actor);
+      return result;
     });
   }
 
@@ -1097,7 +1138,9 @@ class SellerCommissionService {
             updated_at: knex.fn.now(),
           });
       }
-      return { ...payout, status: "failed" };
+      const result = { ...payout, status: "failed" };
+      await this.publishPayoutEvent(result, actor);
+      return result;
     });
   }
 
@@ -1121,6 +1164,7 @@ class SellerCommissionService {
       await trx("seller_commissions").where("payout_id", payoutId).whereNot("status", "paid").update({
         status: "cancelled", updated_at: trx.fn.now(),
       });
+      await this.publishPayoutEvent(updated, actor);
       return updated;
     });
   }
@@ -1154,6 +1198,7 @@ class SellerCommissionService {
         .whereIn("status", ["pending", "approved"])
         .update({ status: "approved", updated_at: knex.fn.now() });
 
+      await this.publishPayoutEvent(updated, options.actor);
       return updated;
     });
   }
@@ -1178,6 +1223,7 @@ class SellerCommissionService {
         })
         .returning("*");
       await this.transitionPayoutItems(trx, payoutId, "held", { reason, actor });
+      await this.publishPayoutEvent(updated, actor);
       return updated;
     });
   }
@@ -1206,6 +1252,7 @@ class SellerCommissionService {
         reason: options.note || "payout_hold_released",
         actor: options.actor,
       });
+      await this.publishPayoutEvent(updated, options.actor);
       return updated;
     });
   }
