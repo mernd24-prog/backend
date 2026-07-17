@@ -624,7 +624,17 @@ class SellerCommissionService {
       const sellerDeliveryChargeAmount = 0;
       const shippingReimbursementAmount = 0;
       const shippingDeductionAmount = 0;
-      const netAmount = this.round(group.sellerReceivableAmount);
+      const taxableSupplyAmount = this.round(
+        group.products.reduce((sum, product) => sum + Number(product.taxableAmount || 0), 0),
+      );
+      const gstTcsRate = financeSnapshot.gstTcsEnabled ? Number(financeSnapshot.gstTcsRate || 0) : 0;
+      const incomeTaxTdsRate = financeSnapshot.incomeTaxTdsEnabled ? Number(financeSnapshot.incomeTaxTdsRate || 0) : 0;
+      const gstTcsAmount = this.round((taxableSupplyAmount * gstTcsRate) / 100);
+      const incomeTaxTdsAmount = this.round((amount * incomeTaxTdsRate) / 100);
+      const netAmount = this.round(Math.max(
+        0,
+        group.sellerReceivableAmount - gstTcsAmount - incomeTaxTdsAmount,
+      ));
       return {
         sellerId: group.sellerId,
         organizationId: group.organizationId || null,
@@ -659,6 +669,14 @@ class SellerCommissionService {
           sellerDeliveryChargeAmount,
           shippingReimbursementAmount,
           shippingDeductionAmount,
+          taxableSupplyAmount,
+          gstTcsEnabled: Boolean(financeSnapshot.gstTcsEnabled),
+          gstTcsRate,
+          gstTcsAmount,
+          incomeTaxTdsEnabled: Boolean(financeSnapshot.incomeTaxTdsEnabled),
+          incomeTaxTdsRate,
+          incomeTaxTdsAmount,
+          statutoryDeductionAmount: this.round(gstTcsAmount + incomeTaxTdsAmount),
           pricingSource: "checkout_snapshot",
           sellerReceivable: netAmount,
           products: group.products,

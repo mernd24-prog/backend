@@ -52,7 +52,8 @@ class TaxService {
     const cgstAmount = taxTotals.cgstAmount;
     const sgstAmount = taxTotals.sgstAmount;
     const igstAmount = taxTotals.igstAmount;
-    const tcsAmount = Number((taxableAmount * 0.01).toFixed(2));
+    // GST TCS is a seller settlement withholding, not a customer invoice charge.
+    const tcsAmount = 0;
     const invoiceNumber = await this.taxRepository.nextInvoiceNumber("GST");
 
     const invoice = await this.taxRepository.createInvoice({

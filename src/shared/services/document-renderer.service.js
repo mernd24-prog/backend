@@ -632,7 +632,7 @@ class DocumentRendererService {
     if (!isIgst && cgst > 0) rows.push({ component: "CGST", amount: cgst });
     if (!isIgst && sgst > 0) rows.push({ component: "SGST", amount: sgst });
     if (igst > 0) rows.push({ component: "IGST", amount: igst });
-    if (tcs > 0) rows.push({ component: "TCS (1%)", amount: tcs });
+    if (tcs > 0) rows.push({ component: "GST TCS", amount: tcs });
 
     if (!rows.length) {
       return `<p style="color:#b0b4c9;font-style:italic;font-size:11px;padding:8px 0">No tax applicable</p>`;

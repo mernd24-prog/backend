@@ -361,10 +361,17 @@ class PricingService {
       );
       const shippingReimbursementAmount = shippingPolicy === "reimburse_seller" ? sellerDeliveryChargeAmount : 0;
       const shippingDeductionAmount = shippingPolicy === "deduct_from_seller" ? sellerDeliveryChargeAmount : 0;
-      const sellerPayoutAmount = Math.max(
+      const payoutBeforeStatutoryDeductions = Math.max(
         0,
         seller.sellerPayoutAmount + shippingReimbursementAmount - shippingDeductionAmount,
       );
+      const gstTcsRate = financeSettings.gstTcsEnabled ? Number(financeSettings.gstTcsRate || 0) : 0;
+      const incomeTaxTdsRate = financeSettings.incomeTaxTdsEnabled ? Number(financeSettings.incomeTaxTdsRate || 0) : 0;
+      const gstTcsAmount = Number(((seller.taxableAmount * gstTcsRate) / 100).toFixed(2));
+      const incomeTaxTdsAmount = Number(((seller.grossSalesAmount * incomeTaxTdsRate) / 100).toFixed(2));
+      const sellerPayoutAmount = Math.max(0, Number(
+        (payoutBeforeStatutoryDeductions - gstTcsAmount - incomeTaxTdsAmount).toFixed(2),
+      ));
       return {
         ...seller,
         grossSalesAmount: Number(seller.grossSalesAmount.toFixed(2)),
@@ -378,6 +385,11 @@ class PricingService {
         shippingReimbursementAmount: Number(shippingReimbursementAmount.toFixed(2)),
         shippingDeductionAmount: Number(shippingDeductionAmount.toFixed(2)),
         shippingPolicy,
+        gstTcsRate,
+        gstTcsAmount,
+        incomeTaxTdsRate,
+        incomeTaxTdsAmount,
+        statutoryDeductionAmount: Number((gstTcsAmount + incomeTaxTdsAmount).toFixed(2)),
         sellerPayoutAmount: Number(sellerPayoutAmount.toFixed(2)),
       };
     });
@@ -491,10 +503,23 @@ class PricingService {
     const customerFeeValue = Number(config.customerFeeValue || 0);
     const breakup = [];
     let sellerFeeAmount = 0;
-    let customerFeeAmount = 0;
-    let customerFeeTaxAmount = 0;
+    const customerOrderFeeBase = calculationBase === "order_total"
+      ? Number(context.totalAmount || 0)
+      : Number(context.customerItemsAmount ?? context.subtotalAmount ?? 0);
+    const customerFeeAmount = this.calculateConfiguredFee(
+      customerFeeType,
+      customerFeeValue,
+      customerOrderFeeBase,
+      1,
+    );
+    const customerFeeTaxAmount = 0;
+    const allocationBaseTotal = pricedItems.reduce(
+      (sum, item) => sum + this.resolvePlatformFeeBase(item, context, calculationBase),
+      0,
+    );
+    let allocatedCustomerFee = 0;
 
-    for (const item of pricedItems) {
+    for (const [index, item] of pricedItems.entries()) {
       const feeBaseAmount = this.resolvePlatformFeeBase(item, context, calculationBase);
       const sellerCommission = this.calculateConfiguredFee(
         sellerCommissionType,
@@ -502,17 +527,13 @@ class PricingService {
         feeBaseAmount,
         item.quantity,
       );
-      const customerPlatformFee = this.calculateConfiguredFee(
-        customerFeeType,
-        customerFeeValue,
-        feeBaseAmount,
-        item.quantity,
-      );
+      const customerPlatformFee = index === pricedItems.length - 1
+        ? Number((customerFeeAmount - allocatedCustomerFee).toFixed(2))
+        : Number((customerFeeAmount * (feeBaseAmount / Math.max(allocationBaseTotal, 1))).toFixed(2));
       const customerPlatformFeeTax = 0;
 
       sellerFeeAmount += sellerCommission;
-      customerFeeAmount += customerPlatformFee;
-      customerFeeTaxAmount += customerPlatformFeeTax;
+      allocatedCustomerFee += customerPlatformFee;
 
       breakup.push({
         productId: item.productId,
@@ -668,9 +689,12 @@ class PricingService {
         const originCountry = String(item.origin?.country || "INDIA").trim().toUpperCase();
         const originState = String(item.origin?.state || "").trim().toUpperCase();
 
+        const supplierState = originState || businessState;
+        const placeOfSupplyState = buyerState || businessState;
+
         if (originCountry !== "INDIA") {
           itemTaxMode = "igst";
-        } else if (originState !== businessState || buyerState !== businessState) {
+        } else if (!supplierState || !placeOfSupplyState || supplierState !== placeOfSupplyState) {
           itemTaxMode = "igst";
         } else {
           itemTaxMode = "cgst_sgst";
@@ -752,11 +776,7 @@ class PricingService {
     result.taxPayableAmount = Number(result.items.reduce((sum, item) => sum + Number(item.taxPayableAmount || 0), 0).toFixed(2));
     result.taxMode = hasMixedTaxMode
       ? "mixed"
-      : isExport
-      ? "zero_rated_export"
-      : buyerState === businessState
-      ? "cgst_sgst"
-      : "igst";
+      : result.items[0]?.taxMode || (isExport ? "zero_rated_export" : "cgst_sgst");
 
     return result;
   }

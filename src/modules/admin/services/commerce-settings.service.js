@@ -83,6 +83,10 @@ const DEFAULT_SETTINGS = {
     payoutManualApprovalRequired: true,
     minimumPayoutAmount: 0,
     shippingPolicy: "not_in_seller_payout",
+    gstTcsEnabled: false,
+    gstTcsRate: 0.5,
+    incomeTaxTdsEnabled: false,
+    incomeTaxTdsRate: 0.1,
   },
 };
 
@@ -368,6 +372,10 @@ class CommerceSettingsService {
           ALLOWED.finance.shippingPolicy,
           DEFAULT_SETTINGS.finance.shippingPolicy,
         ),
+        gstTcsEnabled: bool(source.finance.gstTcsEnabled, DEFAULT_SETTINGS.finance.gstTcsEnabled),
+        gstTcsRate: Math.min(Math.max(num(source.finance.gstTcsRate, DEFAULT_SETTINGS.finance.gstTcsRate), 0), 100),
+        incomeTaxTdsEnabled: bool(source.finance.incomeTaxTdsEnabled, DEFAULT_SETTINGS.finance.incomeTaxTdsEnabled),
+        incomeTaxTdsRate: Math.min(Math.max(num(source.finance.incomeTaxTdsRate, DEFAULT_SETTINGS.finance.incomeTaxTdsRate), 0), 100),
       },
     };
   }

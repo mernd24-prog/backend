@@ -966,6 +966,7 @@ class OrderRepository {
       if (!match) return settlement;
 
       const payout = match.payout_id ? payoutsById.get(String(match.payout_id)) : null;
+      const commissionMetadata = this.parseJson(match.metadata, {});
 
       return {
         ...settlement,
@@ -982,6 +983,11 @@ class OrderRepository {
         netCommissionAmount: this.money(match.net_amount),
         platformFeeAmount: this.money(match.commission_amount),
         platformFeeTaxAmount: this.money(match.tax_amount),
+        gstTcsRate: this.money(commissionMetadata.gstTcsRate),
+        gstTcsAmount: this.money(commissionMetadata.gstTcsAmount),
+        incomeTaxTdsRate: this.money(commissionMetadata.incomeTaxTdsRate),
+        incomeTaxTdsAmount: this.money(commissionMetadata.incomeTaxTdsAmount),
+        statutoryDeductionAmount: this.money(commissionMetadata.statutoryDeductionAmount),
         sellerPayoutAmount: this.money(match.net_amount),
       };
     });
@@ -989,7 +995,8 @@ class OrderRepository {
 
   buildSellerSettlements(items = [], sellers = [], order = {}) {
     const orderMetadata = this.parseJson(order.metadata, {});
-    const shippingPolicy = orderMetadata.commerceSettings?.finance?.shippingPolicy || "not_in_seller_payout";
+    const financeSettings = orderMetadata.commerceSettings?.finance || {};
+    const shippingPolicy = financeSettings.shippingPolicy || "not_in_seller_payout";
     const deliveryChargeSellers = Array.isArray(orderMetadata.deliveryCharge?.sellers)
       ? orderMetadata.deliveryCharge.sellers
       : [];
@@ -1067,10 +1074,15 @@ class OrderRepository {
       );
       const shippingReimbursementAmount = shippingPolicy === "reimburse_seller" ? sellerDeliveryChargeAmount : 0;
       const shippingDeductionAmount = shippingPolicy === "deduct_from_seller" ? sellerDeliveryChargeAmount : 0;
-      const sellerPayoutAmount = Math.max(
+      const payoutBeforeStatutoryDeductions = Math.max(
         0,
         seller.sellerPayoutAmount + shippingReimbursementAmount - shippingDeductionAmount,
       );
+      const gstTcsRate = financeSettings.gstTcsEnabled ? this.money(financeSettings.gstTcsRate) : 0;
+      const incomeTaxTdsRate = financeSettings.incomeTaxTdsEnabled ? this.money(financeSettings.incomeTaxTdsRate) : 0;
+      const gstTcsAmount = this.money((seller.taxableAmount * gstTcsRate) / 100);
+      const incomeTaxTdsAmount = this.money((seller.grossSalesAmount * incomeTaxTdsRate) / 100);
+      const sellerPayoutAmount = Math.max(0, payoutBeforeStatutoryDeductions - gstTcsAmount - incomeTaxTdsAmount);
 
       return {
         ...seller,
@@ -1089,6 +1101,11 @@ class OrderRepository {
         shippingReimbursementAmount: Number(shippingReimbursementAmount.toFixed(2)),
         shippingDeductionAmount: Number(shippingDeductionAmount.toFixed(2)),
         shippingPolicy,
+        gstTcsRate: Number(gstTcsRate.toFixed(2)),
+        gstTcsAmount: Number(gstTcsAmount.toFixed(2)),
+        incomeTaxTdsRate: Number(incomeTaxTdsRate.toFixed(2)),
+        incomeTaxTdsAmount: Number(incomeTaxTdsAmount.toFixed(2)),
+        statutoryDeductionAmount: Number((gstTcsAmount + incomeTaxTdsAmount).toFixed(2)),
         sellerPayoutAmount: Number(sellerPayoutAmount.toFixed(2)),
       };
     });
