@@ -7,6 +7,7 @@ const { makeEvent } = require("../../../contracts/events/event");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { NotificationPreferenceModel } = require("../models/notification-preference.model");
 const { ROLES } = require("../../../shared/constants/roles");
+const { UserModel } = require("../../user/models/user.model");
 
 const notificationQueue = createQueue("notifications");
 let subscribersRegistered = false;
@@ -68,6 +69,7 @@ class NotificationService {
     definitions.forEach(([eventName, subject, templateBuilder]) => {
       eventBus.subscribe(eventName, async (event) => {
         const userId = event.payload.buyerId || event.payload.userId;
+        const customerPayload = this.withViewMetadata(event.payload, "buyer");
         if (userId) {
           await this.createNotification({
             userId,
@@ -78,44 +80,194 @@ class NotificationService {
               eventName,
               eventId: event.id,
               recipientType: "buyer",
-              ...event.payload,
+              ...customerPayload,
             },
             status: "queued",
             idempotencyKey: `${eventName}:${event.id}:${userId}:buyer:in_app`,
           });
 
-          await notificationQueue.add("commerce-email-placeholder", {
-            userId,
+          await this.queueEmailForUser(userId, {
             subject,
+            message: templateBuilder(event.payload),
             eventName,
             eventId: event.id,
-          });
-          await notificationQueue.add("commerce-sms-placeholder", {
-            userId,
-            subject,
-            eventName,
-            eventId: event.id,
+            recipientType: "buyer",
+            payload: customerPayload,
           });
         }
 
         const sellerIds = this.extractSellerRecipientIds(event.payload)
           .filter((sellerId) => String(sellerId) !== String(userId || ""));
-        await Promise.all(sellerIds.map((sellerId) => this.createNotification({
-          userId: sellerId,
-          channel: "in_app",
-          subject,
-          template: this.buildSellerCommerceMessage(eventName, event.payload, templateBuilder),
-          payload: {
+        await Promise.all(sellerIds.map(async (sellerId) => {
+          const sellerMessage = this.buildSellerCommerceMessage(eventName, event.payload, templateBuilder);
+          const sellerPayload = this.withViewMetadata(event.payload, "seller");
+          await this.createNotification({
+            userId: sellerId,
+            channel: "in_app",
+            subject,
+            template: sellerMessage,
+            payload: {
+              eventName,
+              eventId: event.id,
+              recipientType: "seller",
+              ...sellerPayload,
+            },
+            status: "queued",
+            idempotencyKey: `${eventName}:${event.id}:${sellerId}:seller:in_app`,
+          });
+          await this.queueEmailForUser(sellerId, {
+            subject,
+            message: sellerMessage,
             eventName,
             eventId: event.id,
             recipientType: "seller",
-            ...event.payload,
-          },
-          status: "queued",
-          idempotencyKey: `${eventName}:${event.id}:${sellerId}:seller:in_app`,
-        })));
+            payload: sellerPayload,
+          });
+        }));
       });
     });
+
+    this.registerOnboardingSubscribers();
+    this.registerPayoutSubscribers();
+  }
+
+  registerOnboardingSubscribers() {
+    eventBus.subscribe(DOMAIN_EVENTS.SELLER_KYC_SUBMITTED_V1, async (event) => {
+      const admins = await this.findAdminRecipients();
+      await Promise.all(admins.map((admin) => this.createNotification({
+        userId: String(admin._id || admin.id),
+        channel: "in_app",
+        subject: "Seller Onboarding Submitted",
+        template: `${event.payload.legalName || "A seller"} completed onboarding and is ready for review.`,
+        payload: {
+          eventName: event.eventName,
+          eventId: event.id,
+          recipientType: "admin",
+          targetType: "seller_onboarding",
+          viewUrl: `/app/seller-organizations?sellerId=${encodeURIComponent(event.payload.sellerId || "")}`,
+          ...event.payload,
+        },
+        status: "queued",
+        idempotencyKey: `${event.eventName}:${event.id}:${admin._id || admin.id}:admin:in_app`,
+      })));
+    });
+
+    const sellerStatusEvents = [
+      DOMAIN_EVENTS.KYC_STATUS_UPDATED_V1,
+      DOMAIN_EVENTS.SELLER_ORGANIZATION_STATUS_UPDATED_V1,
+    ];
+    sellerStatusEvents.forEach((eventName) => {
+      eventBus.subscribe(eventName, async (event) => {
+        const sellerId = event.payload.sellerId;
+        const status = event.payload.status || event.payload.verificationStatus || event.payload.approvalStatus;
+        if (!sellerId || !["verified", "approved", "active", "live", "rejected"].includes(String(status || ""))) return;
+        const isRejected = String(status) === "rejected";
+        const subject = isRejected ? "Seller Onboarding Rejected" : "Seller Onboarding Approved";
+        const message = isRejected
+          ? `Your seller onboarding was rejected. ${event.payload.rejectionReason || "Please review the requested changes and resubmit."}`
+          : "Your seller onboarding has been approved. You can continue selling on Sam Global.";
+        const payload = {
+          ...event.payload,
+          eventName,
+          eventId: event.id,
+          recipientType: "seller",
+          targetType: "seller_onboarding",
+          viewUrl: "/app/seller-status",
+        };
+        await this.createNotification({
+          userId: sellerId,
+          channel: "in_app",
+          subject,
+          template: message,
+          payload,
+          status: "queued",
+          idempotencyKey: `${eventName}:${event.id}:${sellerId}:seller:in_app`,
+        });
+        await this.queueEmailForUser(sellerId, {
+          subject,
+          message,
+          eventName,
+          eventId: event.id,
+          recipientType: "seller",
+          payload,
+        });
+      });
+    });
+  }
+
+  registerPayoutSubscribers() {
+    eventBus.subscribe(DOMAIN_EVENTS.SELLER_PAYOUT_STATUS_UPDATED_V1, async (event) => {
+      const sellerId = event.payload.sellerId;
+      if (!sellerId) return;
+      const status = String(event.payload.status || "").replace(/_/g, " ");
+      const subject = "Payout Update";
+      const message = `Your payout ${event.payload.payoutId || ""} is now ${status}.`;
+      const payload = {
+        ...event.payload,
+        eventName: event.eventName,
+        eventId: event.id,
+        recipientType: "seller",
+        targetType: "payout",
+        viewUrl: event.payload.viewUrl || `/app/seller-payouts?payoutId=${encodeURIComponent(event.payload.payoutId || "")}`,
+      };
+      await this.createNotification({
+        userId: sellerId,
+        channel: "in_app",
+        subject,
+        template: message,
+        payload,
+        status: "queued",
+        idempotencyKey: `${event.eventName}:${event.id}:${sellerId}:seller:in_app`,
+      });
+      await this.queueEmailForUser(sellerId, {
+        subject,
+        message,
+        eventName: event.eventName,
+        eventId: event.id,
+        recipientType: "seller",
+        payload,
+      });
+    });
+  }
+
+  withViewMetadata(payload = {}, recipientType = "buyer") {
+    const orderId = payload.orderId || payload.order_id || "";
+    const returnId = payload.returnId || payload.return_id || "";
+    const payoutId = payload.payoutId || payload.payout_id || "";
+    const viewUrl = payload.viewUrl ||
+      (returnId ? `/app/returns?returnId=${encodeURIComponent(returnId)}` : "") ||
+      (payoutId ? `/app/seller-payouts?payoutId=${encodeURIComponent(payoutId)}` : "") ||
+      (orderId
+        ? recipientType === "buyer"
+          ? `/orders/${encodeURIComponent(orderId)}`
+          : `/app/orders/view/${encodeURIComponent(orderId)}`
+        : "");
+    return {
+      ...payload,
+      ...(viewUrl ? { viewUrl } : {}),
+      targetType: returnId ? "return" : payoutId ? "payout" : orderId ? "order" : payload.targetType,
+    };
+  }
+
+  async queueEmailForUser(userId, { subject, message, eventName, eventId, recipientType, payload = {} }) {
+    const user = await UserModel.findById(userId).select("email").lean();
+    if (!user?.email) return;
+    await notificationQueue.add("templated-email", {
+      to: user.email,
+      subject,
+      message,
+      eventName,
+      eventId,
+      recipientType,
+      payload,
+    });
+  }
+
+  async findAdminRecipients() {
+    return UserModel.find({
+      role: { $in: [ROLES.ADMIN, ROLES.SUB_ADMIN, ROLES.SUPER_ADMIN, "admin", "sub-admin", "super-admin"] },
+      accountStatus: { $ne: "deleted" },
+    }).select("_id email role").lean();
   }
 
   extractSellerRecipientIds(payload = {}) {

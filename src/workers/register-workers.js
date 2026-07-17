@@ -1,6 +1,7 @@
 const { logger } = require("../shared/logger/logger");
 const { createWorker } = require("../shared/queues/queue-factory");
 const { sendMail } = require("../infrastructure/mail/mailer");
+const { notificationMailService } = require("../modules/notification/services/notification-mail.service");
 
 let registered = false;
 let workers = [];
@@ -19,6 +20,9 @@ function registerWorkers() {
           subject: "Welcome to ecommerce",
           html: "<p>Your account is ready. Start shopping or selling.</p>",
         });
+      }
+      if (job.name === "templated-email") {
+        await notificationMailService.sendTemplatedMail(job.data);
       }
     }),
   ];

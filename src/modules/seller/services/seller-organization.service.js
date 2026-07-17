@@ -4,6 +4,9 @@ const { UserModel } = require("../../user/models/user.model");
 const { storageService: defaultStorageService } = require("../../../shared/storage/storage-service");
 const { postgresPool } = require("../../../infrastructure/postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
+const { makeEvent } = require("../../../contracts/events/event");
+const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
+const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 
 const SELLER_ROLES = ["seller", "seller-admin", "seller-sub-admin"];
 const ADMIN_ROLES = ["admin", "sub-admin", "super-admin"];
@@ -1351,6 +1354,7 @@ class SellerOrganizationService {
       ...normalized,
       ...this.buildLifecyclePatch(existing, normalized, actor, { action, notes: payload.notes || null }),
     });
+    await this.publishOrganizationStatusUpdate(existing, updated, actor);
     const updatedCanOperate = this.isOrganizationApprovedForBusiness(updated);
     if (updatedCanOperate) {
       const sellerAccount = await UserModel.findById(sellerId).select("accountStatus").lean();
@@ -1384,6 +1388,47 @@ class SellerOrganizationService {
       }
     }
     return this.enrichOrganization(updated);
+  }
+
+  async publishOrganizationStatusUpdate(previous = {}, current = {}, actor = {}) {
+    const statusFields = ["approvalStatus", "kycStatus", "bankVerificationStatus", "goLiveStatus"];
+    const changedFields = statusFields.filter((field) => String(previous[field] || "") !== String(current[field] || ""));
+    if (!changedFields.length) return;
+
+    const status =
+      current.approvalStatus === "rejected" ||
+      current.kycStatus === "rejected" ||
+      current.bankVerificationStatus === "rejected" ||
+      current.goLiveStatus === "rejected"
+        ? "rejected"
+        : current.goLiveStatus === "live"
+          ? "live"
+          : current.approvalStatus || current.kycStatus || current.goLiveStatus;
+
+    if (!["approved", "active", "live", "rejected"].includes(String(status || ""))) return;
+
+    await eventPublisher.publish(
+      makeEvent(
+        DOMAIN_EVENTS.SELLER_ORGANIZATION_STATUS_UPDATED_V1,
+        {
+          sellerId: current.sellerId,
+          organizationId: current.id,
+          legalBusinessName: current.legalBusinessName || current.storeDisplayName || "",
+          status,
+          approvalStatus: current.approvalStatus,
+          kycStatus: current.kycStatus,
+          bankVerificationStatus: current.bankVerificationStatus,
+          goLiveStatus: current.goLiveStatus,
+          rejectionReason: current.rejectionReason || null,
+          changedFields,
+          updatedBy: actor.userId || actor.sub || null,
+        },
+        {
+          source: "seller-organization-module",
+          aggregateId: current.id,
+        },
+      ),
+    );
   }
 
   async adminReview(sellerId, organizationId, payload = {}, actor = {}) {
