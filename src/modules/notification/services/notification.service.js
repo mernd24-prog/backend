@@ -11,6 +11,10 @@ const { UserModel } = require("../../user/models/user.model");
 
 const notificationQueue = createQueue("notifications");
 let subscribersRegistered = false;
+const EMAIL_SUPPRESSED_EVENTS = new Set([
+  DOMAIN_EVENTS.INVOICE_GENERATED_V1,
+  DOMAIN_EVENTS.CREDIT_NOTE_GENERATED_V1,
+]);
 const SELLER_ROLES = new Set([
   ROLES.SELLER,
   ROLES.SELLER_ADMIN,
@@ -41,7 +45,7 @@ class NotificationService {
   registerCommerceSubscribers() {
     const definitions = [
       [DOMAIN_EVENTS.ORDER_CREATED_V1, "Order Created", (p) => `Your order ${p.orderNumber || p.orderId} has been created.`],
-      [DOMAIN_EVENTS.ORDER_PAID_V1, "Payment Successful", (p) => `Payment received for order ${p.orderNumber || p.orderId}.`],
+      [DOMAIN_EVENTS.ORDER_PAID_V1, "Order Confirmed", (p) => `Your order ${p.orderNumber || p.orderId} has been confirmed.`],
       [DOMAIN_EVENTS.ORDER_PAYMENT_FAILED_V1, "Payment Failed", (p) => `Payment failed for order ${p.orderNumber || p.orderId}.`],
       [DOMAIN_EVENTS.ORDER_CANCELLED_V1, "Order Cancelled", (p) => `Order ${p.orderNumber || p.orderId} was cancelled.`],
       [DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1, "Order Updated", (p) => `Order ${p.orderNumber || p.orderId} is now ${String(p.status || "").replace(/_/g, " ")}.`],
@@ -86,14 +90,16 @@ class NotificationService {
             idempotencyKey: `${eventName}:${event.id}:${userId}:buyer:in_app`,
           });
 
-          await this.queueEmailForUser(userId, {
-            subject,
-            message: templateBuilder(event.payload),
-            eventName,
-            eventId: event.id,
-            recipientType: "buyer",
-            payload: customerPayload,
-          });
+          if (this.shouldQueueEmail(eventName, "buyer", event.payload)) {
+            await this.queueEmailForUser(userId, {
+              subject,
+              message: templateBuilder(event.payload),
+              eventName,
+              eventId: event.id,
+              recipientType: "buyer",
+              payload: customerPayload,
+            });
+          }
         }
 
         const sellerIds = this.extractSellerRecipientIds(event.payload)
@@ -115,14 +121,16 @@ class NotificationService {
             status: "queued",
             idempotencyKey: `${eventName}:${event.id}:${sellerId}:seller:in_app`,
           });
-          await this.queueEmailForUser(sellerId, {
-            subject,
-            message: sellerMessage,
-            eventName,
-            eventId: event.id,
-            recipientType: "seller",
-            payload: sellerPayload,
-          });
+          if (this.shouldQueueEmail(eventName, "seller", event.payload)) {
+            await this.queueEmailForUser(sellerId, {
+              subject,
+              message: sellerMessage,
+              eventName,
+              eventId: event.id,
+              recipientType: "seller",
+              payload: sellerPayload,
+            });
+          }
         }));
       });
     });
@@ -261,6 +269,10 @@ class NotificationService {
       recipientType,
       payload,
     });
+  }
+
+  shouldQueueEmail(eventName) {
+    return !EMAIL_SUPPRESSED_EVENTS.has(eventName);
   }
 
   async findAdminRecipients() {

@@ -91,6 +91,7 @@ class OrderService {
     return items.map((item) => ({
       sellerId: item.sellerId || item.seller_id || null,
       productId: item.productId || item.product_id || null,
+      productName: item.productName || item.product_name || item.productTitle || item.product_title || null,
       quantity: Number(item.quantity || 0),
     }));
   }
