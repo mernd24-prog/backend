@@ -482,7 +482,7 @@ class ReturnServiceClass {
       returnWindowDays,
       deliveredAt,
       eligibleUntil,
-      shippingPaidBy: policies.find((policy) => policy.shippingPaidBy)?.shippingPaidBy || "platform",
+      shippingPaidBy: policies.find((policy) => policy.shippingPaidBy)?.shippingPaidBy || "seller",
       requiresQc: !policies.some((policy) => policy.requiresQc === false),
       source: "product_item_policies",
       sellerPolicyWindows: policies.map((policy) => ({

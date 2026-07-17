@@ -88,6 +88,7 @@ const PRODUCT_LIST_PROJECTION = {
   "shipping.shippingMethod": 1,
   "shipping.shippingClass": 1,
   "shipping.expressDelivery": 1,
+  commonImages: 1,
   "shipping.express_delivery": 1,
   "shipping.isExpress": 1,
   "shipping.estimatedDaysMin": 1,
@@ -518,9 +519,11 @@ class ProductService {
     const variantImage = (Array.isArray(variants) ? variants : [])
       .map((variant) => this.normalizeImageUrl(variant?.image) || this.normalizeImageUrl(variant?.images?.[0]))
       .find(Boolean);
+    const commonImages = this.normalizeImages(product.commonImages || []);
     const primaryImage = this.normalizeImageUrl(product.image) || this.normalizeImageUrl(product.images?.[0]) || variantImage;
     return {
       ...productWithoutVariants,
+      commonImages,
       images: primaryImage ? [primaryImage] : [],
       image: product.image || primaryImage || null,
       imageUrl: product.imageUrl || primaryImage || null,
@@ -530,6 +533,9 @@ class ProductService {
 
   normalizeProductMedia(payload = {}) {
     const normalized = { ...payload };
+    if (Object.prototype.hasOwnProperty.call(payload, "commonImages")) {
+      normalized.commonImages = this.normalizeImages(payload.commonImages || []);
+    }
     delete normalized.images;
     delete normalized.imageUrls;
     delete normalized.product_image_id;
@@ -1137,6 +1143,15 @@ class ProductService {
       ...payload,
       gstInclusive: true,
     };
+    if (isSeller) {
+      payload.warranty = {
+        ...(payload.warranty || {}),
+        returnPolicy: {
+          ...(payload.warranty?.returnPolicy || {}),
+          shippingPaidBy: "seller",
+        },
+      };
+    }
     payload = await this.normalizeProductCompliance(payload, actor);
     const productType = (payload.hasVariants === true || (payload.variants || []).length > 0)
       ? PRODUCT_TYPE.VARIABLE
@@ -1246,6 +1261,15 @@ class ProductService {
     payload = this.normalizeProductMedia(payload);
     payload = this.normalizeProductVariants(payload);
     payload = this.syncRootAndDefaultVariant(payload, existingProduct);
+    if (isSellerRole(actor)) {
+      payload.warranty = {
+        ...(payload.warranty || existingProduct.warranty || {}),
+        returnPolicy: {
+          ...(payload.warranty?.returnPolicy || existingProduct.warranty?.returnPolicy || {}),
+          shippingPaidBy: "seller",
+        },
+      };
+    }
     payload = await this.normalizeProductCompliance(payload, actor, existingProduct);
 
     const categoryKey =
@@ -3205,15 +3229,15 @@ class ProductService {
       throw new AppError("Seller cannot directly approve or reject products", 403);
     }
 
-    if (
-      nextStatus === PRODUCT_STATUS.ACTIVE &&
-      (currentStatus !== PRODUCT_STATUS.INACTIVE || !product.approvedAt)
-    ) {
-      throw new AppError(
-        "Only a previously approved inactive product can be reactivated by seller",
-        403,
-      );
-    }
+    // if (
+    //   nextStatus === PRODUCT_STATUS.ACTIVE &&
+    //   (currentStatus !== PRODUCT_STATUS.INACTIVE || !product.approvedAt)
+    // ) {
+    //   throw new AppError(
+    //     "Only a previously approved inactive product can be reactivated by seller",
+    //     403,
+    //   );
+    // }
 
     if (currentStatus === PRODUCT_STATUS.ACTIVE && nextStatus !== PRODUCT_STATUS.INACTIVE && nextStatus !== PRODUCT_STATUS.ARCHIVED) {
       throw new AppError("Active product changes must be submitted as a pending revision", 403);
@@ -3300,7 +3324,7 @@ class ProductService {
     const activeFilter = publicFilter.$or?.length ? publicFilter : categoryFilter;
 
     const results = await this.productRepository.paginate(activeFilter, { page: 1, limit, skip: 0, sortBy: "rating" }, {
-      projection: { title: 1, slug: 1, images: 1, "variants.images": 1, "variants.image": 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1, tags: 1 },
+      projection: { title: 1, slug: 1, images: 1, commonImages: 1, "variants.images": 1, "variants.image": 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1, tags: 1 },
       lean: true,
     });
 
@@ -3318,7 +3342,7 @@ class ProductService {
       : applyPublicProductFilter({ _id: { $ne: product._id }, category: { $ne: product.category } });
 
     const results = await this.productRepository.paginate(baseFilter, { page: 1, limit, skip: 0, sortBy: "newest" }, {
-      projection: { title: 1, slug: 1, images: 1, "variants.images": 1, "variants.image": 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1 },
+      projection: { title: 1, slug: 1, images: 1, commonImages: 1, "variants.images": 1, "variants.image": 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1 },
       lean: true,
     });
 
@@ -3343,7 +3367,7 @@ class ProductService {
     });
 
     const results = await this.productRepository.paginate(filter, { page: 1, limit, skip: 0, sortBy: "rating" }, {
-      projection: { title: 1, slug: 1, images: 1, "variants.images": 1, "variants.image": 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1 },
+      projection: { title: 1, slug: 1, images: 1, commonImages: 1, "variants.images": 1, "variants.image": 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1 },
       lean: true,
     });
 

@@ -134,7 +134,7 @@ const warrantySchema = Joi.object({
     resolution: Joi.string().valid("refund", "replacement", "refund_or_replacement").default("refund_or_replacement"),
     requiresImages: Joi.boolean().default(false),
     inspectionRequired: Joi.boolean().default(true),
-    shippingPaidBy: Joi.string().valid("platform", "seller", "customer").default("platform"),
+    shippingPaidBy: Joi.string().valid("platform", "seller", "customer").default("seller"),
     restockingFee: optionalNonNegativeNumber().default(0),
   }).default({}),
   serviceableCountries: Joi.array().items(Joi.string().trim()).default([]),
@@ -248,6 +248,7 @@ const productBodyBase = {
 
   // Media
   images: deprecatedRootVariantField(),
+  commonImages: Joi.array().items(Joi.string().uri()).max(8).default([]),
   videos: Joi.array().items(Joi.string().uri()).default([]),
   documents: deprecatedRootVariantField(),
 

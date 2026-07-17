@@ -322,6 +322,7 @@ const productSchema = new mongoose.Schema(
 
     // ── Media
     images: [{ type: String }],
+    commonImages: [{ type: String }],
     videos: [{ type: String }],
     documents: [{ type: String }],
 
@@ -360,7 +361,7 @@ const productSchema = new mongoose.Schema(
         resolution: { type: String, enum: ["refund", "replacement", "refund_or_replacement"], default: "refund_or_replacement" },
         requiresImages: { type: Boolean, default: false },
         inspectionRequired: { type: Boolean, default: true },
-        shippingPaidBy: { type: String, enum: ["platform", "seller", "customer"], default: "platform" },
+        shippingPaidBy: { type: String, enum: ["platform", "seller", "customer"], default: "seller" },
         restockingFee: { type: Number, default: 0 },
       },
       serviceableCountries: [{ type: String }],

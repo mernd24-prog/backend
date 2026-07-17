@@ -114,10 +114,27 @@ const trackingEventBody = {
   shippedAt: Joi.date().iso().allow(null),
   rawPayload: Joi.object().default({}),
   eventId: Joi.string().trim().max(180).allow("", null),
+  source: Joi.string().valid("seller_panel", "admin_panel", "manual").default("manual"),
 };
 
 const trackingEventSchema = Joi.object({
-  body: Joi.object(trackingEventBody).required(),
+  body: Joi.object(trackingEventBody).custom((value, helpers) => {
+    const location = String(value.location || "").trim();
+    const note = String(value.note || "").trim();
+    if (value.status === "delivered" && !location) {
+      return helpers.message({ custom: "Delivery location is required when marking a shipment delivered" });
+    }
+    if (location && (/^\d+$/.test(location) || location.length < 3)) {
+      return helpers.message({ custom: "Location must be readable and cannot contain only numbers" });
+    }
+    if (["failed", "rto", "cancelled"].includes(value.status) && note.length < 3) {
+      return helpers.message({ custom: "A reason of at least 3 characters is required for this shipment status" });
+    }
+    if (value.shippedAt && new Date(value.shippedAt).getTime() > Date.now()) {
+      return helpers.message({ custom: "Shipment time cannot be in the future" });
+    }
+    return value;
+  }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({
     shipmentId: uuid.required(),

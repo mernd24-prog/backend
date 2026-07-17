@@ -115,7 +115,7 @@ class PricingService {
           resolution: productReturnPolicy.resolution || "refund_or_replacement",
           requiresImages: Boolean(productReturnPolicy.requiresImages || productReturnPolicy.requires_images),
           inspectionRequired: productReturnPolicy.inspectionRequired ?? productReturnPolicy.requiresQc ?? true,
-          shippingPaidBy: productReturnPolicy.shippingPaidBy || "platform",
+          shippingPaidBy: productReturnPolicy.shippingPaidBy || "seller",
           source: "product_snapshot",
         };
 
