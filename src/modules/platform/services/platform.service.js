@@ -92,6 +92,14 @@ function reviewBuyerLookupId(value = "") {
   return adminMatch ? adminMatch[1] : "";
 }
 
+function escapeRegex(value = "") {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isPlatformReviewSearch(value = "") {
+  return /^(platform|admin)$/i.test(String(value || "").trim());
+}
+
 class PlatformService {
   constructor({
     platformRepository = new PlatformRepository(),
@@ -765,14 +773,48 @@ class PlatformService {
     if (query.orderId) filter.orderId = query.orderId;
     if (query.status) filter.status = query.status;
     if (query.rating) filter.rating = Number(query.rating);
-    const q = query.q || query.keyWord || query.search;
+    const q = String(query.q || query.keyWord || query.search || "").trim();
     if (q) {
+      const pattern = new RegExp(escapeRegex(q), "i");
+      const [matchingProducts, matchingUsers] = await Promise.all([
+        ProductModel.find({
+          $or: [
+            { title: pattern },
+            { name: pattern },
+            { slug: pattern },
+            { sku: pattern },
+          ],
+        }).select("_id").lean(),
+        UserModel.find({
+          $or: [
+            { email: pattern },
+            { displayName: pattern },
+            { name: pattern },
+            { "profile.firstName": pattern },
+            { "profile.lastName": pattern },
+            { "profile.fullName": pattern },
+            { "addresses.fullName": pattern },
+          ],
+        }).select("_id").lean(),
+      ]);
+      const matchingProductIds = matchingProducts.map((product) => String(product._id));
+      const matchingBuyerIds = matchingUsers.flatMap((user) => {
+        const id = String(user._id);
+        return [id, `admin:${id}`];
+      });
       filter.$or = [
-        { title: { $regex: q, $options: "i" } },
-        { reviewText: { $regex: q, $options: "i" } },
-        { productId: { $regex: q, $options: "i" } },
-        { buyerId: { $regex: q, $options: "i" } },
+        { title: pattern },
+        { reviewText: pattern },
+        { buyerName: pattern },
+        { productId: pattern },
+        { buyerId: pattern },
+        { orderId: pattern },
       ];
+      if (matchingProductIds.length) filter.$or.push({ productId: { $in: matchingProductIds } });
+      if (matchingBuyerIds.length) filter.$or.push({ buyerId: { $in: matchingBuyerIds } });
+      if (isPlatformReviewSearch(q)) {
+        filter.$or.push({ orderId: /^admin:/i }, { orderItemId: /^admin:/i });
+      }
     }
     const result = await this.platformRepository.listProductReviews(filter, pagination);
     return {
@@ -811,14 +853,47 @@ class PlatformService {
     if (query.orderId) filter.orderId = query.orderId;
     if (query.status) filter.status = query.status;
     if (query.rating) filter.rating = Number(query.rating);
-    const q = query.q || query.keyWord || query.search;
+    const q = String(query.q || query.keyWord || query.search || "").trim();
     if (q) {
+      const pattern = new RegExp(escapeRegex(q), "i");
+      const [matchingProducts, matchingUsers] = await Promise.all([
+        ProductModel.find({
+          _id: { $in: productIds },
+          $or: [
+            { title: pattern },
+            { name: pattern },
+            { slug: pattern },
+            { sku: pattern },
+          ],
+        }).select("_id").lean(),
+        UserModel.find({
+          $or: [
+            { email: pattern },
+            { displayName: pattern },
+            { name: pattern },
+            { "profile.firstName": pattern },
+            { "profile.lastName": pattern },
+            { "profile.fullName": pattern },
+            { "addresses.fullName": pattern },
+          ],
+        }).select("_id").lean(),
+      ]);
+      const matchingProductIds = matchingProducts.map((product) => String(product._id));
+      const matchingBuyerIds = matchingUsers.flatMap((user) => {
+        const id = String(user._id);
+        return [id, `admin:${id}`];
+      });
       filter.$and = [{
         $or: [
-          { title: { $regex: q, $options: "i" } },
-          { reviewText: { $regex: q, $options: "i" } },
-          { productId: { $regex: q, $options: "i" } },
-          { buyerId: { $regex: q, $options: "i" } },
+          { title: pattern },
+          { reviewText: pattern },
+          { buyerName: pattern },
+          { productId: pattern },
+          { buyerId: pattern },
+          { orderId: pattern },
+          ...(matchingProductIds.length ? [{ productId: { $in: matchingProductIds } }] : []),
+          ...(matchingBuyerIds.length ? [{ buyerId: { $in: matchingBuyerIds } }] : []),
+          ...(isPlatformReviewSearch(q) ? [{ orderId: /^admin:/i }, { orderItemId: /^admin:/i }] : []),
         ],
       }];
     }
