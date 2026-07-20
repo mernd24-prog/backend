@@ -581,10 +581,9 @@ class SellerService {
       },
       delivery: {
         status: row.delivery_status || "not_created",
-        eWayBillId: row.eway_bill_id || null,
-        eWayBillNumber: row.e_way_bill_number || null,
-        transporterName: row.transporter_name || null,
-        vehicleNumber: row.vehicle_number || null,
+        shipmentId: row.shipment_id || null,
+        courierName: row.courier_name || null,
+        trackingNumber: row.tracking_number || null,
         updatedAt: row.delivery_updated_at || null,
       },
       createdAt: row.created_at,

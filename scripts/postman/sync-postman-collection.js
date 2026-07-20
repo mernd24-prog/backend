@@ -613,7 +613,6 @@ function sampleBodyForRoute(route) {
   if (pathName.includes('/delivery/shipments') && pathName.includes('/confirm-delivery')) return { otp: '123456', deliveredTo: 'Customer' };
   if (pathName.includes('/delivery/shipments')) return { orderId: SAMPLE_IDS.orderId, carrierName: 'Manual Courier', serviceType: 'standard' };
   if (pathName.includes('/delivery/manifests')) return { shipmentIds: ['{{shipmentId}}'], manifestDate: '2026-06-20' };
-  if (pathName.includes('/eway-bill')) return { ewayBillNumber: 'EWB123456789', status: 'generated' };
 
   if (pathName.includes('/tax/orders') && pathName.includes('/marketplace-invoices')) return {};
   if (pathName.includes('/tax/orders') && pathName.includes('/invoice')) return { forceRegenerate: false };

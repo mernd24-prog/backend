@@ -14,6 +14,7 @@ const { CancellationRepository } = require("../repositories/cancellation.reposit
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
+const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
 
 const CANCELLABLE_ORDER_STATUSES = new Set([
   ORDER_STATUS.PENDING_PAYMENT,
@@ -51,6 +52,14 @@ class CancellationService {
 
   round(value) {
     return Number(Number(value || 0).toFixed(2));
+  }
+
+  parseJson(value, fallback = {}) {
+    if (!value) return fallback;
+    if (typeof value === "string") {
+      try { return JSON.parse(value); } catch { return fallback; }
+    }
+    return value;
   }
 
   isAdmin(actor = {}) {
@@ -111,6 +120,8 @@ class CancellationService {
       const itemAmount = this.round(Number(orderItem.line_total || 0) * ratio);
       const discountAmount = this.round(Number(orderItem.discount_amount || 0) * ratio);
       const taxAmount = this.round(Number(orderItem.tax_amount || 0) * ratio);
+      const taxBreakup = this.parseJson(orderItem.tax_breakup, {});
+      const additionalTaxAmount = this.round(Number(taxBreakup.taxPayableAmount || 0) * ratio);
       return {
         orderItemId: orderItem.id,
         productId: orderItem.product_id,
@@ -123,7 +134,9 @@ class CancellationService {
         itemAmount,
         discountAmount,
         taxAmount,
-        refundAmount: this.round(Math.max(itemAmount - discountAmount + taxAmount, 0)),
+        // Inclusive GST is already part of line_total. Add only tax that was
+        // charged separately at checkout so a cancellation cannot refund GST twice.
+        refundAmount: this.round(Math.max(itemAmount - discountAmount + additionalTaxAmount, 0)),
       };
     });
   }
@@ -169,10 +182,30 @@ class CancellationService {
   async cancelOrder(orderId, payload = {}, actor = {}) {
     const order = await this.orderRepository.findByIdWithItems(orderId);
     if (!order) throw new AppError("Order not found", 404);
-    if (!CANCELLABLE_ORDER_STATUSES.has(order.status)) {
+    // A multi-seller parent order can already be `shipped` because another
+    // seller handed over their package. Seller cancellation eligibility must
+    // therefore be decided from the affected seller shipment(s), which is
+    // enforced by assertShipmentsCancellable below. This also repairs legacy
+    // shipments that were directly marked cancelled before the cancellation
+    // workflow was introduced.
+    if (!this.isSeller(actor) && !CANCELLABLE_ORDER_STATUSES.has(order.status)) {
       throw new AppError("Order cannot be cancelled after shipment handover. Use return or RTO flow.", 409);
     }
-    const items = this.normalizeItems(order, payload.items || []);
+    let requestedItems = payload.items || [];
+    if (this.isSeller(actor) && requestedItems.length === 0) {
+      const sellerId = String(actor.ownerSellerId || actor.userId);
+      requestedItems = (order.items || [])
+        .filter((item) => String(item.seller_id) === sellerId)
+        .map((item) => ({
+          orderItemId: item.id,
+          quantity: Number(item.quantity || 0) - Number(item.cancelled_quantity || 0),
+        }))
+        .filter((item) => item.quantity > 0);
+      if (requestedItems.length === 0) {
+        throw new AppError("There are no active items from this seller to cancel", 409);
+      }
+    }
+    const items = this.normalizeItems(order, requestedItems);
     await this.assertCanCancel(order, items, actor);
     const fullCancellation = this.isFullCancellation(order, items);
     const payment = await this.orderRepository.findRefundablePaymentByOrderId(orderId);
@@ -210,6 +243,9 @@ class CancellationService {
   async assertShipmentsCancellable(order, items) {
     const sellerIds = new Set(items.map((item) => String(item.sellerId)));
     const shipments = (order.relations?.shipments || []).filter((shipment) => sellerIds.has(String(shipment.seller_id)) && shipment.direction !== "reverse");
+    if (!shipments.length && !CANCELLABLE_ORDER_STATUSES.has(order.status)) {
+      throw new AppError("Order cannot be cancelled after shipment handover. Use return or RTO flow.", 409);
+    }
     const blocked = shipments.find((shipment) => !CANCELLABLE_SHIPMENT_STATUSES.has(shipment.status));
     if (blocked) throw new AppError("Cancellation is blocked because a shipment was handed to the courier", 409);
     for (const shipment of shipments.filter((entry) => entry.status !== "cancelled")) {
@@ -255,6 +291,9 @@ class CancellationService {
     if (cancellation.status === "completed") return cancellation;
     const order = await this.orderRepository.findByIdWithItems(cancellation.order_id);
     if (!order) throw new AppError("Order not found", 404);
+    const commerceSettings = await commerceSettingsService.getSettings();
+    const refundPolicy = commerceSettings.payments?.refundPolicy || "manual_review";
+    const requiresManualRefundReview = refundPolicy === "manual_review";
     const attempt = { attemptId: uuidv4(), startedAt: new Date().toISOString(), status: "processing" };
     const attempts = [...(cancellation.attempts || []), attempt];
     cancellation = await this.cancellationRepository.update(cancellation.id, {
@@ -278,13 +317,15 @@ class CancellationService {
         cancellation = await this.cancellationRepository.update(cancellation.id, { inventoryStatus: "completed" });
       }
 
-      if (!cancellation.metadata?.walletProcessed) {
+      if (!requiresManualRefundReview && !cancellation.metadata?.walletProcessed) {
         await this.processWallet(cancellation, order, actor);
         cancellation = await this.cancellationRepository.update(cancellation.id, {
           metadata: { walletProcessed: true, walletProcessedAt: new Date().toISOString() },
         });
       }
-      const refundResult = ["completed", "not_required"].includes(cancellation.refund_status)
+      const refundResult = requiresManualRefundReview && cancellation.refund_status !== "not_required"
+        ? { refundStatus: "manual_review", providerRefundId: cancellation.provider_refund_id }
+        : ["completed", "not_required"].includes(cancellation.refund_status)
         ? { refundStatus: cancellation.refund_status, providerRefundId: cancellation.provider_refund_id }
         : await this.processProviderRefund(cancellation, order);
       cancellation = await this.cancellationRepository.update(cancellation.id, {
@@ -331,7 +372,9 @@ class CancellationService {
         attempts,
         completedAt: finalStatus === "completed" ? new Date() : null,
         metadata: {
-          walletProcessed: true,
+          walletProcessed: Boolean(cancellation.metadata?.walletProcessed),
+          refundPolicy,
+          manualRefundReviewRequired: requiresManualRefundReview,
           sellerFinance: financeResult,
         },
       });
@@ -458,6 +501,9 @@ class CancellationService {
     if (cancellation.refund_status !== "manual_review") throw new AppError("Cancellation is not awaiting a manual refund", 409);
     const order = await this.orderRepository.findByIdWithItems(cancellation.order_id);
     if (!order) throw new AppError("Order not found", 404);
+    if (!cancellation.metadata?.walletProcessed && Number(cancellation.wallet_refund_amount || 0) > 0) {
+      await this.processWallet(cancellation, order, actor);
+    }
     const creditNote = await this.createCreditNoteIfRequired(cancellation, actor);
     const financeResult = await this.processSellerFinance(cancellation, actor);
     await this.syncPaymentState(cancellation, order, "completed");
@@ -480,6 +526,8 @@ class CancellationService {
         manualRefundReference: payload.referenceId,
         manualRefundProofUrl: payload.proofUrl || null,
         manualRefundConfirmedBy: actor.userId,
+        walletProcessed: Number(cancellation.wallet_refund_amount || 0) > 0 || Boolean(cancellation.metadata?.walletProcessed),
+        walletProcessedAt: Number(cancellation.wallet_refund_amount || 0) > 0 ? new Date().toISOString() : cancellation.metadata?.walletProcessedAt,
         sellerFinance: financeResult,
       },
     });
@@ -493,6 +541,37 @@ class CancellationService {
       throw new AppError("Only failed or pending cancellations can be retried", 409);
     }
     return this.processCancellation(cancellationId, actor);
+  }
+
+  async reconcileProviderRefunds({ limit = 100 } = {}) {
+    const rows = await this.cancellationRepository.findProviderRefundsForReconciliation({ limit });
+    const result = { scanned: rows.length, completed: 0, pending: 0, failed: 0, errors: [] };
+    const actor = { userId: "system", role: "system", isSuperAdmin: true };
+
+    for (const cancellation of rows) {
+      try {
+        const providerRefund = await this.razorpayProvider.fetchRefund(cancellation.provider_refund_id);
+        const entity = {
+          ...(providerRefund.metadata || {}),
+          id: providerRefund.refundId || cancellation.provider_refund_id,
+          status: providerRefund.status,
+          error_description: providerRefund.failureReason || null,
+        };
+        if (providerRefund.status === "failed") {
+          await this.handleProviderRefundWebhook(entity, "refund.failed", actor);
+          result.failed += 1;
+        } else if (["processed", "completed"].includes(providerRefund.status)) {
+          await this.handleProviderRefundWebhook(entity, "refund.processed", actor);
+          result.completed += 1;
+        } else {
+          await this.handleProviderRefundWebhook(entity, "refund.pending", actor);
+          result.pending += 1;
+        }
+      } catch (error) {
+        result.errors.push({ cancellationId: cancellation.id, message: String(error.message || error) });
+      }
+    }
+    return result;
   }
 
   async handleProviderRefundWebhook(entity = {}, eventType, actor = {}) {
@@ -555,7 +634,46 @@ class CancellationService {
       const order = await this.orderRepository.findByIdWithItems(cancellation.order_id);
       await this.assertCanCancel(order, cancellation.items || [], actor);
     }
+    if (this.isSeller(actor)) {
+      return this.scopeForSeller(cancellation, actor.ownerSellerId || actor.userId);
+    }
     return cancellation;
+  }
+
+  scopeForSeller(cancellation = {}, sellerId) {
+    const sellerKey = String(sellerId || "");
+    const items = (cancellation.items || []).filter((item) => String(item.sellerId || item.seller_id || "") === sellerKey);
+    const sellerCancelledValue = this.round(items.reduce(
+      (sum, item) => sum + Math.max(
+        0,
+        Number(item.itemAmount || item.item_amount || 0) - Number(item.discountAmount || item.discount_amount || 0),
+      ),
+      0,
+    ));
+    const metadata = cancellation.metadata || {};
+    const sellerFinance = metadata.sellerFinance || {};
+    const adjustments = Array.isArray(sellerFinance.adjustments)
+      ? sellerFinance.adjustments.filter((adjustment) => String(adjustment.sellerId || adjustment.seller_id || "") === sellerKey)
+      : [];
+
+    return {
+      ...cancellation,
+      items,
+      // Seller APIs expose only this seller's commercial value. Complete order
+      // and other-seller refund amounts remain admin/customer data.
+      refund_amount: sellerCancelledValue,
+      wallet_refund_amount: 0,
+      provider_refund_amount: 0,
+      provider_refund_id: null,
+      payment_id: null,
+      seller_scoped: true,
+      seller_id: sellerKey,
+      seller_cancelled_value: sellerCancelledValue,
+      metadata: {
+        fullCancellation: Boolean(metadata.fullCancellation),
+        sellerFinance: { ...sellerFinance, adjustments },
+      },
+    };
   }
 
   async list(query = {}, actor = {}) {
@@ -563,7 +681,12 @@ class CancellationService {
       if (this.isSeller(actor)) query.sellerId = actor.ownerSellerId || actor.userId;
       else query.buyerId = actor.userId;
     }
-    return this.cancellationRepository.list(query);
+    const result = await this.cancellationRepository.list(query);
+    if (this.isSeller(actor)) {
+      const sellerId = actor.ownerSellerId || actor.userId;
+      return { ...result, items: result.items.map((item) => this.scopeForSeller(item, sellerId)) };
+    }
+    return result;
   }
 
   async publishCancellationEvent(cancellation, actor) {

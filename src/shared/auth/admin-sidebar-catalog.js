@@ -127,30 +127,30 @@ const SIDEBAR_MODULES = [
 ];
 
 const SELLER_SIDEBAR_MODULES = [
-  { moduleName: "Seller Dashboard", moduleKey: "seller-dashboard-home", moduleSlug: "seller-dashboard-home", icon: "MdOutlineDashboard", routePath: "/app/home", moduleType: "page", order: 1, parentModule: null, requiredModule: "seller-dashboard" },
+  { moduleName: "Dashboard", moduleKey: "seller-dashboard-home", moduleSlug: "seller-dashboard-home", icon: "MdOutlineDashboard", routePath: "/app/home", moduleType: "page", order: 1, parentModule: null, requiredModule: "seller-dashboard" },
 
-  { moduleName: "Seller Catalog", moduleKey: "seller-catalog-management", moduleSlug: "seller-catalog-management", icon: "MdInventory", moduleType: "group", order: 10, parentModule: null, requiredModule: "products" },
-  { moduleName: "Seller Products", moduleKey: "seller-product-catalog", moduleSlug: "seller-product-catalog", icon: "MdViewList", routePath: "/app/product-catalog", moduleType: "page", order: 11, parentModule: "seller-catalog-management", requiredModule: "products" },
+  { moduleName: "Catalog", moduleKey: "seller-catalog-management", moduleSlug: "seller-catalog-management", icon: "MdInventory", moduleType: "group", order: 10, parentModule: null, requiredModule: "products" },
+  { moduleName: "Products", moduleKey: "seller-product-catalog", moduleSlug: "seller-product-catalog", icon: "MdViewList", routePath: "/app/product-catalog", moduleType: "page", order: 11, parentModule: "seller-catalog-management", requiredModule: "products" },
   { moduleName: "Special Price Manager", moduleKey: "seller-special-price-manager", moduleSlug: "seller-special-price-manager", icon: "MdPriceChange", routePath: "/app/seller-special-price-manager", moduleType: "page", order: 12, parentModule: "seller-catalog-management", requiredModule: "products" },
   { moduleName: "Product Reviews", moduleKey: "seller-product-reviews", moduleSlug: "seller-product-reviews", icon: "MdStar", routePath: "/app/product-reviews", moduleType: "page", order: 13, parentModule: "seller-catalog-management", requiredModule: "reviews" },
 
-  { moduleName: "Seller Inventory", moduleKey: "seller-inventory-management", moduleSlug: "seller-inventory-management", icon: "MdWarehouse", moduleType: "group", order: 20, parentModule: null, requiredModule: "inventory" },
+  { moduleName: "Inventory", moduleKey: "seller-inventory-management", moduleSlug: "seller-inventory-management", icon: "MdWarehouse", moduleType: "group", order: 20, parentModule: null, requiredModule: "inventory" },
   { moduleName: "Inventory", moduleKey: "seller-inventory-products", moduleSlug: "seller-inventory-products", icon: "MdInventory", routePath: "/app/inventory", moduleType: "page", order: 21, parentModule: "seller-inventory-management", requiredModule: "inventory" },
-  { moduleName: "Seller Orders", moduleKey: "seller-orders-management", moduleSlug: "seller-orders-management", icon: "MdShoppingCart", moduleType: "group", order: 30, parentModule: null, requiredModule: "orders" },
-  { moduleName: "Seller Order List", moduleKey: "seller-orders", moduleSlug: "seller-orders", icon: "MdReceipt", routePath: "/app/orders", moduleType: "page", order: 31, parentModule: "seller-orders-management", requiredModule: "orders" },
-  // { moduleName: "Returns", moduleKey: "seller-returns", moduleSlug: "seller-returns", icon: "MdAssignmentReturn", routePath: "/app/returns", moduleType: "page", order: 32, parentModule: "seller-orders-management", requiredModule: "returns" },
-  // { moduleName: "Cancellations", moduleKey: "seller-cancellations", moduleSlug: "seller-cancellations", icon: "MdCancel", routePath: "/app/cancellations", moduleType: "page", order: 33, parentModule: "seller-orders-management", requiredModule: "cancellations" },
+  { moduleName: "Orders", moduleKey: "seller-orders-management", moduleSlug: "seller-orders-management", icon: "MdShoppingCart", moduleType: "group", order: 30, parentModule: null, requiredModule: "orders" },
+  { moduleName: "Order List", moduleKey: "seller-orders", moduleSlug: "seller-orders", icon: "MdReceipt", routePath: "/app/orders", moduleType: "page", order: 31, parentModule: "seller-orders-management", requiredModule: "orders" },
+  { moduleName: "Returns", moduleKey: "seller-returns", moduleSlug: "seller-returns", icon: "MdAssignmentReturn", routePath: "/app/returns", moduleType: "page", order: 32, parentModule: "seller-orders-management", requiredModule: "returns" },
+  { moduleName: "Cancellations", moduleKey: "seller-cancellations", moduleSlug: "seller-cancellations", icon: "MdCancel", routePath: "/app/cancellations", moduleType: "page", order: 33, parentModule: "seller-orders-management", requiredModule: "cancellations" },
 
-  { moduleName: "Seller Shipping", moduleKey: "seller-shipping-management", moduleSlug: "seller-shipping-management", icon: "MdLocalShipping", moduleType: "group", order: 40, parentModule: null, requiredModule: "delivery" },
+  { moduleName: "Shipping", moduleKey: "seller-shipping-management", moduleSlug: "seller-shipping-management", icon: "MdLocalShipping", moduleType: "group", order: 40, parentModule: null, requiredModule: "delivery" },
   { moduleName: "Shipment Tracking", moduleKey: "seller-shipment-tracking", moduleSlug: "seller-shipment-tracking", icon: "MdLocalShipping", routePath: "/app/shipment-tracking", moduleType: "page", order: 41, parentModule: "seller-shipping-management", requiredModule: "delivery" },
   { moduleName: "Shipping Profiles", moduleKey: "seller-shipping-profiles", moduleSlug: "seller-shipping-profiles", icon: "MdRule", routePath: "/app/shipping-profiles", moduleType: "page", order: 42, parentModule: "seller-shipping-management", requiredModule: "delivery" },
 
-  { moduleName: "Seller Marketing", moduleKey: "seller-marketing-management", moduleSlug: "seller-marketing-management", icon: "MdCampaign", moduleType: "group", order: 50, parentModule: null, requiredModule: "pricing" },
+  { moduleName: "Marketing", moduleKey: "seller-marketing-management", moduleSlug: "seller-marketing-management", icon: "MdCampaign", moduleType: "group", order: 50, parentModule: null, requiredModule: "pricing" },
   // { moduleName: "COD Configuration", moduleKey: "seller-cod-config", moduleSlug: "seller-cod-config", icon: "MdPayments", routePath: "/app/cod-config", moduleType: "page", order: 51, parentModule: "seller-marketing-management", requiredModule: "cod-config" },
   { moduleName: "Notifications", moduleKey: "seller-notifications", moduleSlug: "seller-notifications", icon: "MdNotifications", routePath: "/app/messages", moduleType: "page", order: 53, parentModule: "seller-marketing-management", requiredModule: "notifications" },
 
-  // { moduleName: "Seller Access", moduleKey: "seller-access-management", moduleSlug: "seller-access-management", icon: "MdGroup", moduleType: "group", order: 60, parentModule: null, requiredModule: "seller-management" },
-  // { moduleName: "Seller Sub-Admins", moduleKey: "seller-sub-admin-management", moduleSlug: "seller-sub-admin-management", icon: "MdSupervisorAccount", routePath: "/app/seller-sub-admins", moduleType: "page", order: 61, parentModule: "seller-access-management", requiredModule: "seller-management" },
+  // { moduleName: "Access", moduleKey: "seller-access-management", moduleSlug: "seller-access-management", icon: "MdGroup", moduleType: "group", order: 60, parentModule: null, requiredModule: "seller-management" },
+  // { moduleName: "Sub-Admins", moduleKey: "seller-sub-admin-management", moduleSlug: "seller-sub-admin-management", icon: "MdSupervisorAccount", routePath: "/app/seller-sub-admins", moduleType: "page", order: 61, parentModule: "seller-access-management", requiredModule: "seller-management" },
   // { moduleName: "My Store", moduleKey: "seller-my-organizations", moduleSlug: "seller-my-organizations", icon: "MdBusiness", routePath: "/app/my-organizations", moduleType: "page", order: 62, parentModule: "seller-access-management", requiredModule: "seller-management" },
 
   { moduleName: "My Finance & Payouts", moduleKey: "seller-finance-management", moduleSlug: "seller-finance-management", icon: "MdAccountBalanceWallet", moduleType: "group", order: 70, parentModule: null, requiredModule: "sellers/commissions" },
@@ -159,15 +159,15 @@ const SELLER_SIDEBAR_MODULES = [
   { moduleName: "Payouts", moduleKey: "seller-my-payouts", moduleSlug: "seller-my-payouts", icon: "MdPayments", routePath: "/app/seller-payouts", moduleType: "page", order: 73, parentModule: "seller-finance-management", requiredModule: "sellers/commissions" },
   // { moduleName: "COD Collections", moduleKey: "seller-cod-collections", moduleSlug: "seller-cod-collections", icon: "MdPayments", routePath: "/app/seller-cod-collections", moduleType: "page", order: 72.5, parentModule: "seller-finance-management", requiredModule: "sellers/commissions" },
 
-  // { moduleName: "Seller Invoices", moduleKey: "seller-tax-management", moduleSlug: "seller-tax-management", icon: "MdReceiptLong", moduleType: "group", order: 80, parentModule: null, requiredModule: "tax" },
-  // { moduleName: "Tax Invoices", moduleKey: "seller-tax-invoices", moduleSlug: "seller-tax-invoices", icon: "MdReceipt", routePath: "/app/tax-invoices", moduleType: "page", order: 81, parentModule: "seller-tax-management", requiredModule: "tax-invoices" },
-  // { moduleName: "Credit Notes", moduleKey: "seller-credit-notes", moduleSlug: "seller-credit-notes", icon: "MdNote", routePath: "/app/credit-notes", moduleType: "page", order: 82, parentModule: "seller-tax-management", requiredModule: "credit-notes" },
+  { moduleName: "Invoices", moduleKey: "seller-tax-management", moduleSlug: "seller-tax-management", icon: "MdReceiptLong", moduleType: "group", order: 80, parentModule: null, requiredModule: "tax" },
+  { moduleName: "Tax Invoices", moduleKey: "seller-tax-invoices", moduleSlug: "seller-tax-invoices", icon: "MdReceipt", routePath: "/app/tax-invoices", moduleType: "page", order: 81, parentModule: "seller-tax-management", requiredModule: "tax-invoices" },
+  { moduleName: "Credit Notes", moduleKey: "seller-credit-notes", moduleSlug: "seller-credit-notes", icon: "MdNote", routePath: "/app/credit-notes", moduleType: "page", order: 82, parentModule: "seller-tax-management", requiredModule: "credit-notes" },
 
-  // { moduleName: "My Reports", moduleKey: "seller-reports-management", moduleSlug: "seller-reports-management", icon: "MdBarChart", moduleType: "group", order: 90, parentModule: null, requiredModule: "reports" },
-  // { moduleName: "Analytics", moduleKey: "seller-analytics-dashboard", moduleSlug: "seller-analytics-dashboard", icon: "MdInsights", routePath: "/app/analytics", moduleType: "page", order: 91, parentModule: "seller-reports-management", requiredModule: "analytics" },
-  // { moduleName: "Sales Report", moduleKey: "seller-sales-report", moduleSlug: "seller-sales-report", icon: "MdBarChart", routePath: "/app/reports-sales", moduleType: "page", order: 92, parentModule: "seller-reports-management", requiredModule: "reports" },
-  // { moduleName: "Product Report", moduleKey: "seller-product-report", moduleSlug: "seller-product-report", icon: "MdInventory", routePath: "/app/reports-products", moduleType: "page", order: 93, parentModule: "seller-reports-management", requiredModule: "reports" },
-  // { moduleName: "Inventory Report", moduleKey: "seller-inventory-report", moduleSlug: "seller-inventory-report", icon: "MdWarehouse", routePath: "/app/reports-inventory", moduleType: "page", order: 94, parentModule: "seller-reports-management", requiredModule: "reports" },
+  { moduleName: "My Reports", moduleKey: "seller-reports-management", moduleSlug: "seller-reports-management", icon: "MdBarChart", moduleType: "group", order: 90, parentModule: null, requiredModule: "reports" },
+  { moduleName: "Analytics", moduleKey: "seller-analytics-dashboard", moduleSlug: "seller-analytics-dashboard", icon: "MdInsights", routePath: "/app/analytics", moduleType: "page", order: 91, parentModule: "seller-reports-management", requiredModule: "analytics" },
+  { moduleName: "Sales Report", moduleKey: "seller-sales-report", moduleSlug: "seller-sales-report", icon: "MdBarChart", routePath: "/app/reports-sales", moduleType: "page", order: 92, parentModule: "seller-reports-management", requiredModule: "reports" },
+  { moduleName: "Product Report", moduleKey: "seller-product-report", moduleSlug: "seller-product-report", icon: "MdInventory", routePath: "/app/reports-products", moduleType: "page", order: 93, parentModule: "seller-reports-management", requiredModule: "reports" },
+  { moduleName: "Inventory Report", moduleKey: "seller-inventory-report", moduleSlug: "seller-inventory-report", icon: "MdWarehouse", routePath: "/app/reports-inventory", moduleType: "page", order: 94, parentModule: "seller-reports-management", requiredModule: "reports" },
 
   // { moduleName: "Help & Support", moduleKey: "seller-help-support", moduleSlug: "seller-help-support", icon: "MdSupportAgent", routePath: "/app/help-support", moduleType: "page", order: 100, parentModule: null, requiredModule: "queries" },
 ].map((module) => ({

@@ -4,6 +4,7 @@ const { outboxProcessor } = require("../events/outbox-processor");
 const { ProductService } = require("../../modules/product/services/product.service");
 const { CommissionService } = require("../../modules/seller/services/commission.service");
 const { settlementLifecycleService } = require("../../modules/seller/services/settlement-lifecycle.service");
+const { CancellationService } = require("../../modules/cancellation/services/cancellation.service");
 const { knex } = require("../postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
 const os = require("os");
@@ -67,6 +68,7 @@ function registerCronJobs() {
   }
 
   const productService = new ProductService();
+  const cancellationService = new CancellationService();
 
   runPeriodicJob("order-cleanup", async () => {}, 10 * 60 * 1000);
   runPeriodicJob("payment-retries", async () => {}, 5 * 60 * 1000);
@@ -81,6 +83,9 @@ function registerCronJobs() {
     await settlementLifecycleService.markEligibleOrderItems();
     await settlementLifecycleService.finalizeEligibleOrders();
   }, 15 * 60 * 1000);
+  runPeriodicJob("cancellation-refund-reconciliation", async () => {
+    return cancellationService.reconcileProviderRefunds({ limit: 100 });
+  }, 5 * 60 * 1000);
   runPeriodicJob("outbox-flush", async () => outboxProcessor.flushPending(), 15 * 1000);
 }
 

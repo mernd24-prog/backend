@@ -54,6 +54,15 @@ class CancellationRepository {
     return knex("order_cancellations").where("order_id", orderId).orderBy("created_at", "desc");
   }
 
+  async findProviderRefundsForReconciliation({ limit = 100 } = {}) {
+    return knex("order_cancellations")
+      .where("payment_provider", "razorpay")
+      .whereNotNull("provider_refund_id")
+      .whereIn("refund_status", ["provider_pending", "pending", "failed"])
+      .orderBy("updated_at", "asc")
+      .limit(Math.min(Math.max(Number(limit || 100), 1), 500));
+  }
+
   async update(id, payload = {}) {
     const values = { updated_at: knex.fn.now() };
     const map = {
@@ -116,25 +125,28 @@ class CancellationRepository {
   async list(query = {}) {
     const limit = Math.min(Math.max(Number(query.limit || 50), 1), 200);
     const offset = Math.max(Number(query.offset || 0), 0);
-    const base = () => knex("order_cancellations").modify((builder) => {
-      if (query.orderId) builder.where("order_id", query.orderId);
-      if (query.buyerId) builder.where("buyer_id", query.buyerId);
+    const base = () => knex({ c: "order_cancellations" })
+      .leftJoin({ o: "orders" }, "o.id", "c.order_id")
+      .modify((builder) => {
+      if (query.orderId) builder.where("c.order_id", query.orderId);
+      if (query.buyerId) builder.where("c.buyer_id", query.buyerId);
       if (query.sellerId) {
-        builder.whereRaw("items @> ?::jsonb", [JSON.stringify([{ sellerId: String(query.sellerId) }])]);
+        builder.whereRaw("c.items @> ?::jsonb", [JSON.stringify([{ sellerId: String(query.sellerId) }])]);
       }
-      if (query.status) builder.where("status", query.status);
-      if (query.refundStatus) builder.where("refund_status", query.refundStatus);
-      if (query.scope) builder.where("scope", query.scope);
-      if (query.fromDate) builder.where("created_at", ">=", query.fromDate);
-      if (query.toDate) builder.where("created_at", "<=", query.toDate);
+      if (query.status) builder.where("c.status", query.status);
+      if (query.refundStatus) builder.where("c.refund_status", query.refundStatus);
+      if (query.scope) builder.where("c.scope", query.scope);
+      if (query.fromDate) builder.where("c.created_at", ">=", query.fromDate);
+      if (query.toDate) builder.where("c.created_at", "<=", query.toDate);
       if (query.search) builder.where((q) => q
-        .whereILike("cancellation_number", `%${query.search}%`)
-        .orWhereRaw("order_id::text ILIKE ?", [`%${query.search}%`])
-        .orWhereILike("reason", `%${query.search}%`));
+        .whereILike("c.cancellation_number", `%${query.search}%`)
+        .orWhereRaw("c.order_id::text ILIKE ?", [`%${query.search}%`])
+        .orWhereILike("o.order_number", `%${query.search}%`)
+        .orWhereILike("c.reason", `%${query.search}%`));
     });
     const [items, [{ count }]] = await Promise.all([
-      base().orderBy("created_at", "desc").limit(limit).offset(offset),
-      base().count({ count: "*" }),
+      base().select("c.*", "o.order_number").orderBy("c.created_at", "desc").limit(limit).offset(offset),
+      base().count({ count: "c.id" }),
     ]);
     return { items, total: Number(count || 0), limit, offset };
   }

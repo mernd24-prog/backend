@@ -66,7 +66,7 @@ flowchart LR
 | Inventory | MongoDB | products, inventory reservations and transactions | Reserve, commit, release, restock, and damage tracking |
 | Returns | MongoDB | `Return` | Seller-split return, QC, reverse logistics, and refund state |
 | Orders and payments | PostgreSQL | `orders`, `order_items`, `payments` | Authoritative commercial and payment records |
-| Shipping | PostgreSQL | serviceability, rates, shipments, tracking, manifests, e-way bills | Forward and reverse logistics |
+| Shipping | PostgreSQL | serviceability, rates, shipments, tracking, and manifests | Forward and reverse logistics |
 | Tax | PostgreSQL | invoices, credit notes, and tax ledger entries | Customer/seller/platform documents and tax postings |
 | Seller finance | PostgreSQL | commissions, payouts, settlements | Payable release, batching, payment completion, and recovery |
 | Policies | PostgreSQL | `admin_settings`, `seller_charge_settings`, `shipping_profiles` | Runtime checkout, delivery, COD, and payout behavior |
@@ -389,7 +389,7 @@ Fulfillment is seller-group based even though status remains on the parent order
 6. Once all forward seller groups are delivered, the order becomes `delivered` and seller commission calculation is invoked.
 7. `fulfilled` is a later explicit seller/admin order transition and also invokes commission calculation idempotently.
 
-The shipping provider registry currently always has a manual provider and can wrap future providers. E-way bill data is stored separately and is not automatically generated from an invoice.
+The shipping provider registry currently always has a manual provider and can wrap future providers.
 
 ## 11. Cancellation, return, and refund
 
@@ -571,7 +571,7 @@ All paths below assume `/api/v1`.
 | Seller delivery/COD policies | `GET/PUT /sellers/me/charge-settings`; admin versions under `/admin/commerce-settings/seller-charge-settings` |
 | Serviceability | `GET /delivery/serviceability`, `GET /delivery/rates` |
 | Shipping profiles | CRUD and set-default under `/shipping-profiles` |
-| Fulfillment | shipment list/create/get/tracking, webhook, manifests, delivery OTP/confirm, delivery agents, and e-way bills under `/delivery` |
+| Fulfillment | shipment list/create/get/tracking, webhook, manifests, delivery OTP/confirm, and delivery agents under `/delivery` |
 | Returns | request/list/get, approve/reject, reverse shipment, receive, QC, refund/retry/sync, replacement, and close under `/returns` |
 | Cancellations | get/list/retry/manual refund under `/cancellations`; creation through the order cancel endpoint |
 | Tax | order invoice, marketplace bundle, invoice/credit-note list/download/dispatch/export, and reports under `/tax` |

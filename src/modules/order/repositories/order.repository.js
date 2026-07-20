@@ -783,7 +783,6 @@ class OrderRepository {
       payments,
       invoices,
       shipments,
-      eWayBills,
       walletTransactions,
       cancellations,
       sellerCommissions,
@@ -805,9 +804,6 @@ class OrderRepository {
         : Promise.resolve([]),
       includeDelivery
         ? this.optionalTableRows("shipments", (query) => query.whereIn("order_id", orderIds).orderBy("created_at", "desc"))
-        : Promise.resolve([]),
-      includeDelivery
-        ? this.optionalTableRows("e_way_bill_details", (query) => query.whereIn("order_id", orderIds).orderBy("created_at", "desc"))
         : Promise.resolve([]),
       includeWallet
         ? this.optionalTableRows("wallet_transactions", (query) => query.where("reference_type", "order").whereIn("reference_id", orderIds).orderBy("created_at", "desc"))
@@ -839,7 +835,6 @@ class OrderRepository {
       payments: this.groupBy(payments, "order_id"),
       invoices: this.groupBy(invoices, "order_id"),
       shipments: this.groupBy(shipments, "order_id"),
-      eWayBills: this.groupBy(eWayBills, "order_id"),
       walletTransactions: this.groupBy(walletTransactions, "reference_id"),
       cancellations: this.groupBy(cancellations, "order_id"),
       sellerCommissions: this.groupBy(sellerCommissions, "order_id"),
@@ -892,7 +887,6 @@ class OrderRepository {
           invoices: grouped.invoices.get(order.id) || [],
           shipments: orderShipments,
           sellerFulfillmentGroups,
-          eWayBill: (grouped.eWayBills.get(order.id) || [])[0] || null,
           walletTransactions: grouped.walletTransactions.get(order.id) || [],
           cancellations: grouped.cancellations.get(order.id) || [],
         },

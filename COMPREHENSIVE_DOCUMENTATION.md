@@ -1465,9 +1465,6 @@ POST  /delivery/agents
 GET   /delivery/agents/:deliveryAgentId
 PATCH /delivery/agents/:deliveryAgentId
 POST  /delivery/manifests
-GET   /delivery/orders/:orderId/eway-bill
-POST  /delivery/orders/:orderId/eway-bill
-PATCH /delivery/eway-bills/:ewayBillId/status
 ```
 
 ### Tax, Warranty, Subscriptions
@@ -2471,9 +2468,6 @@ GET /api/v1/admin/reports/seller-scorecards/export
 
 ```txt
 GET /api/v1/delivery/serviceability
-GET /api/v1/delivery/orders/:orderId/eway-bill
-POST /api/v1/delivery/orders/:orderId/eway-bill
-PATCH /api/v1/delivery/eway-bills/:ewayBillId/status
 GET /api/v1/delivery/rates
 GET /api/v1/delivery/shipments
 GET /api/v1/delivery/agents

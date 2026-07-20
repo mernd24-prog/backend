@@ -121,9 +121,6 @@ const trackingEventSchema = Joi.object({
   body: Joi.object(trackingEventBody).custom((value, helpers) => {
     const location = String(value.location || "").trim();
     const note = String(value.note || "").trim();
-    if (value.status === "delivered" && !location) {
-      return helpers.message({ custom: "Delivery location is required when marking a shipment delivered" });
-    }
     if (location && (/^\d+$/.test(location) || location.length < 3)) {
       return helpers.message({ custom: "Location must be readable and cannot contain only numbers" });
     }
@@ -141,44 +138,6 @@ const trackingEventSchema = Joi.object({
   }).required(),
 });
 
-const orderDeliveryParamSchema = Joi.object({
-  body: Joi.object({}).required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({
-    orderId: uuid.required(),
-  }).required(),
-});
-
-const createEWayBillSchema = Joi.object({
-  body: Joi.object({
-    invoiceId: uuid.allow("", null),
-    eWayBillNumber: Joi.string().allow("", null),
-    status: Joi.string().valid(...Object.values(DELIVERY_STATUS), "initiated").default("initiated"),
-    validFrom: Joi.date().iso().allow(null),
-    validUntil: Joi.date().iso().min(Joi.ref("validFrom")).allow(null),
-    transporterName: Joi.string().allow("", null),
-    vehicleNumber: Joi.string().allow("", null),
-    distanceKm: Joi.number().integer().min(0).allow(null),
-    payloadSnapshot: Joi.object().default({}),
-  }).required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({
-    orderId: uuid.required(),
-  }).required(),
-});
-
-const updateEWayBillStatusSchema = Joi.object({
-  body: Joi.object({
-    status: Joi.string().valid(...Object.values(DELIVERY_STATUS), "initiated").required(),
-    transporterName: Joi.string().allow("", null),
-    vehicleNumber: Joi.string().allow("", null),
-  }).required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({
-    ewayBillId: uuid.required(),
-  }).required(),
-});
-
 module.exports = {
   serviceabilitySchema,
   rateSchema,
@@ -186,7 +145,4 @@ module.exports = {
   createShipmentSchema,
   shipmentParamSchema,
   trackingEventSchema,
-  orderDeliveryParamSchema,
-  createEWayBillSchema,
-  updateEWayBillStatusSchema,
 };

@@ -650,11 +650,6 @@ class OrderService {
           payoutStatus: group.payoutStatus,
           payoutEligibleAt: group.payoutEligibleAt,
         })),
-        eWayBill: relations.eWayBill ? {
-          status: relations.eWayBill.status,
-          e_way_bill_number: relations.eWayBill.e_way_bill_number,
-          valid_until: relations.eWayBill.valid_until,
-        } : null,
         cancellations: relations.cancellations || [],
       },
     };

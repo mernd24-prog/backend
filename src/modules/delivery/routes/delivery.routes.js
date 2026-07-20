@@ -13,9 +13,6 @@ const {
   createShipmentSchema,
   shipmentParamSchema,
   trackingEventSchema,
-  orderDeliveryParamSchema,
-  createEWayBillSchema,
-  updateEWayBillStatusSchema,
 } = require("../validation/delivery.validation");
 
 const deliveryRoutes = express.Router();
@@ -63,30 +60,6 @@ deliveryRoutes.post(
   allowPermissions("delivery:status_change"),
   checkInput(trackingEventSchema),
   catchErrors(deliveryController.addTrackingEvent),
-);
-
-deliveryRoutes.get(
-  "/orders/:orderId/eway-bill",
-  authenticate,
-  allowPermissions("delivery:view"),
-  checkInput(orderDeliveryParamSchema),
-  catchErrors(deliveryController.getEWayBill),
-);
-
-deliveryRoutes.post(
-  "/orders/:orderId/eway-bill",
-  authenticate,
-  allowPermissions("delivery:create"),
-  checkInput(createEWayBillSchema),
-  catchErrors(deliveryController.createEWayBill),
-);
-
-deliveryRoutes.patch(
-  "/eway-bills/:ewayBillId/status",
-  authenticate,
-  allowPermissions("delivery:status_change"),
-  checkInput(updateEWayBillStatusSchema),
-  catchErrors(deliveryController.updateEWayBillStatus),
 );
 
 module.exports = { deliveryRoutes };

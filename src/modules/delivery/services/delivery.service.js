@@ -20,12 +20,12 @@ const { settlementLifecycleService } = require("../../seller/services/settlement
 const shippingProfilesService = new ShippingProfilesService();
 
 const SHIPMENT_TRANSITIONS = {
-  initiated: ["in_transit", "cancelled", "failed"],
-  manifested: ["in_transit", "cancelled", "failed"],
-  picked_up: ["in_transit", "failed", "rto", "cancelled"],
-  in_transit: ["delivered", "failed", "rto", "cancelled"],
-  out_for_delivery: ["delivered", "failed", "rto", "cancelled"],
-  failed: ["in_transit", "rto", "cancelled"],
+  initiated: ["in_transit", "failed"],
+  manifested: ["in_transit", "failed"],
+  picked_up: ["in_transit", "failed", "rto"],
+  in_transit: ["delivered", "failed", "rto"],
+  out_for_delivery: ["delivered", "failed", "rto"],
+  failed: ["in_transit", "rto"],
   delivered: [],
   cancelled: [],
   rto: [],
@@ -427,6 +427,12 @@ class DeliveryService {
     }
 
     await this.assertCanManageShipment(shipment, actor);
+    if (payload.status === DELIVERY_STATUS.CANCELLED) {
+      throw new AppError(
+        "Cancel the order items through the Cancellations workflow so inventory and refunds are processed correctly",
+        409,
+      );
+    }
     if (payload.status === DELIVERY_STATUS.IN_TRANSIT) {
       if (!String(payload.courierName || shipment.courier_name || "").trim()) throw new AppError("Courier name is required when shipping", 400);
       if (!String(payload.awbNumber || payload.trackingNumber || shipment.awb_number || shipment.tracking_number || "").trim()) {
@@ -583,57 +589,6 @@ class DeliveryService {
         { source: "delivery-module", aggregateId: shipment.order_id },
       ),
     );
-  }
-
-  async createEWayBill(orderId, payload, actor) {
-    const order = await this.orderRepository.findById(orderId);
-    if (!order) {
-      throw new AppError("Order not found", 404);
-    }
-
-    await this.assertCanManageOrder(orderId, actor);
-
-    const existing = await this.deliveryRepository.findEWayBillByOrderId(orderId);
-    if (existing) {
-      if (!payload.eWayBillNumber || payload.eWayBillNumber === existing.e_way_bill_number) {
-        return existing;
-      }
-      throw new AppError("An e-way bill already exists for this order", 409);
-    }
-
-    return this.deliveryRepository.createEWayBill({
-      ...payload,
-      orderId,
-      createdBy: actor.userId,
-      updatedBy: actor.userId,
-    });
-  }
-  async getEWayBill(orderId, actor) {
-    const order = await this.orderRepository.findById(orderId);
-    if (!order) {
-      throw new AppError("Order not found", 404);
-    }
-
-    await this.assertCanViewOrder(order, orderId, actor);
-    return this.deliveryRepository.findEWayBillByOrderId(orderId);
-  }
-
-  async updateEWayBillStatus(ewayBillId, payload, actor) {
-    const existing = await this.deliveryRepository.findEWayBillById(ewayBillId);
-    if (!existing) {
-      throw new AppError("Delivery record not found", 404);
-    }
-
-    await this.assertCanManageOrder(existing.order_id, actor);
-
-    const record = await this.deliveryRepository.updateEWayBillStatus(ewayBillId, {
-      ...payload,
-      updatedBy: actor.userId,
-    });
-    if (!record) {
-      throw new AppError("Delivery record not found", 404);
-    }
-    return record;
   }
 
   async assertCanViewOrder(order, orderId, actor) {

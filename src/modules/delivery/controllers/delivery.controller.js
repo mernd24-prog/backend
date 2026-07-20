@@ -59,36 +59,6 @@ class DeliveryController {
     res.json(okResponse(result));
   };
 
-  createEWayBill = async (req, res) => {
-    const actor = getCurrentUser(req);
-    const result = await this.deliveryService.createEWayBill(req.params.orderId, req.body, actor);
-    await auditService.create(req, {
-      module: "delivery",
-      entityId: result?.id,
-      entityType: "EWayBill",
-      newData: result,
-    });
-    res.status(201).json(okResponse(result));
-  };
-
-  getEWayBill = async (req, res) => {
-    const actor = getCurrentUser(req);
-    const result = await this.deliveryService.getEWayBill(req.params.orderId, actor);
-    res.json(okResponse(result));
-  };
-
-  updateEWayBillStatus = async (req, res) => {
-    const actor = getCurrentUser(req);
-    const result = await this.deliveryService.updateEWayBillStatus(req.params.ewayBillId, req.body, actor);
-    await auditService.statusChange(req, {
-      module: "delivery",
-      entityId: req.params.ewayBillId,
-      entityType: "EWayBill",
-      newData: result,
-      reason: `eway_bill_${req.body.status}`,
-    });
-    res.json(okResponse(result));
-  };
 }
 
 module.exports = { DeliveryController };

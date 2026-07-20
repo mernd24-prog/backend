@@ -13,7 +13,7 @@ Core modules present:
 - Cart and checkout: cart items, pricing service, wallet usage, GST-inclusive pricing support, shipping/COD policies.
 - Orders: parent order, item snapshots, status history, payment and delivery status columns, cancellation protections.
 - Payments: Razorpay initiation/verification, COD authorization path, pending payment retry flow.
-- Delivery: shipments, tracking events, webhook audit, manifests, e-way bills, OTP/proof based delivery verification.
+- Delivery: shipments, tracking events, webhook audit, manifests, and OTP/proof based delivery verification.
 - Returns and cancellations: item-aware cancellation, reverse shipment handling, QC, refund allocation, wallet/original/manual refund handling, seller commission refund adjustments.
 - Finance: seller commissions, seller payouts, seller settlements, platform fee/tax deductions.
 - Admin policy: commerce settings for checkout, payment, COD, wallet, and seller finance policy.
@@ -94,7 +94,7 @@ Use this as the product control checklist. Backend Done means the backend API/co
 - [x] Multi-seller cart checkout into one parent order with seller-owned item grouping.
 - [x] Razorpay initiation/verification, COD authorization path, wallet reserve/capture/release, and payment retry metadata.
 - [x] Order status history, item snapshots, cancellation protections, and item-aware order operations.
-- [x] Shipment creation, tracking events, webhook audit, manifests, e-way bill fields, OTP/proof delivery verification, and delivery-agent assignment backend.
+- [x] Shipment creation, tracking events, webhook audit, manifests, OTP/proof delivery verification, and delivery-agent assignment backend.
 - [x] Return and cancellation refund flows with seller commission reversal adjustments.
 - [x] Seller commissions, seller settlements, seller payout ledger, seller wallet summary, and payout release policy backend.
 - [x] Payout scheduler for daily, weekly, monthly, and manual release policies.
@@ -233,7 +233,7 @@ Remaining:
 - Delivery assignment UI is not implemented in Admin/customer repos in this pass.
 - Background courier reconciliation depends on provider integration.
 
-### 7. Invoice, Tax, E-Way Bill
+### 7. Invoice and Tax
 
 Covered:
 
@@ -249,7 +249,6 @@ Covered:
   - seller sees own seller and commission invoices,
   - buyer sees only customer-facing invoices.
 - Credit notes exist through returns.
-- E-way bill records can be created and status-updated.
 
 Remaining:
 
@@ -335,7 +334,7 @@ Remaining:
    - payment verifies,
    - seller shipment created with delivery agent,
    - OTP delivery confirmation,
-   - invoice/e-way bill generation,
+   - invoice generation,
    - return and refund,
    - seller payout after release policy.
 
@@ -495,13 +494,12 @@ This list is the remaining product roadmap from foundation to advanced marketpla
 - Add courier reconciliation and webhook retry/failure queue for courier providers.
 - Add delivery SLA, failed delivery, RTO, lost, damaged, and NDR handling if required.
 
-### Phase 8: Invoice, Tax, E-Way Bill, Credit Notes
+### Phase 8: Invoice, Tax, and Credit Notes
 
 - Backend marketplace invoice bundle exists: seller customer invoices and platform commission invoices per seller.
 - Backend marketplace credit-note split exists for return and cancellation refunds.
 - Backend PDF/download APIs exist for invoices and credit notes.
 - Backend invoice/credit-note email dispatch, WhatsApp dispatch audit placeholder, retry queue, and delivery audit listing exist; live providers and Admin/seller/customer UI are pending.
-- Verify e-way bill creation/update for seller shipment flows.
 - Add GST/TCS/TDS/tax filing reports if required for production finance.
 
 ### Phase 9: Return, Cancellation, Refund

@@ -403,12 +403,11 @@ class SellerRepository {
         COUNT(DISTINCT oi.id)::INT AS items_count,
         COALESCE(SUM(oi.quantity), 0)::INT AS units,
         COALESCE(SUM(oi.line_total), 0)::NUMERIC AS seller_order_total,
-        ewb.id AS eway_bill_id,
-        ewb.e_way_bill_number,
-        ewb.status AS delivery_status,
-        ewb.transporter_name,
-        ewb.vehicle_number,
-        ewb.updated_at AS delivery_updated_at`;
+        shipment.id AS shipment_id,
+        shipment.status AS delivery_status,
+        shipment.courier_name,
+        shipment.tracking_number,
+        shipment.updated_at AS delivery_updated_at`;
   }
 
   trackingOrderFromSql() {
@@ -416,22 +415,24 @@ class SellerRepository {
       INNER JOIN order_items oi ON oi.order_id = o.id
       LEFT JOIN LATERAL (
         SELECT *
-        FROM e_way_bill_details ewb_inner
-        WHERE ewb_inner.order_id = o.id
-        ORDER BY ewb_inner.created_at DESC
+        FROM shipments shipment_inner
+        WHERE shipment_inner.order_id = o.id
+          AND shipment_inner.seller_id = oi.seller_id
+          AND COALESCE(shipment_inner.direction, 'forward') = 'forward'
+        ORDER BY shipment_inner.created_at DESC
         LIMIT 1
-      ) ewb ON true`;
+      ) shipment ON true`;
   }
 
   trackingOrderGroupSql() {
     return `GROUP BY
         o.id,
-        ewb.id,
-        ewb.e_way_bill_number,
-        ewb.status,
-        ewb.transporter_name,
-        ewb.vehicle_number,
-        ewb.updated_at`;
+        oi.seller_id,
+        shipment.id,
+        shipment.status,
+        shipment.courier_name,
+        shipment.tracking_number,
+        shipment.updated_at`;
   }
 
   async fetchSellerTrackingOrders(sellerId, filters = {}) {

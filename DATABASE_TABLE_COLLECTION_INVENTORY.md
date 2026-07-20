@@ -36,7 +36,6 @@ delivery_agents
 delivery_exclusions
 dispute_messages
 dispute_tickets
-e_way_bill_details
 email_opens_clicks
 feature_flag_rollouts
 fraud_detections
