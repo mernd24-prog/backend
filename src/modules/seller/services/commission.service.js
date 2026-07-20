@@ -1506,12 +1506,26 @@ class SellerCommissionService {
     if (fromDate) query.where("created_at", ">=", fromDate);
     if (toDate) query.where("created_at", "<=", toDate);
     if (search) {
-      const term = `%${String(search).trim()}%`;
+      const rawSearch = String(search).trim();
+      const normalizedSearch = rawSearch.replace(/^#/, "");
+      const term = `%${rawSearch}%`;
+      const normalizedTerm = `%${normalizedSearch}%`;
       query.where((builder) => {
         builder
           .whereILike("seller_id", term)
-          .orWhereRaw("order_id::text ILIKE ?", [term])
-          .orWhereRaw("COALESCE(metadata, '{}'::jsonb)::text ILIKE ?", [term]);
+          .orWhereRaw("order_id::text ILIKE ?", [normalizedTerm])
+          .orWhereRaw("COALESCE(payout_id::text, '') ILIKE ?", [normalizedTerm])
+          .orWhereRaw("COALESCE(metadata, '{}'::jsonb)::text ILIKE ?", [term])
+          .orWhereExists(function matchingOrderNumber() {
+            this.select(1)
+              .from("orders")
+              .whereRaw("orders.id = seller_commissions.order_id")
+              .where((orderQuery) => {
+                orderQuery
+                  .whereILike("orders.order_number", term)
+                  .orWhereILike("orders.order_number", normalizedTerm);
+              });
+          });
       });
     }
   }
@@ -2145,6 +2159,9 @@ class SellerCommissionService {
   }
 
   async getFinanceSummary(query = {}) {
+    const applyFinanceFilters = (builder) => {
+      this.applyCommissionFilters(builder, query);
+    };
     const applyDates = (builder, column = "created_at") => {
       if (query.fromDate) builder.where(column, ">=", query.fromDate);
       if (query.toDate) builder.where(column, "<=", query.toDate);
@@ -2154,7 +2171,7 @@ class SellerCommissionService {
 
     const [commissionSummary, payoutSummary, orderSummary, paymentSummary] = await Promise.all([
       knex("seller_commissions")
-        .modify((builder) => applyDates(builder))
+        .modify((builder) => applyFinanceFilters(builder))
         .sum({ gross_amount: "amount" })
         .sum({ commission_amount: "commission_amount" })
         .sum({ commission_tax_amount: "tax_amount" })

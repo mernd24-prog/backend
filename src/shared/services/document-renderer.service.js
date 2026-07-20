@@ -99,7 +99,9 @@ class DocumentRendererService {
 
     const issuerName = isSeller
       ? (seller.legalBusinessName || seller.displayName || seller.businessName || "Seller")
-      : "Marketplace Platform";
+      : (process.env.INVOICE_BRAND_NAME || "Sam Global");
+    const brandName = process.env.INVOICE_BRAND_NAME || issuerName || "Sam Global";
+    const logoUrl = process.env.INVOICE_LOGO_URL || d.marketplace?.logoUrl || document.logoUrl || "";
     const issuerGstin = isSeller ? (inv.gstinSeller || seller.gstNumber || null) : (inv.gstinMarketplace || null);
     const issuerAddrLines = isSeller ? this.formatAddressLines(seller.billingAddress || seller.businessAddress) : [];
     const marketplaceGstin = inv.gstinMarketplace || null;
@@ -120,7 +122,7 @@ class DocumentRendererService {
 
     const itemRowsHtml = items.length
       ? items.map((item, i) => this.renderInvoiceItemRow(item, i + 1, currency, isIgst)).join("")
-      : `<tr><td colspan="${isIgst ? 8 : 9}" class="empty-row">No line items on record</td></tr>`;
+      : `<tr><td colspan="6" class="empty-row">No line items on record</td></tr>`;
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -135,66 +137,89 @@ class DocumentRendererService {
 
   <!-- Header -->
   <div class="hdr">
-    <div>
-      <div class="hdr-brand">${this.escapeHtml(issuerName)}</div>
-      ${issuerAddrLines.length ? `<div class="hdr-sub">${this.escapeHtml(issuerAddrLines[0])}</div>` : ""}
+    <div class="brand-lockup">
+      ${logoUrl
+        ? `<img class="brand-logo-img" src="${this.escapeHtml(logoUrl)}" alt="${this.escapeHtml(brandName)} logo">`
+        : ``}
+      <div>
+        <div class="hdr-brand">${this.escapeHtml(brandName)}</div>
+        <div class="hdr-sub">Contact us: ${this.escapeHtml(process.env.INVOICE_CONTACT || process.env.SUPPORT_EMAIL || "support@samglobal.com")}</div>
+      </div>
+    </div>
+    <div class="hdr-center">
+      <div class="seller-name">${this.escapeHtml(issuerName)}</div>
+      ${issuerAddrLines.length ? `<div class="hdr-sub">Address: ${issuerAddrLines.map((line) => this.escapeHtml(line)).join(", ")}</div>` : ""}
       ${issuerGstin ? `<div class="hdr-sub">GSTIN: ${this.escapeHtml(issuerGstin)}</div>` : ""}
     </div>
     <div class="hdr-right">
-      <div class="hdr-doctype">${this.escapeHtml(document.title || "Tax Invoice")}</div>
-      <div class="hdr-invnum">${this.escapeHtml(inv.number || "")}</div>
+      <div class="tax-stamp">${this.escapeHtml(document.title || "Tax Invoice")} # ${this.escapeHtml(inv.number || "—")}</div>
       <div class="hdr-date">${invoiceDate}</div>
     </div>
   </div>
-  <div class="accent-bar"></div>
 
-  <!-- Meta bar -->
-  <div class="meta-bar">
-    ${this.metaCell("Invoice No.", inv.number || "—")}
-    ${this.metaCell("Invoice Date", invoiceDate)}
-    ${this.metaCell("Order Ref.", orderRef)}
-    ${this.metaCell("Place of Supply", inv.placeOfSupply || "—")}
-    ${this.metaCell("Currency", currency)}
-  </div>
-
-  <!-- Parties -->
-  <div class="parties">
-    ${this.renderPartyBlock("Billed By", issuerName, issuerAddrLines, issuerGstin, null)}
-    ${this.renderPartyBlock(isCommission ? "Billed To (Seller)" : "Bill To", recipientName, [], null, recipientEmail)}
-    ${!isCommission ? this.renderShipToBlock(shippingAddr) : ""}
+  <div class="invoice-info-grid">
+    <div class="order-meta">
+      <div><strong>Order ID:</strong> ${this.escapeHtml(inv.orderId || orderRef || "—")}</div>
+      <div><strong>Order Date:</strong> ${this.escapeHtml(this.formatDate(inv.orderDate || inv.issuedAt))}</div>
+      <div><strong>Invoice Date:</strong> ${this.escapeHtml(invoiceDate)}</div>
+      <div><strong>VAT/TIN:</strong> ${this.escapeHtml(issuerGstin || marketplaceGstin || "—")}</div>
+      <div><strong>CST #:</strong> ${this.escapeHtml(inv.placeOfSupply || "—")}</div>
+      <div><strong>Currency:</strong> ${this.escapeHtml(currency)}</div>
+    </div>
+    <div class="address-block">
+      <div class="addr-title">Billing Address</div>
+      ${this.renderCompactAddress(recipientName, [], recipientEmail)}
+    </div>
+    ${!isCommission
+      ? `<div class="address-block">
+          <div class="addr-title">Shipping Address</div>
+          ${this.renderCompactAddressFromObject(shippingAddr, recipientName)}
+        </div>`
+      : `<div class="address-block">
+          <div class="addr-title">Billed To Seller</div>
+          ${this.renderCompactAddress(recipientName, [], recipientEmail)}
+        </div>`}
+    <div class="keep-note">Keep this invoice for warranty and tax purposes.</div>
   </div>
 
   <!-- Items table -->
-  <div class="section-hdr">Line Items</div>
   <table class="tbl">
     <thead>
       <tr>
-        <th class="l" style="width:3%">#</th>
-        <th class="l" style="min-width:160px">Description</th>
-        <th class="c" style="width:8%">HSN / SAC</th>
-        <th class="c" style="width:5%">Qty</th>
-        <th style="width:10%">Unit Price</th>
-        <th style="width:10%">Taxable</th>
-        ${isIgst
-          ? '<th style="width:9%">IGST</th>'
-          : '<th style="width:8%">CGST</th><th style="width:8%">SGST</th>'}
-        <th style="width:10%">Total</th>
+        <th class="l" style="width:18%">Product</th>
+        <th class="l">Title</th>
+        <th class="c" style="width:8%">Qty</th>
+        <th style="width:13%">Price (${this.escapeHtml(currency)})</th>
+        <th style="width:13%">Tax (${this.escapeHtml(currency)})</th>
+        <th style="width:14%">Total (${this.escapeHtml(currency)})</th>
       </tr>
     </thead>
     <tbody>${itemRowsHtml}</tbody>
   </table>
 
-  <!-- Footer: GST Summary + Amounts -->
-  <div class="footer-grid">
-    <div class="gst-col">
-      <div class="col-title">GST Summary</div>
+  <div class="table-total-line">
+    <span>Total</span>
+    <span>${this.escapeHtml(String(items.reduce((sum, item) => sum + Number(item.quantity || 0), 0) || "—"))}</span>
+    <span>${this.escapeHtml(this.money(amounts.productTaxableAmount ?? amounts.grossSalesAmount ?? 0, currency))}</span>
+    <span>${this.escapeHtml(this.money(cgst + sgst + igst + tcs, currency))}</span>
+    <span>${this.escapeHtml(this.money(amounts.finalPayableAmount || amounts.totalAmount || amounts.customerFinalAmount || inv.totalAmount || 0, currency))}</span>
+  </div>
+
+  <div class="grand-total">
+    <span>Grand Total</span>
+    <strong>${this.escapeHtml(this.money(amounts.finalPayableAmount || amounts.totalAmount || amounts.customerFinalAmount || inv.totalAmount || 0, currency))}</strong>
+  </div>
+
+  <div class="detail-summary">
+    <div>
+      <div class="detail-title">GST Summary</div>
       ${this.renderTaxTable(cgst, sgst, igst, tcs, isIgst, currency)}
       ${marketplaceGstin && isSeller
         ? `<div class="mktplace-gstin">Marketplace GSTIN: <strong>${this.escapeHtml(marketplaceGstin)}</strong></div>`
         : ""}
     </div>
-    <div class="amt-col">
-      <div class="col-title">Amount Summary</div>
+    <div>
+      <div class="detail-title">Amount Summary</div>
       ${this.buildInvoiceAmountRows(amounts, currency).join("")}
     </div>
   </div>
@@ -204,6 +229,24 @@ class DocumentRendererService {
     This is a computer-generated document and does not require a physical signature.
     ${marketplaceGstin ? `&nbsp;·&nbsp; Marketplace GSTIN: ${this.escapeHtml(marketplaceGstin)}` : ""}
     &nbsp;·&nbsp; Generated: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+  </div>
+
+  <div class="invoice-bottom">
+    <div class="policy">
+      <strong>Returns Policy:</strong>
+      Please retain the original brand box/package, invoice and original packing if a return is requested.
+      Terms and conditions apply.
+    </div>
+    <div class="thanks">
+      
+      <strong>Thank You!</strong>
+      <span>for shopping with us</span>
+    </div>
+  </div>
+
+  <div class="registry-line">
+    Regd. office: ${this.escapeHtml(issuerAddrLines.join(", ") || process.env.INVOICE_REGISTERED_OFFICE || "Sam Global")}
+    <span>page 1 of 1</span>
   </div>
 
 </div>
@@ -331,36 +374,49 @@ class DocumentRendererService {
     return `<style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    background: #eef0f7;
-    color: #1a1a2e;
+    background: #fff;
+    color: #222;
     font-family: Arial, Helvetica, sans-serif;
-    font-size: 12px;
-    line-height: 1.55;
+    font-size: 11px;
+    line-height: 1.35;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
-    padding: 24px;
+    padding: 8px;
   }
   .page {
     background: #fff;
-    border-radius: 10px;
-    box-shadow: 0 4px 32px rgba(27,29,96,0.13);
     margin: 0 auto;
-    max-width: 900px;
-    overflow: hidden;
+    max-width: 980px;
+    min-height: 1320px;
+    padding: 14px 16px 8px;
   }
   /* Header */
   .hdr {
-    background: #1B1D60;
-    color: #fff;
+    color: #222;
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    gap: 16px;
-    padding: 28px 36px 26px;
+    gap: 14px;
+    padding: 4px 0 10px;
+    border-bottom: 2px solid #333;
   }
-  .hdr-brand { font-size: 20px; font-weight: 700; letter-spacing: 0.3px; }
-  .hdr-sub { font-size: 10.5px; opacity: 0.72; margin-top: 4px; letter-spacing: 0.2px; }
-  .hdr-right { text-align: right; }
+  .brand-lockup { display: flex; align-items: center; gap: 10px; min-width: 260px; }
+  .brand-mark {
+    width: 42px;
+    height: 42px;
+    border: 2px solid #111;
+    display: grid;
+    place-items: center;
+    font-size: 15px;
+    font-weight: 900;
+    letter-spacing: -0.5px;
+  }
+  .brand-logo-img { display: block; max-width: 120px; max-height: 48px; object-fit: contain; }
+  .hdr-brand { font-size: 20px; font-weight: 900; letter-spacing: -0.3px; color: #111; }
+  .hdr-sub { font-size: 9.5px; color: #555; margin-top: 2px; font-style: italic; }
+  .hdr-center { flex: 1; text-align: left; padding-top: 3px; }
+  .seller-name { font-size: 15px; font-weight: 700; color: #333; }
+  .hdr-right { text-align: right; min-width: 220px; padding-top: 4px; }
   .hdr-doctype {
     font-size: 23px;
     font-weight: 700;
@@ -369,9 +425,30 @@ class DocumentRendererService {
     text-transform: uppercase;
   }
   .hdr-invnum { font-size: 12px; opacity: 0.85; margin-top: 4px; }
-  .hdr-date { font-size: 11px; opacity: 0.60; margin-top: 2px; }
+  .hdr-date { font-size: 10px; color: #555; margin-top: 4px; }
+  .tax-stamp {
+    border: 1px dashed #333;
+    display: inline-block;
+    padding: 2px 5px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #111;
+  }
   /* Accent bar */
   .accent-bar { background: ${accentColor}; height: 4px; }
+  .invoice-info-grid {
+    display: grid;
+    grid-template-columns: 1.05fr 1.15fr 1.15fr 0.75fr;
+    gap: 16px;
+    border-bottom: 2px solid #333;
+    padding: 9px 0 8px;
+  }
+  .order-meta div { margin-bottom: 4px; font-size: 12px; }
+  .address-block { font-size: 11px; color: #333; }
+  .addr-title { font-size: 12px; font-weight: 700; margin-bottom: 2px; }
+  .addr-name { font-size: 11.5px; font-weight: 700; font-style: italic; }
+  .addr-line { margin-top: 1px; }
+  .keep-note { color: #555; font-size: 10px; font-style: italic; line-height: 1.55; align-self: center; }
   /* Meta bar */
   .meta-bar {
     display: flex;
@@ -440,31 +517,70 @@ class DocumentRendererService {
   /* Items table */
   table.tbl { width: 100%; border-collapse: collapse; }
   .tbl th {
-    background: #1B1D60;
-    color: #fff;
-    font-size: 10.5px;
+    background: #fff;
+    color: #222;
+    font-size: 12px;
     font-weight: 700;
-    padding: 9px 10px;
+    padding: 5px 6px;
     text-align: right;
     white-space: nowrap;
-    letter-spacing: 0.2px;
+    border-bottom: 2px solid #333;
   }
   .tbl td {
-    padding: 10px 10px;
-    border-bottom: 1px solid #f0f2f8;
+    padding: 8px 6px;
+    border-bottom: 1px solid #777;
     vertical-align: top;
     text-align: right;
-    color: #2E2E2E;
-    font-size: 11.5px;
+    color: #222;
+    font-size: 11px;
   }
   .tbl th.l, .tbl td.l { text-align: left; }
   .tbl th.c, .tbl td.c { text-align: center; }
   .tbl tbody tr:last-child td { border-bottom: none; }
-  .tbl tbody tr:hover td { background: #f9fafb; }
-  .item-title { font-weight: 600; color: #1B1D60; }
-  .item-sub { font-size: 10.5px; color: #8b90a7; margin-top: 2px; }
-  .item-total { font-weight: 700; color: #1B1D60; }
-  td.empty-row { text-align: center; color: #b0b4c9; padding: 28px; font-style: italic; }
+  .item-title { font-weight: 700; color: #222; }
+  .item-sub { font-size: 9.5px; color: #444; margin-top: 2px; font-style: italic; }
+  .item-product { color: #333; font-size: 10px; }
+  .item-total { font-weight: 700; color: #222; }
+  td.empty-row { text-align: center; color: #777; padding: 24px; font-style: italic; }
+  .table-total-line {
+    border-top: 1px solid #333;
+    border-bottom: 1px solid #333;
+    display: grid;
+    grid-template-columns: 1fr 70px 140px 140px 150px;
+    gap: 10px;
+    align-items: center;
+    min-height: 46px;
+    padding: 8px 6px;
+    text-align: right;
+    font-size: 15px;
+    font-weight: 700;
+  }
+  .table-total-line span:first-child { font-size: 18px; font-weight: 400; }
+  .grand-total {
+    display: flex;
+    justify-content: flex-end;
+    align-items: baseline;
+    gap: 44px;
+    border-bottom: 2px solid #333;
+    padding: 18px 8px 14px;
+    font-size: 24px;
+  }
+  .grand-total strong { font-size: 22px; }
+  .detail-summary {
+    display: grid;
+    grid-template-columns: 1fr 330px;
+    gap: 28px;
+    border-bottom: 1px solid #333;
+    padding: 10px 8px 12px;
+  }
+  .detail-title {
+    color: #333;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+  }
   /* Footer grid */
   .footer-grid {
     display: flex;
@@ -489,20 +605,21 @@ class DocumentRendererService {
   /* Tax table */
   table.tax-tbl { width: 100%; border-collapse: collapse; font-size: 11px; }
   .tax-tbl th {
-    background: #f0f2f8;
-    color: #4b4f6b;
+    background: #fff;
+    color: #333;
     font-size: 9.5px;
     font-weight: 700;
     text-transform: uppercase;
-    padding: 6px 8px;
+    padding: 4px 6px;
     text-align: right;
+    border-bottom: 1px solid #777;
   }
   .tax-tbl th.l, .tax-tbl td.l { text-align: left; }
   .tax-tbl td {
-    padding: 6px 8px;
-    border-bottom: 1px solid #f0f2f8;
+    padding: 4px 6px;
+    border-bottom: 1px solid #ddd;
     text-align: right;
-    color: #2E2E2E;
+    color: #222;
   }
   .tax-tbl tbody tr:last-child td { border-bottom: none; }
   .tax-total td { font-weight: 700; color: #1B1D60; border-top: 1px solid #c7cbe0; }
@@ -530,17 +647,45 @@ class DocumentRendererService {
   .amt-row.grand .amt-val { font-size: 15px; font-weight: 700; color: #1B1D60; }
   /* Declaration */
   .declaration {
-    background: #f9fafb;
-    border-top: 1px solid #e8eaf0;
-    color: #9ca3af;
+    color: #555;
     font-size: 10px;
-    padding: 14px 24px;
+    padding: 4px 24px 0;
     text-align: center;
-    line-height: 1.8;
+    line-height: 1.5;
+    font-style: italic;
+  }
+  .invoice-bottom {
+    min-height: 680px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 24px;
+    padding: 0 20px 30px;
+  }
+  .policy { max-width: 720px; font-size: 11px; color: #222; line-height: 1.45; }
+  .thanks { min-width: 150px; text-align: center; color: #333; }
+  .thanks-mark {
+    width: 34px;
+    height: 34px;
+    border: 2px solid #333;
+    margin: 0 auto 3px;
+    display: grid;
+    place-items: center;
+    font-weight: 900;
+  }
+  .thanks strong { display: block; font-size: 16px; }
+  .thanks span { display: block; font-size: 10px; }
+  .registry-line {
+    border-top: 1px dotted #333;
+    color: #333;
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    padding: 5px 20px 0;
   }
   @media print {
     body { background: #fff; padding: 0; }
-    .page { border-radius: 0; box-shadow: none; }
+    .page { max-width: none; padding: 8mm 8mm 4mm; }
   }
 </style>`;
   }
@@ -560,6 +705,28 @@ class DocumentRendererService {
       ${email ? `<div class="party-line" style="margin-top:3px">${this.escapeHtml(email)}</div>` : ""}
       ${gstin ? `<div class="gstin-badge">GSTIN: ${this.escapeHtml(gstin)}</div>` : ""}
     </div>`;
+  }
+
+  renderCompactAddress(name, addrLines = [], email = null) {
+    return `
+      <div class="addr-name">${this.escapeHtml(name || "—")}</div>
+      ${addrLines.filter(Boolean).map((line) => `<div class="addr-line">${this.escapeHtml(line)}</div>`).join("")}
+      ${email ? `<div class="addr-line">${this.escapeHtml(email)}</div>` : ""}
+      ${!addrLines.filter(Boolean).length && !email ? `<div class="addr-line">—</div>` : ""}
+    `;
+  }
+
+  renderCompactAddressFromObject(addr = {}, fallbackName = "") {
+    if (!addr || typeof addr !== "object") return this.renderCompactAddress(fallbackName, []);
+    const name = addr.fullName || addr.full_name || addr.name || fallbackName || "";
+    const lines = this.formatAddressLines(addr);
+    const phone = addr.phone || addr.phoneNumber || addr.mobile || "";
+    return `
+      <div class="addr-name">${this.escapeHtml(name || "—")}</div>
+      ${lines.map((line) => `<div class="addr-line">${this.escapeHtml(line)}</div>`).join("")}
+      ${phone ? `<div class="addr-line">Phone: ${this.escapeHtml(phone)}</div>` : ""}
+      ${!lines.length && !phone ? `<div class="addr-line">—</div>` : ""}
+    `;
   }
 
   renderShipToBlock(addr = {}) {
@@ -586,27 +753,34 @@ class DocumentRendererService {
     const hsn = item.hsnCode || item.hsn_code || "—";
     const qty = item.quantity ?? "—";
     const unitPrice = this.money(item.unitPrice ?? item.unit_price, currency);
-    const taxable = this.money(item.taxableAmount ?? item.taxable_amount, currency);
     const cgst = this.money(item.cgstAmount ?? item.cgst_amount, currency);
     const sgst = this.money(item.sgstAmount ?? item.sgst_amount, currency);
     const igst = this.money(item.igstAmount ?? item.igst_amount, currency);
     const total = this.money(item.totalAmount ?? item.lineTotal ?? item.line_total, currency);
+    const taxTotal = this.money(
+      Number(item.taxAmount ?? item.tax_amount ?? 0) ||
+      Number(item.cgstAmount ?? item.cgst_amount ?? 0) +
+      Number(item.sgstAmount ?? item.sgst_amount ?? 0) +
+      Number(item.igstAmount ?? item.igst_amount ?? 0),
+      currency,
+    );
     const discount = Number(item.discountAmount ?? item.discount_amount ?? 0);
 
     return `<tr>
-      <td class="l c" style="color:#8b90a7">${index}</td>
+      <td class="l item-product">
+        <div>${this.escapeHtml(item.category || item.productCategory || "Product")}</div>
+        <div>Item: ${this.escapeHtml(String(index).padStart(2, "0"))}</div>
+      </td>
       <td class="l">
         <div class="item-title">${this.escapeHtml(title)}</div>
         ${sku ? `<div class="item-sub">SKU: ${this.escapeHtml(sku)}</div>` : ""}
+        <div class="item-sub">HSN / SAC: ${this.escapeHtml(hsn)}</div>
+        <div class="item-sub">${isIgst ? `IGST: ${this.escapeHtml(igst)}` : `CGST: ${this.escapeHtml(cgst)} · SGST: ${this.escapeHtml(sgst)}`}</div>
         ${discount > 0 ? `<div class="item-sub" style="color:#16a34a">Disc: ${this.escapeHtml(this.money(discount, currency))}</div>` : ""}
       </td>
-      <td class="c">${this.escapeHtml(hsn)}</td>
       <td class="c">${this.escapeHtml(String(qty))}</td>
       <td>${this.escapeHtml(unitPrice)}</td>
-      <td>${this.escapeHtml(taxable)}</td>
-      ${isIgst
-        ? `<td>${this.escapeHtml(igst)}</td>`
-        : `<td>${this.escapeHtml(cgst)}</td><td>${this.escapeHtml(sgst)}</td>`}
+      <td>${this.escapeHtml(taxTotal)}</td>
       <td class="item-total">${this.escapeHtml(total)}</td>
     </tr>`;
   }
