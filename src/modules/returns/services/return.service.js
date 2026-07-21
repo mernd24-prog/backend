@@ -1,5 +1,6 @@
 const { v4: uuidv4 } = require("uuid");
 const { ReturnModel } = require("../models/return.model");
+const { UserModel } = require("../../user/models/user.model");
 const { logger } = require("../../../shared/logger/logger");
 const { AppError } = require("../../../shared/errors/app-error");
 const { ORDER_STATUS, PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
@@ -565,9 +566,18 @@ class ReturnServiceClass {
       }
 
       const unitPrice = Number(orderItem.unit_price || item.unitPrice || 0);
-      const lineTotal = this.round(unitPrice * quantity);
+      const quantityRatio = quantity / Math.max(Number(orderItem.quantity || 1), 1);
+      // Use the persisted line amount because it reflects the price actually
+      // charged for this order. Rebuilding it from the current/unit price can
+      // overstate a refund when an item-level price adjustment was applied.
+      const lineTotal = this.round(Number(orderItem.line_total || 0) * quantityRatio);
+      const discountAmount = this.round(Number(orderItem.discount_amount || 0) * quantityRatio);
       const orderItemTax = Number(orderItem.tax_amount || 0);
-      const taxAmount = this.round(orderItemTax * (quantity / Math.max(Number(orderItem.quantity || 1), 1)));
+      const taxAmount = this.round(orderItemTax * quantityRatio);
+      const orderItemTaxBreakup = this.parseJson(orderItem.tax_breakup, {});
+      // Inclusive GST is already contained in line_total. Only tax explicitly
+      // charged in addition to the product price belongs on top of the refund.
+      const additionalTaxAmount = this.round(Number(orderItemTaxBreakup.taxPayableAmount || 0) * quantityRatio);
       const itemPolicySnapshot = this.getOrderItemReturnPolicy(orderItem, policySnapshot);
       return {
         orderItemId: orderItem.id,
@@ -585,7 +595,9 @@ class ReturnServiceClass {
         receivedQuantity: 0,
         unitPrice,
         lineTotal,
+        discountAmount,
         taxAmount,
+        additionalTaxAmount,
         refundAmount: 0,
         qcResult: "pending",
         photos: item.photos || [],
@@ -685,8 +697,18 @@ class ReturnServiceClass {
     const itemSubtotal = this.round(items.reduce((sum, item) => sum + Number(item.lineTotal || 0), 0));
     const orderSubtotal = Number(order.subtotal_amount || 0);
     const proportion = orderSubtotal > 0 ? Math.min(itemSubtotal / orderSubtotal, 1) : 0;
-    const discountReversal = this.round(Number(order.discount_amount || 0) * proportion);
-    const taxReversal = this.round(Number(order.tax_amount || 0) * proportion);
+    const hasItemDiscountAllocations = items.some((item) =>
+      Object.prototype.hasOwnProperty.call(item, "discountAmount"),
+    );
+    const itemDiscounts = items.reduce((sum, item) => sum + Number(item.discountAmount || 0), 0);
+    const discountReversal = this.round(
+      hasItemDiscountAllocations
+        ? itemDiscounts
+        : Math.max(Number(order.discount_amount || 0), 0) * proportion,
+    );
+    const taxReversal = this.round(
+      items.reduce((sum, item) => sum + Number(item.additionalTaxAmount || 0), 0),
+    );
     const totalRefundAmount = this.round(Math.max(itemSubtotal - discountReversal + taxReversal, 0));
     const walletRefundAmount = this.round(Math.min(
       Number(order.wallet_discount_amount || 0) * proportion,
@@ -890,6 +912,10 @@ class ReturnServiceClass {
       },
     });
     await returnRequest.save();
+    await this.publishReturnStatusUpdated(returnRequest, actor, {
+      shipmentId: returnRequest.reverseShipment?.shipmentId || null,
+      trackingNumber: returnRequest.trackingNumber || null,
+    });
     return returnRequest;
   }
 
@@ -955,6 +981,12 @@ class ReturnServiceClass {
     await returnRequest.save();
     if (returnStatus === "received") {
       await this.publishReturnEvent(DOMAIN_EVENTS.RETURN_RECEIVED_V1, returnRequest, actor);
+    } else {
+      await this.publishReturnStatusUpdated(returnRequest, actor, {
+        shipmentId,
+        shipmentStatus: payload.status,
+        location: payload.location || null,
+      });
     }
     return returnRequest;
   }
@@ -983,6 +1015,7 @@ class ReturnServiceClass {
     };
     this.appendTimeline(returnRequest, "shipped_back", actor, { metadata: { trackingNumber } });
     await returnRequest.save();
+    await this.publishReturnStatusUpdated(returnRequest, actor, { trackingNumber });
     return returnRequest;
   }
 
@@ -1107,6 +1140,10 @@ class ReturnServiceClass {
       },
     });
     await returnRequest.save();
+    await this.publishReturnStatusUpdated(returnRequest, actor, {
+      qcResults: Array.from(results),
+      approvedRefundAmount: qcApprovedRefundAmount,
+    });
     return returnRequest;
   }
 
@@ -1548,6 +1585,7 @@ class ReturnServiceClass {
       returnRequest.replacement.status = "pending";
       this.appendTimeline(returnRequest, "replacement_pending", actor, payload);
       await returnRequest.save();
+      await this.publishReturnStatusUpdated(returnRequest, actor);
       return returnRequest;
     }
     this.validateTransition(returnRequest.status, "replaced");
@@ -1564,6 +1602,10 @@ class ReturnServiceClass {
     };
     this.appendTimeline(returnRequest, "replaced", actor, payload);
     await returnRequest.save();
+    await this.publishReturnStatusUpdated(returnRequest, actor, {
+      replacementOrderId: returnRequest.replacementOrderId || null,
+      replacementShipmentId: returnRequest.replacementShipmentId || null,
+    });
     return returnRequest;
   }
 
@@ -1581,6 +1623,9 @@ class ReturnServiceClass {
     returnRequest.closedAt = new Date();
     this.appendTimeline(returnRequest, "closed", actor, payload);
     await returnRequest.save();
+    await this.publishReturnStatusUpdated(returnRequest, actor, {
+      reason: payload.reason || payload.note || null,
+    });
     return returnRequest;
   }
 
@@ -1695,6 +1740,15 @@ class ReturnServiceClass {
         },
         { source: "returns-module", aggregateId: returnRequest.orderId },
       ),
+    );
+  }
+
+  async publishReturnStatusUpdated(returnRequest, actor = {}, extra = {}) {
+    return this.publishReturnEvent(
+      DOMAIN_EVENTS.RETURN_STATUS_UPDATED_V1,
+      returnRequest,
+      actor,
+      extra,
     );
   }
 }

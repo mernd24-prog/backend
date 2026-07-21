@@ -9,6 +9,7 @@ const DOMAIN_EVENTS = {
   ORDER_PAYMENT_FAILED_V1: "order.payment_failed.v1",
   ORDER_CANCELLED_V1: "order.cancelled.v1",
   RETURN_REQUESTED_V1: "return.requested.v1",
+  RETURN_STATUS_UPDATED_V1: "return.status_updated.v1",
   RETURN_APPROVED_V1: "return.approved.v1",
   RETURN_REJECTED_V1: "return.rejected.v1",
   RETURN_RECEIVED_V1: "return.received.v1",

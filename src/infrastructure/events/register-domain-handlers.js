@@ -39,6 +39,7 @@ function registerDomainHandlers() {
     [DOMAIN_EVENTS.PAYMENT_FAILED_V1, "payment", (p) => p.paymentId],
     [DOMAIN_EVENTS.PAYMENT_REFUNDED_V1, "payment", (p) => p.paymentId],
     [DOMAIN_EVENTS.RETURN_REQUESTED_V1, "return", (p) => p.returnId],
+    [DOMAIN_EVENTS.RETURN_STATUS_UPDATED_V1, "return", (p) => p.returnId],
     [DOMAIN_EVENTS.RETURN_APPROVED_V1, "return", (p) => p.returnId],
     [DOMAIN_EVENTS.RETURN_REJECTED_V1, "return", (p) => p.returnId],
     [DOMAIN_EVENTS.RETURN_RECEIVED_V1, "return", (p) => p.returnId],

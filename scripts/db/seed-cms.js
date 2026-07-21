@@ -516,7 +516,7 @@ async function seedPolicyPages() {
                 description:
                   "18+ years of experience in high-volume product selling and distribution.",
                 image: {
-                  url: "/image/png/provenSalesExpertise.png",
+                  url: "/image/png/dummy.png",
                   alt: "Proven Sales Expertise",
                   title: "Proven Sales Expertise",
                   caption: "",
@@ -530,7 +530,7 @@ async function seedPolicyPages() {
                 description:
                   "Disciplined store-level execution driving performance and consistency.",
                 image: {
-                  url: "/image/png/strongRetailExecution.png",
+                  url: "/image/png/dummy.png",
                   alt: "Strong Retail Execution",
                   title: "Strong Retail Execution",
                   caption: "",
@@ -544,7 +544,7 @@ async function seedPolicyPages() {
                 description:
                   "Deep insights into Indian consumer behaviour and buying patterns.",
                 image: {
-                  url: "/image/png/consumerUnderstanding.png",
+                  url: "/image/png/dummy.png",
                   alt: "Consumer Understanding",
                   title: "Consumer Understanding",
                   caption: "",
@@ -558,7 +558,7 @@ async function seedPolicyPages() {
                 description:
                   "Leadership experience with Adidas, Reebok, Levi's, Pepe Jeans, and Benetton.",
                 image: {
-                  url: "/image/png/globalBrandExperience.png",
+                  url: "/image/png/dummy.png",
                   alt: "Global Brand Experience",
                   title: "Global Brand Experience",
                   caption: "",
@@ -572,7 +572,7 @@ async function seedPolicyPages() {
                 description:
                   "Planned multi-city growth strategy with scalable systems.",
                 image: {
-                  url: "/image/png/structuredExpansion.png",
+                  url: "/image/png/dummy.png",
                   alt: "Structured Expansion",
                   title: "Structured Expansion",
                   caption: "",
@@ -586,7 +586,7 @@ async function seedPolicyPages() {
                 description:
                   "Focused on sell-through, inventory movement, and profitability.",
                 image: {
-                  url: "/image/png/performanceDrivenApproach.png",
+                  url: "/image/png/dummy.png",
                   alt: "Performance-Driven Approach",
                   title: "Performance-Driven Approach",
                   caption: "",
@@ -600,7 +600,7 @@ async function seedPolicyPages() {
                 description:
                   "Strong governance and structured financial planning.",
                 image: {
-                  url: "/image/png/financialDiscipline.png",
+                  url: "/image/png/dummy.png",
                   alt: "Financial Discipline",
                   title: "Financial Discipline",
                   caption: "",
@@ -614,7 +614,7 @@ async function seedPolicyPages() {
                 description:
                   "Ensuring brand compliance and operational consistency.",
                 image: {
-                  url: "/image/png/sopDrivenOperations.png",
+                  url: "/image/png/dummy.png",
                   alt: "SOP-Driven Operations",
                   title: "SOP-Driven Operations",
                   caption: "",
@@ -628,7 +628,7 @@ async function seedPolicyPages() {
                 description:
                   "Committed to building sustainable brand relationships.",
                 image: {
-                  url: "/image/png/longTermPartnerships.png",
+                  url: "/image/png/dummy.png",
                   alt: "Long-Term Partnerships",
                   title: "Long-Term Partnerships",
                   caption: "",
