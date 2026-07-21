@@ -125,23 +125,14 @@ class CancellationRepository {
   async list(query = {}) {
     const limit = Math.min(Math.max(Number(query.limit || 50), 1), 200);
     const offset = Math.max(Number(query.offset || 0), 0);
-<<<<<<< HEAD
     const base = () => knex({ c: "order_cancellations" })
       .leftJoin({ o: "orders" }, "o.id", "c.order_id")
       .modify((builder) => {
       if (query.orderId) builder.where("c.order_id", query.orderId);
       if (query.buyerId) builder.where("c.buyer_id", query.buyerId);
-=======
-    const search = String(query.search || "").trim();
-    const normalizedSearch = search.replace(/^#/, "");
-    const base = () => knex("order_cancellations").modify((builder) => {
-      if (query.orderId) builder.where("order_id", query.orderId);
-      if (query.buyerId) builder.where("buyer_id", query.buyerId);
->>>>>>> origin/sachin-dev
       if (query.sellerId) {
         builder.whereRaw("c.items @> ?::jsonb", [JSON.stringify([{ sellerId: String(query.sellerId) }])]);
       }
-<<<<<<< HEAD
       if (query.status) builder.where("c.status", query.status);
       if (query.refundStatus) builder.where("c.refund_status", query.refundStatus);
       if (query.scope) builder.where("c.scope", query.scope);
@@ -156,38 +147,6 @@ class CancellationRepository {
     const [items, [{ count }]] = await Promise.all([
       base().select("c.*", "o.order_number").orderBy("c.created_at", "desc").limit(limit).offset(offset),
       base().count({ count: "c.id" }),
-=======
-      if (query.status) builder.where("status", query.status);
-      if (query.refundStatus) builder.where("refund_status", query.refundStatus);
-      if (query.scope) builder.where("scope", query.scope);
-      if (query.fromDate) builder.where("created_at", ">=", query.fromDate);
-      if (query.toDate) builder.where("created_at", "<=", query.toDate);
-      if (search) builder.where((q) => q
-        .whereILike("cancellation_number", `%${search}%`)
-        .orWhereRaw("order_id::text ILIKE ?", [`%${normalizedSearch}%`])
-        .orWhereILike("reason", `%${search}%`)
-        .orWhereILike("refund_status", `%${search}%`)
-        .orWhereILike("status", `%${search}%`)
-        .orWhereExists(function matchingOrderNumber() {
-          this.select(1)
-            .from("orders")
-            .whereRaw("orders.id = order_cancellations.order_id")
-            .where((orderQuery) => {
-              orderQuery
-                .whereILike("orders.order_number", `%${search}%`)
-                .orWhereILike("orders.order_number", `%${normalizedSearch}%`);
-            });
-        }));
-    });
-    const [items, [{ count }]] = await Promise.all([
-      base()
-        .leftJoin("orders as o", "o.id", "order_cancellations.order_id")
-        .select("order_cancellations.*", "o.order_number")
-        .orderBy("order_cancellations.created_at", "desc")
-        .limit(limit)
-        .offset(offset),
-      base().count({ count: "*" }),
->>>>>>> origin/sachin-dev
     ]);
     return { items, total: Number(count || 0), limit, offset };
   }
