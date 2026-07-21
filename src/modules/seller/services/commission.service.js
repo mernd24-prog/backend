@@ -91,6 +91,26 @@ class SellerCommissionService {
   }
 
   resolveSellerFeeAmount(row = {}, pricing = {}) {
+    const orderMetadata = this.parseJson(row.order_metadata, {});
+    const platformSettings = orderMetadata.commerceSettings?.platformFees || {};
+    const financeSettings = orderMetadata.commerceSettings?.finance || {};
+    const configuredFeeType = platformSettings.sellerCommissionType || platformSettings.sellerFeeType;
+    const configuredFeeValue = this.numberOrNull(
+      platformSettings.sellerCommissionValue ?? platformSettings.sellerFeeValue,
+    );
+    // Gross-price commission is defined against the immutable order-item total.
+    // Recalculate it even when an older checkout snapshot persisted a slightly
+    // discounted or rounded base.
+    if (
+      financeSettings.sellerPayoutBase !== "taxable_ex_gst" &&
+      configuredFeeValue !== null && configuredFeeValue > 0
+    ) {
+      if (configuredFeeType === "fixed") {
+        return this.round(configuredFeeValue * Number(row.quantity || 1));
+      }
+      return this.round((Number(row.line_total || 0) * configuredFeeValue) / 100);
+    }
+
     const componentFee = this.firstNumber(pricing.commissionFee) +
       this.firstNumber(pricing.fixedFee) +
       this.firstNumber(pricing.closingFee);
@@ -103,12 +123,12 @@ class SellerCommissionService {
       pricing.sellerFeeAmount ??
       pricing.sellerFeeTotal,
     );
-    if (explicitSellerFee !== null) {
+    if (explicitSellerFee !== null && explicitSellerFee > 0) {
       return this.round(explicitSellerFee);
     }
 
     const rowSellerFee = this.numberOrNull(row.platform_fee_amount);
-    if (rowSellerFee !== null) {
+    if (rowSellerFee !== null && rowSellerFee > 0) {
       return this.round(rowSellerFee);
     }
 
@@ -118,22 +138,40 @@ class SellerCommissionService {
       pricing.customerPlatformFee,
       pricing.customerFeeTotal,
     );
-    return this.round(Math.max(0, platformFee - customerFee));
+    const storedFee = this.round(Math.max(0, platformFee - customerFee));
+    if (storedFee > 0) return storedFee;
+
+    // Legacy orders may predate per-item pricing snapshots. Use only the
+    // immutable commerce-settings snapshot stored on the order, never today's
+    // live rate, so historical accounting remains reproducible.
+    const feeType = platformSettings.sellerCommissionType || platformSettings.sellerFeeType;
+    const feeValue = this.numberOrNull(
+      platformSettings.sellerCommissionValue ?? platformSettings.sellerFeeValue,
+    );
+    if (feeValue === null || feeValue <= 0) return 0;
+    const payoutBase = this.firstNumber(
+      pricing.sellerCommissionBaseAmount,
+      pricing.sellerPayoutBaseAmount,
+      row.line_total,
+    );
+    if (feeType === "fixed") return this.round(feeValue * Number(row.quantity || 1));
+    return this.round((payoutBase * feeValue) / 100);
   }
 
   resolveSellerFeeTaxAmount(row = {}, pricing = {}, financeSnapshot = {}) {
     const chargeToSeller = pricing.chargePlatformFeeTaxToSeller ?? financeSnapshot.chargePlatformFeeTaxToSeller ?? true;
     if (chargeToSeller === false) return 0;
 
-    const explicitTax = this.numberOrNull(pricing.platformFeeTaxAmount);
-    if (explicitTax !== null) {
-      return this.round(explicitTax);
+    const taxRate = this.firstNumber(pricing.platformFeeTaxRate, financeSnapshot.platformFeeTaxRate);
+    if (taxRate > 0) {
+      return this.round((this.resolveSellerFeeAmount(row, pricing) * taxRate) / 100);
     }
 
-    const taxRate = this.firstNumber(pricing.platformFeeTaxRate, financeSnapshot.platformFeeTaxRate);
-    if (taxRate <= 0) return 0;
-
-    return this.round((this.resolveSellerFeeAmount(row, pricing) * taxRate) / 100);
+    const explicitTax = this.numberOrNull(pricing.platformFeeTaxAmount);
+    if (explicitTax !== null && explicitTax > 0) {
+      return this.round(explicitTax);
+    }
+    return 0;
   }
 
   normalizePagination(query = {}) {
@@ -572,7 +610,9 @@ class SellerCommissionService {
       const taxBreakup = this.parseJson(row.tax_breakup, {});
       const orderMetadata = this.parseJson(row.order_metadata, {});
       const financeSnapshot = orderMetadata?.commerceSettings?.finance || {};
-      const itemGross = Number((pricing.sellerPayoutBaseAmount ?? grossAfterDiscount) || 0);
+      const itemGross = financeSnapshot.sellerPayoutBase === "taxable_ex_gst"
+        ? Number((pricing.sellerPayoutBaseAmount ?? taxBreakup.taxableAmount ?? grossAfterDiscount) || 0)
+        : lineTotal;
       const sellerFeeAmount = this.resolveSellerFeeAmount(row, pricing);
       const sellerFeeTaxAmount = this.resolveSellerFeeTaxAmount(row, pricing, financeSnapshot);
       const customerFeeAmount = this.firstNumber(
@@ -596,13 +636,18 @@ class SellerCommissionService {
       current.sellerReceivableAmount += itemSellerReceivable;
       current.hasPricingSnapshot = current.hasPricingSnapshot || Object.keys(pricing).length > 0;
       current.quantity += Number(row.quantity || 0);
+      const snapshotGstRate = Number(taxBreakup.gstRate ?? row.gst_rate ?? 0);
+      const snapshotCessRate = Number(taxBreakup.cessRate ?? 0);
+      const taxableAmount = taxBreakup.gstInclusive && snapshotGstRate + snapshotCessRate > 0
+        ? this.round((lineTotal * 100) / (100 + snapshotGstRate + snapshotCessRate))
+        : this.round(taxBreakup.taxableAmount ?? grossAfterDiscount);
       current.products.push({
         productId: row.product_id,
         variantId: row.variant_id,
         variantSku: row.variant_sku,
         amount: this.round(itemGross),
         grossAfterDiscount: this.round(grossAfterDiscount),
-        taxableAmount: this.round(taxBreakup.taxableAmount ?? grossAfterDiscount),
+        taxableAmount,
         sellerPayoutBase: pricing.sellerPayoutBase || "gross_customer_price",
         platformFeeAmount: this.round(sellerFeeAmount),
         platformFeeTaxAmount: this.round(sellerFeeTaxAmount),
@@ -2293,6 +2338,48 @@ class SellerCommissionService {
           continue;
         }
 
+        // Completed commission/payout rows are accounting records and must be
+        // immutable. Recover a later cancellation/return from a future payout.
+        if (commission.status === "paid") {
+          const existingRecovery = await trx("seller_settlements")
+            .where({ seller_id: sellerId, status: "pending" })
+            .whereRaw("metadata ->> 'returnId' = ?", [returnId])
+            .whereRaw("metadata ->> 'commissionId' = ?", [String(commission.id)])
+            .first();
+          if (!existingRecovery) {
+            await trx("seller_settlements").insert({
+              id: uuidv4(),
+              seller_id: sellerId,
+              organization_id: organizationId || null,
+              organization_snapshot: this.jsonb(organizationSnapshot || commission.organization_snapshot || {}),
+              payout_id: commission.payout_id || null,
+              settlement_date: knex.fn.now(),
+              period_start: null,
+              period_end: null,
+              gross_amount: 0,
+              commission_amount: 0,
+              tax_amount: 0,
+              refund_amount: amount,
+              adjustment_amount: -amount,
+              net_amount: -amount,
+              currency: commission.currency || "INR",
+              status: "pending",
+              notes: "Refund adjustment after completed payout",
+              metadata: this.jsonb({
+                adjustmentType: "post_payout_refund_recovery",
+                returnId,
+                orderId,
+                commissionId: commission.id,
+                actorId: actor.userId || actor.sub || null,
+              }),
+              created_at: knex.fn.now(),
+              updated_at: knex.fn.now(),
+            });
+          }
+          adjustments.push({ sellerId, refundAmount: amount, commissionId: commission.id, recovery: true, skipped: Boolean(existingRecovery) });
+          continue;
+        }
+
         const nextRefundAmount = this.round(Number(commission.refund_amount || 0) + amount);
         const nextNetAmount = this.round(
           Number(commission.net_amount || 0) +
@@ -2354,42 +2441,105 @@ class SellerCommissionService {
             });
         }
 
-        if (commission.status === "paid") {
-          await trx("seller_settlements").insert({
-            id: uuidv4(),
-            seller_id: sellerId,
-            organization_id: organizationId || null,
-            organization_snapshot: this.jsonb(organizationSnapshot || commission.organization_snapshot || {}),
-            payout_id: commission.payout_id || null,
-            settlement_date: knex.fn.now(),
-            period_start: null,
-            period_end: null,
-            gross_amount: 0,
-            commission_amount: 0,
-            tax_amount: 0,
-            refund_amount: amount,
-            adjustment_amount: -amount,
-            net_amount: -amount,
-            currency: commission.currency || "INR",
-            status: "pending",
-            notes: "Refund adjustment after completed payout",
-            metadata: this.jsonb({
-              returnId,
-              orderId,
-              commissionId: commission.id,
-              actorId: actor.userId || actor.sub || null,
-            }),
-            created_at: knex.fn.now(),
-            updated_at: knex.fn.now(),
-          });
-        }
-
         adjustments.push({ sellerId, refundAmount: amount, commissionId: commission.id });
       }
     });
 
     logger.info({ orderId, returnId, adjustments }, "Seller commission refund adjustment recorded");
     return { orderId, returnId, adjustments };
+  }
+
+  async auditCommissionCompleteness(orderId, client = knex) {
+    const [order, items, commissions] = await Promise.all([
+      client("orders").where("id", orderId).select("id", "status").first(),
+      client("order_items")
+        .where("order_id", orderId)
+        .whereNotNull("seller_id")
+        .select("id", "seller_id", "organization_id", "quantity", "cancelled_quantity", "delivered_at", "payout_status", "pricing_snapshot"),
+      client("seller_commissions")
+        .where("order_id", orderId)
+        .whereNot("status", "cancelled")
+        .select("id", "order_item_id", "seller_id", "organization_id", "amount", "net_amount", "status", "payout_id"),
+    ]);
+    const orderDelivered = ["delivered", "fulfilled", "completed", "partially_returned", "return_requested", "returned"]
+      .includes(String(order?.status || ""));
+    const expected = items.filter((item) =>
+      Number(item.quantity || 0) > Number(item.cancelled_quantity || 0) &&
+      (orderDelivered || item.delivered_at || ["eligible", "held", "paid"].includes(item.payout_status)),
+    );
+    const byItem = new Map();
+    commissions.forEach((commission) => {
+      const key = String(commission.order_item_id || "");
+      if (!byItem.has(key)) byItem.set(key, []);
+      byItem.get(key).push(commission);
+    });
+    const missing = expected.filter((item) => !(byItem.get(String(item.id)) || []).length);
+    const duplicates = [...byItem.entries()]
+      .filter(([itemId, rows]) => itemId && rows.length > 1)
+      .map(([orderItemId, rows]) => ({ orderItemId, commissionIds: rows.map((row) => row.id) }));
+    const orphaned = commissions.filter((commission) =>
+      commission.order_item_id && !items.some((item) => String(item.id) === String(commission.order_item_id)),
+    );
+    return {
+      orderId,
+      complete: missing.length === 0 && duplicates.length === 0 && orphaned.length === 0,
+      expectedItemCount: expected.length,
+      commissionCount: commissions.length,
+      missing: missing.map((item) => ({ orderItemId: item.id, sellerId: item.seller_id, organizationId: item.organization_id || null })),
+      duplicates,
+      orphaned: orphaned.map((row) => ({ commissionId: row.id, orderItemId: row.order_item_id, status: row.status })),
+      immutablePaidCount: commissions.filter((row) => row.status === "paid").length,
+    };
+  }
+
+  async repairCommissionCompleteness(orderId, actor = {}) {
+    const before = await this.auditCommissionCompleteness(orderId);
+    if (before.complete) return { repaired: false, before, after: before };
+    await knex.transaction(async (trx) => {
+      for (const duplicate of before.duplicates) {
+        const rows = await trx("seller_commissions")
+          .whereIn("id", duplicate.commissionIds)
+          .orderBy("created_at", "asc")
+          .forUpdate();
+        const mutableRows = rows.filter((row) => row.status !== "paid" && !row.payout_id);
+        // Retain one active record. Paid/in-process records are never changed.
+        const protectedRows = rows.filter((row) => row.status === "paid" || row.payout_id);
+        const keepId = protectedRows[0]?.id || mutableRows[0]?.id;
+        for (const row of mutableRows.filter((entry) => entry.id !== keepId)) {
+          await trx("seller_commissions").where("id", row.id).update({
+            status: "cancelled",
+            net_amount: 0,
+            metadata: this.jsonb({
+              ...this.parseJson(row.metadata, {}),
+              supersededByCommissionId: keepId || null,
+              repairReason: "duplicate_order_item_commission",
+              repairedAt: new Date().toISOString(),
+            }),
+            updated_at: knex.fn.now(),
+          });
+        }
+      }
+      for (const orphan of before.orphaned) {
+        const row = await trx("seller_commissions").where("id", orphan.commissionId).first().forUpdate();
+        if (!row || row.status === "paid" || row.payout_id) continue;
+        await trx("seller_commissions").where("id", row.id).update({
+          status: "cancelled",
+          net_amount: 0,
+          metadata: this.jsonb({
+            ...this.parseJson(row.metadata, {}),
+            repairReason: "orphaned_order_item_commission",
+            repairedAt: new Date().toISOString(),
+          }),
+          updated_at: knex.fn.now(),
+        });
+      }
+    });
+    await this.calculateCommission(orderId, {
+      actor: { ...actor, source: "commission_completeness_repair" },
+      sourceStatus: "repair",
+    });
+    const after = await this.auditCommissionCompleteness(orderId);
+    return { repaired: true, before, after };
   }
 
   async getLegacySellerCommissions(sellerId) {

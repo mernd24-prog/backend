@@ -263,9 +263,10 @@ class TaxService {
     }
 
     const scope = await this.resolveMarketplaceInvoiceScope(order, actor, { write: false });
-    this.assertBuyerInvoiceReady(order, actor);
     const invoices = await this.taxRepository.findInvoicesByOrderId(orderId);
-    const visibleInvoices = this.filterInvoicesForScope(invoices, scope);
+    const visibleInvoices = this.filterInvoicesForScope(invoices, scope).filter((invoice) =>
+      !scope.isBuyer || this.isInvoiceReadyForBuyer(order, invoice),
+    );
 
     return {
       orderId,
@@ -475,8 +476,8 @@ class TaxService {
     }
     this.assertInvoiceDocumentAccess(invoice, actor);
     if (invoice.order_id) {
-      const order = await this.orderRepository.findById(invoice.order_id);
-      this.assertBuyerInvoiceReady(order, actor);
+      const order = await this.orderRepository.findByIdWithItems(invoice.order_id);
+      this.assertBuyerInvoiceReady(order, actor, invoice);
     }
     return documentRendererService.render(this.buildInvoiceDocument(invoice), {
       format: query.format || "pdf",
@@ -777,7 +778,12 @@ class TaxService {
 
     const amounts = this.calculateSellerCustomerAmounts(order, sellerId, items);
     const sellerSnapshot = this.buildSellerSnapshot(sellerId, sellerProfile, organizationSnapshot);
-    const invoiceNumber = await this.taxRepository.nextInvoiceNumber("GST-S");
+    const configuredPrefix = organizationSnapshot?.invoiceSettings?.invoicePrefix;
+    const invoicePrefix = String(configuredPrefix || "GST-S")
+      .toUpperCase()
+      .replace(/[^A-Z0-9-]/g, "")
+      .slice(0, 12) || "GST-S";
+    const invoiceNumber = await this.taxRepository.nextInvoiceNumber(invoicePrefix);
     const invoice = await this.taxRepository.createInvoice({
       invoiceNumber,
       orderId: order.id,
@@ -1501,7 +1507,27 @@ class TaxService {
     return invoice.invoice_type || INVOICE_TYPES.ORDER_CUSTOMER;
   }
 
-  assertBuyerInvoiceReady(order = {}, actor = {}) {
+  isDeliveredItem(item = {}) {
+    return Boolean(item.delivered_at || item.deliveredAt) ||
+      ["delivered", "fulfilled", "completed"].includes(
+        String(item.delivery_status || item.deliveryStatus || item.status || "").toLowerCase(),
+      );
+  }
+
+  isInvoiceReadyForBuyer(order = {}, invoice = {}) {
+    if (this.invoiceType(invoice) !== INVOICE_TYPES.SELLER_CUSTOMER) {
+      return order.status === CUSTOMER_INVOICE_READY_STATUS;
+    }
+    const sellerId = String(invoice.seller_id || "");
+    const organizationId = String(invoice.organization_id || "default");
+    const sellerItems = (order.items || []).filter((item) =>
+      String(item.seller_id || "") === sellerId &&
+      String(item.organization_id || "default") === organizationId,
+    );
+    return sellerItems.length > 0 && sellerItems.every((item) => this.isDeliveredItem(item));
+  }
+
+  assertBuyerInvoiceReady(order = {}, actor = {}, invoice = null) {
     if (!order || this.isAdminActor(actor) || this.getActorSellerId(actor)) {
       return;
     }
@@ -1509,8 +1535,11 @@ class TaxService {
     const isBuyer = actor.userId && String(order.buyer_id || "") === String(actor.userId);
     if (!isBuyer) return;
 
-    if (order.status !== CUSTOMER_INVOICE_READY_STATUS) {
-      throw new AppError("Invoice will be available after the order is fulfilled", 409);
+    const ready = invoice
+      ? this.isInvoiceReadyForBuyer(order, invoice)
+      : order.status === CUSTOMER_INVOICE_READY_STATUS;
+    if (!ready) {
+      throw new AppError("Invoice will be available after the relevant seller items are delivered", 409);
     }
   }
 

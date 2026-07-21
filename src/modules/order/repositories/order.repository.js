@@ -317,7 +317,9 @@ class OrderRepository {
          oi.seller_id,
          oi.organization_id,
          oi.product_title,
-         oi.product_image
+         oi.product_image,
+         oi.delivery_status AS item_delivery_status,
+         oi.delivered_at AS item_delivered_at
        FROM orders o
        JOIN order_items oi ON oi.order_id = o.id
        WHERE o.buyer_id = $1
@@ -953,36 +955,68 @@ class OrderRepository {
     }
 
     return settlements.map((settlement) => {
-      const match = commissions.find((commission) =>
+      const matches = commissions.filter((commission) =>
         String(commission.seller_id || "") === String(settlement.sellerId || settlement.seller_id || "") &&
         String(commission.organization_id || "default") === String(settlement.organizationId || settlement.organization_id || "default")
       );
-      if (!match) return settlement;
+      if (!matches.length) return settlement;
 
-      const payout = match.payout_id ? payoutsById.get(String(match.payout_id)) : null;
-      const commissionMetadata = this.parseJson(match.metadata, {});
+      const sum = (selector) => this.money(matches.reduce(
+        (total, commission) => total + this.money(selector(commission)),
+        0,
+      ));
+      const metadataRows = matches.map((commission) => this.parseJson(commission.metadata, {}));
+      const metadataSum = (field) => this.money(
+        metadataRows.reduce((total, metadata) => total + this.money(metadata[field]), 0),
+      );
+      const payoutIds = [...new Set(matches.map((commission) => commission.payout_id).filter(Boolean).map(String))];
+      const payout = payoutIds.length === 1 ? payoutsById.get(payoutIds[0]) : null;
+      const statuses = [...new Set(matches.map((commission) => commission.status).filter(Boolean))];
+      const commissionStatus = statuses.length === 1
+        ? statuses[0]
+        : statuses.includes("pending")
+          ? "pending"
+          : "partially_processed";
+      const firstMetadata = metadataRows[0] || {};
+      const isFinanciallyLocked = matches.some((commission) =>
+        commission.status === "paid" || Boolean(commission.payout_id),
+      );
 
       return {
         ...settlement,
-        commissionId: match.id,
-        commissionStatus: match.status || null,
-        payoutId: match.payout_id || null,
+        commissionId: matches.length === 1 ? matches[0].id : null,
+        commissionIds: matches.map((commission) => commission.id),
+        commissionStatus,
+        payoutId: payoutIds.length === 1 ? payoutIds[0] : null,
         payoutStatus: payout?.status || null,
         payoutReference: payout?.payment_reference || null,
         payoutMethod: payout?.payment_method || null,
         payoutProcessedAt: payout?.processed_at || null,
-        commissionAmount: this.money(match.commission_amount),
-        commissionTaxAmount: this.money(match.tax_amount),
-        refundAmount: this.money(match.refund_amount),
-        netCommissionAmount: this.money(match.net_amount),
-        platformFeeAmount: this.money(match.commission_amount),
-        platformFeeTaxAmount: this.money(match.tax_amount),
-        gstTcsRate: this.money(commissionMetadata.gstTcsRate),
-        gstTcsAmount: this.money(commissionMetadata.gstTcsAmount),
-        incomeTaxTdsRate: this.money(commissionMetadata.incomeTaxTdsRate),
-        incomeTaxTdsAmount: this.money(commissionMetadata.incomeTaxTdsAmount),
-        statutoryDeductionAmount: this.money(commissionMetadata.statutoryDeductionAmount),
-        sellerPayoutAmount: this.money(match.net_amount),
+        commissionAmount: isFinanciallyLocked
+          ? sum((commission) => commission.commission_amount)
+          : settlement.platformFeeAmount,
+        commissionTaxAmount: isFinanciallyLocked
+          ? sum((commission) => commission.tax_amount)
+          : settlement.platformFeeTaxAmount,
+        refundAmount: sum((commission) => commission.refund_amount),
+        adjustmentAmount: sum((commission) => commission.adjustment_amount),
+        netCommissionAmount: sum((commission) => commission.net_amount),
+        platformFeeAmount: isFinanciallyLocked
+          ? sum((commission) => commission.commission_amount)
+          : settlement.platformFeeAmount,
+        platformFeeTaxAmount: isFinanciallyLocked
+          ? sum((commission) => commission.tax_amount)
+          : settlement.platformFeeTaxAmount,
+        gstTcsRate: isFinanciallyLocked ? this.money(firstMetadata.gstTcsRate) : settlement.gstTcsRate,
+        gstTcsAmount: isFinanciallyLocked ? metadataSum("gstTcsAmount") : settlement.gstTcsAmount,
+        incomeTaxTdsRate: isFinanciallyLocked ? this.money(firstMetadata.incomeTaxTdsRate) : settlement.incomeTaxTdsRate,
+        incomeTaxTdsAmount: isFinanciallyLocked ? metadataSum("incomeTaxTdsAmount") : settlement.incomeTaxTdsAmount,
+        statutoryDeductionAmount: isFinanciallyLocked
+          ? metadataSum("statutoryDeductionAmount")
+          : settlement.statutoryDeductionAmount,
+        sellerPayoutAmount: isFinanciallyLocked
+          ? sum((commission) => commission.net_amount)
+          : settlement.sellerPayoutAmount,
       };
     });
   }
@@ -990,6 +1024,12 @@ class OrderRepository {
   buildSellerSettlements(items = [], sellers = [], order = {}) {
     const orderMetadata = this.parseJson(order.metadata, {});
     const financeSettings = orderMetadata.commerceSettings?.finance || {};
+    const platformFeeSettings = orderMetadata.commerceSettings?.platformFees || {};
+    const sellerCommissionType = platformFeeSettings.sellerCommissionType ||
+      platformFeeSettings.sellerFeeType || "percentage";
+    const sellerCommissionValue = Number(
+      platformFeeSettings.sellerCommissionValue ?? platformFeeSettings.sellerFeeValue ?? 0,
+    );
     const shippingPolicy = financeSettings.shippingPolicy || "not_in_seller_payout";
     const deliveryChargeSellers = Array.isArray(orderMetadata.deliveryCharge?.sellers)
       ? orderMetadata.deliveryCharge.sellers
@@ -1031,15 +1071,48 @@ class OrderRepository {
         fixedFeeAmount: 0,
         closingFeeAmount: 0,
         commissionRates: [],
+        commissionBreakdown: {},
         platformFeeAmount: 0,
         sellerPayoutAmount: 0,
       };
 
       const lineTotal = this.money(item.line_total);
-      const taxableAmount = this.money(taxBreakup.taxableAmount ?? item.line_total);
-      const platformFeeAmount = this.money(item.platform_fee_amount || pricing.platformFeeAmount);
-      const platformFeeTaxAmount = this.money(pricing.platformFeeTaxAmount);
-      const sellerPayoutBaseAmount = this.money(pricing.sellerPayoutBaseAmount || lineTotal - this.money(item.discount_amount));
+      const snapshotGstRate = Number(taxBreakup.gstRate ?? item.gst_rate ?? 0);
+      const snapshotCessRate = Number(taxBreakup.cessRate ?? 0);
+      const taxableAmount = taxBreakup.gstInclusive && snapshotGstRate + snapshotCessRate > 0
+        ? this.money((lineTotal * 100) / (100 + snapshotGstRate + snapshotCessRate))
+        : this.money(taxBreakup.taxableAmount ?? item.line_total);
+      const sellerPayoutBaseAmount = this.money(
+        pricing.sellerPayoutBaseAmount ??
+        (financeSettings.sellerPayoutBase === "taxable_ex_gst" ? taxableAmount : lineTotal),
+      );
+      const sellerCommissionBaseAmount = this.money(
+        pricing.sellerCommissionBaseAmount ?? sellerPayoutBaseAmount,
+      );
+      let platformFeeAmount = this.money(item.platform_fee_amount || pricing.platformFeeAmount);
+      if (
+        sellerCommissionValue > 0 &&
+        (financeSettings.sellerPayoutBase !== "taxable_ex_gst" || platformFeeAmount <= 0)
+      ) {
+        platformFeeAmount = sellerCommissionType === "fixed"
+          ? this.money(sellerCommissionValue * Number(item.quantity || 1))
+          : this.money((
+            (financeSettings.sellerPayoutBase === "taxable_ex_gst" ? sellerCommissionBaseAmount : lineTotal) *
+            sellerCommissionValue
+          ) / 100);
+      }
+      let platformFeeTaxAmount = this.money(pricing.platformFeeTaxAmount);
+      const chargePlatformFeeTaxToSeller = pricing.chargePlatformFeeTaxToSeller ??
+        financeSettings.chargePlatformFeeTaxToSeller ?? true;
+      const platformFeeTaxRate = Number(
+        pricing.platformFeeTaxRate ?? financeSettings.platformFeeTaxRate ?? 0,
+      );
+      if (
+        chargePlatformFeeTaxToSeller && platformFeeTaxRate > 0 &&
+        (financeSettings.sellerPayoutBase !== "taxable_ex_gst" || platformFeeTaxAmount <= 0)
+      ) {
+        platformFeeTaxAmount = this.money((platformFeeAmount * platformFeeTaxRate) / 100);
+      }
       const taxAmount = item.tax_amount !== undefined && item.tax_amount !== null
         ? this.money(item.tax_amount)
         : this.money(taxBreakup.taxAmount) + this.money(taxBreakup.cessAmount);
@@ -1047,11 +1120,23 @@ class OrderRepository {
       current.grossSalesAmount += lineTotal;
       current.taxableAmount += taxableAmount;
       current.taxAmount += taxAmount;
-      current.commissionFeeAmount += this.money(pricing.commissionFee);
-      current.fixedFeeAmount += this.money(pricing.fixedFee);
+      const commissionFeeAmount = sellerCommissionType === "percentage" &&
+        (financeSettings.sellerPayoutBase !== "taxable_ex_gst" || this.money(pricing.commissionFee) <= 0)
+        ? platformFeeAmount
+        : this.money(pricing.commissionFee);
+      const fixedFeeAmount = sellerCommissionType === "fixed" &&
+        (financeSettings.sellerPayoutBase !== "taxable_ex_gst" || this.money(pricing.fixedFee) <= 0)
+        ? platformFeeAmount
+        : this.money(pricing.fixedFee);
+      current.commissionFeeAmount += commissionFeeAmount;
+      current.fixedFeeAmount += fixedFeeAmount;
       current.closingFeeAmount += this.money(pricing.closingFee);
-      if (Number(pricing.commissionPercent || 0) > 0) {
-        current.commissionRates.push(Number(pricing.commissionPercent));
+      const commissionRate = Number(pricing.commissionPercent ||
+        (sellerCommissionType === "percentage" ? sellerCommissionValue : 0));
+      if (commissionRate > 0) {
+        const rate = commissionRate;
+        current.commissionRates.push(rate);
+        current.commissionBreakdown[rate] = this.money(current.commissionBreakdown[rate]) + commissionFeeAmount;
       }
       current.platformFeeAmount += platformFeeAmount;
       current.platformFeeTaxAmount = this.money(current.platformFeeTaxAmount) + platformFeeTaxAmount;
@@ -1088,6 +1173,9 @@ class OrderRepository {
         fixedFeeAmount: Number(this.money(seller.fixedFeeAmount).toFixed(2)),
         closingFeeAmount: Number(this.money(seller.closingFeeAmount).toFixed(2)),
         commissionRates: [...new Set(seller.commissionRates || [])].sort((left, right) => left - right),
+        commissionBreakdown: Object.entries(seller.commissionBreakdown || {})
+          .map(([rate, amount]) => ({ rate: Number(rate), amount: Number(this.money(amount).toFixed(2)) }))
+          .sort((left, right) => left.rate - right.rate),
         platformFeeAmount: Number(seller.platformFeeAmount.toFixed(2)),
         platformFeeTaxAmount: Number(this.money(seller.platformFeeTaxAmount).toFixed(2)),
         productTaxLiabilityAmount: Number(this.money(seller.productTaxLiabilityAmount).toFixed(2)),

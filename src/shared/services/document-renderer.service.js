@@ -162,8 +162,8 @@ class DocumentRendererService {
       <div><strong>Order ID:</strong> ${this.escapeHtml(inv.orderId || orderRef || "—")}</div>
       <div><strong>Order Date:</strong> ${this.escapeHtml(this.formatDate(inv.orderDate || inv.issuedAt))}</div>
       <div><strong>Invoice Date:</strong> ${this.escapeHtml(invoiceDate)}</div>
-      <div><strong>VAT/TIN:</strong> ${this.escapeHtml(issuerGstin || marketplaceGstin || "—")}</div>
-      <div><strong>CST #:</strong> ${this.escapeHtml(inv.placeOfSupply || "—")}</div>
+      <div><strong>Supplier GSTIN:</strong> ${this.escapeHtml(issuerGstin || marketplaceGstin || "—")}</div>
+      <div><strong>Place of Supply:</strong> ${this.escapeHtml(inv.placeOfSupply || "—")}</div>
       <div><strong>Currency:</strong> ${this.escapeHtml(currency)}</div>
     </div>
     <div class="address-block">

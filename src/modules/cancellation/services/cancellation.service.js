@@ -15,6 +15,7 @@ const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
+const { prorateMoney } = require("../../../shared/domain/quantity-allocation");
 
 const CANCELLABLE_ORDER_STATUSES = new Set([
   ORDER_STATUS.PENDING_PAYMENT,
@@ -116,12 +117,11 @@ class CancellationService {
       if (!Number.isInteger(quantity) || quantity <= 0 || quantity > remaining) {
         throw new AppError(`Invalid cancellation quantity for ${orderItem.product_title || orderItem.product_id}`, 400);
       }
-      const ratio = quantity / Math.max(Number(orderItem.quantity || 1), 1);
-      const itemAmount = this.round(Number(orderItem.line_total || 0) * ratio);
-      const discountAmount = this.round(Number(orderItem.discount_amount || 0) * ratio);
-      const taxAmount = this.round(Number(orderItem.tax_amount || 0) * ratio);
+      const itemAmount = prorateMoney(orderItem.line_total, quantity, orderItem.quantity);
+      const discountAmount = prorateMoney(orderItem.discount_amount, quantity, orderItem.quantity);
+      const taxAmount = prorateMoney(orderItem.tax_amount, quantity, orderItem.quantity);
       const taxBreakup = this.parseJson(orderItem.tax_breakup, {});
-      const additionalTaxAmount = this.round(Number(taxBreakup.taxPayableAmount || 0) * ratio);
+      const additionalTaxAmount = prorateMoney(taxBreakup.taxPayableAmount, quantity, orderItem.quantity);
       return {
         orderItemId: orderItem.id,
         productId: orderItem.product_id,

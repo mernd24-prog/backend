@@ -199,13 +199,9 @@ class TaxRepository {
       values.push(referenceId);
     }
     if (sellerId) {
-      clauses.push(`(
-        ti.seller_id = $${idx}
-        OR EXISTS (
-          SELECT 1 FROM order_items oi
-          WHERE oi.order_id = ti.order_id AND oi.seller_id = $${idx}
-        )
-      )`);
+      // Seller users must only see documents issued by/to their own legal
+      // entity. The platform's combined customer invoice is admin-only.
+      clauses.push(`ti.seller_id = $${idx}`);
       values.push(sellerId);
       idx += 1;
     }

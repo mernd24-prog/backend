@@ -17,6 +17,7 @@ const { DealService } = require("../../deal/services/deal.service");
 const { CartRepository } = require("../../cart/repositories/cart.repository");
 const { logger } = require("../../../shared/logger/logger");
 const { ReferralService } = require("../../referral/services/referral.service");
+const { ROLES } = require("../../../shared/constants/roles");
 
 class OrderService {
   constructor({
@@ -52,6 +53,14 @@ class OrderService {
       [ORDER_STATUS.FAILED_DELIVERY]: "failed",
       [ORDER_STATUS.FULFILLED]: "delivered",
     }[status] || null;
+  }
+
+  async ensureOrderTaxDocuments(orderId) {
+    const bundle = await this.taxService.createMarketplaceInvoices(orderId, {
+      userId: "tax-service",
+      role: ROLES.SUPER_ADMIN,
+    });
+    return bundle?.orderInvoice || null;
   }
 
   orderStatusToDeliveryStatus(status, currentDeliveryStatus = null) {
@@ -359,7 +368,7 @@ class OrderService {
           userId: actor.userId,
           role: actor.role || "buyer",
         });
-        await this.taxService.createInvoice(orderId);
+        await this.ensureOrderTaxDocuments(orderId);
         await this.clearPurchasedCartItems(orderId, actor.userId, pricedOrder.items, actor, "zero_payable_order_confirmed");
         const notificationSellerPayload = await this.getOrderNotificationSellerPayload(orderId);
         await eventPublisher.publish(
@@ -1222,7 +1231,7 @@ class OrderService {
         await this.dealService.commitOrderSales(orderId, actor).catch((error) =>
           logger.error({ orderId, error: error.message }, "Deal sale capture commit failed"),
         );
-        const invoice = await this.taxService.createInvoice(orderId);
+        const invoice = await this.ensureOrderTaxDocuments(orderId);
         const notificationSellerPayload = await this.getOrderNotificationSellerPayload(orderId);
         await eventPublisher.publish(
           makeEvent(
@@ -1258,7 +1267,7 @@ class OrderService {
       reason: "payment_captured",
       metadata: actor.metadata || {},
     });
-    const invoice = await this.taxService.createInvoice(orderId);
+    const invoice = await this.ensureOrderTaxDocuments(orderId);
 
     const notificationSellerPayload = await this.getOrderNotificationSellerPayload(orderId);
     await eventPublisher.publish(
@@ -1288,7 +1297,7 @@ class OrderService {
 
     if (order.status !== ORDER_STATUS.PENDING_PAYMENT) {
       if (order.status === ORDER_STATUS.CONFIRMED || order.payment_status === PAYMENT_STATUS.AUTHORIZED) {
-        await this.taxService.createInvoice(orderId);
+        await this.ensureOrderTaxDocuments(orderId);
         await this.clearPurchasedCartItems(orderId, order.buyer_id, [], actor, "payment_authorized");
         await this.ensureShipmentsForConfirmedOrder(orderId, actor, "payment_authorized");
         return this.orderRepository.findByIdWithItems(orderId);
@@ -1309,7 +1318,7 @@ class OrderService {
       reason: actor.reason || "payment_authorized",
       metadata: actor.metadata || {},
     });
-    await this.taxService.createInvoice(orderId);
+    await this.ensureOrderTaxDocuments(orderId);
     await this.clearPurchasedCartItems(orderId, order.buyer_id, [], actor, "payment_authorized");
 
     return updatedOrder;

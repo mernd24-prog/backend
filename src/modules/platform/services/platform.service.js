@@ -590,8 +590,11 @@ class PlatformService {
 
     const deliveredStatuses = new Set([ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED, "completed"]);
     const paidStatuses = new Set([PAYMENT_STATUS.CAPTURED, PAYMENT_STATUS.AUTHORIZED, "paid"]);
-    if (!deliveredStatuses.has(orderItem.order_status)) {
-      throw new AppError("Review can be submitted after delivery is complete", 400);
+    const itemDelivered = Boolean(orderItem.item_delivered_at) ||
+      deliveredStatuses.has(String(orderItem.item_delivery_status || "").toLowerCase()) ||
+      deliveredStatuses.has(String(orderItem.order_status || "").toLowerCase());
+    if (!itemDelivered) {
+      throw new AppError("Review can be submitted after this item is delivered", 400);
     }
     if (!paidStatuses.has(orderItem.payment_status)) {
       throw new AppError("Review can be submitted after successful payment", 400);

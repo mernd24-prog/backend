@@ -1,4 +1,5 @@
 const { AppError } = require("../../../shared/errors/app-error");
+const { applyShippingPolicy, uniqueCommissionRates } = require("../../../shared/domain/seller-payout-rules");
 const { COUPON_TYPE } = require("../../../shared/domain/commerce-constants");
 const { PricingRepository } = require("../repositories/pricing.repository");
 const { ProductRepository } = require("../../product/repositories/product.repository");
@@ -229,6 +230,7 @@ class PricingService {
         chargePlatformFeeTaxToSeller: Boolean(commerceSettings.finance.chargePlatformFeeTaxToSeller),
         sellerPayoutBase: commerceSettings.finance.sellerPayoutBase,
         sellerPayoutBaseAmount: item.sellerPayoutBaseAmount,
+        sellerCommissionBaseAmount: Number((fee?.sellerCommissionBaseAmount ?? sellerPayoutBaseAmount).toFixed(2)),
         sellerGrossLineTotal,
         adminFundedDiscountAmount: Number(item.discountAmount || 0),
         productTaxLiabilityAmount: item.productTaxLiabilityAmount,
@@ -333,6 +335,7 @@ class PricingService {
         platformFeeTaxAmount: 0,
         productTaxLiabilityAmount: 0,
         sellerPayoutAmount: 0,
+        commissionRates: [],
       };
       current.grossSalesAmount += Number(item.lineTotal || 0);
       current.sellerPayoutBaseAmount += Number(item.sellerPayoutBaseAmount || 0);
@@ -342,6 +345,8 @@ class PricingService {
       current.platformFeeTaxAmount += Number(item.platformFeeTaxAmount || 0);
       current.productTaxLiabilityAmount += Number(item.productTaxLiabilityAmount || 0);
       current.sellerPayoutAmount += Number(item.settlementAmount || 0);
+      const commissionRate = Number(item.pricingSnapshot?.commissionPercent || 0);
+      if (commissionRate > 0) current.commissionRates.push(commissionRate);
       sellers.set(key, current);
     }
 
@@ -361,9 +366,10 @@ class PricingService {
       );
       const shippingReimbursementAmount = shippingPolicy === "reimburse_seller" ? sellerDeliveryChargeAmount : 0;
       const shippingDeductionAmount = shippingPolicy === "deduct_from_seller" ? sellerDeliveryChargeAmount : 0;
-      const payoutBeforeStatutoryDeductions = Math.max(
-        0,
-        seller.sellerPayoutAmount + shippingReimbursementAmount - shippingDeductionAmount,
+      const payoutBeforeStatutoryDeductions = applyShippingPolicy(
+        seller.sellerPayoutAmount,
+        sellerDeliveryChargeAmount,
+        shippingPolicy,
       );
       const gstTcsRate = financeSettings.gstTcsEnabled ? Number(financeSettings.gstTcsRate || 0) : 0;
       const incomeTaxTdsRate = financeSettings.incomeTaxTdsEnabled ? Number(financeSettings.incomeTaxTdsRate || 0) : 0;
@@ -385,6 +391,7 @@ class PricingService {
         shippingReimbursementAmount: Number(shippingReimbursementAmount.toFixed(2)),
         shippingDeductionAmount: Number(shippingDeductionAmount.toFixed(2)),
         shippingPolicy,
+        commissionRates: uniqueCommissionRates(seller.commissionRates),
         gstTcsRate,
         gstTcsAmount,
         incomeTaxTdsRate,
@@ -493,6 +500,13 @@ class PricingService {
     return Number(lineAmount.toFixed(2));
   }
 
+  resolveSellerCommissionBase(item = {}, financeSettings = {}) {
+    if (financeSettings.sellerPayoutBase === "taxable_ex_gst") {
+      return Number(item.taxableAmountBeforeDiscount ?? item.taxableAmount ?? 0);
+    }
+    return Number(item.sellerPayoutBaseAmount ?? item.lineTotal ?? item.discountedLineTotal ?? 0);
+  }
+
   async calculatePlatformFee(pricedItems, context = {}) {
     const settings = context.commerceSettings || await commerceSettingsService.getSettings();
     const config = settings.platformFees || {};
@@ -521,10 +535,11 @@ class PricingService {
 
     for (const [index, item] of pricedItems.entries()) {
       const feeBaseAmount = this.resolvePlatformFeeBase(item, context, calculationBase);
+      const sellerCommissionBaseAmount = this.resolveSellerCommissionBase(item, settings.finance || {});
       const sellerCommission = this.calculateConfiguredFee(
         sellerCommissionType,
         sellerCommissionValue,
-        feeBaseAmount,
+        sellerCommissionBaseAmount,
         item.quantity,
       );
       const customerPlatformFee = index === pricedItems.length - 1
@@ -543,6 +558,7 @@ class PricingService {
         category: item.category,
         quantity: item.quantity,
         feeBaseAmount,
+        sellerCommissionBaseAmount,
         commissionPercent: sellerCommissionType === "percentage" ? sellerCommissionValue : 0,
         commissionFee: sellerCommissionType === "percentage" ? sellerCommission : 0,
         fixedFee: sellerCommissionType === "fixed" ? sellerCommission : 0,

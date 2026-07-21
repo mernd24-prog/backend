@@ -16,6 +16,7 @@ const { ProductModel } = require("../../product/models/product.model");
 const { sellerChargeSettingsService } = require("../../seller/services/seller-charge-settings.service");
 const { ShippingProfilesService } = require("./shipping-profiles.service");
 const { settlementLifecycleService } = require("../../seller/services/settlement-lifecycle.service");
+const { ReturnModel } = require("../../returns/models/return.model");
 
 const shippingProfilesService = new ShippingProfilesService();
 
@@ -448,9 +449,52 @@ class DeliveryService {
     });
 
     await this.syncOrderForTracking(result.shipment, actor);
+    await this.syncReplacementReturnForTracking(result.shipment, actor);
     await this.syncDealDeliveryForShipment(result.shipment, actor);
     await this.publishShipmentTrackingEvent(result.shipment, actor);
     return result;
+  }
+
+  async syncReplacementReturnForTracking(shipment, actor = {}) {
+    if (String(shipment.shipment_type || "") !== "replacement" || !shipment.return_id) return;
+    const returnRequest = await ReturnModel.findById(shipment.return_id);
+    if (!returnRequest || String(returnRequest.replacementShipmentId || "") !== String(shipment.id || "")) return;
+
+    const delivered = shipment.status === DELIVERY_STATUS.DELIVERED;
+    const nextStatus = delivered ? "replacement_delivered" : "replacement_shipped";
+    if (returnRequest.status === nextStatus || returnRequest.status === "replaced") return;
+    if (!delivered && returnRequest.status !== "replacement_created") return;
+    if (delivered && returnRequest.status !== "replacement_shipped") return;
+
+    returnRequest.status = nextStatus;
+    returnRequest.updatedBy = actor.userId || returnRequest.updatedBy || null;
+    returnRequest.replacement.status = delivered ? "delivered" : "shipped";
+    if (delivered) returnRequest.replacement.deliveredAt = shipment.delivered_at || new Date();
+    returnRequest.timeline.push({
+      status: nextStatus,
+      actorId: actor.userId || null,
+      actorRole: actor.role || null,
+      note: delivered ? "Replacement shipment delivered" : "Replacement shipment updated",
+      metadata: { shipmentId: shipment.id, shipmentStatus: shipment.status },
+      at: new Date(),
+    });
+    await returnRequest.save();
+    await eventPublisher.publish(makeEvent(
+      DOMAIN_EVENTS.RETURN_STATUS_UPDATED_V1,
+      {
+        returnId: String(returnRequest._id),
+        returnNumber: returnRequest.returnNumber || null,
+        orderId: returnRequest.orderId,
+        buyerId: returnRequest.buyerId,
+        sellerId: returnRequest.sellerId || null,
+        status: nextStatus,
+        replacementOrderId: returnRequest.replacementOrderId || null,
+        replacementShipmentId: shipment.id,
+        updatedBy: actor.userId || null,
+        actorRole: actor.role || null,
+      },
+      { source: "delivery-module", aggregateId: returnRequest.orderId },
+    ));
   }
   async syncOrderForTracking(shipment, actor) {
     if (!this.isForwardShipment(shipment)) {
