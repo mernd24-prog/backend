@@ -417,7 +417,12 @@ class SellerCommissionService {
     if (!["pending", "approved"].includes(status)) {
       return { ...base, reason: `status_${status}` };
     }
-    if (this.isBlockedOrderStatus(orderStatus)) {
+    const itemScopedReturn = Boolean(orderItem) && [
+      ORDER_STATUS.RETURN_REQUESTED,
+      ORDER_STATUS.PARTIALLY_RETURNED,
+      ORDER_STATUS.RETURNED,
+    ].includes(orderStatus);
+    if (this.isBlockedOrderStatus(orderStatus) && !itemScopedReturn) {
       return { ...base, releaseStatus: "blocked", reason: `order_${orderStatus}` };
     }
     if (
@@ -430,6 +435,15 @@ class SellerCommissionService {
 
     if (orderItem) {
       const eligibleAt = this.toDate(orderItem.payout_eligible_at || orderItem.return_eligible_until);
+      if (orderItem.payout_status === "refunded" || (Number(commission.net_amount || 0) <= 0 && Number(commission.refund_amount || 0) > 0)) {
+        return {
+          ...base,
+          releaseStatus: "refunded",
+          available: false,
+          eligibleAt: null,
+          reason: "customer_refund_completed_no_seller_payout",
+        };
+      }
       if (orderItem.payout_status !== "eligible") {
         return {
           ...base,
@@ -610,9 +624,11 @@ class SellerCommissionService {
       const taxBreakup = this.parseJson(row.tax_breakup, {});
       const orderMetadata = this.parseJson(row.order_metadata, {});
       const financeSnapshot = orderMetadata?.commerceSettings?.finance || {};
-      const itemGross = financeSnapshot.sellerPayoutBase === "taxable_ex_gst"
-        ? Number((pricing.sellerPayoutBaseAmount ?? taxBreakup.taxableAmount ?? grossAfterDiscount) || 0)
-        : lineTotal;
+      const itemGross = Number((pricing.sellerPayoutBaseAmount ?? (
+        financeSnapshot.sellerPayoutBase === "taxable_ex_gst"
+          ? taxBreakup.taxableAmount ?? grossAfterDiscount
+          : lineTotal
+      )) || 0);
       const sellerFeeAmount = this.resolveSellerFeeAmount(row, pricing);
       const sellerFeeTaxAmount = this.resolveSellerFeeTaxAmount(row, pricing, financeSnapshot);
       const customerFeeAmount = this.firstNumber(
@@ -638,15 +654,21 @@ class SellerCommissionService {
       current.quantity += Number(row.quantity || 0);
       const snapshotGstRate = Number(taxBreakup.gstRate ?? row.gst_rate ?? 0);
       const snapshotCessRate = Number(taxBreakup.cessRate ?? 0);
-      const taxableAmount = taxBreakup.gstInclusive && snapshotGstRate + snapshotCessRate > 0
-        ? this.round((lineTotal * 100) / (100 + snapshotGstRate + snapshotCessRate))
-        : this.round(taxBreakup.taxableAmount ?? grossAfterDiscount);
+      const taxableAmount = this.round(taxBreakup.taxableAmount ?? (
+        taxBreakup.gstInclusive && snapshotGstRate + snapshotCessRate > 0
+          ? (grossAfterDiscount * 100) / (100 + snapshotGstRate + snapshotCessRate)
+          : grossAfterDiscount
+      ));
       current.products.push({
         productId: row.product_id,
         variantId: row.variant_id,
         variantSku: row.variant_sku,
         amount: this.round(itemGross),
         grossAfterDiscount: this.round(grossAfterDiscount),
+        discountAmount: this.round(discountAmount),
+        discountFundingType: pricing.discountFundingType || "marketplace",
+        marketplaceFundedDiscountAmount: this.round(pricing.marketplaceFundedDiscountAmount),
+        sellerFundedDiscountAmount: this.round(pricing.sellerFundedDiscountAmount),
         taxableAmount,
         sellerPayoutBase: pricing.sellerPayoutBase || "gross_customer_price",
         platformFeeAmount: this.round(sellerFeeAmount),
@@ -2016,6 +2038,18 @@ class SellerCommissionService {
 
   buildSettlementDocument(settlement = {}, payout = null, commissions = []) {
     const currency = settlement.currency || payout?.currency || "INR";
+    const commissionMetadata = commissions.map((commission) => this.parseJson(commission.metadata, {}));
+    const metadataTotal = (field) => this.round(commissionMetadata.reduce(
+      (sum, metadata) => sum + Number(metadata[field] || 0),
+      0,
+    ));
+    const productMetadataTotal = (field) => this.round(commissionMetadata.reduce(
+      (sum, metadata) => sum + (metadata.products || []).reduce(
+        (productSum, product) => productSum + Number(product[field] || 0),
+        0,
+      ),
+      0,
+    ));
     return {
       title: "Seller Settlement Statement",
       subtitle: `Settlement ${settlement.id}`,
@@ -2041,8 +2075,14 @@ class SellerCommissionService {
           title: "Amounts",
           rows: [
             { label: "Gross Amount", value: this.renderMoney(settlement.gross_amount, currency) },
+            { label: "Customer Discount", value: this.renderMoney(productMetadataTotal("discountAmount"), currency) },
+            { label: "Marketplace-funded Discount", value: this.renderMoney(productMetadataTotal("marketplaceFundedDiscountAmount"), currency) },
+            { label: "Seller-funded Discount", value: this.renderMoney(productMetadataTotal("sellerFundedDiscountAmount"), currency) },
             { label: "Commission Amount", value: this.renderMoney(settlement.commission_amount, currency) },
             { label: "Commission Tax", value: this.renderMoney(settlement.tax_amount, currency) },
+            { label: "GST TCS Taxable Base", value: this.renderMoney(metadataTotal("taxableSupplyAmount"), currency) },
+            { label: "GST TCS Withheld", value: this.renderMoney(metadataTotal("gstTcsAmount"), currency) },
+            { label: "Income-tax TDS Withheld", value: this.renderMoney(metadataTotal("incomeTaxTdsAmount"), currency) },
             { label: "Refund Amount", value: this.renderMoney(settlement.refund_amount, currency) },
             { label: "Adjustment Amount", value: this.renderMoney(settlement.adjustment_amount, currency) },
             { label: "Net Payout Amount", value: this.renderMoney(settlement.net_amount, currency) },
@@ -2068,16 +2108,22 @@ class SellerCommissionService {
       return [{ label: "Commissions", value: "No commission lines available" }];
     }
     return [
-      ["Order", "Status", "Gross", "Commission", "Tax", "Refund", "Net"],
-      ...commissions.map((commission) => [
-        commission.order_id || "-",
-        commission.status || "-",
-        this.renderMoney(commission.amount, currency),
-        this.renderMoney(commission.commission_amount, currency),
-        this.renderMoney(commission.tax_amount, currency),
-        this.renderMoney(commission.refund_amount, currency),
-        this.renderMoney(commission.net_amount, currency),
-      ]),
+      ["Order", "Status", "Gross", "Commission", "Tax", "TCS Base", "TCS", "TDS", "Refund", "Net"],
+      ...commissions.map((commission) => {
+        const metadata = this.parseJson(commission.metadata, {});
+        return [
+          commission.order_id || "-",
+          commission.status || "-",
+          this.renderMoney(commission.amount, currency),
+          this.renderMoney(commission.commission_amount, currency),
+          this.renderMoney(commission.tax_amount, currency),
+          this.renderMoney(metadata.taxableSupplyAmount, currency),
+          this.renderMoney(metadata.gstTcsAmount, currency),
+          this.renderMoney(metadata.incomeTaxTdsAmount, currency),
+          this.renderMoney(commission.refund_amount, currency),
+          this.renderMoney(commission.net_amount, currency),
+        ];
+      }),
     ];
   }
 
@@ -2221,12 +2267,16 @@ class SellerCommissionService {
         .sum({ commission_amount: "commission_amount" })
         .sum({ commission_tax_amount: "tax_amount" })
         .sum({ refund_amount: "refund_amount" })
+        .sum({ gst_tcs_amount: knex.raw("COALESCE((metadata->>'gstTcsAmount')::numeric, 0)") })
+        .sum({ income_tax_tds_amount: knex.raw("COALESCE((metadata->>'incomeTaxTdsAmount')::numeric, 0)") })
+        .sum({ shipping_deduction_amount: knex.raw("COALESCE((metadata->>'shippingDeductionAmount')::numeric, 0)") })
         .sum({ payable_amount: "net_amount" })
         .count({ count: "*" })
         .first(),
       knex("seller_payouts")
         .modify((builder) => applyDates(builder))
         .sum({ paid_amount: "net_amount" })
+        .sum({ adjustment_amount: "adjustment_amount" })
         .count({ count: "*" })
         .first(),
       knex("order_items")
@@ -2252,7 +2302,11 @@ class SellerCommissionService {
         grossAmount: this.round(commissionSummary?.gross_amount || 0),
         commissionAmount: this.round(commissionSummary?.commission_amount || 0),
         commissionTaxAmount: this.round(commissionSummary?.commission_tax_amount || 0),
+        gstTcsAmount: this.round(commissionSummary?.gst_tcs_amount || 0),
+        incomeTaxTdsAmount: this.round(commissionSummary?.income_tax_tds_amount || 0),
+        shippingDeductionAmount: this.round(commissionSummary?.shipping_deduction_amount || 0),
         refundAmount: this.round(commissionSummary?.refund_amount || 0),
+        adjustmentAmount: this.round(payoutSummary?.adjustment_amount || 0),
         payableAmount: this.round(commissionSummary?.payable_amount || 0),
         count: Number(commissionSummary?.count || 0),
       },
@@ -2334,7 +2388,43 @@ class SellerCommissionService {
         const metadata = this.parseJson(commission.metadata, {});
         const appliedRefunds = metadata.appliedRefunds || {};
         if (appliedRefunds[returnId]) {
-          adjustments.push({ sellerId, skipped: true, reason: "already_applied" });
+          const recordedCustomerRefund = this.round(appliedRefunds[returnId] || amount);
+          const originalUnpaidPayable = this.round(
+            Math.max(Number(commission.net_amount || 0) + Number(commission.refund_amount || 0), 0),
+          );
+          const correctedLiability = this.round(Math.min(recordedCustomerRefund, originalUnpaidPayable));
+          const requiresRepair = Number(commission.net_amount || 0) < 0 ||
+            Number(commission.refund_amount || 0) > originalUnpaidPayable ||
+            (correctedLiability >= originalUnpaidPayable && commission.status !== "refunded");
+          if (requiresRepair && commission.status !== "paid") {
+            await trx("seller_commissions").where("id", commission.id).update({
+              refund_amount: correctedLiability,
+              net_amount: this.round(Math.max(originalUnpaidPayable - correctedLiability, 0)),
+              status: correctedLiability >= originalUnpaidPayable ? "refunded" : commission.status,
+              hold_reason: null,
+              metadata: this.jsonb({
+                ...metadata,
+                lastRefundAdjustment: {
+                  returnId,
+                  customerRefundAmount: recordedCustomerRefund,
+                  sellerRefundLiability: correctedLiability,
+                  reconciledLegacyOverDeduction: true,
+                  actorId: actor.userId || actor.sub || null,
+                  at: new Date().toISOString(),
+                },
+              }),
+              updated_at: knex.fn.now(),
+            });
+            if (orderItemId && correctedLiability >= originalUnpaidPayable) {
+              await trx("order_items").where("id", orderItemId).update({
+                payout_status: "refunded",
+                payout_hold_reason: null,
+              });
+            }
+            adjustments.push({ sellerId, commissionId: commission.id, repaired: true, sellerRefundLiability: correctedLiability });
+          } else {
+            adjustments.push({ sellerId, skipped: true, reason: "already_applied" });
+          }
           continue;
         }
 
@@ -2380,18 +2470,22 @@ class SellerCommissionService {
           continue;
         }
 
-        const nextRefundAmount = this.round(Number(commission.refund_amount || 0) + amount);
-        const nextNetAmount = this.round(
-          Number(commission.net_amount || 0) +
-          Number(commission.refund_amount || 0) -
-          nextRefundAmount,
-        );
+        // Customer refund and seller recovery are different amounts. The
+        // seller can never owe more than this unpaid item's current payable.
+        // Commission/GST/TCS credit notes reverse the remaining platform/tax
+        // components separately.
+        const currentNetAmount = Math.max(this.round(commission.net_amount || 0), 0);
+        const sellerRefundLiability = this.round(Math.min(amount, currentNetAmount));
+        const nextRefundAmount = this.round(Number(commission.refund_amount || 0) + sellerRefundLiability);
+        const nextNetAmount = this.round(Math.max(currentNetAmount - sellerRefundLiability, 0));
 
         await trx("seller_commissions")
           .where("id", commission.id)
           .update({
             refund_amount: nextRefundAmount,
             net_amount: nextNetAmount,
+            status: nextNetAmount <= 0 ? "refunded" : commission.status,
+            hold_reason: null,
             metadata: this.jsonb({
               ...metadata,
               appliedRefunds: {
@@ -2400,7 +2494,8 @@ class SellerCommissionService {
               },
               lastRefundAdjustment: {
                 returnId,
-                refundAmount: amount,
+                customerRefundAmount: amount,
+                sellerRefundLiability,
                 actorId: actor.userId || actor.sub || null,
                 at: new Date().toISOString(),
               },
@@ -2411,20 +2506,18 @@ class SellerCommissionService {
         if (commission.payout_id && commission.status !== "paid") {
           const payoutCommissions = await trx("seller_commissions")
             .where("payout_id", commission.payout_id)
-            .select("amount", "commission_amount", "tax_amount", "refund_amount", "adjustment_amount", "net_amount");
+            .select("amount", "commission_amount", "tax_amount", "refund_amount", "net_amount");
           const payoutTotals = payoutCommissions.reduce((totals, row) => ({
             totalAmount: totals.totalAmount + Number(row.amount || 0),
             commissionAmount: totals.commissionAmount + Number(row.commission_amount || 0),
             taxAmount: totals.taxAmount + Number(row.tax_amount || 0),
             refundAmount: totals.refundAmount + Number(row.refund_amount || 0),
-            adjustmentAmount: totals.adjustmentAmount + Number(row.adjustment_amount || 0),
             netAmount: totals.netAmount + Number(row.net_amount || 0),
           }), {
             totalAmount: 0,
             commissionAmount: 0,
             taxAmount: 0,
             refundAmount: 0,
-            adjustmentAmount: 0,
             netAmount: 0,
           });
           await trx("seller_payouts")
@@ -2435,13 +2528,12 @@ class SellerCommissionService {
               commission_amount: this.round(payoutTotals.commissionAmount),
               tax_amount: this.round(payoutTotals.taxAmount),
               refund_amount: this.round(payoutTotals.refundAmount),
-              adjustment_amount: this.round(payoutTotals.adjustmentAmount),
               net_amount: this.round(payoutTotals.netAmount),
               updated_at: knex.fn.now(),
             });
         }
 
-        adjustments.push({ sellerId, refundAmount: amount, commissionId: commission.id });
+        adjustments.push({ sellerId, customerRefundAmount: amount, sellerRefundLiability, commissionId: commission.id });
       }
     });
 

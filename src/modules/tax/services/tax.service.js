@@ -15,6 +15,7 @@ const INVOICE_TYPES = {
   ORDER_CUSTOMER: "order_customer",
   SELLER_CUSTOMER: "seller_customer",
   PLATFORM_COMMISSION: "platform_commission",
+  PLATFORM_CUSTOMER_FEE: "platform_customer_fee",
 };
 
 const ADMIN_ROLES = [ROLES.ADMIN, ROLES.SUB_ADMIN, ROLES.SUPER_ADMIN];
@@ -112,21 +113,8 @@ class TaxService {
       updatedBy: actor.userId || null,
     });
 
-    const ledgerEntries = [];
-    if (cgstAmount > 0) {
-      ledgerEntries.push(this.makeLedgerEntry(orderId, invoice.id, "tax_collected", "cgst", cgstAmount));
-    }
-    if (sgstAmount > 0) {
-      ledgerEntries.push(this.makeLedgerEntry(orderId, invoice.id, "tax_collected", "sgst", sgstAmount));
-    }
-    if (igstAmount > 0) {
-      ledgerEntries.push(this.makeLedgerEntry(orderId, invoice.id, "tax_collected", "igst", igstAmount));
-    }
-    if (tcsAmount > 0) {
-      ledgerEntries.push(this.makeLedgerEntry(orderId, invoice.id, "tax_collected", "tcs", tcsAmount));
-    }
-
-    await this.taxRepository.insertLedgerEntries(ledgerEntries);
+    // This is a consolidated payment receipt. Product GST ledger entries are
+    // posted by the legal seller invoices, avoiding duplicate order-level tax.
     await eventPublisher.publish(
       makeEvent(
         DOMAIN_EVENTS.INVOICE_GENERATED_V1,
@@ -153,6 +141,19 @@ class TaxService {
 
   normalizeInvoiceResponse(invoice = {}) {
     if (!invoice) return null;
+    const metadata = this.normalizeJson(invoice.metadata, {});
+    const invoiceType = this.invoiceType(invoice);
+    const sellerName = metadata.organization?.legalBusinessName || metadata.organization?.storeDisplayName ||
+      metadata.seller?.legalBusinessName || metadata.seller?.businessName || metadata.seller?.displayName || "Seller";
+    const buyerName = metadata.buyer?.profile?.displayName ||
+      [metadata.buyer?.profile?.firstName, metadata.buyer?.profile?.lastName].filter(Boolean).join(" ") ||
+      metadata.buyer?.email || "Customer";
+    const roles = {
+      [INVOICE_TYPES.ORDER_CUSTOMER]: { kind: "order_receipt", issuer: "Sam Global", recipient: buyerName },
+      [INVOICE_TYPES.SELLER_CUSTOMER]: { kind: "seller_tax_invoice", issuer: sellerName, recipient: buyerName },
+      [INVOICE_TYPES.PLATFORM_COMMISSION]: { kind: "commission_tax_invoice", issuer: "Sam Global", recipient: sellerName },
+      [INVOICE_TYPES.PLATFORM_CUSTOMER_FEE]: { kind: "customer_fee_tax_invoice", issuer: "Sam Global", recipient: buyerName },
+    };
     return {
       ...invoice,
       invoiceNumber: invoice.invoice_number,
@@ -167,10 +168,14 @@ class TaxService {
       igstAmount: Number(invoice.igst_amount || 0),
       tcsAmount: Number(invoice.tcs_amount || 0),
       totalAmount: Number(invoice.total_amount || 0),
-      invoiceType: this.invoiceType(invoice),
+      invoiceType,
+      documentRole: roles[invoiceType] || { kind: "tax_document", issuer: invoice.issuer_type, recipient: invoice.recipient_type },
+      coveredProducts: (metadata.items || metadata.itemReferences || [])
+        .map((item) => item.productTitle)
+        .filter(Boolean),
       issuedAt: invoice.issued_at,
       createdAt: invoice.created_at,
-      metadata: this.normalizeJson(invoice.metadata, {}),
+      metadata,
       organizationSnapshot: this.normalizeJson(invoice.organization_snapshot, {}),
     };
   }
@@ -220,6 +225,9 @@ class TaxService {
       : await this.taxRepository.findInvoiceByOrderId(orderId);
     const sellerInvoices = [];
     const platformCommissionInvoices = [];
+    const customerFeeInvoice = scope.isAdmin
+      ? await this.findOrCreatePlatformCustomerFeeInvoice({ order, actor, parentInvoiceId: orderInvoice?.id || null })
+      : null;
 
     for (const group of sellerGroups) {
       const sellerProfile = sellerProfiles.get(String(group.sellerId)) || null;
@@ -244,7 +252,7 @@ class TaxService {
         parentInvoiceId: sellerInvoice?.id || orderInvoice?.id || null,
       });
       sellerInvoices.push(sellerInvoice);
-      platformCommissionInvoices.push(commissionInvoice);
+      if (commissionInvoice) platformCommissionInvoices.push(commissionInvoice);
     }
 
     return {
@@ -253,6 +261,7 @@ class TaxService {
       orderInvoice,
       sellerInvoices,
       platformCommissionInvoices,
+      customerFeeInvoice,
     };
   }
 
@@ -267,13 +276,33 @@ class TaxService {
     const visibleInvoices = this.filterInvoicesForScope(invoices, scope).filter((invoice) =>
       !scope.isBuyer || this.isInvoiceReadyForBuyer(order, invoice),
     );
+    const pendingSellerDocuments = scope.isBuyer
+      ? invoices
+        .filter((invoice) => this.invoiceType(invoice) === INVOICE_TYPES.SELLER_CUSTOMER)
+        .filter((invoice) => !this.isInvoiceReadyForBuyer(order, invoice))
+        .map((invoice) => {
+          const metadata = this.normalizeJson(invoice.metadata, {});
+          return {
+            sellerName: metadata.organization?.legalBusinessName || metadata.organization?.storeDisplayName ||
+              metadata.seller?.legalBusinessName || metadata.seller?.businessName || metadata.seller?.displayName || "Seller",
+            productTitles: (metadata.items || []).map((item) => item.productTitle).filter(Boolean),
+            availableAfter: "delivery",
+          };
+        })
+      : [];
 
     return {
       orderId,
       orderNumber: order.order_number,
-      orderInvoice: visibleInvoices.find((invoice) => this.invoiceType(invoice) === INVOICE_TYPES.ORDER_CUSTOMER) || null,
-      sellerInvoices: visibleInvoices.filter((invoice) => this.invoiceType(invoice) === INVOICE_TYPES.SELLER_CUSTOMER),
-      platformCommissionInvoices: visibleInvoices.filter((invoice) => this.invoiceType(invoice) === INVOICE_TYPES.PLATFORM_COMMISSION),
+      orderInvoice: this.normalizeInvoiceResponse(visibleInvoices.find((invoice) => this.invoiceType(invoice) === INVOICE_TYPES.ORDER_CUSTOMER)),
+      sellerInvoices: visibleInvoices
+        .filter((invoice) => this.invoiceType(invoice) === INVOICE_TYPES.SELLER_CUSTOMER)
+        .map((invoice) => this.normalizeInvoiceResponse(invoice)),
+      platformCommissionInvoices: visibleInvoices
+        .filter((invoice) => this.invoiceType(invoice) === INVOICE_TYPES.PLATFORM_COMMISSION)
+        .map((invoice) => this.normalizeInvoiceResponse(invoice)),
+      customerFeeInvoice: this.normalizeInvoiceResponse(visibleInvoices.find((invoice) => this.invoiceType(invoice) === INVOICE_TYPES.PLATFORM_CUSTOMER_FEE)),
+      pendingSellerDocuments,
     };
   }
 
@@ -372,9 +401,12 @@ class TaxService {
     }
 
     const marketplaceInvoices = await this.ensureMarketplaceInvoicesForCreditNote(order, actor);
-    const orderCreditNote = payload.createOrderCreditNote === false
-      ? null
-      : await this.createCreditNote(payload, actor);
+    // The marketplace order document is a receipt, not a second product tax
+    // invoice. Create a legacy consolidated credit note only when explicitly
+    // requested; seller and commission credit notes are authoritative.
+    const orderCreditNote = payload.createOrderCreditNote === true
+      ? await this.createCreditNote(payload, actor)
+      : null;
     const refundGroups = this.groupRefundItemsBySeller(order.items || [], payload.items || [], {
       refundAmount: payload.totalAmount,
     });
@@ -420,6 +452,7 @@ class TaxService {
       );
       const commissionAmounts = this.calculateCommissionReversalAmounts(commissionInvoice, sellerInvoice, group);
       if (!commissionInvoice || commissionAmounts.totalAmount <= 0) continue;
+      const commissionCreditItems = this.buildCommissionCreditItems(commissionInvoice, group);
 
       const commissionCreditNote = await this.createCreditNote({
         orderId,
@@ -444,6 +477,7 @@ class TaxService {
           organization: group.organizationSnapshot || {},
           creditNoteScope: "platform_commission_invoice",
           reversalRatio: commissionAmounts.reversalRatio,
+          items: commissionCreditItems,
         },
       }, actor);
       platformCommissionCreditNotes.push(commissionCreditNote);
@@ -888,7 +922,7 @@ class TaxService {
         parentInvoiceId: sellerInvoice?.id || orderInvoice?.id || null,
       });
       sellerInvoices.push(sellerInvoice);
-      platformCommissionInvoices.push(commissionInvoice);
+      if (commissionInvoice) platformCommissionInvoices.push(commissionInvoice);
     }
 
     return { sellerInvoices, platformCommissionInvoices };
@@ -919,6 +953,7 @@ class TaxService {
 
     const sellerSnapshot = this.buildSellerSnapshot(sellerId, sellerProfile, organizationSnapshot);
     const amounts = this.calculatePlatformCommissionAmounts(items, sellerSnapshot);
+    if (amounts.totalAmount <= 0) return null;
     const invoiceNumber = await this.taxRepository.nextInvoiceNumber("GST-C");
     const invoice = await this.taxRepository.createInvoice({
       invoiceNumber,
@@ -967,8 +1002,13 @@ class TaxService {
           orderItemId: item.id,
           productId: item.product_id,
           productTitle: item.product_title,
+          productSku: item.product_sku || item.variant_sku || null,
+          serviceSacCode: env.commerce.platformCommissionSacCode || null,
+          quantity: Number(item.quantity || 0),
+          commissionRate: this.readJsonNumber(item.pricing_snapshot, "commissionPercent"),
           platformFeeAmount: this.money(item.platform_fee_amount),
           platformFeeTaxAmount: this.money(this.readJsonNumber(item.pricing_snapshot, "platformFeeTaxAmount")),
+          platformFeeTaxRate: this.readJsonNumber(item.pricing_snapshot, "platformFeeTaxRate"),
         })),
         generatedBy: actor.userId || "tax-service",
         generatedByRole: actor.role || "system",
@@ -985,6 +1025,80 @@ class TaxService {
       invoiceType: INVOICE_TYPES.PLATFORM_COMMISSION,
       sellerId,
       organizationId,
+    });
+    return invoice;
+  }
+
+  async findOrCreatePlatformCustomerFeeInvoice({ order, actor, parentInvoiceId = null }) {
+    const orderMetadata = this.normalizeJson(order.metadata, {});
+    const pricingSummary = orderMetadata.pricingSummary || {};
+    const taxableAmount = this.money(pricingSummary.customerPlatformFeeAmount);
+    const taxAmount = this.money(pricingSummary.customerPlatformFeeTaxAmount);
+    if (taxableAmount <= 0 || taxAmount <= 0) return null;
+
+    const existing = await this.taxRepository.findInvoiceByOrderAndType({
+      orderId: order.id,
+      invoiceType: INVOICE_TYPES.PLATFORM_CUSTOMER_FEE,
+      referenceType: "platform_customer_fee",
+      referenceId: String(order.id),
+    });
+    if (existing) return existing;
+
+    const shippingAddress = this.normalizeJson(order.shipping_address, {});
+    const taxSplit = this.splitTaxAmountByState(taxAmount, {
+      businessAddress: { state: shippingAddress.state },
+    });
+    const totalAmount = this.money(taxableAmount + taxAmount);
+    const invoice = await this.taxRepository.createInvoice({
+      invoiceNumber: await this.taxRepository.nextInvoiceNumber("GST-F"),
+      orderId: order.id,
+      buyerId: order.buyer_id,
+      taxableAmount,
+      taxAmount,
+      cgstAmount: taxSplit.cgstAmount,
+      sgstAmount: taxSplit.sgstAmount,
+      igstAmount: taxSplit.igstAmount,
+      tcsAmount: 0,
+      totalAmount,
+      currency: order.currency || "INR",
+      taxMode: taxSplit.taxMode,
+      gstinMarketplace: env.commerce.gstinMarketplace || null,
+      gstinSeller: null,
+      placeOfSupply: shippingAddress.state || null,
+      invoiceType: INVOICE_TYPES.PLATFORM_CUSTOMER_FEE,
+      issuerType: "platform",
+      recipientType: "buyer",
+      referenceType: "platform_customer_fee",
+      referenceId: String(order.id),
+      parentInvoiceId,
+      metadata: {
+        invoiceType: INVOICE_TYPES.PLATFORM_CUSTOMER_FEE,
+        orderNumber: order.order_number,
+        buyer: this.buildBuyerSnapshot(order),
+        shippingAddress,
+        amounts: { taxableAmount, taxAmount, totalAmount, taxPayableAmount: taxAmount },
+        lineItems: [{
+          description: "Marketplace customer platform service fee",
+          hsnCode: env.commerce.platformCommissionSacCode || null,
+          quantity: 1,
+          taxableAmount,
+          taxAmount,
+          totalAmount,
+        }],
+        generatedBy: actor.userId || "tax-service",
+        generatedByRole: actor.role || "system",
+      },
+      createdBy: actor.userId || null,
+      updatedBy: actor.userId || null,
+    });
+    await this.taxRepository.insertLedgerEntries(this.buildTaxLedgerEntries(order.id, invoice.id, {
+      cgstAmount: taxSplit.cgstAmount,
+      sgstAmount: taxSplit.sgstAmount,
+      igstAmount: taxSplit.igstAmount,
+      tcsAmount: 0,
+    }));
+    await this.publishInvoiceGenerated(invoice, order, {
+      invoiceType: INVOICE_TYPES.PLATFORM_CUSTOMER_FEE,
     });
     return invoice;
   }
@@ -1025,7 +1139,11 @@ class TaxService {
 
     if (scope.isBuyer) {
       return invoices.filter((invoice) =>
-        [INVOICE_TYPES.ORDER_CUSTOMER, INVOICE_TYPES.SELLER_CUSTOMER].includes(this.invoiceType(invoice)),
+        [
+          INVOICE_TYPES.ORDER_CUSTOMER,
+          INVOICE_TYPES.SELLER_CUSTOMER,
+          INVOICE_TYPES.PLATFORM_CUSTOMER_FEE,
+        ].includes(this.invoiceType(invoice)),
       );
     }
 
@@ -1155,16 +1273,16 @@ class TaxService {
     );
     const taxableAmount = this.money(
       item.taxableAmount ??
-      taxBreakup.taxableAmount ??
+      (taxBreakup.taxableAmount !== undefined ? Number(taxBreakup.taxableAmount) * ratio : undefined) ??
       Math.max(grossAmount - discountAmount, 0),
     );
-    const cgstAmount = this.money(item.cgstAmount ?? taxBreakup.cgstAmount ?? 0);
-    const sgstAmount = this.money(item.sgstAmount ?? taxBreakup.sgstAmount ?? 0);
-    const igstAmount = this.money(item.igstAmount ?? taxBreakup.igstAmount ?? 0);
+    const cgstAmount = this.money(item.cgstAmount ?? Number(taxBreakup.cgstAmount || 0) * ratio);
+    const sgstAmount = this.money(item.sgstAmount ?? Number(taxBreakup.sgstAmount || 0) * ratio);
+    const igstAmount = this.money(item.igstAmount ?? Number(taxBreakup.igstAmount || 0) * ratio);
     const taxAmount = this.money(
       item.taxAmount ??
       item.tax_amount ??
-      taxBreakup.taxAmount ??
+      (taxBreakup.taxAmount !== undefined ? Number(taxBreakup.taxAmount) * ratio : undefined) ??
       cgstAmount + sgstAmount + igstAmount,
     );
     const totalAmount = this.money(
@@ -1205,6 +1323,27 @@ class TaxService {
       };
     }
 
+    const itemReversals = this.buildCommissionCreditItems(commissionInvoice, refundGroup);
+    if (itemReversals.length) {
+      const taxableAmount = this.money(itemReversals.reduce((sum, item) => sum + Number(item.taxableAmount || 0), 0));
+      const taxAmount = this.money(itemReversals.reduce((sum, item) => sum + Number(item.taxAmount || 0), 0));
+      const originalTax = Number(commissionInvoice.tax_amount || 0);
+      const cgstRatio = originalTax > 0 ? Number(commissionInvoice.cgst_amount || 0) / originalTax : 0;
+      const sgstRatio = originalTax > 0 ? Number(commissionInvoice.sgst_amount || 0) / originalTax : 0;
+      const cgstAmount = this.money(taxAmount * cgstRatio);
+      const sgstAmount = this.money(taxAmount * sgstRatio);
+      const igstAmount = this.money(taxAmount - cgstAmount - sgstAmount);
+      return {
+        taxableAmount,
+        taxAmount,
+        cgstAmount,
+        sgstAmount,
+        igstAmount,
+        totalAmount: this.money(taxableAmount + taxAmount),
+        reversalRatio: this.money(taxableAmount / Math.max(Number(commissionInvoice.taxable_amount || 0), 1)),
+      };
+    }
+
     const sellerInvoiceTotal = Number(sellerInvoice.total_amount || 0);
     const reversalRatio = sellerInvoiceTotal > 0
       ? Math.min(Number(refundGroup.totalAmount || 0) / sellerInvoiceTotal, 1)
@@ -1224,6 +1363,35 @@ class TaxService {
       totalAmount: this.money(taxableAmount + taxAmount),
       reversalRatio: this.money(reversalRatio),
     };
+  }
+
+  buildCommissionCreditItems(commissionInvoice = {}, refundGroup = {}) {
+    const invoiceMetadata = this.normalizeJson(commissionInvoice.metadata, {});
+    const references = invoiceMetadata.itemReferences || [];
+    const refundedByItem = new Map((refundGroup.items || []).map((item) => [
+      String(item.orderItemId || ""),
+      item,
+    ]));
+    return references.flatMap((reference) => {
+      const refunded = refundedByItem.get(String(reference.orderItemId || ""));
+      if (!refunded) return [];
+      const orderedQuantity = Math.max(Number(reference.quantity || 1), 1);
+      const reversedQuantity = Math.min(Number(refunded.quantity || orderedQuantity), orderedQuantity);
+      const ratio = reversedQuantity / orderedQuantity;
+      const taxableAmount = this.money(Number(reference.platformFeeAmount || 0) * ratio);
+      const taxAmount = this.money(Number(reference.platformFeeTaxAmount || 0) * ratio);
+      return [{
+        orderItemId: reference.orderItemId || null,
+        productId: reference.productId || null,
+        productTitle: `Commission reversal for ${reference.productTitle || "order item"}`,
+        productSku: reference.productSku || null,
+        hsnCode: reference.serviceSacCode || null,
+        quantity: reversedQuantity,
+        taxableAmount,
+        taxAmount,
+        totalAmount: this.money(taxableAmount + taxAmount),
+      }];
+    });
   }
 
   async loadSellerProfiles(sellerIds = []) {
@@ -1264,7 +1432,8 @@ class TaxService {
       taxPayableAmount: 0,
     });
 
-    const computedCustomerTotal = totals.grossSalesAmount + totals.taxPayableAmount + deliveryChargeAmount;
+    const computedCustomerTotal = totals.grossSalesAmount - totals.discountAmount +
+      totals.taxPayableAmount + deliveryChargeAmount;
     const fallbackCustomerTotal = totals.taxableAmount + totals.taxAmount + deliveryChargeAmount;
     const customerFinalAmount = computedCustomerTotal > 0 ? computedCustomerTotal : fallbackCustomerTotal;
 
@@ -1602,7 +1771,28 @@ class TaxService {
   buildInvoiceDocument(invoice = {}) {
     const metadata = this.normalizeJson(invoice.metadata, {});
     const amounts = metadata.amounts || {};
-    const items = metadata.items || metadata.lineItems || [];
+    const invoiceType = this.invoiceType(invoice);
+    const commissionItems = (metadata.itemReferences || []).map((item) => {
+      const taxableAmount = this.money(item.platformFeeAmount);
+      const taxAmount = this.money(item.platformFeeTaxAmount);
+      return {
+        description: `Marketplace commission for ${item.productTitle || "order item"}`,
+        productTitle: item.productTitle || "Order item",
+        productSku: item.productSku || null,
+        hsnCode: item.serviceSacCode || null,
+        quantity: item.quantity || 1,
+        commissionRate: this.money(item.commissionRate),
+        gstRate: this.money(item.platformFeeTaxRate),
+        taxableAmount,
+        taxAmount,
+        totalAmount: this.money(taxableAmount + taxAmount),
+        orderItemId: item.orderItemId || null,
+        productId: item.productId || null,
+      };
+    });
+    const items = invoiceType === INVOICE_TYPES.PLATFORM_COMMISSION && commissionItems.length
+      ? commissionItems
+      : metadata.items || metadata.lineItems || [];
     const currency = invoice.currency || "INR";
     const seller = metadata.seller || {};
     const buyer = metadata.buyer || {};
@@ -1617,7 +1807,7 @@ class TaxService {
       data: {
         invoice: {
           number: invoice.invoice_number,
-          type: this.invoiceType(invoice),
+          type: invoiceType,
           issuedAt: invoice.issued_at || invoice.created_at,
           orderId: invoice.order_id,
           orderNumber: metadata.orderNumber || null,
@@ -1698,11 +1888,14 @@ class TaxService {
 
   buildCreditNoteDocument(creditNote = {}, invoice = null) {
     const metadata = this.normalizeJson(creditNote.metadata, {});
+    const invoiceMetadata = this.normalizeJson(invoice?.metadata, {});
     const currency = creditNote.currency || invoice?.currency || "INR";
 
     return {
       layout: "credit_note",
-      title: "Marketplace Credit Note",
+      title: metadata.creditNoteScope === "platform_commission_invoice"
+        ? "Platform Commission Credit Note"
+        : "Seller Customer Credit Note",
       subtitle: `Credit Note ${creditNote.credit_note_number || creditNote.id}`,
       fileBaseName: creditNote.credit_note_number || `credit-note-${creditNote.id}`,
       generatedAt: new Date().toISOString(),
@@ -1720,9 +1913,9 @@ class TaxService {
           scope: metadata.creditNoteScope || null,
           sellerId: metadata.sellerId || invoice?.seller_id || null,
         },
-        seller: metadata.seller || {},
-        buyer: metadata.buyer || {},
-        shippingAddress: metadata.shippingAddress || metadata.buyer?.shippingAddress || {},
+        seller: metadata.seller || invoiceMetadata.seller || {},
+        buyer: metadata.buyer || invoiceMetadata.buyer || {},
+        shippingAddress: metadata.shippingAddress || invoiceMetadata.shippingAddress || metadata.buyer?.shippingAddress || {},
         amounts: {
           taxableAmount: creditNote.taxable_amount,
           cgstAmount: creditNote.cgst_amount,
@@ -1886,7 +2079,8 @@ class TaxService {
     const type = this.invoiceType(invoice);
     if (type === INVOICE_TYPES.SELLER_CUSTOMER) return "Seller Customer Tax Invoice";
     if (type === INVOICE_TYPES.PLATFORM_COMMISSION) return "Platform Commission Tax Invoice";
-    return "Order Tax Invoice";
+    if (type === INVOICE_TYPES.PLATFORM_CUSTOMER_FEE) return "Marketplace Customer Fee Tax Invoice";
+    return "Customer Order Receipt";
   }
 
   buildDocumentItemRows(items = [], currency = "INR") {

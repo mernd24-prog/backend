@@ -29,7 +29,8 @@ const VALID_TRANSITIONS = {
   received: ["qc_passed", "qc_failed", "qc_completed", "replacement_requested", "replaced", "closed"],
   qc_passed: ["refund_pending", "replacement_requested", "replacement_pending", "closed"],
   qc_completed: ["refund_pending", "replacement_requested", "replacement_pending", "closed"],
-  qc_failed: ["closed"],
+  qc_failed: ["qc_passed", "qc_completed", "qc_failure_upheld", "closed"],
+  qc_failure_upheld: ["closed"],
   refund_pending: ["refunded", "refund_failed", "partially_refunded", "closed"],
   refund_failed: ["refund_pending", "refunded", "closed"],
   partially_refunded: ["refund_pending", "refunded", "closed"],
@@ -410,6 +411,12 @@ class ReturnServiceClass {
   assertAdmin(actor = {}, action = "perform this action") {
     if (!this.isAdmin(actor)) {
       throw new AppError(`Only an administrator can ${action}`, 403);
+    }
+  }
+
+  assertSeller(actor = {}, action = "perform this return operation") {
+    if (!this.isSeller(actor)) {
+      throw new AppError(`Only the assigned seller can ${action}`, 403);
     }
   }
 
@@ -799,11 +806,8 @@ class ReturnServiceClass {
   }
 
   async approveReturn(returnId, refundAmount, actor = {}, payload = {}) {
+    this.assertSeller(actor, "accept a return");
     const returnRequest = await this.getReturnOrThrow(returnId);
-    const sellerReplacementApproval = this.isSeller(actor) && ["replacement", "exchange"].includes(returnRequest.resolution);
-    if (!this.isAdmin(actor) && !sellerReplacementApproval) {
-      throw new AppError("Only an administrator can approve refund returns; sellers may approve replacement requests only", 403);
-    }
     await this.assertCanManage(returnRequest, actor);
     this.validateTransition(returnRequest.status, "approved");
 
@@ -833,9 +837,9 @@ class ReturnServiceClass {
     const eligibleAmount = this.round(
       returnRequest.items.reduce((sum, item) => sum + Number(item.refundAmount || 0), 0),
     );
-    const approvedAmount = sellerReplacementApproval
-      ? eligibleAmount
-      : this.round(refundAmount || eligibleAmount);
+    // Sellers accept the physical return and quantities. They cannot select or
+    // reduce the monetary refund; only an administrator controls its release.
+    const approvedAmount = eligibleAmount;
     if (approvedAmount <= 0 || approvedAmount > eligibleAmount) {
       throw new AppError("Approved refund amount exceeds the eligible refund amount", 400);
     }
@@ -888,6 +892,7 @@ class ReturnServiceClass {
   }
 
   async scheduleReversePickup(returnId, payload = {}, actor = {}) {
+    this.assertSeller(actor, "schedule return pickup");
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
     const manualShipBack = payload.mode === "manual_ship_back" || payload.manualShipBack;
@@ -1001,6 +1006,7 @@ class ReturnServiceClass {
   }
 
   async updateReverseShipment(returnId, payload = {}, actor = {}) {
+    this.assertSeller(actor, "update return tracking");
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
     const shipmentId = payload.shipmentId || returnRequest.reverseShipment?.shipmentId;
@@ -1082,7 +1088,9 @@ class ReturnServiceClass {
 
   async shipReturnBack(returnId, trackingNumber, actor = {}) {
     const returnRequest = await this.getReturnOrThrow(returnId);
-    await this.assertCanView(returnRequest, actor);
+    if (String(returnRequest.buyerId) !== String(actor.userId)) {
+      throw new AppError("Only the buyer can mark a self-shipped return as shipped", 403);
+    }
     this.validateTransition(returnRequest.status, "shipped_back");
     returnRequest.status = "shipped_back";
     returnRequest.trackingNumber = trackingNumber;
@@ -1109,8 +1117,12 @@ class ReturnServiceClass {
   }
 
   async receiveReturn(returnId, payload = {}, actor = {}) {
+    this.assertSeller(actor, "receive a return");
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
+    if (returnRequest.status !== "shipped_back") {
+      throw new AppError("Manual receipt can be confirmed only after the customer ships the return", 409);
+    }
     this.validateTransition(returnRequest.status, "received");
     returnRequest.status = "received";
     returnRequest.notes = payload.notes || payload.note || "";
@@ -1145,10 +1157,14 @@ class ReturnServiceClass {
   }
 
   async qcReturn(returnId, payload = {}, actor = {}) {
+    this.assertSeller(actor, "record return QC");
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
-    if (returnRequest.status !== "received") {
-      throw new AppError("QC can be recorded only after the return is received", 409);
+    if (!["received", "qc_failed"].includes(returnRequest.status)) {
+      throw new AppError("QC can be recorded only after receipt or an evidence request", 409);
+    }
+    if (returnRequest.status === "qc_failed" && returnRequest.qcReview?.status !== "evidence_requested") {
+      throw new AppError("QC evidence can be resubmitted only when the administrator requests it", 409);
     }
 
     const qcItems = payload.items || [];
@@ -1172,6 +1188,11 @@ class ReturnServiceClass {
       }
       if (!Number.isInteger(quantity) || quantity < 0 || quantity > Number(item.receivedQuantity || item.approvedQuantity || item.quantity || 0)) {
         throw new AppError(`Invalid QC quantity for ${item.productTitle || item.productId}`, 400);
+      }
+      if (["missing", "rejected"].includes(result)) {
+        if (!String(qcItem?.notes || payload.notes || "").trim() || !(qcItem?.photos || []).length) {
+          throw new AppError(`QC rejection evidence and at least one photo are required for ${item.productTitle || item.productId}`, 400);
+        }
       }
       item.condition = qcItem?.condition || payload.condition || result;
       item.qcResult = result;
@@ -1230,6 +1251,22 @@ class ReturnServiceClass {
     this.validateTransition(returnRequest.status, nextStatus);
     returnRequest.status = nextStatus;
     returnRequest.qcAt = new Date();
+    if (nextStatus === "qc_failed") {
+      const now = new Date();
+      returnRequest.qcReview = {
+        ...(returnRequest.qcReview?.toObject?.() || returnRequest.qcReview || {}),
+        status: "awaiting_customer_or_admin_review",
+        submittedBy: actor.userId || null,
+        submittedAt: now.toISOString(),
+        disputeDeadline: new Date(now.getTime() + (48 * 60 * 60 * 1000)).toISOString(),
+        sellerEvidence: returnRequest.items.map((item) => ({
+          orderItemId: item.orderItemId,
+          result: item.qcResult,
+          notes: item.qcNotes,
+          photos: item.qcPhotos || [],
+        })),
+      };
+    }
     this.appendTimeline(returnRequest, nextStatus, actor, {
       ...payload,
       metadata: {
@@ -1242,6 +1279,243 @@ class ReturnServiceClass {
       qcResults: Array.from(results),
       approvedRefundAmount: qcApprovedRefundAmount,
     });
+    return returnRequest;
+  }
+
+  findReturnItem(returnRequest, candidate = {}) {
+    return (returnRequest.items || []).find((item) =>
+      String(candidate.orderItemId || "") === String(item.orderItemId || "") ||
+      (
+        String(candidate.productId || "") === String(item.productId || "") &&
+        String(candidate.variantSku || "") === String(item.variantSku || "")
+      ),
+    );
+  }
+
+  async submitQcEvidence(returnId, payload = {}, actor = {}) {
+    this.assertSeller(actor, "submit QC evidence");
+    const returnRequest = await this.getReturnOrThrow(returnId);
+    await this.assertCanManage(returnRequest, actor);
+    if (returnRequest.status !== "qc_failed" || returnRequest.qcReview?.status !== "evidence_requested") {
+      throw new AppError("Additional QC evidence was not requested for this return", 409);
+    }
+    payload.items.forEach((candidate) => {
+      const item = this.findReturnItem(returnRequest, candidate);
+      if (!item) throw new AppError("QC evidence item does not belong to this return", 400);
+      item.qcNotes = candidate.notes;
+      item.qcPhotos = candidate.photos;
+    });
+    returnRequest.qcReview = {
+      ...(returnRequest.qcReview?.toObject?.() || returnRequest.qcReview || {}),
+      status: "admin_review",
+      additionalEvidenceNote: payload.note,
+      additionalEvidenceSubmittedAt: new Date().toISOString(),
+      sellerEvidence: returnRequest.items.map((item) => ({
+        orderItemId: item.orderItemId,
+        result: item.qcResult,
+        notes: item.qcNotes,
+        photos: item.qcPhotos || [],
+      })),
+    };
+    this.appendTimeline(returnRequest, "qc_evidence_submitted", actor, { note: payload.note });
+    await returnRequest.save();
+    await this.publishReturnStatusUpdated(returnRequest, actor, { qcReviewStatus: "admin_review" });
+    return returnRequest;
+  }
+
+  async disputeQcFailure(returnId, payload = {}, actor = {}) {
+    const returnRequest = await this.getReturnOrThrow(returnId);
+    if (String(returnRequest.buyerId) !== String(actor.userId)) {
+      throw new AppError("Only the buyer can dispute a failed quality check", 403);
+    }
+    if (returnRequest.status !== "qc_failed") throw new AppError("This QC result is not open for dispute", 409);
+    const deadline = new Date(returnRequest.qcReview?.disputeDeadline || 0);
+    if (deadline.getTime() && deadline < new Date()) throw new AppError("The QC dispute window has closed", 409);
+    returnRequest.qcReview = {
+      ...(returnRequest.qcReview?.toObject?.() || returnRequest.qcReview || {}),
+      status: "customer_disputed",
+      customerDispute: {
+        reason: payload.reason,
+        evidence: payload.evidence || [],
+        submittedAt: new Date().toISOString(),
+        submittedBy: actor.userId,
+      },
+    };
+    this.appendTimeline(returnRequest, "qc_customer_disputed", actor, { reason: payload.reason, metadata: { evidence: payload.evidence || [] } });
+    await returnRequest.save();
+    await this.publishReturnStatusUpdated(returnRequest, actor, { qcReviewStatus: "customer_disputed" });
+    return returnRequest;
+  }
+
+  async releaseReturnItemPayoutHolds(returnRequest, actor = {}, reason = "return_resolved") {
+    const itemIds = (returnRequest.items || []).map((item) => item.orderItemId).filter(Boolean);
+    if (!itemIds.length) return;
+    await knex.transaction(async (trx) => {
+      const rows = await trx("order_items").whereIn("id", itemIds).select("id", "seller_id", "order_id", "payout_id", "payout_status", "payout_eligible_at");
+      const payoutIds = new Set();
+      for (const row of rows) {
+        if (row.payout_status !== "held") continue;
+        const refundedCommission = returnRequest.status === "refunded"
+          ? await trx("seller_commissions").where("order_item_id", row.id).first()
+          : null;
+        const nextStatus = returnRequest.status === "refunded" && Number(refundedCommission?.net_amount || 0) <= 0
+          ? "refunded"
+          : row.payout_eligible_at && new Date(row.payout_eligible_at) <= new Date() ? "eligible" : "pending";
+        await trx("order_items").where("id", row.id).update({ payout_status: nextStatus, payout_hold_reason: null });
+        await trx("seller_commissions").where("order_item_id", row.id).whereNot("status", "paid").update({ hold_reason: null, updated_at: trx.fn.now() });
+        await trx("payout_status_history").insert({
+          id: uuidv4(), seller_id: row.seller_id, order_id: row.order_id, order_item_id: row.id,
+          from_status: "held", to_status: nextStatus, reason,
+          actor_id: actor.userId || null, actor_role: actor.role || null,
+          metadata: { returnId: this.getReturnId(returnRequest) },
+        });
+        if (row.payout_id) payoutIds.add(row.payout_id);
+      }
+      for (const payoutId of payoutIds) {
+        const payout = await trx("seller_payouts").where("id", payoutId).first();
+        if (!payout || payout.status !== "on_hold") continue;
+        const payoutMetadata = this.parseJson(payout.metadata, {});
+        if (payoutMetadata.holdReason) continue;
+        const remainingReturnHold = await trx("seller_commissions")
+          .where("payout_id", payoutId)
+          .whereNotNull("hold_reason")
+          .first();
+        if (!remainingReturnHold) {
+          await trx("seller_payouts").where("id", payoutId).update({ status: "pending", updated_at: trx.fn.now() });
+        }
+      }
+    });
+  }
+
+  async decideQcFailure(returnId, payload = {}, actor = {}) {
+    this.assertAdmin(actor, "decide a failed quality check");
+    const returnRequest = await this.getReturnOrThrow(returnId);
+    if (returnRequest.status !== "qc_failed") throw new AppError("This return is not awaiting a QC decision", 409);
+
+    if (payload.decision === "request_evidence") {
+      returnRequest.qcReview = {
+        ...(returnRequest.qcReview?.toObject?.() || returnRequest.qcReview || {}),
+        status: "evidence_requested",
+        evidenceRequestReason: payload.reason,
+        evidenceRequestedAt: new Date().toISOString(),
+        evidenceRequestedBy: actor.userId,
+      };
+      this.appendTimeline(returnRequest, "qc_evidence_requested", actor, { reason: payload.reason });
+      await returnRequest.save();
+      await this.publishReturnStatusUpdated(returnRequest, actor, { qcReviewStatus: "evidence_requested" });
+      return returnRequest;
+    }
+
+    if (payload.decision === "uphold") {
+      returnRequest.items.forEach((item) => { item.refundAmount = 0; });
+      returnRequest.refundAmount = 0;
+      returnRequest.refund.approvedAmount = 0;
+      returnRequest.status = "qc_failure_upheld";
+      returnRequest.returnToCustomer = {
+        required: payload.returnToCustomerRequired !== false,
+        status: payload.returnToCustomerRequired === false ? "not_required" : "awaiting_arrangement",
+      };
+      if (payload.returnToCustomerRequired === false) {
+        await this.releaseReturnItemPayoutHolds(returnRequest, actor, "qc_failure_upheld_no_return_shipping");
+      }
+    } else {
+      let approvedTotal = 0;
+      const restockItems = [];
+      const quarantineItems = [];
+      returnRequest.items.forEach((item) => {
+        const decisionItem = (payload.items || []).find((candidate) =>
+          String(candidate.orderItemId || "") === String(item.orderItemId || "") ||
+          (
+            String(candidate.productId || "") === String(item.productId || "") &&
+            String(candidate.variantSku || "") === String(item.variantSku || "")
+          ),
+        );
+        const requested = Math.max(Number(item.requestedQuantity || item.quantity || 1), 1);
+        const defaultQuantity = payload.decision === "override" ? Number(item.receivedQuantity || item.approvedQuantity || requested) : 0;
+        const approvedQuantity = Number(decisionItem?.approvedQuantity ?? defaultQuantity);
+        if (!Number.isInteger(approvedQuantity) || approvedQuantity < 0 || approvedQuantity > Number(item.receivedQuantity || requested)) {
+          throw new AppError(`Invalid QC-approved quantity for ${item.productTitle || item.productId}`, 400);
+        }
+        item.refundAmount = this.round(Number(item.eligibleRefundAmount || 0) * (approvedQuantity / requested));
+        if (approvedQuantity > 0 && ["missing", "rejected"].includes(item.qcResult)) {
+          item.qcResult = decisionItem?.disposition || "damaged";
+          item.damagedQuantity = decisionItem?.disposition === "sellable" ? 0 : approvedQuantity;
+          item.restockedQuantity = decisionItem?.disposition === "sellable" ? approvedQuantity : 0;
+          const inventoryItem = { ...(item.toObject?.() || item), quantity: approvedQuantity };
+          if (decisionItem?.disposition === "sellable") restockItems.push(inventoryItem);
+          else quarantineItems.push(inventoryItem);
+        }
+        approvedTotal = this.round(approvedTotal + item.refundAmount);
+      });
+      if (approvedTotal <= 0) throw new AppError("At least one item quantity must be approved for refund", 400);
+      if (restockItems.length) await this.inventoryService.restockForReturn(returnRequest, actor, restockItems);
+      if (quarantineItems.length) {
+        await this.inventoryService.recordReturnDamage(returnRequest, actor, { condition: "damaged", notes: payload.reason }, quarantineItems);
+      }
+      returnRequest.refundAmount = approvedTotal;
+      returnRequest.refund.approvedAmount = approvedTotal;
+      returnRequest.status = payload.decision === "override" ? "qc_passed" : "qc_completed";
+    }
+    returnRequest.qcReview = {
+      ...(returnRequest.qcReview?.toObject?.() || returnRequest.qcReview || {}),
+      status: "resolved",
+      adminDecision: payload.decision,
+      decisionReason: payload.reason,
+      decidedAt: new Date().toISOString(),
+      decidedBy: actor.userId,
+    };
+    this.appendTimeline(returnRequest, `qc_${payload.decision}`, actor, { reason: payload.reason, metadata: { approvedRefundAmount: returnRequest.refundAmount } });
+    await returnRequest.save();
+    await this.publishReturnStatusUpdated(returnRequest, actor, { qcDecision: payload.decision, approvedRefundAmount: returnRequest.refundAmount });
+    return returnRequest;
+  }
+
+  async arrangeReturnToCustomer(returnId, payload = {}, actor = {}) {
+    this.assertSeller(actor, "arrange return-to-customer shipping");
+    const returnRequest = await this.getReturnOrThrow(returnId);
+    await this.assertCanManage(returnRequest, actor);
+    if (returnRequest.status !== "qc_failure_upheld" || returnRequest.returnToCustomer?.required === false) {
+      throw new AppError("This product is not awaiting return-to-customer shipping", 409);
+    }
+    returnRequest.returnToCustomer = {
+      ...(returnRequest.returnToCustomer?.toObject?.() || returnRequest.returnToCustomer || {}),
+      status: "shipped",
+      courierName: payload.courierName,
+      trackingNumber: payload.trackingNumber,
+      trackingUrl: payload.trackingUrl || null,
+      shippedAt: new Date().toISOString(),
+      events: [{ status: "shipped", note: payload.note || null, actorId: actor.userId, at: new Date().toISOString() }],
+    };
+    this.appendTimeline(returnRequest, "return_to_customer_shipped", actor, { note: payload.note, metadata: { courierName: payload.courierName, trackingNumber: payload.trackingNumber } });
+    await returnRequest.save();
+    await this.publishReturnStatusUpdated(returnRequest, actor, { returnToCustomerStatus: "shipped" });
+    return returnRequest;
+  }
+
+  async updateReturnToCustomerTracking(returnId, payload = {}, actor = {}) {
+    this.assertSeller(actor, "update return-to-customer tracking");
+    const returnRequest = await this.getReturnOrThrow(returnId);
+    await this.assertCanManage(returnRequest, actor);
+    if (returnRequest.status !== "qc_failure_upheld" || !returnRequest.returnToCustomer?.trackingNumber) {
+      throw new AppError("Return-to-customer shipment has not been arranged", 409);
+    }
+    const current = returnRequest.returnToCustomer?.toObject?.() || returnRequest.returnToCustomer || {};
+    returnRequest.returnToCustomer = {
+      ...current,
+      status: payload.status,
+      deliveredAt: payload.status === "delivered" ? new Date().toISOString() : current.deliveredAt || null,
+      events: [...(current.events || []), { status: payload.status, location: payload.location || null, note: payload.note || null, actorId: actor.userId, at: new Date().toISOString() }],
+    };
+    this.appendTimeline(returnRequest, `return_to_customer_${payload.status}`, actor, { note: payload.note, metadata: { location: payload.location || null } });
+    if (payload.status === "delivered") {
+      returnRequest.status = "closed";
+      returnRequest.closedAt = new Date();
+    }
+    await returnRequest.save();
+    if (payload.status === "delivered") {
+      await this.releaseReturnItemPayoutHolds(returnRequest, actor, "rejected_product_returned_to_customer");
+    }
+    await this.publishReturnStatusUpdated(returnRequest, actor, { returnToCustomerStatus: payload.status });
     return returnRequest;
   }
 
@@ -1285,7 +1559,17 @@ class ReturnServiceClass {
     if (!this.isAdmin(actor)) {
       throw new AppError("Only platform finance/admin users can process refunds", 403);
     }
-    if (returnRequest.refund?.status === "completed" || returnRequest.refundedAt) return returnRequest;
+    if (returnRequest.refund?.status === "completed" || returnRequest.refundedAt) {
+      // Idempotent retry: never refund the customer twice, but repair legacy
+      // seller rows that were over-deducted or left held by an older flow.
+      await this.recordSellerRefundAdjustment(
+        returnRequest,
+        Number(returnRequest.refund?.refundedAmount || returnRequest.refundAmount || 0),
+        actor,
+      );
+      await this.releaseReturnItemPayoutHolds(returnRequest, actor, "completed_refund_ledger_reconciled");
+      return returnRequest;
+    }
     if (!["qc_passed", "qc_completed", "refund_failed"].includes(returnRequest.status)) {
       throw new AppError("Refund can be processed only after accepted QC", 409);
     }
@@ -1637,6 +1921,7 @@ class ReturnServiceClass {
     });
     await returnRequest.save();
     await this.syncParentOrderAfterReturnRefund(returnRequest, actor);
+    await this.releaseReturnItemPayoutHolds(returnRequest, actor, "return_refund_finalized");
     await this.publishReturnEvent(DOMAIN_EVENTS.RETURN_REFUNDED_V1, returnRequest, actor, {
       refundAmount,
       referenceId,
@@ -1866,8 +2151,19 @@ class ReturnServiceClass {
   }
 
   async closeReturn(returnId, payload, actor = {}) {
+    this.assertAdmin(actor, "close a return");
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
+    if (returnRequest.status === "qc_failed" && returnRequest.qcReview?.status !== "resolved") {
+      throw new AppError("Resolve the failed quality check before closing this return", 409);
+    }
+    if (
+      returnRequest.status === "qc_failure_upheld" &&
+      returnRequest.returnToCustomer?.required !== false &&
+      returnRequest.returnToCustomer?.status !== "delivered"
+    ) {
+      throw new AppError("The rejected product must be delivered back to the customer before closing", 409);
+    }
     if (
       returnRequest.status === "refund_pending" ||
       ["pending", "provider_pending", "manual_review"].includes(returnRequest.refund?.status)

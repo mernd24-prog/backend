@@ -264,6 +264,70 @@ router.post(
 );
 
 router.post(
+  "/:returnId/qc/evidence",
+  authenticate,
+  allowPermissions("returns:update"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.qcEvidence, { ...req.body, returnId: req.params.returnId });
+    const updated = await ReturnService.submitQcEvidence(value.returnId, value, actor);
+    await auditService.statusChange(req, { module: "returns", entityId: value.returnId, entityType: "Return", newData: updated, reason: value.note, description: "Additional QC evidence submitted" });
+    res.json(okResponse(updated, "QC evidence submitted"));
+  }),
+);
+
+router.post(
+  "/:returnId/qc/dispute",
+  authenticate,
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.qcDispute, { ...req.body, returnId: req.params.returnId });
+    const updated = await ReturnService.disputeQcFailure(value.returnId, value, actor);
+    await auditService.statusChange(req, { module: "returns", entityId: value.returnId, entityType: "Return", newData: updated, reason: value.reason, description: "Buyer disputed failed QC" });
+    res.json(okResponse(updated, "QC dispute submitted"));
+  }),
+);
+
+router.post(
+  "/:returnId/qc/decision",
+  authenticate,
+  allowPermissions("returns:approve"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.qcDecision, { ...req.body, returnId: req.params.returnId });
+    const updated = await ReturnService.decideQcFailure(value.returnId, value, actor);
+    await auditService.approve(req, { module: "returns", entityId: value.returnId, entityType: "Return", newData: updated, reason: value.reason, description: `QC failure decision: ${value.decision}` });
+    res.json(okResponse(updated, "QC decision recorded"));
+  }),
+);
+
+router.post(
+  "/:returnId/return-to-customer",
+  authenticate,
+  allowPermissions("returns:update"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.returnToCustomerShipment, { ...req.body, returnId: req.params.returnId });
+    const updated = await ReturnService.arrangeReturnToCustomer(value.returnId, value, actor);
+    await auditService.statusChange(req, { module: "returns", entityId: value.returnId, entityType: "Return", newData: updated, description: "Return-to-customer shipment arranged" });
+    res.json(okResponse(updated, "Return-to-customer shipment arranged"));
+  }),
+);
+
+router.post(
+  "/:returnId/return-to-customer/tracking",
+  authenticate,
+  allowPermissions("returns:update"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.returnToCustomerTracking, { ...req.body, returnId: req.params.returnId });
+    const updated = await ReturnService.updateReturnToCustomerTracking(value.returnId, value, actor);
+    await auditService.statusChange(req, { module: "returns", entityId: value.returnId, entityType: "Return", newData: updated, description: `Return-to-customer shipment ${value.status}` });
+    res.json(okResponse(updated, "Return-to-customer tracking updated"));
+  }),
+);
+
+router.post(
   "/:returnId/refund",
   authenticate,
   allowPermissions("returns:approve"),

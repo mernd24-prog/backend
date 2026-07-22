@@ -12,6 +12,12 @@ const couponSchema = new mongoose.Schema(
     value: { type: Number, required: true },
     minOrderAmount: { type: Number, default: 0 },
     maxDiscountAmount: { type: Number, default: null },
+    fundingType: {
+      type: String,
+      enum: ["marketplace", "seller", "shared"],
+      default: "marketplace",
+    },
+    sellerFundingPercent: { type: Number, min: 0, max: 100, default: 0 },
     active: { type: Boolean, default: true, index: true },
     usageLimit: { type: Number, default: null },
     usesPerCustomer: { type: Number, default: null },

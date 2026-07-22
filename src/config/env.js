@@ -203,6 +203,7 @@ const env = {
   commerce: {
     businessState: process.env.BUSINESS_STATE || "KARNATAKA",
     gstinMarketplace: process.env.GSTIN_MARKETPLACE || "",
+    platformCommissionSacCode: process.env.PLATFORM_COMMISSION_SAC_CODE || "",
     referralReferrerBonus: Number(process.env.REFERRAL_REFERRER_BONUS || 100),
     referralRefereeBonus: Number(process.env.REFERRAL_REFEREE_BONUS || 50),
     maxWalletUsagePerOrderPercent: Number(process.env.MAX_WALLET_USAGE_PER_ORDER_PERCENT || 30),

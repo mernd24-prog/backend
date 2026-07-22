@@ -969,17 +969,52 @@ class OrderRepository {
       const metadataSum = (field) => this.money(
         metadataRows.reduce((total, metadata) => total + this.money(metadata[field]), 0),
       );
+      const refundRatio = (commission, metadata) => {
+        if (commission.status === "refunded") return 1;
+        const appliedRefundTotal = Object.values(metadata.appliedRefunds || {}).reduce(
+          (total, amount) => total + this.money(amount),
+          0,
+        );
+        const originalAmount = this.money(commission.amount);
+        if (appliedRefundTotal > 0 && originalAmount > 0) {
+          return Math.min(appliedRefundTotal / originalAmount, 1);
+        }
+        const originalPayable = this.money(commission.net_amount) + this.money(commission.refund_amount);
+        return originalPayable > 0
+          ? Math.min(this.money(commission.refund_amount) / originalPayable, 1)
+          : 0;
+      };
+      const reversedSum = (selector) => this.money(matches.reduce((total, commission, index) => (
+        total + this.money(selector(commission, metadataRows[index])) * refundRatio(commission, metadataRows[index])
+      ), 0));
       const payoutIds = [...new Set(matches.map((commission) => commission.payout_id).filter(Boolean).map(String))];
       const payout = payoutIds.length === 1 ? payoutsById.get(payoutIds[0]) : null;
       const statuses = [...new Set(matches.map((commission) => commission.status).filter(Boolean))];
       const commissionStatus = statuses.length === 1
         ? statuses[0]
+        : statuses.includes("refunded")
+          ? "partially_refunded"
         : statuses.includes("pending")
           ? "pending"
           : "partially_processed";
       const firstMetadata = metadataRows[0] || {};
       const isFinanciallyLocked = matches.some((commission) =>
-        commission.status === "paid" || Boolean(commission.payout_id),
+        commission.status === "paid" || commission.status === "refunded" ||
+        Number(commission.refund_amount || 0) > 0 || Boolean(commission.payout_id),
+      );
+      const originalCommissionAmount = sum((commission) => commission.commission_amount);
+      const originalCommissionTaxAmount = sum((commission) => commission.tax_amount);
+      const commissionReversalAmount = reversedSum((commission) => commission.commission_amount);
+      const commissionTaxReversalAmount = reversedSum((commission) => commission.tax_amount);
+      const gstTcsReversalAmount = reversedSum((_commission, metadata) => metadata.gstTcsAmount);
+      const gstTcsTaxableBaseReversalAmount = reversedSum((_commission, metadata) => metadata.taxableSupplyAmount);
+      const incomeTaxTdsReversalAmount = reversedSum((_commission, metadata) => metadata.incomeTaxTdsAmount);
+      const sellerPayoutBaseReversalAmount = this.money(
+        sum((commission) => commission.refund_amount) +
+        commissionReversalAmount +
+        commissionTaxReversalAmount +
+        gstTcsReversalAmount +
+        incomeTaxTdsReversalAmount,
       );
 
       return {
@@ -993,7 +1028,7 @@ class OrderRepository {
         payoutMethod: payout?.payment_method || null,
         payoutProcessedAt: payout?.processed_at || null,
         commissionAmount: isFinanciallyLocked
-          ? sum((commission) => commission.commission_amount)
+          ? originalCommissionAmount
           : settlement.platformFeeAmount,
         commissionTaxAmount: isFinanciallyLocked
           ? sum((commission) => commission.tax_amount)
@@ -1007,6 +1042,20 @@ class OrderRepository {
         platformFeeTaxAmount: isFinanciallyLocked
           ? sum((commission) => commission.tax_amount)
           : settlement.platformFeeTaxAmount,
+        commissionReversalAmount,
+        netPlatformCommissionAmount: this.money(originalCommissionAmount - commissionReversalAmount),
+        commissionTaxReversalAmount,
+        netCommissionTaxAmount: this.money(originalCommissionTaxAmount - commissionTaxReversalAmount),
+        gstTcsReversalAmount,
+        gstTcsTaxableBaseAmount: metadataSum("taxableSupplyAmount"),
+        netGstTcsAmount: this.money(metadataSum("gstTcsAmount") - gstTcsReversalAmount),
+        gstTcsTaxableBaseReversalAmount,
+        netGstTcsTaxableBaseAmount: this.money(
+          metadataSum("taxableSupplyAmount") - gstTcsTaxableBaseReversalAmount,
+        ),
+        incomeTaxTdsReversalAmount,
+        netIncomeTaxTdsAmount: this.money(metadataSum("incomeTaxTdsAmount") - incomeTaxTdsReversalAmount),
+        sellerPayoutBaseReversalAmount,
         gstTcsRate: isFinanciallyLocked ? this.money(firstMetadata.gstTcsRate) : settlement.gstTcsRate,
         gstTcsAmount: isFinanciallyLocked ? metadataSum("gstTcsAmount") : settlement.gstTcsAmount,
         incomeTaxTdsRate: isFinanciallyLocked ? this.money(firstMetadata.incomeTaxTdsRate) : settlement.incomeTaxTdsRate,
@@ -1073,15 +1122,21 @@ class OrderRepository {
         commissionRates: [],
         commissionBreakdown: {},
         platformFeeAmount: 0,
+        discountAmount: 0,
+        sellerFundedDiscountAmount: 0,
+        marketplaceFundedDiscountAmount: 0,
         sellerPayoutAmount: 0,
       };
 
       const lineTotal = this.money(item.line_total);
       const snapshotGstRate = Number(taxBreakup.gstRate ?? item.gst_rate ?? 0);
       const snapshotCessRate = Number(taxBreakup.cessRate ?? 0);
-      const taxableAmount = taxBreakup.gstInclusive && snapshotGstRate + snapshotCessRate > 0
-        ? this.money((lineTotal * 100) / (100 + snapshotGstRate + snapshotCessRate))
-        : this.money(taxBreakup.taxableAmount ?? item.line_total);
+      const discountedLineTotal = Math.max(lineTotal - this.money(item.discount_amount), 0);
+      const taxableAmount = this.money(taxBreakup.taxableAmount ?? (
+        taxBreakup.gstInclusive && snapshotGstRate + snapshotCessRate > 0
+          ? (discountedLineTotal * 100) / (100 + snapshotGstRate + snapshotCessRate)
+          : discountedLineTotal
+      ));
       const sellerPayoutBaseAmount = this.money(
         pricing.sellerPayoutBaseAmount ??
         (financeSettings.sellerPayoutBase === "taxable_ex_gst" ? taxableAmount : lineTotal),
@@ -1120,6 +1175,9 @@ class OrderRepository {
       current.grossSalesAmount += lineTotal;
       current.taxableAmount += taxableAmount;
       current.taxAmount += taxAmount;
+      current.discountAmount = this.money(current.discountAmount) + this.money(pricing.discountAmount ?? item.discount_amount);
+      current.sellerFundedDiscountAmount = this.money(current.sellerFundedDiscountAmount) + this.money(pricing.sellerFundedDiscountAmount);
+      current.marketplaceFundedDiscountAmount = this.money(current.marketplaceFundedDiscountAmount) + this.money(pricing.marketplaceFundedDiscountAmount);
       const commissionFeeAmount = sellerCommissionType === "percentage" &&
         (financeSettings.sellerPayoutBase !== "taxable_ex_gst" || this.money(pricing.commissionFee) <= 0)
         ? platformFeeAmount
@@ -1179,6 +1237,9 @@ class OrderRepository {
         platformFeeAmount: Number(seller.platformFeeAmount.toFixed(2)),
         platformFeeTaxAmount: Number(this.money(seller.platformFeeTaxAmount).toFixed(2)),
         productTaxLiabilityAmount: Number(this.money(seller.productTaxLiabilityAmount).toFixed(2)),
+        discountAmount: Number(this.money(seller.discountAmount).toFixed(2)),
+        sellerFundedDiscountAmount: Number(this.money(seller.sellerFundedDiscountAmount).toFixed(2)),
+        marketplaceFundedDiscountAmount: Number(this.money(seller.marketplaceFundedDiscountAmount).toFixed(2)),
         sellerDeliveryChargeAmount: Number(sellerDeliveryChargeAmount.toFixed(2)),
         shippingReimbursementAmount: Number(shippingReimbursementAmount.toFixed(2)),
         shippingDeductionAmount: Number(shippingDeductionAmount.toFixed(2)),

@@ -52,6 +52,26 @@ test("mixed delivery releases only the eligible order item", () => {
   assert.equal(pending.reason, "waiting_for_item_return_window");
 });
 
+test("partial return holds only the affected order item", () => {
+  const releaseData = new Map([["order-return", {
+    order: { id: "order-return", status: "return_requested" },
+  }]]);
+  releaseData.itemsById = new Map([
+    ["kept-item", { id: "kept-item", payout_status: "eligible" }],
+    ["returned-item", { id: "returned-item", payout_status: "held" }],
+  ]);
+  const base = { order_id: "order-return", seller_id: "seller-1", status: "pending", net_amount: 500 };
+
+  const kept = CommissionService.evaluateCommissionRelease({ ...base, id: "c-kept", order_item_id: "kept-item" }, releaseData);
+  const returned = CommissionService.evaluateCommissionRelease({ ...base, id: "c-returned", order_item_id: "returned-item" }, releaseData);
+
+  assert.equal(kept.available, true);
+  assert.equal(kept.releaseStatus, "available");
+  assert.equal(returned.available, false);
+  assert.equal(returned.releaseStatus, "held");
+  assert.equal(returned.reason, "item_on_hold");
+});
+
 test("partial quantity cancellation and return allocation are proportional and rounding-safe", () => {
   assert.deepEqual(
     {
@@ -79,6 +99,51 @@ test("different item commission rates remain visible while fees are summed", () 
   assert.equal(items.reduce((sum, item) => sum + item.fee, 0), 110);
   assert.equal(3000 - items.reduce((sum, item) => sum + item.fee, 0), 2890);
   assert.deepEqual(uniqueCommissionRates(items.map((item) => item.rate)), [1, 5]);
+});
+
+test("refunded item settlement exposes net commission, tax, and TCS without changing payout", () => {
+  const repository = new OrderRepository();
+  const [settlement] = repository.attachCommissionStatusToSettlements([{
+    sellerId: "seller-1",
+    organizationId: null,
+    platformFeeAmount: 2300,
+    platformFeeTaxAmount: 414,
+    taxableAmount: 97442,
+    sellerPayoutAmount: 0,
+  }], [{
+    id: "kept",
+    seller_id: "seller-1",
+    organization_id: null,
+    amount: 50000,
+    commission_amount: 1000,
+    tax_amount: 180,
+    refund_amount: 0,
+    net_amount: 48620,
+    status: "pending",
+    metadata: { gstTcsAmount: 200, taxableSupplyAmount: 40000 },
+  }, {
+    id: "returned",
+    seller_id: "seller-1",
+    organization_id: null,
+    amount: 65000,
+    commission_amount: 1300,
+    tax_amount: 234,
+    refund_amount: 63166,
+    net_amount: 0,
+    status: "refunded",
+    metadata: { gstTcsAmount: 300, taxableSupplyAmount: 57442 },
+  }]);
+
+  assert.equal(settlement.commissionReversalAmount, 1300);
+  assert.equal(settlement.netPlatformCommissionAmount, 1000);
+  assert.equal(settlement.commissionTaxReversalAmount, 234);
+  assert.equal(settlement.netCommissionTaxAmount, 180);
+  assert.equal(settlement.gstTcsReversalAmount, 300);
+  assert.equal(settlement.netGstTcsAmount, 200);
+  assert.equal(settlement.gstTcsTaxableBaseAmount, 97442);
+  assert.equal(settlement.netGstTcsTaxableBaseAmount, 40000);
+  assert.equal(settlement.sellerPayoutBaseReversalAmount, 65000);
+  assert.equal(settlement.sellerPayoutAmount, 48620);
 });
 
 test("legacy zero commission snapshots recover the immutable order rate", () => {
@@ -155,9 +220,9 @@ test("two percent gross commission and statutory deductions use exact bases", ()
 
   assert.equal(settlement.platformFeeAmount, 2299.98);
   assert.equal(settlement.platformFeeTaxAmount, 414);
-  assert.equal(settlement.taxableAmount, 97456.78);
-  assert.equal(settlement.gstTcsAmount, 487.28);
-  assert.equal(settlement.sellerPayoutAmount, 111797.74);
+  assert.equal(settlement.taxableAmount, 97442);
+  assert.equal(settlement.gstTcsAmount, 487.21);
+  assert.equal(settlement.sellerPayoutAmount, 111797.81);
 });
 
 test("buyer seller invoice becomes ready per delivered seller package", () => {

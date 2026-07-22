@@ -156,6 +156,21 @@ router.get("/my-wallet", authenticate, financeView, async (req, res, next) => {
   }
 });
 
+// Seller: complete deduction/payable summary, scoped to the signed-in seller.
+router.get("/my-summary", authenticate, financeView, async (req, res, next) => {
+  try {
+    const sellerId = req.auth?.ownerSellerId || req.auth?.sub;
+    if (!sellerId) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const summary = await CommissionService.getFinanceSummary({
+      ...sellerOrganizationQuery(req),
+      sellerId,
+    });
+    return res.status(200).json({ success: true, data: summary });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // ==============================
 // Seller: Settlement history
 // ==============================

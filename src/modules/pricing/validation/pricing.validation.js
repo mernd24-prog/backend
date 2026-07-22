@@ -13,6 +13,8 @@ const couponBodySchema = {
   value: Joi.number().positive(),
   minOrderAmount: Joi.number().min(0),
   maxDiscountAmount: Joi.number().min(0).allow(null),
+  fundingType: Joi.string().valid("marketplace", "seller", "shared"),
+  sellerFundingPercent: Joi.number().min(0).max(100),
   usageLimit: Joi.number().integer().min(1).allow(null),
   usesPerCustomer: Joi.number().integer().min(1).allow(null),
   startsAt: Joi.date().iso().allow(null),
@@ -32,6 +34,8 @@ const withCouponAliases = (schema) =>
     .rename("minOrderValue", "minOrderAmount", { ignoreUndefined: true, override: false })
     .rename("max_discount_value", "maxDiscountAmount", { ignoreUndefined: true, override: false })
     .rename("maxDiscountValue", "maxDiscountAmount", { ignoreUndefined: true, override: false })
+    .rename("funding_type", "fundingType", { ignoreUndefined: true, override: false })
+    .rename("seller_funding_percent", "sellerFundingPercent", { ignoreUndefined: true, override: false })
     .rename("uses_per_coupon", "usageLimit", { ignoreUndefined: true, override: false })
     .rename("usesPerCoupon", "usageLimit", { ignoreUndefined: true, override: false })
     .rename("uses_per_customer", "usesPerCustomer", { ignoreUndefined: true, override: false })
@@ -47,6 +51,8 @@ const createCouponSchema = Joi.object({
     type: couponBodySchema.type.required(),
     value: couponBodySchema.value.required(),
     minOrderAmount: couponBodySchema.minOrderAmount.default(0),
+    fundingType: couponBodySchema.fundingType.default("marketplace"),
+    sellerFundingPercent: couponBodySchema.sellerFundingPercent.default(0),
     active: couponBodySchema.active.default(true),
   })).required(),
   query: Joi.object({}).required(),

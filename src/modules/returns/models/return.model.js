@@ -119,6 +119,7 @@ const returnSchema = new mongoose.Schema(
         "qc_passed",
         "qc_failed",
         "qc_completed",
+        "qc_failure_upheld",
         "refund_pending",
         "refund_failed",
         "partially_refunded",
@@ -194,6 +195,8 @@ const returnSchema = new mongoose.Schema(
       processedAt: Date,
       metadata: { type: Object, default: {} },
     },
+    qcReview: { type: Object, default: {} },
+    returnToCustomer: { type: Object, default: {} },
     replacement: {
       status: String,
       orderId: String,

@@ -185,12 +185,31 @@ class PricingService {
     const subtotalAmount = pricedItems.reduce((sum, item) => sum + item.lineTotal, 0);
     const discount = await this.calculateDiscount(couponCode, subtotalAmount, userId);
     const commerceSettings = await commerceSettingsService.getSettings();
+    const sellerFundingPercent = Number(discount.sellerFundingPercent || 0);
     const taxBreakup = await this.calculateTaxBreakup(
       pricedItems,
       subtotalAmount,
       discount.discountAmount,
       shippingAddress,
+      { sellerFundingPercent },
     );
+    const totalSellerFundedDiscount = Number(
+      (discount.discountAmount * sellerFundingPercent / 100).toFixed(2),
+    );
+    let allocatedSellerFunding = 0;
+    for (const [index, item] of pricedItems.entries()) {
+      const allocatedDiscount = Number(item.discountAmount || 0);
+      item.sellerFundedDiscountAmount = index === pricedItems.length - 1
+        ? Number((totalSellerFundedDiscount - allocatedSellerFunding).toFixed(2))
+        : Number((allocatedDiscount * sellerFundingPercent / 100).toFixed(2));
+      allocatedSellerFunding = Number(
+        (allocatedSellerFunding + item.sellerFundedDiscountAmount).toFixed(2),
+      );
+      item.marketplaceFundedDiscountAmount = Number(
+        (allocatedDiscount - item.sellerFundedDiscountAmount).toFixed(2),
+      );
+      item.discountFundingType = discount.fundingType || "marketplace";
+    }
     const platformFee = await this.calculatePlatformFee(pricedItems, {
       subtotalAmount,
       discountAmount: discount.discountAmount,
@@ -206,9 +225,11 @@ class PricingService {
         : 0;
       const discountedLineTotal = Number(item.discountedLineTotal ?? item.lineTotal ?? 0);
       const sellerGrossLineTotal = Number(item.lineTotal || 0);
+      const sellerFundedDiscountAmount = Number(item.sellerFundedDiscountAmount || 0);
+      const sellerNetLineTotal = Number((sellerGrossLineTotal - sellerFundedDiscountAmount).toFixed(2));
       const sellerPayoutBaseAmount = commerceSettings.finance.sellerPayoutBase === "taxable_ex_gst"
         ? Number(item.taxableAmountBeforeDiscount || item.taxableAmount || 0)
-        : sellerGrossLineTotal;
+        : sellerNetLineTotal;
       item.platformFeeAmount = platformFeeAmount;
       item.platformFeeTaxAmount = platformFeeTaxAmount;
       item.sellerPayoutBaseAmount = Number(sellerPayoutBaseAmount.toFixed(2));
@@ -232,7 +253,10 @@ class PricingService {
         sellerPayoutBaseAmount: item.sellerPayoutBaseAmount,
         sellerCommissionBaseAmount: Number((fee?.sellerCommissionBaseAmount ?? sellerPayoutBaseAmount).toFixed(2)),
         sellerGrossLineTotal,
-        adminFundedDiscountAmount: Number(item.discountAmount || 0),
+        discountAmount: Number(item.discountAmount || 0),
+        discountFundingType: item.discountFundingType || "marketplace",
+        marketplaceFundedDiscountAmount: Number(item.marketplaceFundedDiscountAmount || 0),
+        sellerFundedDiscountAmount,
         productTaxLiabilityAmount: item.productTaxLiabilityAmount,
         sellerReceivable: item.settlementAmount,
         source: fee?.source || "platform_commission",
@@ -303,6 +327,8 @@ class PricingService {
         payableAmount,
         appliedCouponCode: discount.appliedCouponCode,
         discountSource: discount.discountSource || null,
+        discountFundingType: discount.fundingType || "marketplace",
+        sellerFundingPercent,
         referralDiscountAmount: discount.discountSource === "influencer" ? discount.discountAmount : 0,
         commerceSettingsSnapshot: {
           finance: commerceSettings.finance,
@@ -526,7 +552,10 @@ class PricingService {
       customerOrderFeeBase,
       1,
     );
-    const customerFeeTaxAmount = 0;
+    const customerFeeTaxRate = Number(config.customerFeeTaxRate || 0);
+    const customerFeeTaxAmount = Number(
+      (customerFeeAmount * customerFeeTaxRate / 100).toFixed(2),
+    );
     const allocationBaseTotal = pricedItems.reduce(
       (sum, item) => sum + this.resolvePlatformFeeBase(item, context, calculationBase),
       0,
@@ -545,7 +574,9 @@ class PricingService {
       const customerPlatformFee = index === pricedItems.length - 1
         ? Number((customerFeeAmount - allocatedCustomerFee).toFixed(2))
         : Number((customerFeeAmount * (feeBaseAmount / Math.max(allocationBaseTotal, 1))).toFixed(2));
-      const customerPlatformFeeTax = 0;
+      const customerPlatformFeeTax = index === pricedItems.length - 1
+        ? Number((customerFeeTaxAmount - breakup.reduce((sum, entry) => sum + Number(entry.customerFeeTaxAmount || 0), 0)).toFixed(2))
+        : Number((customerFeeTaxAmount * (feeBaseAmount / Math.max(allocationBaseTotal, 1))).toFixed(2));
 
       sellerFeeAmount += sellerCommission;
       allocatedCustomerFee += customerPlatformFee;
@@ -658,7 +689,13 @@ class PricingService {
     return coupon;
   }
 
-  async calculateTaxBreakup(pricedItems, subtotalAmount, discountAmount, shippingAddress = {}) {
+  async calculateTaxBreakup(
+    pricedItems,
+    subtotalAmount,
+    discountAmount,
+    shippingAddress = {},
+    { sellerFundingPercent = 100 } = {},
+  ) {
     const buyerState = String(shippingAddress?.state || "").trim().toUpperCase();
     const buyerCountry = String(shippingAddress?.country || "INDIA").trim().toUpperCase();
     const businessState = String(env.commerce.businessState || "").trim().toUpperCase();
@@ -683,15 +720,23 @@ class PricingService {
 
     const isExport = buyerCountry !== "INDIA";
 
-    for (const item of pricedItems) {
+    let allocatedDiscount = 0;
+    for (const [index, item] of pricedItems.entries()) {
       const proportion = subtotalAmount > 0 ? item.lineTotal / subtotalAmount : 0;
-      const itemDiscount = Number((discountAmount * proportion).toFixed(2));
-      const discountedLineTotal = Number((item.lineTotal - itemDiscount).toFixed(2));
+      const itemDiscount = index === pricedItems.length - 1
+        ? Number((discountAmount - allocatedDiscount).toFixed(2))
+        : Number((discountAmount * proportion).toFixed(2));
+      allocatedDiscount = Number((allocatedDiscount + itemDiscount).toFixed(2));
+      const customerDiscountedLineTotal = Number((item.lineTotal - itemDiscount).toFixed(2));
+      const sellerFundedItemDiscount = Number(
+        (itemDiscount * Number(sellerFundingPercent || 0) / 100).toFixed(2),
+      );
+      const discountedLineTotal = Number((item.lineTotal - sellerFundedItemDiscount).toFixed(2));
       const grossLineTotal = Number(item.lineTotal || 0);
       let taxableAmount = discountedLineTotal;
       let taxableAmountBeforeDiscount = grossLineTotal;
       item.discountAmount = itemDiscount;
-      item.discountedLineTotal = discountedLineTotal;
+      item.discountedLineTotal = customerDiscountedLineTotal;
 
       let itemTax = 0;
       let itemCess = 0;
@@ -756,6 +801,8 @@ class PricingService {
         productId: item.productId,
         lineTotal: item.lineTotal,
         discountedLineTotal,
+        customerDiscountedLineTotal,
+        sellerFundedDiscountAmount: sellerFundedItemDiscount,
         taxableAmount,
         taxableAmountBeforeDiscount,
         gstRate: item.gstRate,
@@ -879,6 +926,8 @@ class PricingService {
         appliedCouponCode: null,
         couponToConsume: null,
         discountSource: null,
+        fundingType: "marketplace",
+        sellerFundingPercent: 0,
         referralContext: null,
       };
     }
@@ -896,6 +945,8 @@ class PricingService {
         appliedCouponCode: referralContext.code,
         couponToConsume: null,
         discountSource: "influencer",
+        fundingType: "marketplace",
+        sellerFundingPercent: 0,
         referralContext,
       };
     }
@@ -946,6 +997,12 @@ class PricingService {
       appliedCouponCode: coupon.code,
       couponToConsume: coupon.id,
       discountSource: "coupon",
+      fundingType: coupon.fundingType || "marketplace",
+      sellerFundingPercent: coupon.fundingType === "seller"
+        ? 100
+        : coupon.fundingType === "shared"
+          ? Number(coupon.sellerFundingPercent || 0)
+          : 0,
       referralContext: null,
     };
   }

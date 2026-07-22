@@ -524,15 +524,26 @@ class TaxRepository {
   }
 
   async nextInvoiceNumber(prefix = "INV", tableName = "tax_invoices", columnName = "invoice_number") {
-    const { rows } = await postgresPool.query(
-      `SELECT COUNT(*)::INT AS count
-       FROM ${tableName}
-       WHERE ${columnName} LIKE $1`,
-      [`${prefix}-%`],
-    );
-    const nextSequence = Number(rows[0]?.count || 0) + 1;
-    const pad = String(nextSequence).padStart(6, "0");
     const month = new Date().toISOString().slice(0, 7).replace("-", "");
+    const allowedSources = new Set([
+      "tax_invoices.invoice_number",
+      "tax_credit_notes.credit_note_number",
+    ]);
+    if (!allowedSources.has(`${tableName}.${columnName}`)) {
+      throw new Error("Unsupported tax document sequence source");
+    }
+    const { rows } = await postgresPool.query(
+      `INSERT INTO tax_document_sequences (prefix, period, last_number)
+       SELECT $1, $2, COALESCE(MAX(RIGHT(${columnName}, 6)::INTEGER), 0) + 1
+       FROM ${tableName}
+       WHERE ${columnName} LIKE $3
+       ON CONFLICT (prefix, period)
+       DO UPDATE SET last_number = tax_document_sequences.last_number + 1,
+                     updated_at = NOW()
+       RETURNING last_number`,
+      [prefix, month, `${prefix}-${month}-%`],
+    );
+    const pad = String(Number(rows[0]?.last_number || 1)).padStart(6, "0");
     return `${prefix}-${month}-${pad}`;
   }
 }
