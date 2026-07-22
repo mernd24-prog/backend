@@ -393,8 +393,8 @@ class AnalyticsRepository {
     }
 
     const createdAt = {};
-    if (fromDate) createdAt.$gte = new Date(fromDate);
-    if (toDate) createdAt.$lte = new Date(toDate);
+    if (fromDate) createdAt.$gte = new Date(this.normalizeDateRangeStart(fromDate));
+    if (toDate) createdAt.$lte = new Date(this.normalizeDateRangeEnd(toDate));
     if (Object.keys(createdAt).length) {
       filter.createdAt = createdAt;
     }
@@ -454,11 +454,23 @@ class AnalyticsRepository {
 
   applyDateRange(builder, { fromDate = null, toDate = null } = {}, column = "created_at") {
     if (fromDate) {
-      builder.where(column, ">=", fromDate);
+      builder.where(column, ">=", this.normalizeDateRangeStart(fromDate));
     }
     if (toDate) {
-      builder.where(column, "<=", toDate);
+      builder.where(column, "<=", this.normalizeDateRangeEnd(toDate));
     }
+  }
+
+  isDateOnly(value) {
+    return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  }
+
+  normalizeDateRangeStart(value) {
+    return this.isDateOnly(value) ? `${value} 00:00:00` : value;
+  }
+
+  normalizeDateRangeEnd(value) {
+    return this.isDateOnly(value) ? `${value} 23:59:59.999` : value;
   }
 
   jsonNumberSql(jsonColumn, key) {
