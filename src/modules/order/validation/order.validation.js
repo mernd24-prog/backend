@@ -48,6 +48,9 @@ const createOrderSchema = Joi.object({
     couponCode: Joi.string().trim().uppercase().allow("", null),
     walletAmount: Joi.number().min(0).default(0),
     shippingAddress: Joi.object({
+      fullName: Joi.string().trim().max(120).allow("", null),
+      dialCode: Joi.string().trim().max(8).allow("", null),
+      phone: Joi.string().trim().max(20).allow("", null),
       line1: Joi.string().required(),
       line2: Joi.string().allow("", null),
       city: Joi.string().required(),

@@ -2647,7 +2647,57 @@ class ProductService {
   }
 
   async bulkUpdateSpecialPrices(updates = [], actor = {}) {
-    const normalizedUpdates = Array.isArray(updates) ? updates : [];
+    const rawUpdates = Array.isArray(updates) ? updates : [];
+    const groupedUpdates = new Map();
+
+    rawUpdates.forEach((entry) => {
+      const productId = String(entry?.productId || "");
+      if (!productId) return;
+
+      const existing = groupedUpdates.get(productId) || {
+        productId,
+        variants: [],
+      };
+      const hasTopLevelVariantIdentity = Boolean(entry?.variantId || entry?.variantSku);
+      const hasGroupedVariantUpdates = Array.isArray(entry?.variants) && entry.variants.length > 0;
+
+      if (hasTopLevelVariantIdentity) {
+        if (Object.prototype.hasOwnProperty.call(existing, "salePrice")) {
+          throw new AppError(`Cannot mix product-level and variant-level special price updates for product ${productId}`, 400);
+        }
+        existing.variants.push({
+          variantId: entry.variantId,
+          variantSku: entry.variantSku,
+          salePrice: entry.salePrice,
+        });
+      }
+
+      if (hasGroupedVariantUpdates) {
+        if (Object.prototype.hasOwnProperty.call(existing, "salePrice")) {
+          throw new AppError(`Cannot mix product-level and variant-level special price updates for product ${productId}`, 400);
+        }
+        existing.variants.push(...entry.variants);
+      }
+
+      if (!hasTopLevelVariantIdentity && !hasGroupedVariantUpdates && Object.prototype.hasOwnProperty.call(entry, "salePrice")) {
+        if (existing.variants.length) {
+          throw new AppError(`Cannot mix product-level and variant-level special price updates for product ${productId}`, 400);
+        }
+        if (Object.prototype.hasOwnProperty.call(existing, "salePrice")) {
+          throw new AppError(`Duplicate product-level special price update for product ${productId}`, 400);
+        }
+        existing.salePrice = entry.salePrice;
+      }
+
+      groupedUpdates.set(productId, existing);
+    });
+
+    const normalizedUpdates = Array.from(groupedUpdates.values()).map((entry) => {
+      if (entry.variants.length) return entry;
+      const { variants, ...productLevelEntry } = entry;
+      return productLevelEntry;
+    });
+
     if (!normalizedUpdates.length) {
       throw new AppError("No special price updates were provided", 400);
     }
@@ -2664,10 +2714,6 @@ class ProductService {
     const products = await this.productRepository.findByIds(productIds);
     if (!products.length || products.length !== requestedCount) {
       throw new AppError("One or more products were not found for special price update", 404);
-    }
-
-    if (productIds.length !== requestedCount) {
-      throw new AppError("Duplicate product rows are not allowed in a special price update", 400);
     }
 
     const productMap = new Map(products.map((product) => [String(product._id || product.id), product]));

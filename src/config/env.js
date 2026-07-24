@@ -8,6 +8,11 @@ const emailPort = Number(process.env.EMAIL_PORT || process.env.SMTP_PORT || 1025
 const emailSecureDefault = emailPort === 465 ? "true" : "false";
 const isProductionMode = parseBoolean(process.env.PRODUCTION, false);
 
+function parsePositiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
 function cleanEnvValue(value) {
   return String(value || "").trim();
 }
@@ -231,6 +236,11 @@ const env = {
     mode: emailMode,
     liveRequested: emailLiveRequested,
     missingKeys: emailMissingKeys,
+    queue: {
+      concurrency: parsePositiveInteger(process.env.EMAIL_QUEUE_CONCURRENCY, 1),
+      intervalMs: parsePositiveInteger(process.env.EMAIL_QUEUE_INTERVAL_MS, 30000),
+      maxPerInterval: parsePositiveInteger(process.env.EMAIL_QUEUE_MAX_PER_INTERVAL, 1),
+    },
   },
   defaultFromEmail,
   auth: {

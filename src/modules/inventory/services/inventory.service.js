@@ -517,6 +517,69 @@ class InventoryService {
   }
 
   async adjustVariantInventory(productId, variantSku, payload = {}, actor = {}) {
+    let updates = null;
+    if (Array.isArray(payload)) {
+      updates = payload;
+    } else if (Array.isArray(payload?.updates)) {
+      updates = payload.updates;
+    }
+    if (updates) {
+      if (!updates.length) {
+        throw new AppError("No inventory adjustments were provided", 400);
+      }
+
+      const product = await this.productRepository.findById(productId);
+      if (!product) throw new AppError("Product not found", 404);
+      this.assertInventoryProductAccess(product, actor);
+
+      const variants = Array.isArray(product.variants) ? product.variants : [];
+      const seenSkus = new Set();
+      const plans = updates.map((entry) => {
+        const sku = normalizeText(entry?.variantSku);
+        if (!sku) {
+          throw new AppError("Variant SKU is required for inventory adjustment", 400);
+        }
+        if (seenSkus.has(sku)) {
+          throw new AppError(`Duplicate inventory adjustment for variant SKU "${sku}"`, 400);
+        }
+        seenSkus.add(sku);
+
+        const variant = variants.find((item) => item.sku === sku);
+        if (!variant) {
+          throw new AppError(`Variant SKU "${sku}" not found for this product`, 404);
+        }
+        const adjustment = this.resolveManualAdjustment(product, { ...entry, variantSku: sku });
+        const currentStock = Number(variant.stock || 0);
+        const reservedStock = Number(variant.reservedStock || 0);
+        if (adjustment < 0 && currentStock - reservedStock < Math.abs(adjustment)) {
+          throw new AppError(`Insufficient available stock for variant SKU "${sku}"`, 400);
+        }
+        return { ...entry, variantSku: sku };
+      });
+
+      let updated = 0;
+      for (const plan of plans) {
+        try {
+          await this.adjustProductInventory(productId, plan, actor);
+          updated += 1;
+        } catch (error) {
+          if (error?.message === "Inventory adjustment does not change stock") {
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      const result = await this.getProductInventory(productId, {}, actor);
+      return {
+        ...result,
+        bulk: {
+          requested: plans.length,
+          updated,
+        },
+      };
+    }
+
     const sku = normalizeText(variantSku || payload.variantSku);
     if (!sku) {
       throw new AppError("Variant SKU is required for inventory adjustment", 400);

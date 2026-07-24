@@ -59,10 +59,28 @@ class WarehouseController {
       module: "inventory",
       action: "adjust",
       entityType: "ProductVariant",
-      entityId: `${req.params.productId}:${req.params.variantSku}`,
+      entityId: req.params.variantSku
+        ? `${req.params.productId}:${req.params.variantSku}`
+        : `${req.params.productId}:bulk`,
       newData: result,
       reason: req.body?.reason || "variant_inventory_adjustment",
       description: "Adjusted product variant inventory",
+    });
+    res.json(okResponse(result));
+  };
+  
+
+  bulkSetVariantInventory = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const updates = Array.isArray(req.body?.updates) ? req.body.updates : [];
+    const result = await this.inventoryService.bulkSetVariantInventory(updates, actor);
+    await auditService.record(req, {
+      module: "inventory",
+      action: "bulk_inventory_set",
+      entityType: "ProductVariant",
+      newData: result,
+      reason: "bulk_inventory_set",
+      description: "Set product variant inventory from import grid",
     });
     res.json(okResponse(result));
   };

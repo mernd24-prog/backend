@@ -18,6 +18,7 @@ const { CartRepository } = require("../../cart/repositories/cart.repository");
 const { logger } = require("../../../shared/logger/logger");
 const { ReferralService } = require("../../referral/services/referral.service");
 const { ROLES } = require("../../../shared/constants/roles");
+const { UserModel } = require("../../user/models/user.model");
 
 class OrderService {
   constructor({
@@ -90,19 +91,55 @@ class OrderService {
   sellerIdsFromItems(items = []) {
     return [...new Set(
       items
-        .map((item) => item.sellerId || item.seller_id)
+        .map((item) => {
+          const sellerSnapshot = this.normalizeJson(item.seller_snapshot || item.sellerSnapshot, {});
+          const productSnapshot = this.normalizeJson(item.product_snapshot || item.productSnapshot, {});
+          return item.sellerId || item.seller_id || sellerSnapshot.sellerId || productSnapshot.sellerId;
+        })
         .filter((sellerId) => sellerId && String(sellerId) !== "platform")
         .map(String),
     )];
   }
 
   notificationItemsFromOrderItems(items = []) {
-    return items.map((item) => ({
-      sellerId: item.sellerId || item.seller_id || null,
-      productId: item.productId || item.product_id || null,
-      productName: item.productName || item.product_name || item.productTitle || item.product_title || null,
-      quantity: Number(item.quantity || 0),
-    }));
+    return items.map((item) => {
+      const sellerSnapshot = this.normalizeJson(item.seller_snapshot || item.sellerSnapshot, {});
+      const productSnapshot = this.normalizeJson(item.product_snapshot || item.productSnapshot, {});
+      return {
+        sellerId: item.sellerId || item.seller_id || sellerSnapshot.sellerId || productSnapshot.sellerId || null,
+        sellerEmail: sellerSnapshot.email || sellerSnapshot.sellerEmail || productSnapshot.sellerEmail || null,
+        productId: item.productId || item.product_id || null,
+        productName: item.productName || item.product_name || item.productTitle || item.product_title || null,
+        productSku: item.productSku || item.product_sku || item.sku || null,
+        variantTitle: item.variantTitle || item.variant_title || null,
+        quantity: Number(item.quantity || 0),
+        lineTotal: item.lineTotal || item.line_total || null,
+      };
+    });
+  }
+
+  getDisplayNameFromProfile(profile = {}, fallback = "") {
+    return [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim() ||
+      profile.fullName ||
+      fallback ||
+      "";
+  }
+
+  async getBuyerNotificationPayload(buyerId, fallbackEmail = null, shippingAddress = {}) {
+    if (!buyerId) return {};
+    const buyer = fallbackEmail
+      ? null
+      : await UserModel.findById(buyerId).select("email phone profile").lean().catch(() => null);
+    const buyerEmail = fallbackEmail || buyer?.email || null;
+    const buyerName = shippingAddress.fullName ||
+      this.getDisplayNameFromProfile(buyer?.profile, buyerEmail || "Customer");
+    const buyerPhone = shippingAddress.phone || buyer?.phone || null;
+    return {
+      ...(buyerEmail ? { buyerEmail, customerEmail: buyerEmail } : {}),
+      ...(buyerName ? { buyerName, customerName: buyerName } : {}),
+      ...(buyerPhone ? { buyerPhone, customerPhone: buyerPhone } : {}),
+      ...(shippingAddress && Object.keys(shippingAddress).length ? { shippingAddress } : {}),
+    };
   }
 
   async getOrderNotificationSellerPayload(orderId) {
@@ -111,6 +148,36 @@ class OrderService {
       sellerIds: this.sellerIdsFromItems(items),
       items: this.notificationItemsFromOrderItems(items),
     };
+  }
+
+  async publishOrderPaidNotification(orderId, order = {}, updatedOrder = {}, actor = {}, invoice = null) {
+    const notificationSellerPayload = await this.getOrderNotificationSellerPayload(orderId);
+    const buyerNotificationPayload = await this.getBuyerNotificationPayload(
+      order.buyer_id || order.buyerId,
+      null,
+      this.normalizeJson(order.shipping_address || order.shippingAddress, {}),
+    );
+    await eventPublisher.publish(
+      makeEvent(
+        DOMAIN_EVENTS.ORDER_PAID_V1 || DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
+        {
+          orderId,
+          orderNumber: updatedOrder.order_number || order.order_number || updatedOrder.orderNumber || order.orderNumber,
+          buyerId: order.buyer_id || order.buyerId,
+          ...buyerNotificationPayload,
+          ...notificationSellerPayload,
+          status: ORDER_STATUS.CONFIRMED,
+          paymentStatus: PAYMENT_STATUS.CAPTURED,
+          paymentProvider: updatedOrder.payment_provider || order.payment_provider || updatedOrder.paymentProvider || order.paymentProvider,
+          totalAmount: updatedOrder.total_amount ?? order.total_amount ?? updatedOrder.totalAmount ?? order.totalAmount,
+          payableAmount: updatedOrder.payable_amount ?? order.payable_amount ?? updatedOrder.payableAmount ?? order.payableAmount,
+          currency: updatedOrder.currency || order.currency,
+          invoiceId: invoice?.id || null,
+          updatedBy: actor.userId || null,
+        },
+        { source: "order-module", aggregateId: orderId },
+      ),
+    );
   }
 
   getFulfillmentSnapshotForItems(items = []) {
@@ -244,15 +311,26 @@ class OrderService {
       paymentProvider: payload.paymentProvider,
     });
     const orderId = uuidv4();
+    const orderNumber = payload.orderNumber || this.orderRepository.generateOrderNumber();
     const payableAmount = pricedOrder.pricing.payableAmount;
+    const buyerNotificationPayload = await this.getBuyerNotificationPayload(
+      actor.userId,
+      actor.email,
+      payload.shippingAddress,
+    );
     const orderEvent = makeEvent(
       DOMAIN_EVENTS.ORDER_CREATED_V1,
       {
         orderId,
+        orderNumber,
         buyerId: actor.userId,
+        ...buyerNotificationPayload,
         sellerIds: this.sellerIdsFromItems(pricedOrder.items),
         totalAmount: pricedOrder.pricing.totalAmount,
         payableAmount: pricedOrder.pricing.payableAmount,
+        status: payableAmount > 0 ? ORDER_STATUS.PENDING_PAYMENT : ORDER_STATUS.CONFIRMED,
+        paymentStatus: payableAmount > 0 ? PAYMENT_STATUS.INITIATED : PAYMENT_STATUS.CAPTURED,
+        paymentProvider: pricedOrder.pricing.paymentProvider,
         platformFeeAmount: pricedOrder.pricing.platformFeeAmount,
         codChargeAmount: pricedOrder.pricing.codChargeAmount,
         shippingFeeAmount: pricedOrder.pricing.shippingFeeAmount,
@@ -277,7 +355,7 @@ class OrderService {
       const order = await this.orderRepository.createOrder(
         {
           id: orderId,
-          orderNumber: payload.orderNumber,
+          orderNumber,
           currency: payload.currency || "INR",
           subtotalAmount: pricedOrder.pricing.subtotalAmount,
           discountAmount: pricedOrder.pricing.discountAmount,
@@ -377,15 +455,27 @@ class OrderService {
         await this.ensureOrderTaxDocuments(orderId);
         await this.clearPurchasedCartItems(orderId, actor.userId, pricedOrder.items, actor, "zero_payable_order_confirmed");
         const notificationSellerPayload = await this.getOrderNotificationSellerPayload(orderId);
+        const statusBuyerNotificationPayload = await this.getBuyerNotificationPayload(
+          actor.userId,
+          actor.email,
+          payload.shippingAddress,
+        );
         await eventPublisher.publish(
           makeEvent(
             DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
             {
               orderId,
+              orderNumber,
               buyerId: actor.userId,
+              ...statusBuyerNotificationPayload,
               ...notificationSellerPayload,
               previousStatus: ORDER_STATUS.PENDING_PAYMENT,
               status: ORDER_STATUS.CONFIRMED,
+              paymentStatus: PAYMENT_STATUS.CAPTURED,
+              paymentProvider: pricedOrder.pricing.paymentProvider,
+              totalAmount: pricedOrder.pricing.totalAmount,
+              payableAmount: pricedOrder.pricing.payableAmount,
+              currency: payload.currency || "INR",
               updatedBy: actor.userId,
             },
             {
@@ -967,15 +1057,31 @@ const sellerPayoutAmount = Number(
     }
 
     const notificationSellerPayload = await this.getOrderNotificationSellerPayload(orderId);
+    const buyerNotificationPayload = await this.getBuyerNotificationPayload(
+      order.buyer_id,
+      null,
+      this.normalizeJson(order.shipping_address, {}),
+    );
     await eventPublisher.publish(
       makeEvent(
         DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
         {
           orderId,
+          orderNumber: updatedOrder.order_number || order.order_number,
           buyerId: order.buyer_id,
+          ...buyerNotificationPayload,
           ...notificationSellerPayload,
           previousStatus: order.status,
           status: nextStatus,
+          paymentStatus: updatedOrder.payment_status || order.payment_status,
+          paymentProvider: updatedOrder.payment_provider || order.payment_provider,
+          reason: actor.reason || actor.cancellationReason || null,
+          trackingNumber: trackingInfo?.trackingNumber || null,
+          carrierName: trackingInfo?.carrierName || null,
+          carrierUrl: trackingInfo?.carrierUrl || null,
+          totalAmount: updatedOrder.total_amount ?? order.total_amount,
+          payableAmount: updatedOrder.payable_amount ?? order.payable_amount,
+          currency: updatedOrder.currency || order.currency,
           updatedBy: actor.userId,
         },
         {
@@ -991,10 +1097,20 @@ const sellerPayoutAmount = Number(
           DOMAIN_EVENTS.ORDER_CANCELLED_V1 || DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
           {
             orderId,
+            orderNumber: updatedOrder.order_number || order.order_number,
             buyerId: order.buyer_id,
+            ...buyerNotificationPayload,
             ...notificationSellerPayload,
             previousStatus: order.status,
             status: nextStatus,
+            paymentStatus: updatedOrder.payment_status || order.payment_status,
+            paymentProvider: updatedOrder.payment_provider || order.payment_provider,
+            trackingNumber: trackingInfo?.trackingNumber || null,
+            carrierName: trackingInfo?.carrierName || null,
+            carrierUrl: trackingInfo?.carrierUrl || null,
+            totalAmount: updatedOrder.total_amount ?? order.total_amount,
+            payableAmount: updatedOrder.payable_amount ?? order.payable_amount,
+            currency: updatedOrder.currency || order.currency,
             reason: actor.cancellationReason || actor.reason || null,
             updatedBy: actor.userId,
           },
@@ -1262,6 +1378,7 @@ const sellerPayoutAmount = Number(
 
     if (order.status !== ORDER_STATUS.PENDING_PAYMENT) {
       if (order.payment_status === PAYMENT_STATUS.CAPTURED) {
+        await this.publishOrderPaidNotification(orderId, order, order, actor);
         await this.clearPurchasedCartItems(orderId, order.buyer_id, [], actor, "payment_already_captured");
         return this.orderRepository.findByIdWithItems(orderId);
       }
@@ -1277,21 +1394,7 @@ const sellerPayoutAmount = Number(
           logger.error({ orderId, error: error.message }, "Deal sale capture commit failed"),
         );
         const invoice = await this.ensureOrderTaxDocuments(orderId);
-        const notificationSellerPayload = await this.getOrderNotificationSellerPayload(orderId);
-        await eventPublisher.publish(
-          makeEvent(
-            DOMAIN_EVENTS.ORDER_PAID_V1 || DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
-            {
-              orderId,
-              buyerId: order.buyer_id,
-              ...notificationSellerPayload,
-              status: ORDER_STATUS.CONFIRMED,
-              paymentStatus: PAYMENT_STATUS.CAPTURED,
-              invoiceId: invoice?.id || null,
-            },
-            { source: "order-module", aggregateId: orderId },
-          ),
-        );
+        await this.publishOrderPaidNotification(orderId, order, updatedOrder, actor, invoice);
         await this.clearPurchasedCartItems(orderId, order.buyer_id, [], actor, "payment_captured");
         await this.ensureShipmentsForConfirmedOrder(orderId, actor, "payment_captured");
         return this.orderRepository.findByIdWithItems(updatedOrder.id);
@@ -1314,21 +1417,7 @@ const sellerPayoutAmount = Number(
     });
     const invoice = await this.ensureOrderTaxDocuments(orderId);
 
-    const notificationSellerPayload = await this.getOrderNotificationSellerPayload(orderId);
-    await eventPublisher.publish(
-      makeEvent(
-        DOMAIN_EVENTS.ORDER_PAID_V1 || DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
-        {
-          orderId,
-          buyerId: order.buyer_id,
-          ...notificationSellerPayload,
-          status: ORDER_STATUS.CONFIRMED,
-          paymentStatus: PAYMENT_STATUS.CAPTURED,
-          invoiceId: invoice?.id || null,
-        },
-        { source: "order-module", aggregateId: orderId },
-      ),
-    );
+    await this.publishOrderPaidNotification(orderId, order, updatedOrder, actor, invoice);
 
     await this.clearPurchasedCartItems(orderId, order.buyer_id, [], actor, "payment_captured");
     return this.orderRepository.findByIdWithItems(updatedOrder.id);
@@ -1392,15 +1481,26 @@ const sellerPayoutAmount = Number(
     });
 
     const notificationSellerPayload = await this.getOrderNotificationSellerPayload(orderId);
+    const buyerNotificationPayload = await this.getBuyerNotificationPayload(
+      order.buyer_id,
+      null,
+      this.normalizeJson(order.shipping_address, {}),
+    );
     await eventPublisher.publish(
       makeEvent(
         DOMAIN_EVENTS.ORDER_PAYMENT_FAILED_V1 || DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1,
         {
           orderId,
+          orderNumber: updatedOrder.order_number || order.order_number,
           buyerId: order.buyer_id,
+          ...buyerNotificationPayload,
           ...notificationSellerPayload,
           status: ORDER_STATUS.PAYMENT_FAILED,
           paymentStatus: PAYMENT_STATUS.FAILED,
+          paymentProvider: updatedOrder.payment_provider || order.payment_provider,
+          totalAmount: updatedOrder.total_amount ?? order.total_amount,
+          payableAmount: updatedOrder.payable_amount ?? order.payable_amount,
+          currency: updatedOrder.currency || order.currency,
           reason: actor.reason || "payment_failed",
         },
         { source: "order-module", aggregateId: orderId },

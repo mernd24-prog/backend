@@ -38,6 +38,12 @@ adminInventoryRoutes.patch(
   checkInput(adjustVariantInventorySchema),
   catchErrors(warehouseController.adjustVariantInventory),
 );
+adminInventoryRoutes.patch(
+  "/products/:productId/variants/adjust",
+  allowPermissions("inventory:adjust"),
+  checkInput(adjustVariantInventorySchema),
+  catchErrors(warehouseController.adjustVariantInventory),
+);
 adminInventoryRoutes.get(
   "/stats",
   allowPermissions("inventory:view"),
