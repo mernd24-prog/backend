@@ -491,22 +491,27 @@ const bulkProductSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
+const specialPriceVariantUpdateSchema = Joi.object({
+  variantId: optionalString(),
+  variantSku: optionalString(),
+  salePrice: optionalNonNegativeNumber().required(),
+}).or("variantId", "variantSku").required();
+
+const specialPriceProductUpdateSchema = Joi.object({
+  productId: Joi.string().required(),
+  salePrice: optionalNonNegativeNumber(),
+  variantId: optionalString(),
+  variantSku: optionalString(),
+  variants: Joi.array().items(specialPriceVariantUpdateSchema).default([]),
+}).or("salePrice", "variantId", "variantSku", "variants");
+
 const specialPriceBulkUpdateSchema = Joi.object({
-  body: Joi.object({
-    updates: Joi.array().items(
-      Joi.object({
-        productId: Joi.string().required(),
-        salePrice: optionalNonNegativeNumber(),
-        variants: Joi.array().items(
-          Joi.object({
-            variantId: optionalString(),
-            variantSku: optionalString(),
-            salePrice: optionalNonNegativeNumber().required(),
-          }).or("variantId", "variantSku").required(),
-        ).default([]),
-      }).or("salePrice", "variants"),
-    ).min(1).required(),
-  }).required(),
+  body: Joi.alternatives().try(
+    Joi.array().items(specialPriceProductUpdateSchema).min(1).required(),
+    Joi.object({
+      updates: Joi.array().items(specialPriceProductUpdateSchema).min(1).required(),
+    }).required(),
+  ).required(),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),
 });

@@ -83,21 +83,48 @@ const productInventorySchema = Joi.object({
   params: Joi.object({ productId: Joi.string().required() }).required(),
 });
 
+const variantAdjustmentBodySchema = Joi.object({
+  variantSku: Joi.string().trim().allow("", null),
+  adjustmentType: Joi.string().valid("add", "remove", "set"),
+  quantity: Joi.number().min(0),
+  adjustment: Joi.number(),
+  reason: Joi.string().trim().max(500).allow("", null),
+  note: Joi.string().trim().max(1000).allow("", null),
+  reference: Joi.string().trim().max(200).allow("", null),
+  showAllHistory: Joi.boolean(),
+}).or("quantity", "adjustment").required();
+
 const adjustVariantInventorySchema = Joi.object({
-  body: Joi.object({
-    adjustmentType: Joi.string().valid("add", "remove", "set"),
-    quantity: Joi.number().min(0),
-    adjustment: Joi.number(),
-    reason: Joi.string().trim().max(500).allow("", null),
-    note: Joi.string().trim().max(1000).allow("", null),
-    reference: Joi.string().trim().max(200).allow("", null),
-    showAllHistory: Joi.boolean(),
-  }).or("quantity", "adjustment").required(),
+  body: Joi.alternatives().try(
+    variantAdjustmentBodySchema,
+    Joi.array().items(variantAdjustmentBodySchema).min(1).max(500).required(),
+    Joi.object({
+      updates: Joi.array().items(variantAdjustmentBodySchema).min(1).max(500).required(),
+      showAllHistory: Joi.boolean(),
+    }).required(),
+  ).required(),
   query: Joi.object({}).required(),
   params: Joi.object({
     productId: Joi.string().required(),
-    variantSku: Joi.string().required(),
+    variantSku: Joi.string(),
   }).required(),
+});
+
+const bulkSetVariantInventorySchema = Joi.object({
+  body: Joi.object({
+    updates: Joi.array().items(
+      Joi.object({
+        productId: Joi.string().required(),
+        variantId: Joi.string().trim().allow("", null),
+        variantSku: Joi.string().trim().allow("", null),
+        stock: Joi.number().integer().min(0).required(),
+        reason: Joi.string().trim().max(500).allow("", null),
+        note: Joi.string().trim().max(1000).allow("", null),
+      }).or("variantId", "variantSku").required(),
+    ).min(1).max(500).required(),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
 });
 
 const warehouseBody = {
@@ -184,6 +211,7 @@ module.exports = {
   listVariantInventorySchema,
   productInventorySchema,
   adjustVariantInventorySchema,
+  bulkSetVariantInventorySchema,
   createWarehouseSchema,
   updateWarehouseSchema,
   warehouseParamSchema,

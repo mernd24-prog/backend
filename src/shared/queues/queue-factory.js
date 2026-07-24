@@ -12,9 +12,10 @@ function createQueue(name) {
   });
 }
 
-function createWorker(name, processor) {
+function createWorker(name, processor, options = {}) {
   return new Worker(name, processor, {
     connection: redis,
+    ...options,
   });
 }
 

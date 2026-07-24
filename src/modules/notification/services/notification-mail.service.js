@@ -1,54 +1,13 @@
 const { sendMail } = require("../../../infrastructure/mail/mailer");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { logger } = require("../../../shared/logger/logger");
+const {
+  buildOrderEmailTemplate,
+  isOrderEmailEvent,
+  helpers,
+} = require("./order-email-template.service");
 
-const escapeHtml = (value = "") =>
-  String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-
-const humanize = (value = "") =>
-  String(value || "")
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (match) => match.toUpperCase());
-
-const formatMoney = (value, currency = "INR") =>
-  new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency,
-    maximumFractionDigits: 2,
-  }).format(Number(value || 0));
-
-const trimTrailingSlash = (value = "") => String(value || "").replace(/\/+$/, "");
-
-const absoluteUrlPattern = /^https?:\/\//i;
-
-const getBaseUrl = (recipientType = "customer") => {
-  if (recipientType === "admin") {
-    return trimTrailingSlash(process.env.ADMIN_APP_BASE_URL || "http://45.195.90.183:5000");
-  }
-  if (recipientType === "seller") {
-    return trimTrailingSlash(process.env.SELLER_APP_BASE_URL || "http://45.195.90.183:3000");
-  }
-  return trimTrailingSlash(
-    process.env.CUSTOMER_APP_BASE_URL ||
-      process.env.SELLER_APP_BASE_URL ||
-      "http://45.195.90.183",
-  );
-};
-
-const toAbsoluteUrl = (value = "", recipientType = "customer") => {
-  const url = String(value || "").trim();
-  if (!url) return "";
-  if (absoluteUrlPattern.test(url)) return url;
-  const path = url.startsWith("/") ? url : `/${url}`;
-  return `${getBaseUrl(recipientType)}${path}`;
-};
+const { escapeHtml, humanize, formatMoney, toAbsoluteUrl, row } = helpers;
 
 const referenceOf = (payload = {}) =>
   payload.orderNumber ||
@@ -94,6 +53,28 @@ const productSummaryOf = (payload = {}) => {
   return `${names[0]} + ${names.length - 1} more`;
 };
 
+const productDetailsOf = (payload = {}) => {
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  const details = items
+    .map((item) => {
+      const name = item.productName || item.product_name || item.productTitle || item.product_title || item.title || item.name;
+      if (!name) return "";
+      const variant = item.variantTitle || item.variant_title;
+      const sku = item.productSku || item.product_sku || item.sku;
+      const quantity = Number(item.quantity || 0);
+      return [
+        name,
+        variant ? `(${variant})` : "",
+        sku ? `SKU: ${sku}` : "",
+        quantity ? `Qty: ${quantity}` : "",
+      ].filter(Boolean).join(" ");
+    })
+    .filter(Boolean);
+  if (!details.length) return productSummaryOf(payload);
+  if (details.length <= 4) return details.join(", ");
+  return `${details.slice(0, 4).join(", ")} + ${details.length - 4} more`;
+};
+
 const amountOf = (payload = {}) =>
   payload.netAmount ||
   payload.payableAmount ||
@@ -103,18 +84,37 @@ const amountOf = (payload = {}) =>
   payload.amount ||
   "";
 
-const row = (label, value) =>
-  value !== undefined && value !== null && value !== "" ? { label, value } : null;
+const addressSummaryOf = (address = {}) =>
+  [
+    address.line1 || address.addressLine1 || address.address_line1,
+    address.line2 || address.addressLine2 || address.address_line2,
+    address.city,
+    address.state,
+    address.postalCode || address.postal_code || address.pincode,
+    address.country,
+  ].filter(Boolean).join(", ");
 
-const orderRows = (payload = {}) => {
+const orderRows = (payload = {}, recipientType = "customer") => {
   const currency = payload.currency || "INR";
+  const shippingAddress = payload.shippingAddress || payload.shipping_address || {};
+  const customerName = payload.customerName || payload.buyerName || shippingAddress.fullName;
+  const customerEmail = payload.customerEmail || payload.buyerEmail;
+  const customerPhone = payload.customerPhone || payload.buyerPhone || shippingAddress.phone;
   return [
-    row("Product", productSummaryOf(payload)),
+    recipientType === "seller" ? row("Customer", customerName) : row("Customer Name", customerName),
+    recipientType === "seller" ? row("Customer Email", customerEmail) : null,
+    recipientType === "seller" ? row("Customer Phone", customerPhone) : row("Contact Phone", customerPhone),
+    row("Products", productDetailsOf(payload)),
     row("Order Reference", payload.orderNumber),
+    row("Previous Status", humanize(payload.previousStatus || payload.previous_status)),
     row("Order Status", humanize(payload.status || payload.orderStatus)),
     row("Payment Status", humanize(payload.paymentStatus || payload.payment_status)),
+    row("Tracking Number", payload.trackingNumber || payload.tracking_number),
+    row("Carrier", payload.carrierName || payload.carrier_name),
+    row("Reason", payload.reason),
     row("Items", itemCountOf(payload)),
     row("Amount", amountOf(payload) ? formatMoney(amountOf(payload), currency) : ""),
+    row("Delivery Address", addressSummaryOf(shippingAddress)),
   ].filter(Boolean);
 };
 
@@ -172,7 +172,7 @@ const eventCopy = ({ eventName, subject, message, payload = {}, recipientType = 
         recipientType === "seller"
           ? `A new order${productText} has been placed. Please review the order details in your seller panel.`
           : `Thanks for shopping with Sam Global. We have received your order${productText}.`,
-      rows: orderRows(payload),
+      rows: orderRows(payload, recipientType),
       ctaText: "View order",
     },
     [DOMAIN_EVENTS.ORDER_PAID_V1]: {
@@ -181,25 +181,25 @@ const eventCopy = ({ eventName, subject, message, payload = {}, recipientType = 
         recipientType === "seller"
           ? `You have received a paid order${productText}. Please review it and start processing.`
           : `Your order${productText} is confirmed. Payment has been received and we are preparing it for processing.`,
-      rows: orderRows(payload),
+      rows: orderRows(payload, recipientType),
       ctaText: "View order",
     },
     [DOMAIN_EVENTS.ORDER_PAYMENT_FAILED_V1]: {
       title: "Payment Failed",
       intro: `Payment could not be completed for this order${productText}. Please review the order details.`,
-      rows: orderRows(payload),
+      rows: orderRows(payload, recipientType),
       ctaText: "View order",
     },
     [DOMAIN_EVENTS.ORDER_CANCELLED_V1]: {
       title: "Order Cancelled",
       intro: `This order${productText} has been cancelled. The details are listed below for your reference.`,
-      rows: orderRows(payload),
+      rows: orderRows(payload, recipientType),
       ctaText: "View order",
     },
     [DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1]: {
       title: "Order Status Updated",
       intro: `This order${productText} is now ${humanize(payload.status || payload.orderStatus) || "updated"}.`,
-      rows: orderRows(payload),
+      rows: orderRows(payload, recipientType),
       ctaText: "View order",
     },
     [DOMAIN_EVENTS.RETURN_REQUESTED_V1]: {
@@ -325,6 +325,10 @@ const wrapEmail = ({ title, intro, rows = [], ctaText = "View details", ctaUrl =
 };
 
 const buildTemplate = ({ subject, message, payload = {}, recipientType = "customer", eventName }) => {
+  if (isOrderEmailEvent(eventName, payload)) {
+    return buildOrderEmailTemplate({ subject, message, payload, recipientType, eventName });
+  }
+
   const resolvedEventName = eventName || payload.eventName;
   const { title, intro, rows, ctaText } = eventCopy({
     eventName: resolvedEventName,
@@ -336,10 +340,14 @@ const buildTemplate = ({ subject, message, payload = {}, recipientType = "custom
   const reference = displayReferenceOf(payload);
   const status = humanize(payload.status || payload.verificationStatus || payload.approvalStatus);
   const ctaUrl = toAbsoluteUrl(payload.viewUrl || "", recipientType);
+  const detailText = (rows || [])
+    .filter((row) => row?.value !== undefined && row?.value !== null && row?.value !== "")
+    .map((row) => `${row.label}: ${row.value}`)
+    .join("\n");
 
   return {
     subject: title,
-    text: `${title}\n\n${intro}${reference ? `\nReference: ${reference}` : ""}${status ? `\nStatus: ${status}` : ""}`,
+    text: `${title}\n\n${intro}${detailText ? `\n\n${detailText}` : ""}${!detailText && reference ? `\nReference: ${reference}` : ""}${!detailText && status ? `\nStatus: ${status}` : ""}`,
     html: wrapEmail({
       title,
       intro,
@@ -355,15 +363,26 @@ class NotificationMailService {
     if (!to) return null;
     const template = buildTemplate({ subject, message, payload, recipientType, eventName });
     try {
-      return await sendMail({
+      const result = await sendMail({
         to,
         subject: template.subject,
         text: template.text,
         html: template.html,
       });
+      logger.info({
+        to,
+        subject: template.subject,
+        eventName,
+        recipientType,
+        messageId: result?.messageId,
+        accepted: result?.accepted,
+        rejected: result?.rejected,
+        response: result?.response,
+      }, "Templated notification email sent");
+      return result;
     } catch (error) {
       logger.error({ err: error, to, subject }, "Templated notification email failed");
-      return null;
+      throw error;
     }
   }
 }

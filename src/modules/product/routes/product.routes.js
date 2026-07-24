@@ -29,6 +29,7 @@ const {
   listVariantInventorySchema,
   productInventorySchema,
   adjustVariantInventorySchema,
+  bulkSetVariantInventorySchema,
 } = require("../../inventory/validation/warehouse.validation");
 const { ACTIONS } = require("../../../shared/constants/actions");
 
@@ -194,6 +195,20 @@ productRoutes.patch(
   allowPermissions("inventory:adjust"),
   checkInput(adjustVariantInventorySchema),
   catchErrors(inventoryController.adjustVariantInventory),
+);
+productRoutes.patch(
+  "/inventory/products/:productId/variants/adjust",
+  authenticate,
+  allowPermissions("inventory:adjust"),
+  checkInput(adjustVariantInventorySchema),
+  catchErrors(inventoryController.adjustVariantInventory),
+);
+productRoutes.post(
+  "/inventory/variants/bulk-set",
+  authenticate,
+  allowPermissions("inventory:adjust"),
+  checkInput(bulkSetVariantInventorySchema),
+  catchErrors(inventoryController.bulkSetVariantInventory),
 );
 productRoutes.patch(
   "/:productId/inventory",

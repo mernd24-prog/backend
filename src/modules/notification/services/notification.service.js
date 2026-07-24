@@ -1,6 +1,5 @@
 const { NotificationRepository } = require("../repositories/notification.repository");
 const { createQueue } = require("../../../shared/queues/queue-factory");
-const { sendMail } = require("../../../infrastructure/mail/mailer");
 const { eventBus } = require("../../../infrastructure/events/event-bus");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { makeEvent } = require("../../../contracts/events/event");
@@ -8,6 +7,7 @@ const { eventPublisher } = require("../../../infrastructure/events/event-publish
 const { NotificationPreferenceModel } = require("../models/notification-preference.model");
 const { ROLES } = require("../../../shared/constants/roles");
 const { UserModel } = require("../../user/models/user.model");
+const { ORDER_STATUS, PAYMENT_PROVIDER, PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 
 const notificationQueue = createQueue("notifications");
 let subscribersRegistered = false;
@@ -75,6 +75,12 @@ class NotificationService {
       eventBus.subscribe(eventName, async (event) => {
         const userId = event.payload.buyerId || event.payload.userId;
         const customerPayload = this.withViewMetadata(event.payload, "buyer");
+        const hasCustomerEmail = Boolean(
+          customerPayload.recipientEmail ||
+            customerPayload.customerEmail ||
+            customerPayload.buyerEmail ||
+            customerPayload.email,
+        );
         if (userId) {
           await this.createNotification({
             userId,
@@ -90,17 +96,17 @@ class NotificationService {
             status: "queued",
             idempotencyKey: `${eventName}:${event.id}:${userId}:buyer:in_app`,
           });
+        }
 
-          if (this.shouldQueueEmail(eventName, "buyer", event.payload)) {
-            await this.queueEmailForUser(userId, {
-              subject,
-              message: templateBuilder(event.payload),
-              eventName,
-              eventId: event.id,
-              recipientType: "buyer",
-              payload: customerPayload,
-            });
-          }
+        if ((userId || hasCustomerEmail) && this.shouldQueueEmail(eventName, "buyer", event.payload)) {
+          await this.queueEmailForUser(userId, {
+            subject,
+            message: templateBuilder(event.payload),
+            eventName,
+            eventId: event.id,
+            recipientType: "buyer",
+            payload: customerPayload,
+          });
         }
 
         const sellerIds = this.extractSellerRecipientIds(event.payload)
@@ -133,6 +139,22 @@ class NotificationService {
             });
           }
         }));
+
+        if (this.shouldQueueAdminEmail(eventName, event.payload)) {
+          const admins = await this.findAdminRecipients();
+          const adminPayload = this.withViewMetadata(event.payload, "admin");
+          await Promise.all(admins.map((admin) => this.queueEmailForUser(String(admin._id || admin.id), {
+            subject,
+            message: templateBuilder(event.payload),
+            eventName,
+            eventId: event.id,
+            recipientType: "admin",
+            payload: {
+              ...adminPayload,
+              adminName: admin.profile?.firstName || admin.email || "",
+            },
+          })));
+        }
       });
     });
 
@@ -259,28 +281,164 @@ class NotificationService {
   }
 
   async queueEmailForUser(userId, { subject, message, eventName, eventId, recipientType, payload = {} }) {
-    const user = await UserModel.findById(userId).select("email").lean();
-    if (!user?.email) return;
+    const isBuyerRecipient = ["buyer", "customer"].includes(String(recipientType || ""));
+    const directEmail = isBuyerRecipient
+      ? payload.recipientEmail || payload.customerEmail || payload.buyerEmail || payload.email
+      : payload.recipientEmail || this.extractSellerRecipientEmail(payload, userId);
+    const to = directEmail || await this.findUserEmail(userId, recipientType);
+    if (!to) return;
+    const referenceId = payload.orderId || payload.returnId || payload.payoutId || eventId;
+    const statusKey = this.emailJobStatusKey(eventName, payload);
+    const jobId = [
+      eventName,
+      referenceId,
+      statusKey,
+      recipientType,
+      userId || to,
+    ].filter(Boolean).join("|");
     await notificationQueue.add("templated-email", {
-      to: user.email,
+      to,
       subject,
       message,
       eventName,
       eventId,
       recipientType,
       payload,
-    });
+    }, { jobId });
   }
 
-  shouldQueueEmail(eventName) {
-    return !EMAIL_SUPPRESSED_EVENTS.has(eventName);
+  async findUserEmail(userId, recipientType = "buyer") {
+    if (!userId) return null;
+    const id = String(userId);
+    const isObjectId = UserModel.db.base.Types.ObjectId.isValid(id);
+    const projection = "email sellerProfile";
+    let user = isObjectId
+      ? await UserModel.findById(id).select(projection).lean().catch(() => null)
+      : null;
+
+    if (!user && String(recipientType || "") === "seller") {
+      user = await UserModel.findOne({
+        $or: [
+          { ownerSellerId: id },
+          { parentSellerId: id },
+        ],
+        accountStatus: { $ne: "deleted" },
+      }).select(projection).lean().catch(() => null);
+    }
+
+    return user?.email || user?.sellerProfile?.supportEmail || null;
+  }
+
+  async queueDirectEmail({ to, subject, html, text, from, idempotencyKey }) {
+    if (!to) return;
+    const jobId = idempotencyKey
+      ? `direct-email:${idempotencyKey}`
+      : ["direct-email", to, subject].filter(Boolean).join("|");
+    await notificationQueue.add("direct-email", {
+      to,
+      subject,
+      html,
+      text,
+      from,
+    }, { jobId });
+  }
+
+  isOnlinePaymentProvider(payload = {}) {
+    const provider = payload.paymentProvider || payload.payment_provider || payload.metadata?.paymentProvider;
+    return [PAYMENT_PROVIDER.RAZORPAY, PAYMENT_PROVIDER.STRIPE].includes(provider);
+  }
+
+  emailJobStatusKey(eventName, payload = {}) {
+    if (
+      [DOMAIN_EVENTS.ORDER_PAID_V1, DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1].includes(eventName) &&
+      String(payload.status || "") === ORDER_STATUS.CONFIRMED
+    ) {
+      return "confirmed";
+    }
+    return eventName === DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1
+      ? payload.status || payload.orderStatus || "updated"
+      : "";
+  }
+
+  shouldQueueEmail(eventName, recipientType = "buyer", payload = {}) {
+    if (EMAIL_SUPPRESSED_EVENTS.has(eventName)) return false;
+
+    const isSellerRecipient = String(recipientType || "") === "seller";
+    const status = String(payload.status || payload.orderStatus || "");
+
+    if (eventName === DOMAIN_EVENTS.ORDER_CREATED_V1) {
+      return !this.isOnlinePaymentProvider(payload);
+    }
+
+    if (isSellerRecipient) {
+      if ([DOMAIN_EVENTS.ORDER_PAID_V1, DOMAIN_EVENTS.ORDER_CANCELLED_V1, DOMAIN_EVENTS.ORDER_PAYMENT_FAILED_V1].includes(eventName)) {
+        return true;
+      }
+      return false;
+    }
+
+    if (this.isOnlinePaymentProvider(payload)) {
+      const paymentStatus = String(payload.paymentStatus || payload.payment_status || "");
+      if (
+        eventName === DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1 &&
+        String(payload.status || "") === ORDER_STATUS.CONFIRMED &&
+        [PAYMENT_STATUS.CAPTURED, PAYMENT_STATUS.AUTHORIZED, ""].includes(paymentStatus)
+      ) {
+        return false;
+      }
+    }
+
+    if (eventName === DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1 && status === ORDER_STATUS.CONFIRMED) {
+      return false;
+    }
+
+    return true;
+  }
+
+  shouldQueueAdminEmail(eventName, payload = {}) {
+    const status = String(payload.status || payload.orderStatus || "");
+    if (eventName === DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1) {
+      return [ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED, "completed", "complete"].includes(status);
+    }
+    return [
+      DOMAIN_EVENTS.ORDER_CREATED_V1,
+      DOMAIN_EVENTS.ORDER_PAID_V1,
+      DOMAIN_EVENTS.ORDER_CANCELLED_V1,
+      DOMAIN_EVENTS.ORDER_PAYMENT_FAILED_V1,
+      DOMAIN_EVENTS.RETURN_REFUNDED_V1,
+      DOMAIN_EVENTS.REFUND_PROCESSED_V1,
+      DOMAIN_EVENTS.REFUND_FAILED_V1,
+      DOMAIN_EVENTS.PAYMENT_REFUNDED_V1,
+    ].includes(eventName);
+  }
+
+  extractSellerRecipientEmail(payload = {}, sellerId = "") {
+    const targetSellerId = String(sellerId || "");
+    const addFromObject = (entry = {}) => {
+      if (!entry || typeof entry !== "object") return null;
+      const entrySellerId = String(entry.sellerId || entry.seller_id || entry.ownerSellerId || entry.userId || entry.id || "");
+      if (targetSellerId && entrySellerId && entrySellerId !== targetSellerId) return null;
+      return entry.sellerEmail || entry.seller_email || entry.email || entry.supportEmail || null;
+    };
+
+    const direct = payload.sellerEmail || payload.seller_email || null;
+    if (direct) return direct;
+
+    for (const list of [payload.items, payload.sellers, payload.shipments]) {
+      for (const entry of Array.isArray(list) ? list : []) {
+        const email = addFromObject(entry);
+        if (email) return email;
+      }
+    }
+
+    return null;
   }
 
   async findAdminRecipients() {
     return UserModel.find({
       role: { $in: [ROLES.ADMIN, ROLES.SUB_ADMIN, ROLES.SUPER_ADMIN, "admin", "sub-admin", "super-admin"] },
       accountStatus: { $ne: "deleted" },
-    }).select("_id email role").lean();
+    }).select("_id email role profile").lean();
   }
 
   extractSellerRecipientIds(payload = {}) {
@@ -289,9 +447,25 @@ class NotificationService {
       if (value === undefined || value === null || value === "" || value === "platform") return;
       sellerIds.add(String(value));
     };
+    const parseObject = (value) => {
+      if (!value) return {};
+      if (typeof value === "object") return value;
+      if (typeof value === "string") {
+        try {
+          return JSON.parse(value);
+        } catch {
+          return {};
+        }
+      }
+      return {};
+    };
     const addFromObject = (entry = {}) => {
       if (!entry || typeof entry !== "object") return;
       add(entry.sellerId || entry.seller_id || entry.ownerSellerId || entry.userId || entry.id);
+      const sellerSnapshot = parseObject(entry.sellerSnapshot || entry.seller_snapshot);
+      const productSnapshot = parseObject(entry.productSnapshot || entry.product_snapshot);
+      add(sellerSnapshot.sellerId || sellerSnapshot.seller_id);
+      add(productSnapshot.sellerId || productSnapshot.seller_id);
     };
 
     add(payload.sellerId || payload.seller_id || payload.ownerSellerId);
@@ -334,10 +508,11 @@ class NotificationService {
     const notification = await this.notificationRepository.create(payload);
 
     if (notification.channel === "email" && payload.email) {
-      await sendMail({
+      await this.queueDirectEmail({
         to: payload.email,
         subject: notification.subject || "Notification",
         html: `<p>${notification.template}</p>`,
+        idempotencyKey: payload.idempotencyKey || notification.id,
       });
     }
 

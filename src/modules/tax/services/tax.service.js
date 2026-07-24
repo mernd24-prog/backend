@@ -10,6 +10,7 @@ const { UserModel } = require("../../user/models/user.model");
 const { documentRendererService } = require("../../../shared/services/document-renderer.service");
 const { sendMail } = require("../../../infrastructure/mail/mailer");
 const { NotificationQueueModel } = require("../../notification/models/notification-preference.model");
+const { createQueue } = require("../../../shared/queues/queue-factory");
 
 const INVOICE_TYPES = {
   ORDER_CUSTOMER: "order_customer",
@@ -21,6 +22,7 @@ const INVOICE_TYPES = {
 const ADMIN_ROLES = [ROLES.ADMIN, ROLES.SUB_ADMIN, ROLES.SUPER_ADMIN];
 const SELLER_ROLES = [ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN];
 const CUSTOMER_INVOICE_READY_STATUS = "fulfilled";
+const taxDocumentMailQueue = createQueue("notifications");
 
 class TaxService {
   constructor({
@@ -632,10 +634,11 @@ class TaxService {
       scheduledFor: payload.scheduledFor || null,
     });
 
-    return this.sendQueuedTaxDocument(queueItem, {
+    await this.enqueueTaxDocumentEmail(queueItem, {
       html: htmlDocument.body,
       text: textDocument.body,
     });
+    return queueItem;
   }
 
   async queueTaxDocumentWhatsapp({ documentType, documentId, source, document, recipient, actor, payload = {} }) {
@@ -678,7 +681,7 @@ class TaxService {
       await queueItem.save();
       return queueItem;
     }
-    return this.sendQueuedTaxDocument(queueItem);
+    return this.enqueueTaxDocumentEmail(queueItem);
   }
 
   async listTaxDocumentDispatches(query = {}) {
@@ -727,6 +730,20 @@ class TaxService {
       await queueItem.save();
       throw error;
     }
+  }
+
+  async enqueueTaxDocumentEmail(queueItem, rendered = {}) {
+    queueItem.status = "queued";
+    queueItem.failureReason = "";
+    await queueItem.save();
+    const attempt = Number(queueItem.attempts || 0);
+    await taxDocumentMailQueue.add("tax-document-email", {
+      dispatchId: String(queueItem._id || queueItem.id),
+      rendered,
+    }, {
+      jobId: `tax-document-email:${queueItem._id || queueItem.id}:${attempt}`,
+    });
+    return queueItem;
   }
 
   async getTaxReport(query) {
