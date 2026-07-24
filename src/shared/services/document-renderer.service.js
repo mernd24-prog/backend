@@ -844,11 +844,21 @@ class DocumentRendererService {
     };
 
     if (a(amounts.grossSalesAmount) > 0) addRow("Gross Sales", amounts.grossSalesAmount);
-    if (a(amounts.discountAmount) > 0) {
+    const customerPromotion = a(amounts.customerDiscountAmount ?? amounts.discountAmount);
+    if (customerPromotion > 0) {
       rows.push(`<div class="amt-row savings">
-        <span class="amt-lbl">Discount</span>
-        <span class="amt-val">−${this.escapeHtml(this.money(amounts.discountAmount, currency))}</span>
+        <span class="amt-lbl">Customer Promotion</span>
+        <span class="amt-val">−${this.escapeHtml(this.money(customerPromotion, currency))}</span>
       </div>`);
+    }
+    if (a(amounts.marketplaceFundedDiscountAmount) > 0) {
+      addRow("Paid by Marketplace Promotion", amounts.marketplaceFundedDiscountAmount);
+    }
+    if (a(amounts.paymentPartnerFundedDiscountAmount) > 0) {
+      addRow("Paid by Payment Partner", amounts.paymentPartnerFundedDiscountAmount);
+    }
+    if (a(amounts.customerPaidTowardInvoiceAmount) > 0) {
+      addRow("Paid by Customer Toward Invoice", amounts.customerPaidTowardInvoiceAmount);
     }
     if (a(amounts.walletDiscountAmount) > 0) {
       rows.push(`<div class="amt-row savings">
@@ -865,9 +875,12 @@ class DocumentRendererService {
     const taxPayable = a(amounts.taxPayableAmount ?? (a(amounts.cgstAmount) + a(amounts.sgstAmount) + a(amounts.igstAmount) + a(amounts.tcsAmount)));
     if (taxPayable > 0) addRow("GST", taxPayable);
 
-    const total = a(amounts.finalPayableAmount || amounts.totalAmount || amounts.customerFinalAmount);
+    const customerPaid = a(amounts.customerPaidTowardInvoiceAmount);
+    const total = customerPaid > 0
+      ? customerPaid
+      : a(amounts.finalPayableAmount || amounts.totalAmount || amounts.customerFinalAmount);
     rows.push(`<div class="amt-row grand">
-      <span class="amt-lbl">Grand Total</span>
+      <span class="amt-lbl">${customerPaid > 0 ? "Amount Paid by Customer" : "Grand Total"}</span>
       <span class="amt-val">${this.escapeHtml(this.money(total, currency))}</span>
     </div>`);
 
@@ -1037,6 +1050,7 @@ class DocumentRendererService {
     const isCommission = inv.type === "platform_commission";
     const isOrderReceipt = inv.type === "order_customer";
     const isCustomerFee = inv.type === "platform_customer_fee";
+    const isSellerCustomer = inv.type === "seller_customer";
     const sellerName = seller.legalBusinessName || seller.displayName || seller.businessName || "Seller";
     const buyerName = this.getBuyerName(buyer);
     const sellerAddress = this.formatAddressLines(seller.billingAddress || seller.businessAddress);
@@ -1087,7 +1101,9 @@ class DocumentRendererService {
       const documentTitle = inv.displayTitle || (isCommission
         ? "COMMISSION TAX INVOICE"
         : isCustomerFee
-          ? "PLATFORM FEE TAX INVOICE"
+          ? Number(amounts.taxAmount || amounts.taxPayableAmount || 0) > 0
+            ? "PLATFORM FEE TAX INVOICE"
+            : "PLATFORM FEE INVOICE"
         : isOrderReceipt
           ? "ORDER RECEIPT"
           : "TAX INVOICE");
@@ -1162,9 +1178,18 @@ class DocumentRendererService {
         text(compact(title, 34), 62, y, 8, true);
         const sku = item.productSku || item.variantSku || item.product_sku || item.variant_sku;
         if (sku) text(`SKU: ${compact(sku, 30)}`, 62, y - 11, 7);
-        const itemDiscount = Number(item.discountAmount ?? item.discount_amount ?? 0);
-        if (!isCommission && itemDiscount > 0) {
-          text(`Discount: ${money(itemDiscount)}`, 160, y - 11, 7);
+        const customerPromotion = Number(
+          item.customerDiscountAmount ?? item.discountAmount ?? item.discount_amount ?? 0,
+        );
+        if (!isCommission && customerPromotion > 0) {
+          const marketplaceFunding = Number(item.marketplaceFundedDiscountAmount || 0);
+          const partnerFunding = Number(item.paymentPartnerFundedDiscountAmount || 0);
+          const fundingLabel = marketplaceFunding > 0
+            ? "marketplace funded"
+            : partnerFunding > 0
+              ? "payment partner funded"
+              : "seller funded";
+          text(`Customer promotion: -${money(customerPromotion)} (${fundingLabel})`, 140, y - 11, 7);
         }
         if (isCommission && Number(item.commissionRate || 0) > 0) {
           text(`Commission: ${Number(item.commissionRate).toFixed(2)}%`, 160, y - 11, 7);
@@ -1184,7 +1209,7 @@ class DocumentRendererService {
           if (Number(value || 0) !== 0) summaryRows.push([label, Number(value), negative]);
         };
         add("Subtotal", amounts.grossSalesAmount || amounts.taxableAmount);
-        add("Discount", amounts.discountAmount, true);
+        add("Customer Promotion", amounts.customerDiscountAmount ?? amounts.discountAmount, true);
         add("Delivery Charge", amounts.deliveryChargeAmount || amounts.shippingChargeAmount);
         add("COD Charge", amounts.codChargeAmount);
         add("Platform Fee", amounts.customerPlatformFeeAmount);
@@ -1195,7 +1220,10 @@ class DocumentRendererService {
           : Number(amounts.taxPayableAmount || 0) > 0
             ? "GST"
             : "Included GST (information only)", displayedTax);
-        const total = amounts.finalPayableAmount || amounts.totalAmount || amounts.customerFinalAmount || inv.totalAmount || 0;
+        const invoiceValue = amounts.finalPayableAmount || amounts.totalAmount || amounts.customerFinalAmount || inv.totalAmount || 0;
+        const total = isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0
+          ? amounts.customerPaidTowardInvoiceAmount
+          : invoiceValue;
         const summaryTop = Math.min(y - 4, 205 + summaryRows.length * 17);
         text("AMOUNT SUMMARY", 355, summaryTop + 18, 8, true);
         summaryRows.forEach(([label, value, negative], index) => {
@@ -1205,8 +1233,25 @@ class DocumentRendererService {
         });
         const totalY = summaryTop - summaryRows.length * 16 - 4;
         line(350, totalY + 12, 559, totalY + 12, 0.8);
-        text("GRAND TOTAL", 355, totalY - 2, 10, true);
+        text(isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0
+          ? "AMOUNT PAID BY CUSTOMER"
+          : "GRAND TOTAL", 355, totalY - 2, 10, true);
         text(money(total), 553, totalY - 2, 11, true, "right");
+        if (isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0) {
+          text(`Tax invoice value: ${money(invoiceValue)}`, 355, totalY - 16, 7.5);
+        }
+        const contribution = Number(amounts.marketplaceFundedDiscountAmount || 0);
+        const partnerContribution = Number(amounts.paymentPartnerFundedDiscountAmount || 0);
+        if (contribution > 0 || partnerContribution > 0) {
+          const allocation = [
+            Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0
+              ? `Customer: ${money(amounts.customerPaidTowardInvoiceAmount)}`
+              : null,
+            contribution > 0 ? `Marketplace promotion: ${money(contribution)}` : null,
+            partnerContribution > 0 ? `Payment partner: ${money(partnerContribution)}` : null,
+          ].filter(Boolean).join(" · ");
+          text(`Payment allocation: ${compact(allocation, 78)}`, 40, 188, 7.5);
+        }
         text("Amount in words: As per the grand total shown above.", 40, 174, 8);
         text("Payment status and transaction reference are available in the order details.", 40, 159, 8);
         line(36, 138, 559, 138, 0.8);

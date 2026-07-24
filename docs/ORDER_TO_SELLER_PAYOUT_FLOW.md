@@ -34,7 +34,9 @@ The canonical order-to-payout tables are:
 3. `seller_payouts` — a batch of eligible commission rows;
 4. `seller_settlements` — the completed payout or a negative post-payout adjustment.
 
-`vendor_payouts`, exposed through `/admin/payouts`, is a separate legacy/manual record. It is not linked to order items or `seller_commissions` and is not the canonical order-to-seller payout path.
+`vendor_payouts` is a historical/manual table kept for compatibility. It is
+not exposed as the canonical order-to-seller payout path; live seller payouts
+run through `seller_commissions`, `seller_payouts`, and `seller_settlements`.
 
 ```mermaid
 flowchart LR
@@ -124,8 +126,10 @@ discountedLineTotal = itemLineTotal - itemDiscount
 customerItemsAmount = subtotal - orderDiscount
 ```
 
-The checkout item snapshot records marketplace-funded and seller-funded discount
-portions. Only the seller-funded portion reduces the seller payout base. Item
+The checkout item snapshot records marketplace-funded, seller-funded, and
+payment-partner-funded discount portions. Only the seller-funded portion
+reduces the seller invoice and payout base; the other portions are recorded as
+payment contributions. Item
 allocation uses a deterministic final-item rounding remainder so the item
 discounts equal the order discount exactly. See
 `MARKETPLACE_TAX_DOCUMENT_FLOW.md` for document placement and reconciliation.
@@ -579,7 +583,7 @@ Manual approval still applies to scheduler-created batches.
 | `finance.payoutSchedule` | `manual` | Automatic batch cadence |
 | `finance.payoutManualApprovalRequired` | true | Create pending rather than processing payout |
 | `finance.minimumPayoutAmount` | 0 | Minimum batch net |
-| `cod.payoutRequiresCapture` | true | Stored and exposed, but not enforced by payout eligibility |
+| `cod.payoutRequiresCapture` | true | Blocks COD payout release until payment/collection capture is confirmed |
 
 Commerce settings are stored in `admin_settings` under `commerce_policy`. Order metadata snapshots checkout settings, but seller commission release uses current settings at the time it runs.
 
@@ -604,7 +608,7 @@ All paths below assume `/api/v1`.
 | Tax | order invoice, marketplace bundle, invoice/credit-note list/download/dispatch/export, and reports under `/tax` |
 | Seller finance | commissions, wallet summary, payouts, settlements, exports, statements, payout operations, and recoveries under `/sellers/commissions` |
 | Canonical payout actions | `POST /sellers/commissions/process-payouts`; approve/process/fail/hold/release/retry endpoints under `/sellers/commissions/payouts` |
-| Legacy manual payout | `POST/GET /admin/payouts` using `vendor_payouts` |
+| Historical manual payout table | `vendor_payouts`; no longer exposed as the canonical payout API |
 
 RBAC is enforced through action/permission middleware. Seller reads are scoped using the authenticated owner seller and selected organization where the route passes that context.
 
@@ -632,25 +636,19 @@ These are implementation findings, not hypothetical roadmap items.
 
 ### Critical
 
-1. **COD capture is not enforced before payout.** `cod.payoutRequiresCapture` is stored and displayed, but release evaluation checks order status, not payment capture. A delivered COD order with an authorized payment can become payout-eligible.
-2. **No payout provider or bank/KYC readiness check exists.** Completing a payout only records a caller-supplied reference. The flow does not verify seller bank, KYC, go-live, or organization payout readiness and does not transfer money.
-3. **Quote shipping policy and payout ledger can disagree.** Checkout adds/reduces seller payout for `shippingPolicy`; `seller_commissions` does not include shipping reimbursement or deduction. Actual payout rows therefore omit this quoted adjustment.
-4. **Fee-tax settings can drift after checkout.** Commission tax is recomputed at delivery using current commerce settings instead of the item’s snapshotted `platformFeeTaxAmount`.
-5. **Unmatched modern rules can create a quote-to-payout commission jump.** If any modern rules exist but none match an item, checkout can snapshot zero seller fee. At delivery the commission ledger falls back to the default bronze rate (15%) whenever the snapshotted item fee total is zero; it does not load the seller’s actual tier.
-6. **Refund after payout batching can overpay.** A refund updates an approved/processing commission row but does not recompute the already-created `seller_payouts` totals. Negative recovery is created only when commission status is `paid`.
-7. **GST-inclusive partial refunds can add tax twice.** Return and partial-cancellation estimates start from `line_total`, which normally already includes GST, and then add a proportional `tax_amount`. This can overstate the buyer refund and seller adjustment for the default GST-inclusive product mode.
-9. **Marketplace invoice item component splits are incomplete.** Item tax snapshots store tax mode and total tax but not item CGST/SGST/IGST fields. Seller invoice component totals can remain zero while `tax_amount` is non-zero.
-10. **A buyer can directly mark an order delivered.** The generic order status endpoint permits the order owner to perform `shipped -> delivered`. That path synchronizes shipments to delivered and calculates seller commission without requiring courier tracking or delivery verification.
+1. **No payout provider or bank/KYC readiness check exists.** Completing a payout only records a caller-supplied reference. The flow does not verify seller bank, KYC, go-live, or organization payout readiness and does not transfer money.
+2. **Fee-tax settings can drift after checkout.** Commission tax is recomputed at delivery using current commerce settings instead of the item’s snapshotted `platformFeeTaxAmount`.
+3. **Unmatched modern rules can create a quote-to-payout commission jump.** If any modern rules exist but none match an item, checkout can snapshot zero seller fee. At delivery the commission ledger falls back to the default bronze rate (15%) whenever the snapshotted item fee total is zero; it does not load the seller’s actual tier.
+4. **Refund after payout batching can overpay.** A refund updates an approved/processing commission row but does not recompute the already-created `seller_payouts` totals. Negative recovery is created only when commission status is `paid`.
+5. **GST-inclusive partial refunds can add tax twice.** Return and partial-cancellation estimates start from `line_total`, which normally already includes GST, and then add a proportional `tax_amount`. This can overstate the buyer refund and seller adjustment for the default GST-inclusive product mode.
+6. **Marketplace invoice item component splits are incomplete.** Item tax snapshots store tax mode and total tax but not item CGST/SGST/IGST fields. Seller invoice component totals can remain zero while `tax_amount` is non-zero.
+7. **A buyer can directly mark an order delivered.** The generic order status endpoint permits the order owner to perform `shipped -> delivered`. That path synchronizes shipments to delivered and calculates seller commission without requiring courier tracking or delivery verification.
 
 ### High
 
 1. **Checkout and public serviceability can disagree.** Global pincode exclusions/rates and `shipping_profiles` are not authoritative in checkout.
-2. **Unscoped payout batch discovery uses obsolete statuses.** `processBatchPayouts()` looks for `calculated`/`failed` when organization is omitted, but commission calculation creates `pending`; seller-wide manual/scheduled payout discovery can therefore return no organization groups. Explicit organization-scoped runs avoid that discovery branch.
-3. **Legacy payout APIs bypass the canonical ledger.** `/admin/payouts` can create arbitrary `vendor_payouts` with no commission linkage, release policy, refund adjustment, approval workflow, or settlement row.
-4. **Manual payout approval can be bypassed.** `processPayout()` accepts a `pending` payout, so an authorized caller can call the process endpoint without first calling approve. It also accepts `failed`; after failure has detached the commissions, direct processing can complete the old payout and create a settlement with no commissions attached.
-7. **Invoice numbering is race-prone.** The next number is `COUNT(*) + 1`, which can collide under concurrent generation.
-8. **Partial cancellation tax uses proportional item totals, not the item tax breakup components.** This can diverge from exact tax/credit-note allocation after mixed rates or rounding.
-9. **A return “manual” refund is only a state transition.** It can finalize immediately without a required bank/cash transfer reference or proof; no external movement is performed.
+2. **Partial cancellation tax uses proportional item totals, not the item tax breakup components.** This can diverge from exact tax/credit-note allocation after mixed rates or rounding.
+3. **A return “manual” refund is only a state transition.** It can finalize immediately without a required bank/cash transfer reference or proof; no external movement is performed.
 
 ### Medium
 
@@ -659,9 +657,7 @@ These are implementation findings, not hypothetical roadmap items.
 3. Coupon usage increment is not atomic with order creation and is not reversed on cancellation.
 4. GST rate fallback uses truthy `||` expressions; an explicit zero rate without an exempt HSN rule can fall through to 18%.
 5. Global shipping rate/COD fee and seller checkout delivery/COD charges are separate calculations and can show different amounts.
-6. Organization-aware checkout groups charges correctly, but some order read-model shipping lookup code keys only by seller and can misattribute charge display when one seller has multiple organizations in one order.
-7. Direct organization charge-setting reads have an argument-order defect in the seller-fallback branch; checkout uses the separate bulk settings path, but seller/admin read-update behavior can be incorrect when only seller-wide settings exist.
-8. The repository has no project test script or automated unit/integration suite for this flow; current verification depends on syntax checks and manual/runtime smoke tests.
+6. Direct organization charge-setting reads have an argument-order defect in the seller-fallback branch; checkout uses the separate bulk settings path, but seller/admin read-update behavior can be incorrect when only seller-wide settings exist.
 
 ## 18. Source map
 

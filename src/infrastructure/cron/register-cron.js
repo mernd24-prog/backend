@@ -86,6 +86,9 @@ function registerCronJobs() {
   runPeriodicJob("cancellation-refund-reconciliation", async () => {
     return cancellationService.reconcileProviderRefunds({ limit: 100 });
   }, 5 * 60 * 1000);
+  runPeriodicJob("rto-financial-reconciliation", async () => {
+    return cancellationService.reconcileRtoSettlements({ limit: 100 });
+  }, 5 * 60 * 1000);
   runPeriodicJob("outbox-flush", async () => outboxProcessor.flushPending(), 15 * 1000);
 }
 

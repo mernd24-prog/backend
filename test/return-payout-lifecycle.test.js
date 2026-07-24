@@ -5,8 +5,16 @@ const { CommissionService } = require("../src/modules/seller/services/commission
 const { OrderRepository } = require("../src/modules/order/repositories/order.repository");
 const { TaxService } = require("../src/modules/tax/services/tax.service");
 const { ReturnService } = require("../src/modules/returns/services/return.service");
+const { AnalyticsRepository } = require("../src/modules/analytics/repositories/analytics.repository");
+const { CancellationService } = require("../src/modules/cancellation/services/cancellation.service");
+const { DeliveryService } = require("../src/modules/delivery/services/delivery.service");
 const { prorateMoney } = require("../src/shared/domain/quantity-allocation");
-const { applyShippingPolicy, uniqueCommissionRates } = require("../src/shared/domain/seller-payout-rules");
+const {
+  applyShippingPolicy,
+  calculateInclusiveShippingTax,
+  resolveShippingPolicy,
+  uniqueCommissionRates,
+} = require("../src/shared/domain/seller-payout-rules");
 
 test("item commission becomes available only after item eligibility", () => {
   const releaseData = new Map([
@@ -72,6 +80,88 @@ test("partial return holds only the affected order item", () => {
   assert.equal(returned.reason, "item_on_hold");
 });
 
+test("COD commissions wait for collection capture before payout release", () => {
+  const releaseData = new Map([["order-cod", {
+    order: {
+      id: "order-cod",
+      status: "fulfilled",
+      payment_provider: "cod",
+      payment_status: "authorized",
+      updated_at: "2026-07-21T00:00:00.000Z",
+    },
+    codCollections: [],
+  }]]);
+  releaseData.itemsById = new Map([
+    ["item-cod", { id: "item-cod", payout_status: "eligible" }],
+  ]);
+  const commission = {
+    id: "commission-cod",
+    order_id: "order-cod",
+    order_item_id: "item-cod",
+    seller_id: "seller-1",
+    status: "pending",
+    net_amount: 1000,
+  };
+
+  const blocked = CommissionService.evaluateCommissionRelease(
+    commission,
+    releaseData,
+    { codPayoutRequiresCapture: true },
+  );
+  assert.equal(blocked.available, false);
+  assert.equal(blocked.releaseStatus, "blocked");
+  assert.equal(blocked.reason, "waiting_for_cod_collection_confirmation");
+
+  releaseData.get("order-cod").order.payment_status = "captured";
+  const available = CommissionService.evaluateCommissionRelease(
+    commission,
+    releaseData,
+    { codPayoutRequiresCapture: true },
+  );
+  assert.equal(available.available, true);
+  assert.equal(available.releaseStatus, "available");
+});
+
+test("seller-direct COD collections block payout until verified", () => {
+  const releaseData = new Map([["order-cod-direct", {
+    order: {
+      id: "order-cod-direct",
+      status: "fulfilled",
+      payment_provider: "cod",
+      payment_status: "captured",
+      fulfillment_eligible_at: "2026-07-20T00:00:00.000Z",
+    },
+    codCollections: [
+      { seller_id: "seller-1", collection_mode: "seller_direct", status: "submitted" },
+    ],
+  }]]);
+  const commission = {
+    id: "commission-cod-direct",
+    order_id: "order-cod-direct",
+    seller_id: "seller-1",
+    status: "pending",
+    net_amount: 1000,
+  };
+
+  const blocked = CommissionService.evaluateCommissionRelease(
+    commission,
+    releaseData,
+    { codPayoutRequiresCapture: true },
+  );
+  assert.equal(blocked.available, false);
+  assert.equal(blocked.releaseStatus, "blocked");
+  assert.equal(blocked.reason, "waiting_for_seller_cod_reconciliation");
+
+  releaseData.get("order-cod-direct").codCollections[0].status = "verified";
+  const available = CommissionService.evaluateCommissionRelease(
+    commission,
+    releaseData,
+    { codPayoutRequiresCapture: true },
+  );
+  assert.equal(available.available, true);
+  assert.equal(available.releaseStatus, "available");
+});
+
 test("partial quantity cancellation and return allocation are proportional and rounding-safe", () => {
   assert.deepEqual(
     {
@@ -94,11 +184,295 @@ test("all seller shipping policies apply exactly once", () => {
   assert.equal(applyShippingPolicy(900, 50, "not_in_seller_payout"), 900);
 });
 
+test("seller-fulfilled customer shipping is credited and included in GST TCS base", () => {
+  assert.equal(
+    resolveShippingPolicy("not_in_seller_payout", {
+      fulfillmentParty: "seller",
+      settlementPolicy: "reimburse_seller",
+    }),
+    "reimburse_seller",
+  );
+  assert.equal(
+    resolveShippingPolicy("not_in_seller_payout", {
+      sellerId: "seller-1",
+      ruleSource: "shipping_profile",
+    }),
+    "reimburse_seller",
+  );
+  assert.deepEqual(calculateInclusiveShippingTax(49, 847.46, 152.54), {
+    taxableAmount: 41.53,
+    taxAmount: 7.47,
+  });
+
+  const metadata = {
+    commerceSettings: {
+      platformFees: { sellerCommissionType: "percentage", sellerCommissionValue: 2 },
+      finance: {
+        sellerPayoutBase: "gross_customer_price",
+        chargePlatformFeeTaxToSeller: true,
+        platformFeeTaxRate: 18,
+        shippingPolicy: "not_in_seller_payout",
+        gstTcsEnabled: true,
+        gstTcsRate: 0.5,
+      },
+    },
+    deliveryCharge: {
+      sellers: [{
+        sellerId: "seller-1",
+        chargeAmount: 49,
+        fulfillmentParty: "seller",
+        collectedBy: "platform",
+        beneficiary: "seller",
+        settlementPolicy: "reimburse_seller",
+      }],
+    },
+  };
+  const [settlement] = new OrderRepository().buildSellerSettlements([{
+    seller_id: "seller-1",
+    quantity: 1,
+    line_total: 1000,
+    tax_amount: 152.54,
+    tax_breakup: { taxableAmount: 847.46, taxAmount: 152.54, gstRate: 18, gstInclusive: true },
+    pricing_snapshot: {
+      sellerPayoutBaseAmount: 1000,
+      platformFeeAmount: 20,
+      platformFeeTaxAmount: 3.6,
+    },
+  }], [], { metadata });
+
+  assert.equal(settlement.shippingReimbursementAmount, 49);
+  assert.equal(settlement.shippingTaxableAmount, 41.53);
+  assert.equal(settlement.gstTcsTaxableAmount, 888.99);
+  assert.equal(settlement.gstTcsAmount, 4.44);
+  assert.equal(settlement.sellerPayoutAmount, 1020.96);
+});
+
+test("multi-seller shipping is credited only to its owning seller", () => {
+  const metadata = {
+    commerceSettings: {
+      platformFees: { sellerCommissionType: "percentage", sellerCommissionValue: 0 },
+      finance: { sellerPayoutBase: "gross_customer_price", shippingPolicy: "reimburse_seller" },
+    },
+    deliveryCharge: {
+      sellers: [
+        { sellerId: "seller-a", chargeAmount: 40, fulfillmentParty: "seller", settlementPolicy: "reimburse_seller" },
+        { sellerId: "seller-b", chargeAmount: 60, fulfillmentParty: "seller", settlementPolicy: "reimburse_seller" },
+      ],
+    },
+  };
+  const settlements = new OrderRepository().buildSellerSettlements([
+    { seller_id: "seller-a", quantity: 1, line_total: 1000, tax_breakup: { taxableAmount: 1000 }, pricing_snapshot: { sellerPayoutBaseAmount: 1000 } },
+    { seller_id: "seller-b", quantity: 1, line_total: 2000, tax_breakup: { taxableAmount: 2000 }, pricing_snapshot: { sellerPayoutBaseAmount: 2000 } },
+  ], [], { metadata });
+
+  assert.deepEqual(
+    settlements.map((row) => [row.sellerId, row.shippingReimbursementAmount, row.sellerPayoutAmount]),
+    [["seller-a", 40, 1040], ["seller-b", 60, 2060]],
+  );
+});
+
+test("income-tax TDS gross base includes seller-owned shipping", () => {
+  const metadata = {
+    commerceSettings: {
+      platformFees: { sellerCommissionType: "percentage", sellerCommissionValue: 0 },
+      finance: {
+        sellerPayoutBase: "gross_customer_price",
+        shippingPolicy: "reimburse_seller",
+        incomeTaxTdsEnabled: true,
+        incomeTaxTdsRate: 0.1,
+      },
+    },
+    deliveryCharge: {
+      sellers: [{
+        sellerId: "seller-1",
+        chargeAmount: 49,
+        fulfillmentParty: "seller",
+        settlementPolicy: "reimburse_seller",
+      }],
+    },
+  };
+  const [settlement] = new OrderRepository().buildSellerSettlements([{
+    seller_id: "seller-1",
+    quantity: 1,
+    line_total: 1000,
+    tax_amount: 152.54,
+    tax_breakup: { taxableAmount: 847.46, taxAmount: 152.54 },
+    pricing_snapshot: { sellerPayoutBaseAmount: 1000 },
+  }], [], { metadata });
+
+  assert.equal(settlement.incomeTaxTdsTaxableAmount, 1049);
+  assert.equal(settlement.incomeTaxTdsAmount, 1.05);
+  assert.equal(settlement.sellerPayoutAmount, 1047.95);
+});
+
 test("different item commission rates remain visible while fees are summed", () => {
   const items = [{ rate: 1, fee: 10 }, { rate: 5, fee: 100 }];
   assert.equal(items.reduce((sum, item) => sum + item.fee, 0), 110);
   assert.equal(3000 - items.reduce((sum, item) => sum + item.fee, 0), 2890);
   assert.deepEqual(uniqueCommissionRates(items.map((item) => item.rate)), [1, 5]);
+});
+
+test("settlement statements and finance exports expose shipping and statutory breakdowns", () => {
+  const service = CommissionService;
+  const commission = {
+    id: "commission-shipping",
+    seller_id: "seller-1",
+    order_id: "order-1",
+    status: "paid",
+    amount: 1000,
+    commission_amount: 20,
+    tax_amount: 3.6,
+    refund_amount: 0,
+    net_amount: 1020.96,
+    currency: "INR",
+    metadata: {
+      sellerDeliveryChargeAmount: 49,
+      shippingReimbursementAmount: 49,
+      shippingTaxableAmount: 41.53,
+      shippingTaxAmount: 7.47,
+      taxableSupplyAmount: 888.99,
+      gstTcsAmount: 4.44,
+      incomeTaxTdsAmount: 0,
+    },
+  };
+  const settlement = {
+    id: "settlement-1",
+    seller_id: "seller-1",
+    status: "completed",
+    gross_amount: 1000,
+    commission_amount: 20,
+    tax_amount: 3.6,
+    refund_amount: 0,
+    adjustment_amount: 0,
+    net_amount: 1020.96,
+    currency: "INR",
+    metadata: {
+      financialBreakdown: {
+        sellerDeliveryChargeAmount: 49,
+        shippingReimbursementAmount: 49,
+        shippingTaxableAmount: 41.53,
+        shippingTaxAmount: 7.47,
+        gstTcsTaxableAmount: 888.99,
+        gstTcsAmount: 4.44,
+        incomeTaxTdsAmount: 0,
+      },
+    },
+  };
+
+  const statement = service.buildSettlementDocument(settlement, null, [commission]);
+  const amountRows = statement.sections.find((section) => section.title === "Amounts").rows;
+  assert.equal(
+    amountRows.find((row) => row.label === "Shipping Reimbursed To Seller").value,
+    "INR 49.00",
+  );
+  assert.equal(
+    amountRows.find((row) => row.label === "GST TCS Taxable Base").value,
+    "INR 888.99",
+  );
+
+  const exportRows = service.buildSettlementsExportDocument([settlement]).sections[0].rows;
+  assert.ok(exportRows[0].includes("Shipping Reimbursed"));
+  assert.ok(exportRows[0].includes("GST TCS Base"));
+  assert.ok(exportRows[1].includes("INR 49.00"));
+  assert.ok(exportRows[1].includes("INR 888.99"));
+});
+
+test("platform revenue includes customer fees net of credits and never seller shipping", () => {
+  const summary = new AnalyticsRepository().composeAdminFinanceSummary(
+    {
+      commission_count: 1,
+      seller_gross_amount: 1049,
+      platform_revenue_amount: 20,
+      platform_revenue_tax_amount: 3.6,
+      seller_payable_amount: 1020.96,
+      currency: "INR",
+    },
+    {
+      taxable_amount: 10,
+      tax_amount: 1.8,
+      total_amount: 11.8,
+      // Deliberately present to prove this non-revenue seller amount is ignored.
+      shipping_fee_amount: 49,
+    },
+    {
+      taxable_amount: 4,
+      tax_amount: 0.72,
+      total_amount: 4.72,
+    },
+  );
+
+  assert.equal(summary.commissionRevenueAmount, 20);
+  assert.equal(summary.customerPlatformFeeRevenueAmount, 6);
+  assert.equal(summary.customerPlatformFeeRevenueTaxAmount, 1.08);
+  assert.equal(summary.platformRevenueAmount, 26);
+  assert.equal(summary.platformRevenueTaxAmount, 4.68);
+  assert.equal(summary.platformRevenueTotalAmount, 30.68);
+});
+
+test("full cancellation recovers all remaining seller payable but never the platform customer fee", () => {
+  const sellerPayable = 1020.96;
+  const customerRefundIncludingPlatformFee = 1032.76;
+  assert.equal(
+    CommissionService.resolveSellerRecoveryRequest({
+      fullCancellation: true,
+      customerRefundAmount: customerRefundIncludingPlatformFee,
+      remainingSellerPayable: sellerPayable,
+    }),
+    sellerPayable,
+  );
+  assert.equal(
+    CommissionService.resolveSellerRecoveryRequest({
+      fullCancellation: false,
+      customerRefundAmount: 500,
+      remainingSellerPayable: sellerPayable,
+    }),
+    500,
+  );
+});
+
+test("multi-seller RTO refunds only the returned seller shipping", () => {
+  const service = new CancellationService();
+  const order = {
+    subtotal_amount: 3000,
+    cod_charge_amount: 0,
+    metadata: {
+      deliveryCharge: {
+        sellers: [
+          { sellerId: "seller-a", organizationId: "org-a", chargeAmount: 49 },
+          { sellerId: "seller-b", organizationId: "org-b", chargeAmount: 75 },
+        ],
+      },
+    },
+    relations: {
+      shipments: [{
+        id: "shipment-a",
+        seller_id: "seller-a",
+        organization_id: "org-a",
+        status: "rto",
+      }],
+    },
+  };
+  const items = [{ itemAmount: 1000, refundAmount: 1000 }];
+  const shippingRefund = service.getSellerShippingAmount(
+    order,
+    "seller-a",
+    "org-a",
+  );
+  assert.equal(shippingRefund, 49);
+  assert.doesNotThrow(() => service.assertRtoShipment(order, {
+    shipmentId: "shipment-a",
+    sellerId: "seller-a",
+    organizationId: "org-a",
+  }));
+  const refund = service.calculateRefund(
+    order,
+    items,
+    { status: "captured", provider: "razorpay" },
+    false,
+    shippingRefund,
+  );
+  assert.equal(refund.refundAmount, 1049);
+  assert.equal(refund.providerRefundAmount, 1049);
 });
 
 test("refunded item settlement exposes net commission, tax, and TCS without changing payout", () => {
@@ -247,4 +621,32 @@ test("buyer seller invoice becomes ready per delivered seller package", () => {
     organization_id: "org-b",
   }), false);
   assert.equal(service.isInvoiceReadyForBuyer(order, { invoice_type: "order_customer" }), false);
+});
+
+test("manual shipment organization scope is inferred or required per seller group", () => {
+  const service = new DeliveryService();
+  const order = {
+    items: [
+      { seller_id: "seller-a", organization_id: "org-a" },
+      { seller_id: "seller-a", organization_id: "org-b" },
+      { seller_id: "seller-b", organization_id: "org-c" },
+    ],
+  };
+
+  assert.equal(
+    service.resolveShipmentOrganizationId(order, "seller-b", {}, {}),
+    "org-c",
+  );
+  assert.equal(
+    service.resolveShipmentOrganizationId(order, "seller-a", { organizationId: "org-b" }, {}),
+    "org-b",
+  );
+  assert.throws(
+    () => service.resolveShipmentOrganizationId(order, "seller-a", {}, {}),
+    /Organization ID is required/,
+  );
+  assert.throws(
+    () => service.resolveShipmentOrganizationId(order, "seller-a", { organizationId: "org-c" }, {}),
+    /does not own items/,
+  );
 });

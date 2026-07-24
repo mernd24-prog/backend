@@ -295,27 +295,72 @@ class AnalyticsRepository {
   }
 
   async getAdminFinanceSummary(range = {}) {
-    const row = await knex("seller_commissions")
-      .modify((builder) => this.applyDateRange(builder, range, "created_at"))
-      .select(knex.raw(`
-        COUNT(*)::INT AS commission_count,
-        COALESCE(SUM(amount), 0)::NUMERIC AS seller_gross_amount,
-        COALESCE(SUM(commission_amount), 0)::NUMERIC AS platform_revenue_amount,
-        COALESCE(SUM(tax_amount), 0)::NUMERIC AS platform_revenue_tax_amount,
-        COALESCE(SUM(refund_amount), 0)::NUMERIC AS refund_adjustment_amount,
-        COALESCE(SUM(net_amount), 0)::NUMERIC AS seller_payable_amount,
-        MAX(currency) AS currency
-      `))
-      .first();
+    const [row, customerFeeInvoice, customerFeeCredit] = await Promise.all([
+      knex("seller_commissions")
+        .modify((builder) => this.applyDateRange(builder, range, "created_at"))
+        .select(knex.raw(`
+          COUNT(*)::INT AS commission_count,
+          COALESCE(SUM(amount), 0)::NUMERIC AS seller_gross_amount,
+          COALESCE(SUM(commission_amount), 0)::NUMERIC AS platform_revenue_amount,
+          COALESCE(SUM(tax_amount), 0)::NUMERIC AS platform_revenue_tax_amount,
+          COALESCE(SUM(refund_amount), 0)::NUMERIC AS refund_adjustment_amount,
+          COALESCE(SUM(net_amount), 0)::NUMERIC AS seller_payable_amount,
+          MAX(currency) AS currency
+        `))
+        .first(),
+      knex("tax_invoices")
+        .where("invoice_type", "platform_customer_fee")
+        .modify((builder) => this.applyDateRange(builder, range, "issued_at"))
+        .sum({ taxable_amount: "taxable_amount" })
+        .sum({ tax_amount: "tax_amount" })
+        .sum({ total_amount: "total_amount" })
+        .first(),
+      knex("tax_credit_notes as cn")
+        .join("tax_invoices as ti", "ti.id", "cn.invoice_id")
+        .where("ti.invoice_type", "platform_customer_fee")
+        .modify((builder) => this.applyDateRange(builder, range, "cn.issued_at"))
+        .sum({ taxable_amount: "cn.taxable_amount" })
+        .sum({ tax_amount: "cn.tax_amount" })
+        .sum({ total_amount: "cn.total_amount" })
+        .first(),
+    ]);
+    return this.composeAdminFinanceSummary(row, customerFeeInvoice, customerFeeCredit);
+  }
 
+  composeAdminFinanceSummary(row = {}, customerFeeInvoice = {}, customerFeeCredit = {}) {
+    const commissionRevenueAmount = Number(row?.platform_revenue_amount || 0);
+    const commissionRevenueTaxAmount = Number(row?.platform_revenue_tax_amount || 0);
+    const customerPlatformFeeInvoicedAmount = Number(customerFeeInvoice?.taxable_amount || 0);
+    const customerPlatformFeeTaxInvoicedAmount = Number(customerFeeInvoice?.tax_amount || 0);
+    const customerPlatformFeeCreditedAmount = Number(customerFeeCredit?.taxable_amount || 0);
+    const customerPlatformFeeTaxCreditedAmount = Number(customerFeeCredit?.tax_amount || 0);
+    const customerPlatformFeeRevenueAmount = Math.max(
+      customerPlatformFeeInvoicedAmount - customerPlatformFeeCreditedAmount,
+      0,
+    );
+    const customerPlatformFeeRevenueTaxAmount = Math.max(
+      customerPlatformFeeTaxInvoicedAmount - customerPlatformFeeTaxCreditedAmount,
+      0,
+    );
+    const platformRevenueAmount = commissionRevenueAmount + customerPlatformFeeRevenueAmount;
+    const platformRevenueTaxAmount =
+      commissionRevenueTaxAmount + customerPlatformFeeRevenueTaxAmount;
     return {
       commissionCount: Number(row?.commission_count || 0),
       sellerGrossAmount: this.money(row?.seller_gross_amount),
-      platformRevenueAmount: this.money(row?.platform_revenue_amount),
-      platformRevenueTaxAmount: this.money(row?.platform_revenue_tax_amount),
+      commissionRevenueAmount: this.money(commissionRevenueAmount),
+      commissionRevenueTaxAmount: this.money(commissionRevenueTaxAmount),
+      customerPlatformFeeInvoicedAmount: this.money(customerPlatformFeeInvoicedAmount),
+      customerPlatformFeeTaxInvoicedAmount: this.money(customerPlatformFeeTaxInvoicedAmount),
+      customerPlatformFeeCreditedAmount: this.money(customerPlatformFeeCreditedAmount),
+      customerPlatformFeeTaxCreditedAmount: this.money(customerPlatformFeeTaxCreditedAmount),
+      customerPlatformFeeRevenueAmount: this.money(customerPlatformFeeRevenueAmount),
+      customerPlatformFeeRevenueTaxAmount: this.money(customerPlatformFeeRevenueTaxAmount),
+      platformRevenueAmount: this.money(platformRevenueAmount),
+      platformRevenueTaxAmount: this.money(platformRevenueTaxAmount),
       refundAdjustmentAmount: this.money(row?.refund_adjustment_amount),
       sellerPayableAmount: this.money(row?.seller_payable_amount),
-      platformRevenueTotalAmount: this.money(Number(row?.platform_revenue_amount || 0) + Number(row?.platform_revenue_tax_amount || 0)),
+      platformRevenueTotalAmount: this.money(platformRevenueAmount + platformRevenueTaxAmount),
       currency: row?.currency || "INR",
     };
   }

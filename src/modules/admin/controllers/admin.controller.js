@@ -209,16 +209,6 @@ class AdminController {
     res.json(okResponse(items));
   };
 
-  createPayout = async (req, res) => {
-    const payout = await this.adminService.createPayout(req.body);
-    res.status(201).json(okResponse(payout));
-  };
-
-  listPayouts = async (req, res) => {
-    const payouts = await this.adminService.listPayouts(req.query);
-    res.json(okResponse(payouts));
-  };
-
   taxReport = async (req, res) => {
     const report = await this.adminService.getTaxReport(req.query);
     res.json(okResponse(report));

@@ -61,8 +61,6 @@ const {
   moderateProductSchema,
   listOrdersSchema,
   listPaymentsSchema,
-  createPayoutSchema,
-  listPayoutsSchema,
   taxReportSchema,
   createInvoiceSchema,
   createApiKeySchema,
@@ -698,16 +696,6 @@ adminRoutes.get(
   "/payments",
   checkInput(listPaymentsSchema),
   catchErrors(adminController.listPayments),
-);
-adminRoutes.post(
-  "/payouts",
-  checkInput(createPayoutSchema),
-  catchErrors(adminController.createPayout),
-);
-adminRoutes.get(
-  "/payouts",
-  checkInput(listPayoutsSchema),
-  catchErrors(adminController.listPayouts),
 );
 adminRoutes.get(
   "/tax/reports",

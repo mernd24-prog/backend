@@ -13,9 +13,13 @@ const { UserModel } = require("../../user/models/user.model");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
+const {
+  calculateInclusiveShippingTax,
+  resolveShippingPolicy,
+} = require("../../../shared/domain/seller-payout-rules");
 
 class SellerCommissionService {
-  constructor() {}
+  constructor() { }
 
   async publishPayoutEvent(payout = {}, actor = {}) {
     if (!payout?.id || !payout?.seller_id) return;
@@ -82,6 +86,143 @@ class SellerCommissionService {
     return Number.isFinite(number) ? number : null;
   }
 
+  async listPromotionFundingLedger(filters = {}) {
+    const limit = Math.min(Math.max(Number(filters.limit || 50), 1), 200);
+    const offset = Math.max(Number(filters.offset || 0), 0);
+    const base = knex("order_items as oi")
+      .join("orders as o", "o.id", "oi.order_id")
+      .leftJoin("seller_commissions as sc", function joinCommission() {
+        this.on("sc.order_id", "=", "oi.order_id")
+          .andOn("sc.seller_id", "=", "oi.seller_id")
+          .andOn(knex.raw(
+            "COALESCE(sc.organization_id::text, '') = COALESCE(oi.organization_id::text, '')",
+          ));
+      })
+      .whereRaw(
+        "(COALESCE((oi.pricing_snapshot->>'marketplaceFundedDiscountAmount')::numeric, 0) > 0 OR " +
+        "COALESCE((oi.pricing_snapshot->>'paymentPartnerFundedDiscountAmount')::numeric, 0) > 0 OR " +
+        "COALESCE((oi.pricing_snapshot->>'sellerFundedDiscountAmount')::numeric, 0) > 0)",
+      );
+
+    if (filters.sellerId) base.where("oi.seller_id", String(filters.sellerId));
+    if (filters.organizationId) base.where("oi.organization_id", String(filters.organizationId));
+    if (filters.orderId) base.where("oi.order_id", String(filters.orderId));
+    if (filters.fundingType) {
+      base.whereRaw("oi.pricing_snapshot->>'discountFundingType' = ?", [String(filters.fundingType)]);
+    }
+    if (filters.fromDate) base.where("o.created_at", ">=", new Date(filters.fromDate));
+    if (filters.toDate) base.where("o.created_at", "<=", new Date(filters.toDate));
+    if (filters.search) {
+      const search = `%${String(filters.search).trim()}%`;
+      base.where((builder) => builder
+        .whereILike("o.order_number", search)
+        .orWhereILike("oi.product_title", search)
+        .orWhereILike("oi.product_sku", search));
+    }
+
+    const countRow = await base.clone().clearSelect().clearOrder().countDistinct({ total: "oi.id" }).first();
+    const summaryRow = await base.clone().clearSelect().clearOrder().select([
+      knex.raw("COALESCE(SUM(COALESCE((oi.pricing_snapshot->>'discountAmount')::numeric, oi.discount_amount, 0)), 0) AS customer_discount_amount"),
+      knex.raw("COALESCE(SUM(COALESCE((oi.pricing_snapshot->>'sellerFundedDiscountAmount')::numeric, 0)), 0) AS seller_funded_discount_amount"),
+      knex.raw("COALESCE(SUM(COALESCE((oi.pricing_snapshot->>'marketplaceFundedDiscountAmount')::numeric, 0)), 0) AS marketplace_contribution_amount"),
+      knex.raw("COALESCE(SUM(COALESCE((oi.pricing_snapshot->>'paymentPartnerFundedDiscountAmount')::numeric, 0)), 0) AS payment_partner_contribution_amount"),
+      knex.raw(
+        "COALESCE(SUM(CASE WHEN LOWER(COALESCE(oi.payout_status, '')) = 'refunded' THEN " +
+        "COALESCE((oi.pricing_snapshot->>'marketplaceFundedDiscountAmount')::numeric, 0) + " +
+        "COALESCE((oi.pricing_snapshot->>'paymentPartnerFundedDiscountAmount')::numeric, 0) ELSE 0 END), 0) AS reversal_amount",
+      ),
+    ]).first();
+    const rows = await base.clone()
+      .select([
+        "oi.id as order_item_id",
+        "oi.order_id",
+        "o.order_number",
+        "o.status as order_status",
+        "o.payment_status",
+        "o.currency",
+        "o.created_at",
+        "oi.product_id",
+        "oi.product_title",
+        "oi.product_sku",
+        "oi.quantity",
+        "oi.seller_id",
+        "oi.organization_id",
+        "oi.line_total",
+        "oi.discount_amount",
+        "oi.payout_status as item_payout_status",
+        "oi.pricing_snapshot",
+        "sc.id as commission_id",
+        "sc.status as commission_status",
+        "sc.payout_id",
+        "sc.refund_amount",
+      ])
+      .orderBy("o.created_at", "desc")
+      .limit(limit)
+      .offset(offset);
+
+    const items = rows.map((row) => {
+      const pricing = this.parseJson(row.pricing_snapshot, {});
+      const marketplaceContribution = this.round(pricing.marketplaceFundedDiscountAmount);
+      const paymentPartnerContribution = this.round(pricing.paymentPartnerFundedDiscountAmount);
+      const sellerFundedDiscount = this.round(pricing.sellerFundedDiscountAmount);
+      const contributionAmount = this.round(marketplaceContribution + paymentPartnerContribution);
+      const refunded = String(row.item_payout_status || "").toLowerCase() === "refunded";
+      const settled = Boolean(row.payout_id) || ["paid", "completed", "settled"].includes(
+        String(row.commission_status || "").toLowerCase(),
+      );
+      const status = refunded ? "reversed" : settled ? "settled" :
+        ["paid", "captured", "completed", "fulfilled"].includes(String(row.payment_status || "").toLowerCase())
+          ? "earned"
+          : "reserved";
+      const reversalAmount = refunded ? contributionAmount : 0;
+      return {
+        id: row.order_item_id,
+        orderItemId: row.order_item_id,
+        orderId: row.order_id,
+        orderNumber: row.order_number,
+        orderStatus: row.order_status,
+        paymentStatus: row.payment_status,
+        productId: row.product_id,
+        productTitle: row.product_title,
+        productSku: row.product_sku,
+        quantity: Number(row.quantity || 0),
+        sellerId: row.seller_id,
+        organizationId: row.organization_id,
+        currency: row.currency || "INR",
+        customerDiscountAmount: this.round(pricing.discountAmount ?? row.discount_amount),
+        sellerFundedDiscountAmount: sellerFundedDiscount,
+        marketplaceContributionAmount: marketplaceContribution,
+        paymentPartnerContributionAmount: paymentPartnerContribution,
+        contributionAmount,
+        reversalAmount,
+        netPlatformContributionAmount: this.round(contributionAmount - reversalAmount),
+        sellerInvoiceAmount: this.round(
+          Number(pricing.sellerGrossLineTotal || row.line_total || 0) - sellerFundedDiscount,
+        ),
+        fundingType: pricing.discountFundingType || "marketplace",
+        status,
+        commissionId: row.commission_id || null,
+        payoutId: row.payout_id || null,
+        createdAt: row.created_at,
+      };
+    });
+    const marketplaceContributionAmount = this.round(summaryRow?.marketplace_contribution_amount);
+    const paymentPartnerContributionAmount = this.round(summaryRow?.payment_partner_contribution_amount);
+    const reversalAmount = this.round(summaryRow?.reversal_amount);
+    const totals = {
+      customerDiscountAmount: this.round(summaryRow?.customer_discount_amount),
+      sellerFundedDiscountAmount: this.round(summaryRow?.seller_funded_discount_amount),
+      marketplaceContributionAmount,
+      paymentPartnerContributionAmount,
+      reversalAmount,
+      netPlatformContributionAmount: this.round(
+        marketplaceContributionAmount + paymentPartnerContributionAmount - reversalAmount,
+      ),
+    };
+
+    return { items, total: Number(countRow?.total || 0), limit, offset, totals };
+  }
+
   firstNumber(...values) {
     for (const value of values) {
       const number = this.numberOrNull(value);
@@ -90,89 +231,132 @@ class SellerCommissionService {
     return 0;
   }
 
-  resolveSellerFeeAmount(row = {}, pricing = {}) {
-    const orderMetadata = this.parseJson(row.order_metadata, {});
-    const platformSettings = orderMetadata.commerceSettings?.platformFees || {};
-    const financeSettings = orderMetadata.commerceSettings?.finance || {};
-    const configuredFeeType = platformSettings.sellerCommissionType || platformSettings.sellerFeeType;
-    const configuredFeeValue = this.numberOrNull(
-      platformSettings.sellerCommissionValue ?? platformSettings.sellerFeeValue,
-    );
-    // Gross-price commission is defined against the immutable order-item total.
-    // Recalculate it even when an older checkout snapshot persisted a slightly
-    // discounted or rounded base.
-    if (
-      financeSettings.sellerPayoutBase !== "taxable_ex_gst" &&
-      configuredFeeValue !== null && configuredFeeValue > 0
-    ) {
-      if (configuredFeeType === "fixed") {
-        return this.round(configuredFeeValue * Number(row.quantity || 1));
-      }
-      return this.round((Number(row.line_total || 0) * configuredFeeValue) / 100);
-    }
+resolveSellerFeeAmount(row = {}, pricing = {}) {
+  const orderMetadata = this.parseJson(row.order_metadata, {});
+  const platformSettings =
+    orderMetadata.commerceSettings?.platformFees || {};
 
-    const componentFee = this.firstNumber(pricing.commissionFee) +
-      this.firstNumber(pricing.fixedFee) +
-      this.firstNumber(pricing.closingFee);
-    if (componentFee > 0) {
-      return this.round(componentFee);
-    }
+  // 1. Always prefer the immutable checkout snapshot.
+  const componentFee =
+    this.firstNumber(pricing.commissionFee) +
+    this.firstNumber(pricing.fixedFee) +
+    this.firstNumber(pricing.closingFee);
 
-    const explicitSellerFee = this.numberOrNull(
-      pricing.sellerPlatformFeeAmount ??
-      pricing.sellerFeeAmount ??
-      pricing.sellerFeeTotal,
-    );
-    if (explicitSellerFee !== null && explicitSellerFee > 0) {
-      return this.round(explicitSellerFee);
-    }
-
-    const rowSellerFee = this.numberOrNull(row.platform_fee_amount);
-    if (rowSellerFee !== null && rowSellerFee > 0) {
-      return this.round(rowSellerFee);
-    }
-
-    const platformFee = this.firstNumber(pricing.platformFeeAmount);
-    const customerFee = this.firstNumber(
-      pricing.customerPlatformFeeAmount,
-      pricing.customerPlatformFee,
-      pricing.customerFeeTotal,
-    );
-    const storedFee = this.round(Math.max(0, platformFee - customerFee));
-    if (storedFee > 0) return storedFee;
-
-    // Legacy orders may predate per-item pricing snapshots. Use only the
-    // immutable commerce-settings snapshot stored on the order, never today's
-    // live rate, so historical accounting remains reproducible.
-    const feeType = platformSettings.sellerCommissionType || platformSettings.sellerFeeType;
-    const feeValue = this.numberOrNull(
-      platformSettings.sellerCommissionValue ?? platformSettings.sellerFeeValue,
-    );
-    if (feeValue === null || feeValue <= 0) return 0;
-    const payoutBase = this.firstNumber(
-      pricing.sellerCommissionBaseAmount,
-      pricing.sellerPayoutBaseAmount,
-      row.line_total,
-    );
-    if (feeType === "fixed") return this.round(feeValue * Number(row.quantity || 1));
-    return this.round((payoutBase * feeValue) / 100);
+  if (componentFee > 0) {
+    return this.round(componentFee);
   }
 
-  resolveSellerFeeTaxAmount(row = {}, pricing = {}, financeSnapshot = {}) {
-    const chargeToSeller = pricing.chargePlatformFeeTaxToSeller ?? financeSnapshot.chargePlatformFeeTaxToSeller ?? true;
-    if (chargeToSeller === false) return 0;
+  // 2. Check other saved seller fee fields.
+  const explicitSellerFee = this.numberOrNull(
+    pricing.sellerPlatformFeeAmount ??
+    pricing.sellerFeeAmount ??
+    pricing.sellerFeeTotal,
+  );
 
-    const taxRate = this.firstNumber(pricing.platformFeeTaxRate, financeSnapshot.platformFeeTaxRate);
-    if (taxRate > 0) {
-      return this.round((this.resolveSellerFeeAmount(row, pricing) * taxRate) / 100);
-    }
+  if (explicitSellerFee !== null && explicitSellerFee > 0) {
+    return this.round(explicitSellerFee);
+  }
 
-    const explicitTax = this.numberOrNull(pricing.platformFeeTaxAmount);
-    if (explicitTax !== null && explicitTax > 0) {
-      return this.round(explicitTax);
-    }
+  const rowSellerFee = this.numberOrNull(row.platform_fee_amount);
+
+  if (rowSellerFee !== null && rowSellerFee > 0) {
+    return this.round(rowSellerFee);
+  }
+
+  const platformFee = this.firstNumber(
+    pricing.platformFeeAmount,
+  );
+
+  const customerFee = this.firstNumber(
+    pricing.customerPlatformFeeAmount,
+    pricing.customerPlatformFee,
+    pricing.customerFeeTotal,
+  );
+
+  const storedFee = this.round(
+    Math.max(0, platformFee - customerFee),
+  );
+
+  if (storedFee > 0) {
+    return storedFee;
+  }
+
+  // 3. Legacy fallback: recalculate only when snapshot is missing.
+  const feeType =
+    platformSettings.sellerCommissionType ||
+    platformSettings.sellerFeeType;
+
+  const feeValue = this.numberOrNull(
+    platformSettings.sellerCommissionValue ??
+    platformSettings.sellerFeeValue,
+  );
+
+  if (feeValue === null || feeValue <= 0) {
     return 0;
   }
+
+  if (feeType === "fixed") {
+    return this.round(
+      feeValue * Number(row.quantity || 1),
+    );
+  }
+
+  // Use the saved commission base first, not line_total.
+  const commissionBase = this.firstNumber(
+    pricing.sellerCommissionBaseAmount,
+    pricing.taxableAmount,
+    pricing.sellerPayoutBaseAmount,
+    row.line_total,
+  );
+
+  return this.round(
+    (commissionBase * feeValue) / 100,
+  );
+}
+
+resolveSellerFeeTaxAmount(
+  row = {},
+  pricing = {},
+  financeSnapshot = {},
+) {
+  const chargeToSeller =
+    pricing.chargePlatformFeeTaxToSeller ??
+    financeSnapshot.chargePlatformFeeTaxToSeller ??
+    true;
+
+  if (chargeToSeller === false) {
+    return 0;
+  }
+
+  // First use checkout snapshot.
+  const explicitTax = this.numberOrNull(
+    pricing.platformFeeTaxAmount,
+  );
+
+  if (explicitTax !== null) {
+    return this.round(explicitTax);
+  }
+
+  // Legacy fallback only.
+  const taxRate = this.firstNumber(
+    pricing.platformFeeTaxRate,
+    financeSnapshot.platformFeeTaxRate,
+  );
+
+  if (taxRate <= 0) {
+    return 0;
+  }
+
+  return this.round(
+    (
+      this.resolveSellerFeeAmount(
+        row,
+        pricing,
+      ) *
+      taxRate
+    ) / 100,
+  );
+}
 
   normalizePagination(query = {}) {
     return {
@@ -599,11 +783,19 @@ class SellerCommissionService {
       const current = grouped.get(key) || {
         sellerId: String(row.seller_id),
         organizationId,
-        organizationSnapshot: this.parseJson(row.organization_snapshot, {}),
+        organizationSnapshot: this.parseJson(
+          row.organization_snapshot,
+          {},
+        ),
         orderId,
         orderItemIds: [],
         orderItemId: row.id,
+
         amount: 0,
+        productTaxableAmount: 0,
+        productTaxAmount: 0,
+        commissionBaseAmount: 0,
+
         platformFeeAmount: 0,
         platformFeeTaxAmount: 0,
         commissionFeeAmount: 0,
@@ -624,11 +816,39 @@ class SellerCommissionService {
       const taxBreakup = this.parseJson(row.tax_breakup, {});
       const orderMetadata = this.parseJson(row.order_metadata, {});
       const financeSnapshot = orderMetadata?.commerceSettings?.finance || {};
-      const itemGross = Number((pricing.sellerPayoutBaseAmount ?? (
-        financeSnapshot.sellerPayoutBase === "taxable_ex_gst"
-          ? taxBreakup.taxableAmount ?? grossAfterDiscount
-          : lineTotal
-      )) || 0);
+      // Product amount excluding GST.
+      // Use this for commission, TCS and TDS calculation.
+      const productTaxableAmount = this.round(
+        taxBreakup.taxableAmount ?? (
+          taxBreakup.gstInclusive &&
+            Number(taxBreakup.gstRate || 0) + Number(taxBreakup.cessRate || 0) > 0
+            ? (grossAfterDiscount * 100) /
+            (
+              100 +
+              Number(taxBreakup.gstRate || 0) +
+              Number(taxBreakup.cessRate || 0)
+            )
+            : grossAfterDiscount
+        ),
+      );
+
+      // Product GST amount.
+      const productTaxAmount = this.round(
+        taxBreakup.taxAmount ??
+        Math.max(0, grossAfterDiscount - productTaxableAmount),
+      );
+
+      // Seller's complete product invoice amount, including GST.
+      // The seller payout must start from this amount.
+      const grossSellerInvoiceAmount = this.round(
+        productTaxableAmount + productTaxAmount,
+      );
+
+      // Keep this separately because commission may be calculated excluding GST.
+     const commissionBaseAmount = this.firstNumber(
+  pricing.sellerCommissionBaseAmount,
+  productTaxableAmount,
+);
       const sellerFeeAmount = this.resolveSellerFeeAmount(row, pricing);
       const sellerFeeTaxAmount = this.resolveSellerFeeTaxAmount(row, pricing, financeSnapshot);
       const customerFeeAmount = this.firstNumber(
@@ -637,11 +857,19 @@ class SellerCommissionService {
         pricing.customerFeeTotal,
       );
       const customerFeeTaxAmount = this.firstNumber(pricing.customerPlatformFeeTaxAmount);
-      const itemSellerReceivable = Number(
-        Math.max(0, itemGross - sellerFeeAmount - sellerFeeTaxAmount).toFixed(2),
+      const itemSellerReceivable = this.round(
+        Math.max(
+          0,
+          grossSellerInvoiceAmount -
+          sellerFeeAmount -
+          sellerFeeTaxAmount,
+        ),
       );
       current.orderItemIds.push(row.id);
-      current.amount += itemGross;
+      current.amount += grossSellerInvoiceAmount;
+      current.productTaxableAmount += productTaxableAmount;
+      current.productTaxAmount += productTaxAmount;
+      current.commissionBaseAmount += commissionBaseAmount;
       current.platformFeeAmount += sellerFeeAmount;
       current.platformFeeTaxAmount += sellerFeeTaxAmount;
       current.customerPlatformFeeAmount = Number(current.customerPlatformFeeAmount || 0) + customerFeeAmount;
@@ -659,17 +887,22 @@ class SellerCommissionService {
           ? (grossAfterDiscount * 100) / (100 + snapshotGstRate + snapshotCessRate)
           : grossAfterDiscount
       ));
+
       current.products.push({
         productId: row.product_id,
         variantId: row.variant_id,
         variantSku: row.variant_sku,
-        amount: this.round(itemGross),
+       amount: grossSellerInvoiceAmount,
+grossSellerInvoiceAmount,
+commissionBaseAmount,
         grossAfterDiscount: this.round(grossAfterDiscount),
         discountAmount: this.round(discountAmount),
         discountFundingType: pricing.discountFundingType || "marketplace",
         marketplaceFundedDiscountAmount: this.round(pricing.marketplaceFundedDiscountAmount),
+        paymentPartnerFundedDiscountAmount: this.round(pricing.paymentPartnerFundedDiscountAmount),
         sellerFundedDiscountAmount: this.round(pricing.sellerFundedDiscountAmount),
         taxableAmount,
+        taxAmount: productTaxAmount,
         sellerPayoutBase: pricing.sellerPayoutBase || "gross_customer_price",
         platformFeeAmount: this.round(sellerFeeAmount),
         platformFeeTaxAmount: this.round(sellerFeeTaxAmount),
@@ -680,27 +913,120 @@ class SellerCommissionService {
       grouped.set(key, current);
     });
 
-    return Array.from(grouped.values()).map((group) => {
+    const commissionGroups = Array.from(grouped.values());
+    const allocationBySeller = new Map();
+    for (const group of commissionGroups) {
+      const sellerKey = `${group.sellerId}:${group.organizationId || "default"}`;
+      const current = allocationBySeller.get(sellerKey) || {
+        totalAmount: 0,
+        remainingAmount: 0,
+        remainingShipping: null,
+      };
+      current.totalAmount += Number(group.amount || 0);
+      current.remainingAmount += Number(group.amount || 0);
+      allocationBySeller.set(sellerKey, current);
+    }
+
+    return commissionGroups.map((group) => {
       const amount = this.round(group.amount);
       const financeSnapshot = group.orderMetadata?.commerceSettings?.finance || {};
       const platformFeeAmount = this.round(group.platformFeeAmount);
       const commissionAmount = platformFeeAmount;
       const effectiveRate = amount > 0 ? this.round(commissionAmount / amount) : 0;
       const taxAmount = this.round(group.platformFeeTaxAmount);
-      const shippingPolicy = financeSnapshot.shippingPolicy || "not_in_seller_payout";
-      const sellerDeliveryChargeAmount = 0;
-      const shippingReimbursementAmount = 0;
-      const shippingDeductionAmount = 0;
-      const taxableSupplyAmount = this.round(
-        group.products.reduce((sum, product) => sum + Number(product.taxableAmount || 0), 0),
-      );
-      const gstTcsRate = financeSnapshot.gstTcsEnabled ? Number(financeSnapshot.gstTcsRate || 0) : 0;
-      const incomeTaxTdsRate = financeSnapshot.incomeTaxTdsEnabled ? Number(financeSnapshot.incomeTaxTdsRate || 0) : 0;
-      const gstTcsAmount = this.round((taxableSupplyAmount * gstTcsRate) / 100);
-      const incomeTaxTdsAmount = this.round((amount * incomeTaxTdsRate) / 100);
+      const deliveryEntries = Array.isArray(group.orderMetadata?.deliveryCharge?.sellers)
+        ? group.orderMetadata.deliveryCharge.sellers
+        : [];
+      const deliveryEntry = deliveryEntries.find((entry) =>
+        String(entry.sellerId) === String(group.sellerId) &&
+        String(entry.organizationId || "default") === String(group.organizationId || "default"),
+      ) || deliveryEntries.find((entry) => String(entry.sellerId) === String(group.sellerId)) || {};
+      const sellerKey = `${group.sellerId}:${group.organizationId || "default"}`;
+      const allocation = allocationBySeller.get(sellerKey);
+      if (allocation.remainingShipping === null) {
+        allocation.remainingShipping = this.round(deliveryEntry.chargeAmount);
+      }
+      const sellerDeliveryChargeAmount = allocation.remainingAmount <= amount
+        ? allocation.remainingShipping
+        : this.round(
+          Number(deliveryEntry.chargeAmount || 0) * amount / Math.max(allocation.totalAmount, 1),
+        );
+      allocation.remainingShipping = this.round(allocation.remainingShipping - sellerDeliveryChargeAmount);
+      allocation.remainingAmount = this.round(allocation.remainingAmount - amount);
+    const shippingPolicy =
+  financeSnapshot.shippingPolicy ||
+  resolveShippingPolicy(
+    financeSnapshot.shippingPolicy,
+    deliveryEntry,
+  );
+
+const shippingReimbursementAmount =
+  shippingPolicy === "reimburse_seller"
+    ? sellerDeliveryChargeAmount
+    : 0;
+
+const shippingDeductionAmount =
+  shippingPolicy === "deduct_from_seller"
+    ? sellerDeliveryChargeAmount
+    : 0;
+
+const productTaxableSupplyAmount = this.round(
+  group.products.reduce(
+    (sum, product) =>
+      sum + Number(product.taxableAmount || 0),
+    0,
+  ),
+);
+
+const productTaxAmount = this.round(
+  group.products.reduce(
+    (sum, product) =>
+      sum + Number(product.taxAmount || 0),
+    0,
+  ),
+);
+
+const shippingTax = calculateInclusiveShippingTax(
+  sellerDeliveryChargeAmount,
+  productTaxableSupplyAmount,
+  productTaxAmount,
+);
+
+const gstTcsRate = financeSnapshot.gstTcsEnabled
+  ? Number(financeSnapshot.gstTcsRate || 0)
+  : 0;
+
+const incomeTaxTdsRate =
+  financeSnapshot.incomeTaxTdsEnabled
+    ? Number(financeSnapshot.incomeTaxTdsRate || 0)
+    : 0;
+
+const gstTcsTaxableAmount =
+  productTaxableSupplyAmount;
+
+const gstTcsAmount = this.round(
+  (
+    gstTcsTaxableAmount *
+    gstTcsRate
+  ) / 100,
+);
+
+const incomeTaxTdsTaxableAmount =
+  productTaxableSupplyAmount;
+
+const incomeTaxTdsAmount = this.round(
+  (
+    incomeTaxTdsTaxableAmount *
+    incomeTaxTdsRate
+  ) / 100,
+);
       const netAmount = this.round(Math.max(
         0,
-        group.sellerReceivableAmount - gstTcsAmount - incomeTaxTdsAmount,
+        group.sellerReceivableAmount +
+        shippingReimbursementAmount -
+        shippingDeductionAmount -
+        gstTcsAmount -
+        incomeTaxTdsAmount,
       ));
       return {
         sellerId: group.sellerId,
@@ -736,12 +1062,17 @@ class SellerCommissionService {
           sellerDeliveryChargeAmount,
           shippingReimbursementAmount,
           shippingDeductionAmount,
-          taxableSupplyAmount,
+          shippingTaxableAmount: shippingTax.taxableAmount,
+          shippingTaxAmount: shippingTax.taxAmount,
+taxableSupplyAmount:
+  productTaxableSupplyAmount,
           gstTcsEnabled: Boolean(financeSnapshot.gstTcsEnabled),
-          gstTcsRate,
-          gstTcsAmount,
+        gstTcsRate,
+gstTcsTaxableAmount,
+gstTcsAmount,
           incomeTaxTdsEnabled: Boolean(financeSnapshot.incomeTaxTdsEnabled),
           incomeTaxTdsRate,
+          incomeTaxTdsTaxableAmount,
           incomeTaxTdsAmount,
           statutoryDeductionAmount: this.round(gstTcsAmount + incomeTaxTdsAmount),
           pricingSource: "checkout_snapshot",
@@ -811,7 +1142,12 @@ class SellerCommissionService {
         const refundAmount = this.round(existing?.refund_amount || group.refundAmount || 0);
         const netAmount = this.round(group.netAmount - refundAmount);
 
-        if (existing?.status === "paid") {
+        if (
+          existing?.status === "paid" ||
+          existing?.status === "refunded" ||
+          existing?.payout_id ||
+          Number(existing?.refund_amount || 0) > 0
+        ) {
           skipped += 1;
           items.push(existing);
           continue;
@@ -920,6 +1256,27 @@ class SellerCommissionService {
     const commerceSettings = await commerceSettingsService.getSettings();
     const payoutPolicy = this.getPayoutPolicy(commerceSettings);
     const organizationId = options.organizationId || null;
+    const pendingOrders = await knex("seller_commissions")
+      .where("seller_id", sellerId)
+      .whereIn("status", ["pending", "approved"])
+      .whereNull("payout_id")
+      .modify((builder) => {
+        if (organizationId) builder.where("organization_id", organizationId);
+        else if (options.organizationId === null) builder.whereNull("organization_id");
+      })
+      .modify((builder) => {
+        if (options.commissionIds?.length) builder.whereIn("id", options.commissionIds);
+        else builder.whereBetween("created_at", [range.periodStart, `${range.periodEnd} 23:59:59`]);
+      })
+      .distinct("order_id");
+    for (const row of pendingOrders) {
+      await this.calculateCommission(row.order_id, {
+        sellerId,
+        organizationId,
+        actor: options.actor || {},
+        sourceStatus: "pre_payout_refresh",
+      });
+    }
     return await knex.transaction(async (trx) => {
       const commissions = await trx("seller_commissions")
         .where("seller_id", sellerId)
@@ -970,6 +1327,32 @@ class SellerCommissionService {
         },
         { totalAmount: 0, commissionAmount: 0, taxAmount: 0, refundAmount: 0, adjustmentAmount: 0, netAmount: 0 }
       );
+      const financialBreakdown = payoutCommissions.reduce((acc, commission) => {
+        const metadata = this.parseJson(commission.metadata, {});
+        acc.sellerDeliveryChargeAmount += Number(metadata.sellerDeliveryChargeAmount || 0);
+        acc.shippingReimbursementAmount += Number(metadata.shippingReimbursementAmount || 0);
+        acc.shippingDeductionAmount += Number(metadata.shippingDeductionAmount || 0);
+        acc.shippingTaxableAmount += Number(metadata.shippingTaxableAmount || 0);
+        acc.shippingTaxAmount += Number(metadata.shippingTaxAmount || 0);
+        acc.gstTcsTaxableAmount += Number(metadata.taxableSupplyAmount || 0);
+        acc.gstTcsAmount += Number(metadata.gstTcsAmount || 0);
+        acc.incomeTaxTdsTaxableAmount += Number(metadata.incomeTaxTdsTaxableAmount || 0);
+        acc.incomeTaxTdsAmount += Number(metadata.incomeTaxTdsAmount || 0);
+        return acc;
+      }, {
+        sellerDeliveryChargeAmount: 0,
+        shippingReimbursementAmount: 0,
+        shippingDeductionAmount: 0,
+        shippingTaxableAmount: 0,
+        shippingTaxAmount: 0,
+        gstTcsTaxableAmount: 0,
+        gstTcsAmount: 0,
+        incomeTaxTdsTaxableAmount: 0,
+        incomeTaxTdsAmount: 0,
+      });
+      Object.keys(financialBreakdown).forEach((field) => {
+        financialBreakdown[field] = this.round(financialBreakdown[field]);
+      });
       const recoveryRows = await trx("seller_settlements")
         .where("seller_id", sellerId)
         .modify((builder) => {
@@ -1031,6 +1414,7 @@ class SellerCommissionService {
           skippedCommissions,
           recoverySettlementIds: recoveryRows.map((row) => row.id),
           recoveryAdjustment,
+          financialBreakdown,
           payoutPolicy,
           note: options.note || null,
           createdBy: options.actor?.userId || options.actor?.sub || null,
@@ -1132,6 +1516,7 @@ class SellerCommissionService {
         metadata: { paymentReference },
       });
 
+      const payoutMetadata = this.parseJson(payout.metadata, {});
       await trx("seller_settlements").insert({
         id: uuidv4(),
         seller_id: payout.seller_id,
@@ -1153,13 +1538,13 @@ class SellerCommissionService {
         metadata: this.jsonb({
           paymentReference,
           paymentMethod: options.paymentMethod || payout.payment_method || null,
+          financialBreakdown: payoutMetadata.financialBreakdown || {},
           processedBy: options.actor?.userId || options.actor?.sub || null,
         }),
         created_at: knex.fn.now(),
         updated_at: knex.fn.now(),
       });
 
-      const payoutMetadata = this.parseJson(payout.metadata, {});
       if (Array.isArray(payoutMetadata.recoverySettlementIds) && payoutMetadata.recoverySettlementIds.length) {
         await trx("seller_settlements")
           .whereIn("id", payoutMetadata.recoverySettlementIds)
@@ -1846,11 +2231,11 @@ class SellerCommissionService {
   async getSettlements(query = {}) {
     const { limit, offset } = this.normalizePagination(query);
     const buildBase = () => knex("seller_settlements").modify((builder) => {
-        if (query.sellerId) builder.where("seller_id", query.sellerId);
-        if (query.organizationId) builder.where("organization_id", query.organizationId);
-        if (query.status) builder.where("status", query.status);
-        if (query.payoutId) builder.where("payout_id", query.payoutId);
-      });
+      if (query.sellerId) builder.where("seller_id", query.sellerId);
+      if (query.organizationId) builder.where("organization_id", query.organizationId);
+      if (query.status) builder.where("status", query.status);
+      if (query.payoutId) builder.where("payout_id", query.payoutId);
+    });
     const [rows, countRows] = await Promise.all([
       buildBase().orderBy("created_at", "desc").limit(limit).offset(offset),
       buildBase().count({ total: "*" }),
@@ -2077,11 +2462,18 @@ class SellerCommissionService {
             { label: "Gross Amount", value: this.renderMoney(settlement.gross_amount, currency) },
             { label: "Customer Discount", value: this.renderMoney(productMetadataTotal("discountAmount"), currency) },
             { label: "Marketplace-funded Discount", value: this.renderMoney(productMetadataTotal("marketplaceFundedDiscountAmount"), currency) },
+            { label: "Payment-partner-funded Discount", value: this.renderMoney(productMetadataTotal("paymentPartnerFundedDiscountAmount"), currency) },
             { label: "Seller-funded Discount", value: this.renderMoney(productMetadataTotal("sellerFundedDiscountAmount"), currency) },
+            { label: "Shipping Collected For Seller", value: this.renderMoney(metadataTotal("sellerDeliveryChargeAmount"), currency) },
+            { label: "Shipping Reimbursed To Seller", value: this.renderMoney(metadataTotal("shippingReimbursementAmount"), currency) },
+            { label: "Shipping Deducted From Seller", value: this.renderMoney(metadataTotal("shippingDeductionAmount"), currency) },
+            { label: "Shipping Taxable Value", value: this.renderMoney(metadataTotal("shippingTaxableAmount"), currency) },
+            { label: "Shipping GST", value: this.renderMoney(metadataTotal("shippingTaxAmount"), currency) },
             { label: "Commission Amount", value: this.renderMoney(settlement.commission_amount, currency) },
             { label: "Commission Tax", value: this.renderMoney(settlement.tax_amount, currency) },
             { label: "GST TCS Taxable Base", value: this.renderMoney(metadataTotal("taxableSupplyAmount"), currency) },
             { label: "GST TCS Withheld", value: this.renderMoney(metadataTotal("gstTcsAmount"), currency) },
+            { label: "Income-tax TDS Gross Base", value: this.renderMoney(metadataTotal("incomeTaxTdsTaxableAmount"), currency) },
             { label: "Income-tax TDS Withheld", value: this.renderMoney(metadataTotal("incomeTaxTdsAmount"), currency) },
             { label: "Refund Amount", value: this.renderMoney(settlement.refund_amount, currency) },
             { label: "Adjustment Amount", value: this.renderMoney(settlement.adjustment_amount, currency) },
@@ -2158,20 +2550,31 @@ class SellerCommissionService {
         {
           title: "Commissions",
           rows: [
-            ["Commission ID", "Seller ID", "Order ID", "Status", "Payout ID", "Gross", "Commission", "Tax", "Refund", "Net", "Created At"],
-            ...commissions.map((commission) => [
-              commission.id,
-              commission.seller_id,
-              commission.order_id,
-              commission.status,
-              commission.payout_id || "-",
-              this.renderMoney(commission.amount, commission.currency),
-              this.renderMoney(commission.commission_amount, commission.currency),
-              this.renderMoney(commission.tax_amount, commission.currency),
-              this.renderMoney(commission.refund_amount, commission.currency),
-              this.renderMoney(commission.net_amount, commission.currency),
-              commission.created_at,
-            ]),
+            ["Commission ID", "Seller ID", "Order ID", "Status", "Payout ID", "Gross", "Shipping Collected", "Shipping Reimbursed", "Shipping Taxable", "Shipping GST", "GST TCS Base", "GST TCS", "Income-tax TDS Base", "Income-tax TDS", "Commission", "Commission Tax", "Refund", "Net", "Created At"],
+            ...commissions.map((commission) => {
+              const metadata = this.parseJson(commission.metadata, {});
+              return [
+                commission.id,
+                commission.seller_id,
+                commission.order_id,
+                commission.status,
+                commission.payout_id || "-",
+                this.renderMoney(commission.amount, commission.currency),
+                this.renderMoney(metadata.sellerDeliveryChargeAmount, commission.currency),
+                this.renderMoney(metadata.shippingReimbursementAmount, commission.currency),
+                this.renderMoney(metadata.shippingTaxableAmount, commission.currency),
+                this.renderMoney(metadata.shippingTaxAmount, commission.currency),
+                this.renderMoney(metadata.taxableSupplyAmount, commission.currency),
+                this.renderMoney(metadata.gstTcsAmount, commission.currency),
+                this.renderMoney(metadata.incomeTaxTdsTaxableAmount, commission.currency),
+                this.renderMoney(metadata.incomeTaxTdsAmount, commission.currency),
+                this.renderMoney(commission.commission_amount, commission.currency),
+                this.renderMoney(commission.tax_amount, commission.currency),
+                this.renderMoney(commission.refund_amount, commission.currency),
+                this.renderMoney(commission.net_amount, commission.currency),
+                commission.created_at,
+              ];
+            }),
           ],
         },
       ],
@@ -2197,21 +2600,32 @@ class SellerCommissionService {
         {
           title: "Payouts",
           rows: [
-            ["Payout ID", "Seller ID", "Status", "Period Start", "Period End", "Gross", "Commission", "Tax", "Refund", "Net", "Reference", "Processed At"],
-            ...payouts.map((payout) => [
-              payout.id,
-              payout.seller_id,
-              payout.status,
-              payout.period_start,
-              payout.period_end,
-              this.renderMoney(payout.total_amount, payout.currency),
-              this.renderMoney(payout.commission_amount, payout.currency),
-              this.renderMoney(payout.tax_amount, payout.currency),
-              this.renderMoney(payout.refund_amount, payout.currency),
-              this.renderMoney(payout.net_amount, payout.currency),
-              payout.payment_reference || "-",
-              payout.processed_at || "-",
-            ]),
+            ["Payout ID", "Seller ID", "Status", "Period Start", "Period End", "Gross", "Shipping Collected", "Shipping Reimbursed", "Shipping Taxable", "Shipping GST", "GST TCS Base", "GST TCS", "Income-tax TDS Base", "Income-tax TDS", "Commission", "Commission Tax", "Refund", "Net", "Reference", "Processed At"],
+            ...payouts.map((payout) => {
+              const breakdown = this.parseJson(payout.metadata, {}).financialBreakdown || {};
+              return [
+                payout.id,
+                payout.seller_id,
+                payout.status,
+                payout.period_start,
+                payout.period_end,
+                this.renderMoney(payout.total_amount, payout.currency),
+                this.renderMoney(breakdown.sellerDeliveryChargeAmount, payout.currency),
+                this.renderMoney(breakdown.shippingReimbursementAmount, payout.currency),
+                this.renderMoney(breakdown.shippingTaxableAmount, payout.currency),
+                this.renderMoney(breakdown.shippingTaxAmount, payout.currency),
+                this.renderMoney(breakdown.gstTcsTaxableAmount, payout.currency),
+                this.renderMoney(breakdown.gstTcsAmount, payout.currency),
+                this.renderMoney(breakdown.incomeTaxTdsTaxableAmount, payout.currency),
+                this.renderMoney(breakdown.incomeTaxTdsAmount, payout.currency),
+                this.renderMoney(payout.commission_amount, payout.currency),
+                this.renderMoney(payout.tax_amount, payout.currency),
+                this.renderMoney(payout.refund_amount, payout.currency),
+                this.renderMoney(payout.net_amount, payout.currency),
+                payout.payment_reference || "-",
+                payout.processed_at || "-",
+              ];
+            }),
           ],
         },
       ],
@@ -2227,22 +2641,33 @@ class SellerCommissionService {
         {
           title: "Settlements",
           rows: [
-            ["Settlement ID", "Seller ID", "Payout ID", "Status", "Period Start", "Period End", "Gross", "Commission", "Tax", "Refund", "Adjustment", "Net", "Settlement Date"],
-            ...settlements.map((settlement) => [
-              settlement.id,
-              settlement.seller_id,
-              settlement.payout_id || "-",
-              settlement.status,
-              settlement.period_start,
-              settlement.period_end,
-              this.renderMoney(settlement.gross_amount, settlement.currency),
-              this.renderMoney(settlement.commission_amount, settlement.currency),
-              this.renderMoney(settlement.tax_amount, settlement.currency),
-              this.renderMoney(settlement.refund_amount, settlement.currency),
-              this.renderMoney(settlement.adjustment_amount, settlement.currency),
-              this.renderMoney(settlement.net_amount, settlement.currency),
-              settlement.settlement_date || settlement.created_at,
-            ]),
+            ["Settlement ID", "Seller ID", "Payout ID", "Status", "Period Start", "Period End", "Gross", "Shipping Collected", "Shipping Reimbursed", "Shipping Taxable", "Shipping GST", "GST TCS Base", "GST TCS", "Income-tax TDS Base", "Income-tax TDS", "Commission", "Commission Tax", "Refund", "Adjustment", "Net", "Settlement Date"],
+            ...settlements.map((settlement) => {
+              const breakdown = this.parseJson(settlement.metadata, {}).financialBreakdown || {};
+              return [
+                settlement.id,
+                settlement.seller_id,
+                settlement.payout_id || "-",
+                settlement.status,
+                settlement.period_start,
+                settlement.period_end,
+                this.renderMoney(settlement.gross_amount, settlement.currency),
+                this.renderMoney(breakdown.sellerDeliveryChargeAmount, settlement.currency),
+                this.renderMoney(breakdown.shippingReimbursementAmount, settlement.currency),
+                this.renderMoney(breakdown.shippingTaxableAmount, settlement.currency),
+                this.renderMoney(breakdown.shippingTaxAmount, settlement.currency),
+                this.renderMoney(breakdown.gstTcsTaxableAmount, settlement.currency),
+                this.renderMoney(breakdown.gstTcsAmount, settlement.currency),
+                this.renderMoney(breakdown.incomeTaxTdsTaxableAmount, settlement.currency),
+                this.renderMoney(breakdown.incomeTaxTdsAmount, settlement.currency),
+                this.renderMoney(settlement.commission_amount, settlement.currency),
+                this.renderMoney(settlement.tax_amount, settlement.currency),
+                this.renderMoney(settlement.refund_amount, settlement.currency),
+                this.renderMoney(settlement.adjustment_amount, settlement.currency),
+                this.renderMoney(settlement.net_amount, settlement.currency),
+                settlement.settlement_date || settlement.created_at,
+              ];
+            }),
           ],
         },
       ],
@@ -2328,6 +2753,10 @@ class SellerCommissionService {
   async recordRefundAdjustment(returnRequest, refundAmount, actor = {}) {
     const orderId = returnRequest?.orderId;
     const returnId = String(returnRequest?._id || returnRequest?.id || "");
+    const fullCancellation =
+      returnRequest?.scope === "full" ||
+      returnRequest?.cancellationScope === "full" ||
+      returnRequest?.sellerSupplyCancellation === true;
     if (!orderId || !returnId || Number(refundAmount || 0) <= 0) return null;
 
     const orderItems = await knex("order_items")
@@ -2386,6 +2815,12 @@ class SellerCommissionService {
         if (!commission) continue;
 
         const metadata = this.parseJson(commission.metadata, {});
+        const remainingSellerPayable = this.round(Math.max(Number(commission.net_amount || 0), 0));
+        const sellerRecoveryRequest = this.resolveSellerRecoveryRequest({
+          fullCancellation,
+          customerRefundAmount: amount,
+          remainingSellerPayable,
+        });
         const appliedRefunds = metadata.appliedRefunds || {};
         if (appliedRefunds[returnId]) {
           const recordedCustomerRefund = this.round(appliedRefunds[returnId] || amount);
@@ -2449,9 +2884,9 @@ class SellerCommissionService {
               gross_amount: 0,
               commission_amount: 0,
               tax_amount: 0,
-              refund_amount: amount,
-              adjustment_amount: -amount,
-              net_amount: -amount,
+              refund_amount: sellerRecoveryRequest,
+              adjustment_amount: -sellerRecoveryRequest,
+              net_amount: -sellerRecoveryRequest,
               currency: commission.currency || "INR",
               status: "pending",
               notes: "Refund adjustment after completed payout",
@@ -2460,13 +2895,23 @@ class SellerCommissionService {
                 returnId,
                 orderId,
                 commissionId: commission.id,
+                customerRefundAmount: amount,
+                sellerRefundLiability: sellerRecoveryRequest,
+                fullCancellation,
                 actorId: actor.userId || actor.sub || null,
               }),
               created_at: knex.fn.now(),
               updated_at: knex.fn.now(),
             });
           }
-          adjustments.push({ sellerId, refundAmount: amount, commissionId: commission.id, recovery: true, skipped: Boolean(existingRecovery) });
+          adjustments.push({
+            sellerId,
+            customerRefundAmount: amount,
+            sellerRefundLiability: sellerRecoveryRequest,
+            commissionId: commission.id,
+            recovery: true,
+            skipped: Boolean(existingRecovery),
+          });
           continue;
         }
 
@@ -2475,7 +2920,9 @@ class SellerCommissionService {
         // Commission/GST/TCS credit notes reverse the remaining platform/tax
         // components separately.
         const currentNetAmount = Math.max(this.round(commission.net_amount || 0), 0);
-        const sellerRefundLiability = this.round(Math.min(amount, currentNetAmount));
+        const sellerRefundLiability = this.round(
+          Math.min(sellerRecoveryRequest, currentNetAmount),
+        );
         const nextRefundAmount = this.round(Number(commission.refund_amount || 0) + sellerRefundLiability);
         const nextNetAmount = this.round(Math.max(currentNetAmount - sellerRefundLiability, 0));
 
@@ -2496,6 +2943,7 @@ class SellerCommissionService {
                 returnId,
                 customerRefundAmount: amount,
                 sellerRefundLiability,
+                fullCancellation,
                 actorId: actor.userId || actor.sub || null,
                 at: new Date().toISOString(),
               },
@@ -2539,6 +2987,19 @@ class SellerCommissionService {
 
     logger.info({ orderId, returnId, adjustments }, "Seller commission refund adjustment recorded");
     return { orderId, returnId, adjustments };
+  }
+
+  resolveSellerRecoveryRequest({
+    fullCancellation = false,
+    customerRefundAmount = 0,
+    remainingSellerPayable = 0,
+  } = {}) {
+    const payable = this.round(Math.max(Number(remainingSellerPayable || 0), 0));
+    if (fullCancellation) return payable;
+    return this.round(Math.min(
+      Math.max(Number(customerRefundAmount || 0), 0),
+      payable,
+    ));
   }
 
   async auditCommissionCompleteness(orderId, client = knex) {

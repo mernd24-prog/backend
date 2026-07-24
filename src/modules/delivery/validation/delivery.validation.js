@@ -69,6 +69,7 @@ const createShipmentSchema = Joi.object({
     orderId: uuid.required(),
     dealId: uuid.allow(null),
     sellerId: Joi.string().max(64).allow("", null),
+    organizationId: uuid.allow(null),
     provider: Joi.string().valid("manual").default("manual"),
     courierName: Joi.string().allow("", null),
     awbNumber: Joi.string().allow("", null),

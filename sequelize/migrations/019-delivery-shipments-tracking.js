@@ -11,6 +11,7 @@ module.exports = {
         id: { type: Sequelize.UUID, primaryKey: true, allowNull: false },
         order_id: { type: Sequelize.UUID, allowNull: false },
         seller_id: { type: Sequelize.STRING(64), allowNull: false },
+        organization_id: { type: Sequelize.UUID, allowNull: true },
         provider: { type: Sequelize.STRING(64), allowNull: false, defaultValue: "manual" },
         courier_name: { type: Sequelize.STRING(160), allowNull: true },
         awb_number: { type: Sequelize.STRING(160), allowNull: true },
@@ -72,6 +73,7 @@ module.exports = {
 
     await queryInterface.addIndex("shipments", ["order_id", "status"], { transaction });
     await queryInterface.addIndex("shipments", ["seller_id", "status"], { transaction });
+    await queryInterface.addIndex("shipments", ["seller_id", "organization_id", "status"], { transaction });
     await queryInterface.addIndex("shipments", ["awb_number"], { transaction });
     await queryInterface.addIndex("shipment_tracking_events", ["shipment_id", "event_time"], { transaction });
     await queryInterface.addIndex("shipment_manifests", ["created_at"], { transaction });

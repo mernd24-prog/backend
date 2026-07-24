@@ -13,7 +13,7 @@ const couponBodySchema = {
   value: Joi.number().positive(),
   minOrderAmount: Joi.number().min(0),
   maxDiscountAmount: Joi.number().min(0).allow(null),
-  fundingType: Joi.string().valid("marketplace", "seller", "shared"),
+  fundingType: Joi.string().valid("marketplace", "seller", "shared", "payment_partner"),
   sellerFundingPercent: Joi.number().min(0).max(100),
   usageLimit: Joi.number().integer().min(1).allow(null),
   usesPerCustomer: Joi.number().integer().min(1).allow(null),

@@ -28,7 +28,6 @@ test("seller invoice uses only its item discount and reconciles its total", () =
     },
   }];
 
-  service.getDeliveryChargeBySeller = () => 0;
   const amounts = service.calculateSellerCustomerAmounts(order, "seller-a", items);
   assert.equal(amounts.grossSalesAmount, 2000);
   assert.equal(amounts.discountAmount, 200);
@@ -99,6 +98,145 @@ test("buyers never receive platform commission invoices", () => {
   ]);
 });
 
+test("customer order documents become available for delivered orders and delivered items", () => {
+  assert.equal(service.isOrderInvoiceReadyForBuyer({ status: "delivered", items: [] }), true);
+  assert.equal(service.isOrderInvoiceReadyForBuyer({
+    status: "processing",
+    items: [{ delivery_status: "delivered" }, { delivered_at: "2026-07-23T10:00:00.000Z" }],
+  }), true);
+  assert.equal(service.isOrderInvoiceReadyForBuyer({
+    status: "processing",
+    items: [{ delivery_status: "delivered" }, { delivery_status: "shipped" }],
+  }), false);
+});
+
+test("customer platform-fee invoice is available after payment capture before delivery", () => {
+  const pendingDeliveryOrder = {
+    status: "processing",
+    payment_status: "captured",
+    items: [{ delivery_status: "shipped" }],
+  };
+  assert.equal(service.isOrderInvoiceReadyForBuyer(pendingDeliveryOrder), false);
+  assert.equal(service.isInvoiceReadyForBuyer(
+    pendingDeliveryOrder,
+    { invoice_type: "platform_customer_fee" },
+  ), true);
+  assert.equal(service.isInvoiceReadyForBuyer(
+    pendingDeliveryOrder,
+    { invoice_type: "seller_customer", seller_id: "seller-a" },
+  ), false);
+});
+
+test("customer platform-fee reversal is identified as its own credit-note document", () => {
+  const document = service.buildCreditNoteDocument({
+    id: "credit-customer-fee",
+    credit_note_number: "CN-FEE-1",
+    order_id: "order-1",
+    currency: "INR",
+    taxable_amount: 10,
+    tax_amount: 1.8,
+    total_amount: 11.8,
+    metadata: {
+      creditNoteScope: "platform_customer_fee_invoice",
+      items: [],
+    },
+  }, {
+    id: "invoice-customer-fee",
+    invoice_number: "GST-F-1",
+    invoice_type: "platform_customer_fee",
+    metadata: {},
+  });
+
+  assert.equal(document.title, "Customer Platform Fee Credit Note");
+});
+
+test("full cancellation credit notes reverse seller shipping and customer platform fee", async () => {
+  const created = [];
+  const sellerInvoice = {
+    id: "seller-invoice",
+    seller_id: "seller-a",
+    organization_id: null,
+    total_amount: 1049,
+    metadata: {
+      amounts: {
+        deliveryChargeAmount: 49,
+        shippingTaxableAmount: 41.53,
+        shippingTaxAmount: 7.47,
+        shippingCgstAmount: 3.74,
+        shippingSgstAmount: 3.73,
+        shippingIgstAmount: 0,
+      },
+    },
+  };
+  const feeInvoice = {
+    id: "customer-fee-invoice",
+    invoice_type: "platform_customer_fee",
+    taxable_amount: 10,
+    tax_amount: 1.8,
+    cgst_amount: 0.9,
+    sgst_amount: 0.9,
+    igst_amount: 0,
+    total_amount: 11.8,
+  };
+  const localService = new TaxService({
+    taxRepository: {
+      findInvoicesByOrderId: async () => [sellerInvoice, feeInvoice],
+    },
+    orderRepository: {
+      findByIdWithItems: async () => ({
+        id: "order-1",
+        items: [{
+          id: "item-1",
+          seller_id: "seller-a",
+          quantity: 1,
+          line_total: 1000,
+          discount_amount: 0,
+          tax_amount: 152.54,
+          tax_breakup: {
+            taxableAmount: 847.46,
+            taxAmount: 152.54,
+            cgstAmount: 76.27,
+            sgstAmount: 76.27,
+          },
+        }],
+      }),
+    },
+  });
+  localService.ensureMarketplaceInvoicesForCreditNote = async () => ({
+    sellerInvoices: [sellerInvoice],
+    platformCommissionInvoices: [],
+  });
+  localService.createCreditNote = async (payload) => {
+    created.push(payload);
+    return {
+      id: `credit-${created.length}`,
+      credit_note_number: `CN-${created.length}`,
+      ...payload,
+    };
+  };
+
+  const bundle = await localService.createMarketplaceCreditNotes({
+    orderId: "order-1",
+    referenceType: "cancellation",
+    referenceId: "cancel-1",
+    reason: "cancelled",
+    metadata: { cancellationScope: "full" },
+    items: [{ orderItemId: "item-1", quantity: 1, refundAmount: 1000 }],
+  }, { userId: "admin-1", role: "admin" });
+
+  const sellerCredit = created.find((entry) => entry.invoiceId === "seller-invoice");
+  assert.equal(sellerCredit.taxableAmount, 888.99);
+  assert.equal(sellerCredit.taxAmount, 160.01);
+  assert.equal(sellerCredit.totalAmount, 1049);
+  assert.equal(sellerCredit.metadata.shippingReversalAmount, 49);
+  assert.equal(sellerCredit.metadata.items.at(-1).lineType, "seller_shipping_reversal");
+
+  const feeCredit = created.find((entry) => entry.invoiceId === "customer-fee-invoice");
+  assert.equal(feeCredit.totalAmount, 11.8);
+  assert.equal(feeCredit.metadata.creditNoteScope, "platform_customer_fee_invoice");
+  assert.equal(bundle.customerFeeCreditNote.invoiceId, "customer-fee-invoice");
+});
+
 test("PDF distinguishes receipt, product invoice, and commission invoice roles", () => {
   const renderer = new DocumentRendererService();
   const base = {
@@ -123,6 +261,81 @@ test("PDF distinguishes receipt, product invoice, and commission invoice roles",
   assert.match(pdfText("platform_customer_fee"), /PLATFORM FEE TAX INVOICE/);
 });
 
+test("zero-GST customer platform fee is still a downloadable fee invoice", () => {
+  assert.equal(service.getInvoiceDocumentTitle({
+    invoice_type: "platform_customer_fee",
+    tax_amount: 0,
+  }), "Marketplace Customer Fee Invoice");
+
+  const renderer = new DocumentRendererService();
+  const pdf = renderer.renderPdf({
+    layout: "invoice",
+    data: {
+      invoice: {
+        type: "platform_customer_fee",
+        number: "FEE-1",
+        currency: "INR",
+        orderNumber: "ORD-1",
+      },
+      buyer: { email: "buyer@example.com" },
+      amounts: { taxableAmount: 21, taxAmount: 0, totalAmount: 21 },
+      items: [{
+        description: "Marketplace customer platform service fee",
+        quantity: 1,
+        taxableAmount: 21,
+        taxAmount: 0,
+        totalAmount: 21,
+      }],
+    },
+  }).toString("binary");
+  assert.match(pdf, /PLATFORM FEE INVOICE/);
+  assert.doesNotMatch(pdf, /PLATFORM FEE TAX INVOICE/);
+});
+
+test("seller invoice exposes seller-managed shipping as a separate supply line", () => {
+  const renderer = new DocumentRendererService();
+  const pdf = renderer.renderPdf({
+    layout: "invoice",
+    data: {
+      invoice: {
+        type: "seller_customer",
+        number: "SELLER-SHIP-1",
+        currency: "INR",
+        orderNumber: "ORD-SHIP-1",
+      },
+      seller: { legalBusinessName: "Seller A" },
+      buyer: { email: "buyer@example.com" },
+      amounts: {
+        grossSalesAmount: 1000,
+        deliveryChargeAmount: 49,
+        shippingTaxableAmount: 41.53,
+        shippingTaxAmount: 7.47,
+        customerFinalAmount: 1049,
+      },
+      items: [
+        {
+          productTitle: "Phone",
+          quantity: 1,
+          taxableAmount: 847.46,
+          taxAmount: 152.54,
+          totalAmount: 1000,
+        },
+        {
+          description: "Delivery / shipping collected by platform on behalf of seller",
+          quantity: 1,
+          taxableAmount: 41.53,
+          taxAmount: 7.47,
+          totalAmount: 49,
+          lineType: "seller_shipping",
+        },
+      ],
+    },
+  }).toString("binary");
+
+  assert.match(pdf, /Delivery \/ shipping collected/);
+  assert.match(pdf, /INR 49\.00/);
+});
+
 test("order discount allocation is exact after item-level rounding", async () => {
   const pricing = new PricingService();
   const items = [
@@ -135,7 +348,7 @@ test("order discount allocation is exact after item-level rounding", async () =>
   assert.deepEqual(items.map((item) => item.discountAmount), [3.33, 3.33, 3.34]);
 });
 
-test("coupon funding snapshot resolves marketplace, seller, and shared responsibility", async () => {
+test("coupon funding snapshot resolves marketplace, seller, shared, and payment-partner responsibility", async () => {
   const coupon = {
     id: "coupon-1",
     code: "SHARED20",
@@ -156,6 +369,13 @@ test("coupon funding snapshot resolves marketplace, seller, and shared responsib
   assert.equal(result.discountAmount, 100);
   assert.equal(result.fundingType, "shared");
   assert.equal(result.sellerFundingPercent, 25);
+
+  coupon.fundingType = "payment_partner";
+  coupon.code = "BANK100";
+  const partnerResult = await pricing.calculateDiscount("BANK100", 1000, "buyer-1");
+  assert.equal(partnerResult.discountAmount, 100);
+  assert.equal(partnerResult.fundingType, "payment_partner");
+  assert.equal(partnerResult.sellerFundingPercent, 0);
 });
 
 test("partial return reverses only the returned quantity tax and discount", () => {
@@ -210,6 +430,160 @@ test("marketplace-funded discount does not reduce seller taxable value", async (
   );
   assert.equal(sellerFunded.taxableAmount, 847.46);
   assert.equal(sellerFunded.totalTaxAmount, 152.54);
+});
+
+test("seller invoice records marketplace promotion as payment contribution", () => {
+  const amounts = service.calculateSellerCustomerAmounts(
+    { shipping_address: { state: "Madhya Pradesh" } },
+    "seller-a",
+    [{
+      id: "item-1",
+      seller_id: "seller-a",
+      line_total: 1180,
+      discount_amount: 100,
+      tax_amount: 180,
+      tax_breakup: {
+        taxableAmount: 1000,
+        taxAmount: 180,
+        cgstAmount: 90,
+        sgstAmount: 90,
+        taxPayableAmount: 0,
+      },
+      pricing_snapshot: {
+        discountAmount: 100,
+        discountFundingType: "marketplace",
+        marketplaceFundedDiscountAmount: 100,
+        sellerFundedDiscountAmount: 0,
+        paymentPartnerFundedDiscountAmount: 0,
+      },
+    }],
+  );
+
+  assert.equal(amounts.sellerFundedDiscountAmount, 0);
+  assert.equal(amounts.customerDiscountAmount, 100);
+  assert.equal(amounts.marketplaceFundedDiscountAmount, 100);
+  assert.equal(amounts.customerFinalAmount, 1180);
+  assert.equal(amounts.customerPaidTowardInvoiceAmount, 1080);
+  assert.equal(amounts.customerPaidTowardInvoiceAmount + amounts.thirdPartyContributionAmount, amounts.customerFinalAmount);
+
+  const invoicePdf = new DocumentRendererService().renderPdf({
+    layout: "invoice",
+    data: {
+      invoice: { type: "seller_customer", number: "INV-PROMO-1", currency: "INR" },
+      seller: { legalBusinessName: "Seller A" },
+      buyer: { email: "buyer@example.com" },
+      amounts,
+      items: [{
+        productTitle: "Phone",
+        quantity: 1,
+        taxableAmount: 1000,
+        taxAmount: 180,
+        totalAmount: 1180,
+        customerDiscountAmount: 100,
+        marketplaceFundedDiscountAmount: 100,
+      }],
+    },
+  }).toString("binary");
+  assert.match(invoicePdf, /Customer Promotion/);
+  assert.match(invoicePdf, /AMOUNT PAID BY CUSTOMER/);
+  assert.match(invoicePdf, /Tax invoice value/);
+  assert.match(invoicePdf, /Marketplace promotion/);
+
+  const reversal = service.normalizeRefundItem(
+    { orderItemId: "item-1", quantity: 1, refundAmount: 1080 },
+    {
+      id: "item-1",
+      quantity: 1,
+      line_total: 1180,
+      discount_amount: 100,
+      tax_amount: 180,
+      tax_breakup: { taxableAmount: 1000, taxAmount: 180, cgstAmount: 90, sgstAmount: 90 },
+      pricing_snapshot: { marketplaceFundedDiscountAmount: 100 },
+    },
+  );
+  assert.equal(reversal.customerRefundAmount, 1080);
+  assert.equal(reversal.marketplaceContributionReversalAmount, 100);
+  assert.equal(reversal.totalAmount, 1180);
+});
+
+test("seller shipping GST split reconciles exactly without a negative remainder", () => {
+  const amounts = service.calculateSellerCustomerAmounts(
+    {
+      shipping_address: { state: "Punjab" },
+      metadata: {
+        commerceSettings: { finance: { shippingPolicy: "reimburse_seller" } },
+        deliveryCharge: {
+          sellers: [{
+            sellerId: "seller-a",
+            chargeAmount: 49,
+            fulfillmentParty: "seller",
+          }],
+        },
+      },
+    },
+    "seller-a",
+    [{
+      id: "item-1",
+      seller_id: "seller-a",
+      quantity: 1,
+      line_total: 1000,
+      discount_amount: 0,
+      tax_amount: 152.54,
+      tax_breakup: {
+        taxableAmount: 847.46,
+        taxAmount: 152.54,
+        cgstAmount: 76.27,
+        sgstAmount: 76.27,
+      },
+      pricing_snapshot: {
+        sellerFundedDiscountAmount: 0,
+        marketplaceFundedDiscountAmount: 0,
+        paymentPartnerFundedDiscountAmount: 0,
+      },
+    }],
+  );
+
+  assert.equal(amounts.shippingTaxableAmount, 41.53);
+  assert.equal(amounts.shippingTaxAmount, 7.47);
+  assert.equal(amounts.shippingCgstAmount, 3.74);
+  assert.equal(amounts.shippingSgstAmount, 3.73);
+  assert.equal(amounts.shippingIgstAmount, 0);
+  assert.equal(
+    Number((
+      amounts.shippingCgstAmount +
+      amounts.shippingSgstAmount +
+      amounts.shippingIgstAmount
+    ).toFixed(2)),
+    amounts.shippingTaxAmount,
+  );
+});
+
+test("seller invoice shipping is scoped to the seller organization", () => {
+  const order = {
+    metadata: {
+      commerceSettings: { finance: { shippingPolicy: "reimburse_seller" } },
+      deliveryCharge: {
+        sellers: [
+          {
+            sellerId: "seller-a",
+            organizationId: "org-a",
+            chargeAmount: 40,
+            fulfillmentParty: "seller",
+          },
+          {
+            sellerId: "seller-a",
+            organizationId: "org-b",
+            chargeAmount: 60,
+            fulfillmentParty: "seller",
+          },
+        ],
+      },
+    },
+  };
+
+  assert.equal(service.getDeliveryChargeBySeller(order, "seller-a", "org-a"), 40);
+  assert.equal(service.getDeliveryChargeBySeller(order, "seller-a", "org-b"), 60);
+  assert.equal(service.getDeliveryChargeBySeller(order, "seller-a"), 0);
 });
 
 test("commission credit uses the returned product fee rather than an order-average ratio", () => {

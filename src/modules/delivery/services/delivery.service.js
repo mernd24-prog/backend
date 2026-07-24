@@ -259,11 +259,13 @@ class DeliveryService {
     if (!isAdmin && String(sellerId) !== String(actorSellerId)) {
       throw new AppError("You can create shipments only for your seller account", 403);
     }
+    const organizationId = this.resolveShipmentOrganizationId(order, sellerId, payload, actor);
     const dealFulfillment = this.resolveDealFulfillment(order, sellerId, payload);
     const initialStatus = this.resolveInitialShipmentStatus(payload.status, order.status);
     const shipment = await this.deliveryRepository.createShipment({
       ...payload,
       sellerId,
+      organizationId,
       cod: order.payment_provider === PAYMENT_PROVIDER.COD || Boolean(payload.cod),
       provider: "manual",
       awbNumber: payload.awbNumber,
@@ -299,6 +301,7 @@ class DeliveryService {
           orderId: shipment.order_id,
           buyerId: order.buyer_id,
           sellerId: shipment.seller_id,
+          organizationId: shipment.organization_id || organizationId || null,
           status: shipment.status,
           trackingNumber: shipment.tracking_number,
           updatedBy: actor.userId,
@@ -308,6 +311,28 @@ class DeliveryService {
     );
 
     return shipment;
+  }
+
+  resolveShipmentOrganizationId(order = {}, sellerId, payload = {}, actor = {}) {
+    const sellerItemOrgIds = Array.from(new Set(
+      (order.items || [])
+        .filter((item) => String(item.seller_id || item.sellerId || "") === String(sellerId))
+        .map((item) => item.organization_id || item.organizationId || null),
+    ));
+    let organizationId = payload.organizationId || payload.organization_id || actor.organizationId || null;
+    if (!organizationId && sellerItemOrgIds.length === 1) {
+      organizationId = sellerItemOrgIds[0] || null;
+    }
+    if (sellerItemOrgIds.length > 1 && !organizationId) {
+      throw new AppError("Organization ID is required for this seller shipment", 400);
+    }
+    if (
+      organizationId &&
+      !sellerItemOrgIds.some((itemOrganizationId) => String(itemOrganizationId || "") === String(organizationId))
+    ) {
+      throw new AppError("Selected organization does not own items in this order", 400);
+    }
+    return organizationId || null;
   }
 
   resolveInitialShipmentStatus(requestedStatus, orderStatus) {
@@ -625,6 +650,7 @@ class DeliveryService {
           orderId: shipment.order_id,
           buyerId: order?.buyer_id || null,
           sellerId: shipment.seller_id,
+          organizationId: shipment.organization_id || null,
           status: shipment.status,
           trackingNumber: shipment.tracking_number,
           updatedBy: actor.userId || null,

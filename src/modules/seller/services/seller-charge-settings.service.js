@@ -935,6 +935,10 @@ class SellerChargeSettingsService {
       sellers.push({
         sellerId: group.sellerId,
         organizationId: group.organizationId,
+        fulfillmentParty: "seller",
+        collectedBy: "platform",
+        beneficiary: "seller",
+        settlementPolicy: "reimburse_seller",
         orderAmount: money(group.amount),
         quantity: group.quantity,
         mode: delivery.mode,

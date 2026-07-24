@@ -382,38 +382,6 @@ const listPaymentsSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
-const createPayoutSchema = Joi.object({
-  body: Joi.object({
-    sellerId: Joi.string().required(),
-    periodStart: Joi.date().iso().required(),
-    periodEnd: Joi.date().iso().required(),
-    grossAmount: Joi.number().positive().required(),
-    commissionAmount: Joi.number().min(0),
-    processingFeeAmount: Joi.number().min(0),
-    taxWithheldAmount: Joi.number().min(0),
-    netPayoutAmount: Joi.number().min(0),
-    currency: Joi.string().default("INR"),
-    status: Joi.string().valid("scheduled", "processing", "paid", "failed"),
-    scheduledAt: Joi.date().iso(),
-    metadata: Joi.object().default({}),
-  }).required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({}).required(),
-});
-
-const listPayoutsSchema = Joi.object({
-  body: Joi.object({}).required(),
-  query: Joi.object({
-    sellerId: Joi.string(),
-    status: Joi.string().valid("scheduled", "processing", "paid", "failed"),
-    fromDate: Joi.date().iso(),
-    toDate: Joi.date().iso(),
-    limit: Joi.number().integer().min(1).max(500),
-    offset: Joi.number().integer().min(0),
-  }).required(),
-  params: Joi.object({}).required(),
-});
-
 const taxReportSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
@@ -798,8 +766,6 @@ module.exports = {
   moderateProductSchema,
   listOrdersSchema,
   listPaymentsSchema,
-  createPayoutSchema,
-  listPayoutsSchema,
   taxReportSchema,
   createInvoiceSchema,
   createApiKeySchema,

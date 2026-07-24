@@ -10,6 +10,10 @@ const { UserModel } = require("../../user/models/user.model");
 const { documentRendererService } = require("../../../shared/services/document-renderer.service");
 const { sendMail } = require("../../../infrastructure/mail/mailer");
 const { NotificationQueueModel } = require("../../notification/models/notification-preference.model");
+const {
+  calculateInclusiveShippingTax,
+  resolveShippingPolicy,
+} = require("../../../shared/domain/seller-payout-rules");
 
 const INVOICE_TYPES = {
   ORDER_CUSTOMER: "order_customer",
@@ -96,6 +100,10 @@ class TaxService {
           grossSalesAmount,
           productTaxableAmount: taxableAmount,
           discountAmount: Number(order.discount_amount || 0),
+          sellerFundedDiscountAmount: Number(pricingSummary.sellerFundedDiscountAmount || 0),
+          marketplaceFundedDiscountAmount: Number(pricingSummary.marketplaceFundedDiscountAmount || 0),
+          paymentPartnerFundedDiscountAmount: Number(pricingSummary.paymentPartnerFundedDiscountAmount || 0),
+          discountFundingType: pricingSummary.discountFundingType || null,
           deliveryChargeAmount: Number(order.shipping_fee_amount || pricingSummary.deliveryChargeAmount || pricingSummary.shippingFeeAmount || 0),
           shippingChargeAmount: Number(order.shipping_fee_amount || pricingSummary.shippingFeeAmount || pricingSummary.deliveryChargeAmount || 0),
           sellerPlatformFeeAmount: Number(pricingSummary.sellerPlatformFeeAmount || order.platform_fee_amount || 0),
@@ -156,6 +164,7 @@ class TaxService {
     };
     return {
       ...invoice,
+      invoiceId: invoice.id,
       invoiceNumber: invoice.invoice_number,
       orderId: invoice.order_id,
       buyerId: invoice.buyer_id,
@@ -272,7 +281,38 @@ class TaxService {
     }
 
     const scope = await this.resolveMarketplaceInvoiceScope(order, actor, { write: false });
-    const invoices = await this.taxRepository.findInvoicesByOrderId(orderId);
+    let invoices = await this.taxRepository.findInvoicesByOrderId(orderId);
+    if (
+      scope.isBuyer &&
+      (this.isOrderInvoiceReadyForBuyer(order) || this.isPlatformCustomerFeeReadyForBuyer(order))
+    ) {
+      const orderMetadata = this.normalizeJson(order.metadata, {});
+      const pricingSummary = orderMetadata.pricingSummary || {};
+      const customerFeeAmount = this.money(
+        pricingSummary.customerPlatformFeeAmount ?? pricingSummary.customerPlatformFee,
+      );
+      const sellerGroupCount = this.groupItemsBySeller(order.items || []).length;
+      const hasOrderReceipt = invoices.some((invoice) =>
+        this.invoiceType(invoice) === INVOICE_TYPES.ORDER_CUSTOMER,
+      );
+      const hasCustomerFeeDocument = invoices.some((invoice) =>
+        this.invoiceType(invoice) === INVOICE_TYPES.PLATFORM_CUSTOMER_FEE,
+      );
+      const sellerInvoiceCount = invoices.filter((invoice) =>
+        this.invoiceType(invoice) === INVOICE_TYPES.SELLER_CUSTOMER,
+      ).length;
+      if (
+        !hasOrderReceipt ||
+        sellerInvoiceCount < sellerGroupCount ||
+        (customerFeeAmount > 0 && !hasCustomerFeeDocument)
+      ) {
+        await this.createMarketplaceInvoices(orderId, {
+          userId: "tax-document-backfill",
+          role: "super-admin",
+        });
+        invoices = await this.taxRepository.findInvoicesByOrderId(orderId);
+      }
+    }
     const visibleInvoices = this.filterInvoicesForScope(invoices, scope).filter((invoice) =>
       !scope.isBuyer || this.isInvoiceReadyForBuyer(order, invoice),
     );
@@ -412,6 +452,7 @@ class TaxService {
     });
     const sellerCreditNotes = [];
     const platformCommissionCreditNotes = [];
+    let customerFeeCreditNote = null;
 
     for (const group of refundGroups) {
       const sellerInvoice = marketplaceInvoices.sellerInvoices.find((invoice) =>
@@ -420,17 +461,53 @@ class TaxService {
       );
       if (!sellerInvoice) continue;
 
+      const sellerInvoiceMetadata = this.normalizeJson(sellerInvoice.metadata, {});
+      const sellerInvoiceAmounts = sellerInvoiceMetadata.amounts || {};
+      const reversesSellerShipping =
+        referenceType === "cancellation" &&
+        (
+          payload.metadata?.cancellationScope === "full" ||
+          payload.metadata?.reverseSellerShipping === true
+        ) &&
+        Number(sellerInvoiceAmounts.deliveryChargeAmount || 0) > 0;
+      const shippingCreditItem = reversesSellerShipping
+        ? {
+          description: "Delivery / shipping charge reversal",
+          lineType: "seller_shipping_reversal",
+          quantity: 1,
+          taxableAmount: this.money(sellerInvoiceAmounts.shippingTaxableAmount),
+          taxAmount: this.money(sellerInvoiceAmounts.shippingTaxAmount),
+          cgstAmount: this.money(sellerInvoiceAmounts.shippingCgstAmount),
+          sgstAmount: this.money(sellerInvoiceAmounts.shippingSgstAmount),
+          igstAmount: this.money(sellerInvoiceAmounts.shippingIgstAmount),
+          totalAmount: this.money(sellerInvoiceAmounts.deliveryChargeAmount),
+          customerRefundAmount: this.money(sellerInvoiceAmounts.deliveryChargeAmount),
+        }
+        : null;
+      const sellerCreditAmounts = {
+        taxableAmount: this.money(
+          group.taxableAmount + Number(shippingCreditItem?.taxableAmount || 0),
+        ),
+        taxAmount: this.money(group.taxAmount + Number(shippingCreditItem?.taxAmount || 0)),
+        cgstAmount: this.money(group.cgstAmount + Number(shippingCreditItem?.cgstAmount || 0)),
+        sgstAmount: this.money(group.sgstAmount + Number(shippingCreditItem?.sgstAmount || 0)),
+        igstAmount: this.money(group.igstAmount + Number(shippingCreditItem?.igstAmount || 0)),
+        totalAmount: this.money(group.totalAmount + Number(shippingCreditItem?.totalAmount || 0)),
+        customerRefundAmount: this.money(
+          group.customerRefundAmount + Number(shippingCreditItem?.customerRefundAmount || 0),
+        ),
+      };
       const sellerCreditNote = await this.createCreditNote({
         orderId,
         invoiceId: sellerInvoice.id,
         referenceType: `${referenceType}_seller`,
         referenceId: `${referenceId}:${group.sellerId}:${group.organizationId || "default"}`,
-        taxableAmount: group.taxableAmount,
-        taxAmount: group.taxAmount,
-        cgstAmount: group.cgstAmount,
-        sgstAmount: group.sgstAmount,
-        igstAmount: group.igstAmount,
-        totalAmount: group.totalAmount,
+        taxableAmount: sellerCreditAmounts.taxableAmount,
+        taxAmount: sellerCreditAmounts.taxAmount,
+        cgstAmount: sellerCreditAmounts.cgstAmount,
+        sgstAmount: sellerCreditAmounts.sgstAmount,
+        igstAmount: sellerCreditAmounts.igstAmount,
+        totalAmount: sellerCreditAmounts.totalAmount,
         reason: payload.reason || "seller_tax_reversal",
         metadata: {
           ...(payload.metadata || {}),
@@ -441,7 +518,11 @@ class TaxService {
           organizationId: group.organizationId || null,
           organization: group.organizationSnapshot || {},
           creditNoteScope: "seller_customer_invoice",
-          items: group.items,
+          customerRefundAmount: sellerCreditAmounts.customerRefundAmount,
+          marketplaceContributionReversalAmount: group.marketplaceContributionReversalAmount,
+          paymentPartnerContributionReversalAmount: group.paymentPartnerContributionReversalAmount,
+          shippingReversalAmount: Number(shippingCreditItem?.totalAmount || 0),
+          items: shippingCreditItem ? [...group.items, shippingCreditItem] : group.items,
         },
       }, actor);
       sellerCreditNotes.push(sellerCreditNote);
@@ -483,15 +564,52 @@ class TaxService {
       platformCommissionCreditNotes.push(commissionCreditNote);
     }
 
+    const reversesCustomerFee = payload.refundCustomerPlatformFee === true ||
+      (
+        referenceType === "cancellation" &&
+        payload.metadata?.cancellationScope === "full"
+      );
+    if (reversesCustomerFee) {
+      const orderInvoices = await this.taxRepository.findInvoicesByOrderId(orderId);
+      const customerFeeInvoice = orderInvoices.find((invoice) =>
+        this.invoiceType(invoice) === INVOICE_TYPES.PLATFORM_CUSTOMER_FEE,
+      );
+      if (customerFeeInvoice && Number(customerFeeInvoice.total_amount || 0) > 0) {
+        customerFeeCreditNote = await this.createCreditNote({
+          orderId,
+          invoiceId: customerFeeInvoice.id,
+          referenceType: `${referenceType}_customer_fee`,
+          referenceId: `${referenceId}:customer-platform-fee`,
+          taxableAmount: Number(customerFeeInvoice.taxable_amount || 0),
+          taxAmount: Number(customerFeeInvoice.tax_amount || 0),
+          cgstAmount: Number(customerFeeInvoice.cgst_amount || 0),
+          sgstAmount: Number(customerFeeInvoice.sgst_amount || 0),
+          igstAmount: Number(customerFeeInvoice.igst_amount || 0),
+          totalAmount: Number(customerFeeInvoice.total_amount || 0),
+          reason: payload.reason || "customer_platform_fee_reversal",
+          metadata: {
+            ...(payload.metadata || {}),
+            parentCreditNoteId: orderCreditNote?.id || null,
+            parentReferenceType: referenceType,
+            parentReferenceId: referenceId,
+            creditNoteScope: "platform_customer_fee_invoice",
+          },
+        }, actor);
+      }
+    }
+
     return {
-      id: orderCreditNote?.id || sellerCreditNotes[0]?.id || platformCommissionCreditNotes[0]?.id || null,
+      id: orderCreditNote?.id || sellerCreditNotes[0]?.id ||
+        platformCommissionCreditNotes[0]?.id || customerFeeCreditNote?.id || null,
       credit_note_number: orderCreditNote?.credit_note_number ||
         sellerCreditNotes[0]?.credit_note_number ||
         platformCommissionCreditNotes[0]?.credit_note_number ||
+        customerFeeCreditNote?.credit_note_number ||
         null,
       orderCreditNote,
       sellerCreditNotes,
       platformCommissionCreditNotes,
+      customerFeeCreditNote,
     };
   }
 
@@ -818,6 +936,23 @@ class TaxService {
       .replace(/[^A-Z0-9-]/g, "")
       .slice(0, 12) || "GST-S";
     const invoiceNumber = await this.taxRepository.nextInvoiceNumber(invoicePrefix);
+    const invoiceItems = items.map((item) => this.buildInvoiceItem(item));
+    if (amounts.deliveryChargeAmount > 0) {
+      invoiceItems.push({
+        description: "Delivery / shipping collected by platform on behalf of seller",
+        hsnCode: null,
+        quantity: 1,
+        taxableAmount: amounts.shippingTaxableAmount,
+        taxAmount: amounts.shippingTaxAmount,
+        cgstAmount: amounts.shippingCgstAmount,
+        sgstAmount: amounts.shippingSgstAmount,
+        igstAmount: amounts.shippingIgstAmount,
+        totalAmount: amounts.deliveryChargeAmount,
+        lineType: "seller_shipping",
+        collectedBy: "platform",
+        beneficiary: "seller",
+      });
+    }
     const invoice = await this.taxRepository.createInvoice({
       invoiceNumber,
       orderId: order.id,
@@ -854,7 +989,7 @@ class TaxService {
         buyer: this.buildBuyerSnapshot(order),
         shippingAddress: this.normalizeJson(order.shipping_address, {}),
         amounts,
-        items: items.map((item) => this.buildInvoiceItem(item)),
+        items: invoiceItems,
         generatedBy: actor.userId || "tax-service",
         generatedByRole: actor.role || "system",
       },
@@ -1032,9 +1167,13 @@ class TaxService {
   async findOrCreatePlatformCustomerFeeInvoice({ order, actor, parentInvoiceId = null }) {
     const orderMetadata = this.normalizeJson(order.metadata, {});
     const pricingSummary = orderMetadata.pricingSummary || {};
-    const taxableAmount = this.money(pricingSummary.customerPlatformFeeAmount);
-    const taxAmount = this.money(pricingSummary.customerPlatformFeeTaxAmount);
-    if (taxableAmount <= 0 || taxAmount <= 0) return null;
+    const taxableAmount = this.money(
+      pricingSummary.customerPlatformFeeAmount ?? pricingSummary.customerPlatformFee,
+    );
+    const taxAmount = this.money(
+      pricingSummary.customerPlatformFeeTaxAmount ?? pricingSummary.customerPlatformFeeGST,
+    );
+    if (taxableAmount <= 0) return null;
 
     const existing = await this.taxRepository.findInvoiceByOrderAndType({
       orderId: order.id,
@@ -1079,7 +1218,7 @@ class TaxService {
         amounts: { taxableAmount, taxAmount, totalAmount, taxPayableAmount: taxAmount },
         lineItems: [{
           description: "Marketplace customer platform service fee",
-          hsnCode: env.commerce.platformCommissionSacCode || null,
+          hsnCode: env.commerce.platformCustomerFeeSacCode || null,
           quantity: 1,
           taxableAmount,
           taxAmount,
@@ -1170,7 +1309,7 @@ class TaxService {
     return [...grouped.values()];
   }
 
-  groupRefundItemsBySeller(orderItems = [], refundItems = [], options = {}) {
+  groupRefundItemsBySeller(orderItems = [], refundItems = []) {
     const orderItemMap = new Map();
     for (const item of orderItems) {
       orderItemMap.set(String(item.id), item);
@@ -1209,30 +1348,23 @@ class TaxService {
       grouped.set(key, current);
     }
 
-    const groups = [...grouped.values()];
-    const rawTotal = groups.reduce((sum, group) => sum + group.totalAmount, 0);
-    const requestedTotal = Number(options.refundAmount || 0);
-    const scale = requestedTotal > 0 && rawTotal > 0 && requestedTotal < rawTotal
-      ? requestedTotal / rawTotal
-      : 1;
-
-    return groups.map((group) => ({
+    return [...grouped.values()].map((group) => ({
       ...group,
-      taxableAmount: this.money(group.taxableAmount * scale),
-      taxAmount: this.money(group.taxAmount * scale),
-      cgstAmount: this.money(group.cgstAmount * scale),
-      sgstAmount: this.money(group.sgstAmount * scale),
-      igstAmount: this.money(group.igstAmount * scale),
-      totalAmount: this.money(group.totalAmount * scale),
-      items: group.items.map((item) => ({
-        ...item,
-        taxableAmount: this.money(item.taxableAmount * scale),
-        taxAmount: this.money(item.taxAmount * scale),
-        cgstAmount: this.money(item.cgstAmount * scale),
-        sgstAmount: this.money(item.sgstAmount * scale),
-        igstAmount: this.money(item.igstAmount * scale),
-        totalAmount: this.money(item.totalAmount * scale),
-      })),
+      taxableAmount: this.money(group.taxableAmount),
+      taxAmount: this.money(group.taxAmount),
+      cgstAmount: this.money(group.cgstAmount),
+      sgstAmount: this.money(group.sgstAmount),
+      igstAmount: this.money(group.igstAmount),
+      totalAmount: this.money(group.totalAmount),
+      customerRefundAmount: this.money(group.items.reduce(
+        (sum, item) => sum + Number(item.customerRefundAmount || 0), 0,
+      )),
+      marketplaceContributionReversalAmount: this.money(group.items.reduce(
+        (sum, item) => sum + Number(item.marketplaceContributionReversalAmount || 0), 0,
+      )),
+      paymentPartnerContributionReversalAmount: this.money(group.items.reduce(
+        (sum, item) => sum + Number(item.paymentPartnerContributionReversalAmount || 0), 0,
+      )),
     }));
   }
 
@@ -1247,16 +1379,23 @@ class TaxService {
   }
 
   normalizeRefundItem(item = {}, orderItem = null) {
-    const quantity = Number(
-      item.quantity ||
-      item.approvedQuantity ||
-      item.requestedQuantity ||
-      item.receivedQuantity ||
-      0,
-    );
+    const requestedQuantity = Number(item.requestedQuantity || item.quantity || 0);
+    const approvedQuantity = Number(item.approvedQuantity || item.receivedQuantity || requestedQuantity);
+    const eligibleRefundAmount = Number(item.eligibleRefundAmount || 0);
+    const approvedRefundAmount = Number(item.refundAmount ?? eligibleRefundAmount);
+    const approvalRatio = eligibleRefundAmount > 0
+      ? Math.min(Math.max(approvedRefundAmount / eligibleRefundAmount, 0), 1)
+      : 1;
+    const quantity = approvedQuantity > 0
+      ? approvedQuantity
+      : Number((requestedQuantity * approvalRatio).toFixed(6));
     const orderedQuantity = Math.max(Number(orderItem?.quantity || item.orderedQuantity || quantity || 1), 1);
-    const ratio = quantity > 0 ? Math.min(quantity / orderedQuantity, 1) : 1;
+    const requestedRatio = requestedQuantity > 0
+      ? Math.min(requestedQuantity / orderedQuantity, 1)
+      : Math.min(quantity / orderedQuantity, 1);
+    const ratio = Math.min(requestedRatio * approvalRatio, 1);
     const orderTaxBreakup = this.normalizeJson(orderItem?.tax_breakup, {});
+    const pricingSnapshot = this.normalizeJson(orderItem?.pricing_snapshot, {});
     const itemTaxBreakup = this.normalizeJson(item.taxBreakup || item.tax_breakup, {});
     const taxBreakup = Object.keys(itemTaxBreakup).length ? itemTaxBreakup : orderTaxBreakup;
 
@@ -1285,12 +1424,19 @@ class TaxService {
       (taxBreakup.taxAmount !== undefined ? Number(taxBreakup.taxAmount) * ratio : undefined) ??
       cgstAmount + sgstAmount + igstAmount,
     );
-    const totalAmount = this.money(
+    const customerRefundAmount = this.money(
       item.refundAmount ??
       item.eligibleRefundAmount ??
       item.totalAmount ??
       taxableAmount + taxAmount,
     );
+    const marketplaceContributionReversalAmount = this.money(
+      Number(pricingSnapshot.marketplaceFundedDiscountAmount || 0) * ratio,
+    );
+    const paymentPartnerContributionReversalAmount = this.money(
+      Number(pricingSnapshot.paymentPartnerFundedDiscountAmount || 0) * ratio,
+    );
+    const totalAmount = this.money(taxableAmount + taxAmount);
 
     return {
       orderItemId: item.orderItemId || item.order_item_id || orderItem?.id || null,
@@ -1307,6 +1453,9 @@ class TaxService {
       sgstAmount,
       igstAmount,
       totalAmount,
+      customerRefundAmount,
+      marketplaceContributionReversalAmount,
+      paymentPartnerContributionReversalAmount,
     };
   }
 
@@ -1409,11 +1558,19 @@ class TaxService {
 
   calculateSellerCustomerAmounts(order, sellerId, items = []) {
     const shippingAddress = this.normalizeJson(order.shipping_address, {});
-    const deliveryChargeAmount = this.getDeliveryChargeBySeller(order, sellerId);
+    const organizationId = items.find((item) =>
+      item.organization_id || item.organizationId,
+    )?.organization_id || items.find((item) => item.organizationId)?.organizationId || null;
+    const deliveryChargeAmount = this.getDeliveryChargeBySeller(order, sellerId, organizationId);
     const totals = items.reduce((acc, item) => {
       const itemAmounts = this.buildInvoiceItem(item);
       acc.grossSalesAmount += itemAmounts.lineTotal;
       acc.discountAmount += itemAmounts.discountAmount;
+      acc.customerDiscountAmount += itemAmounts.customerDiscountAmount;
+      acc.sellerFundedDiscountAmount += itemAmounts.sellerFundedDiscountAmount;
+      acc.marketplaceFundedDiscountAmount += itemAmounts.marketplaceFundedDiscountAmount;
+      acc.paymentPartnerFundedDiscountAmount += itemAmounts.paymentPartnerFundedDiscountAmount;
+      acc.sellerInvoiceAmount += itemAmounts.totalAmount;
       acc.taxableAmount += itemAmounts.taxableAmount;
       acc.taxAmount += itemAmounts.taxAmount;
       acc.cgstAmount += itemAmounts.cgstAmount;
@@ -1424,6 +1581,11 @@ class TaxService {
     }, {
       grossSalesAmount: 0,
       discountAmount: 0,
+      customerDiscountAmount: 0,
+      sellerFundedDiscountAmount: 0,
+      marketplaceFundedDiscountAmount: 0,
+      paymentPartnerFundedDiscountAmount: 0,
+      sellerInvoiceAmount: 0,
       taxableAmount: 0,
       taxAmount: 0,
       cgstAmount: 0,
@@ -1432,22 +1594,55 @@ class TaxService {
       taxPayableAmount: 0,
     });
 
-    const computedCustomerTotal = totals.grossSalesAmount - totals.discountAmount +
-      totals.taxPayableAmount + deliveryChargeAmount;
-    const fallbackCustomerTotal = totals.taxableAmount + totals.taxAmount + deliveryChargeAmount;
-    const customerFinalAmount = computedCustomerTotal > 0 ? computedCustomerTotal : fallbackCustomerTotal;
+    const shippingTax = calculateInclusiveShippingTax(
+      deliveryChargeAmount,
+      totals.taxableAmount,
+      totals.taxAmount,
+    );
+    const productTaxSplitTotal = totals.cgstAmount + totals.sgstAmount + totals.igstAmount;
+    let shippingCgstAmount = 0;
+    let shippingSgstAmount = 0;
+    let shippingIgstAmount = 0;
+    if (productTaxSplitTotal > 0 && shippingTax.taxAmount > 0) {
+      if (totals.igstAmount > 0 && totals.cgstAmount + totals.sgstAmount === 0) {
+        shippingIgstAmount = shippingTax.taxAmount;
+      } else {
+        shippingCgstAmount = this.money(
+          shippingTax.taxAmount * totals.cgstAmount / productTaxSplitTotal,
+        );
+        shippingSgstAmount = this.money(shippingTax.taxAmount - shippingCgstAmount);
+      }
+    }
+    const sellerInvoiceAmount = totals.sellerInvoiceAmount + deliveryChargeAmount;
+    const thirdPartyContributionAmount =
+      totals.marketplaceFundedDiscountAmount + totals.paymentPartnerFundedDiscountAmount;
+    const customerPaidTowardInvoiceAmount = Math.max(
+      sellerInvoiceAmount - thirdPartyContributionAmount,
+      0,
+    );
 
     return {
       grossSalesAmount: this.money(totals.grossSalesAmount),
       discountAmount: this.money(totals.discountAmount),
-      taxableAmount: this.money(totals.taxableAmount),
-      taxAmount: this.money(totals.taxAmount),
-      cgstAmount: this.money(totals.cgstAmount),
-      sgstAmount: this.money(totals.sgstAmount),
-      igstAmount: this.money(totals.igstAmount),
+      customerDiscountAmount: this.money(totals.customerDiscountAmount),
+      sellerFundedDiscountAmount: this.money(totals.sellerFundedDiscountAmount),
+      marketplaceFundedDiscountAmount: this.money(totals.marketplaceFundedDiscountAmount),
+      paymentPartnerFundedDiscountAmount: this.money(totals.paymentPartnerFundedDiscountAmount),
+      thirdPartyContributionAmount: this.money(thirdPartyContributionAmount),
+      customerPaidTowardInvoiceAmount: this.money(customerPaidTowardInvoiceAmount),
+      taxableAmount: this.money(totals.taxableAmount + shippingTax.taxableAmount),
+      taxAmount: this.money(totals.taxAmount + shippingTax.taxAmount),
+      cgstAmount: this.money(totals.cgstAmount + shippingCgstAmount),
+      sgstAmount: this.money(totals.sgstAmount + shippingSgstAmount),
+      igstAmount: this.money(totals.igstAmount + shippingIgstAmount),
       taxPayableAmount: this.money(totals.taxPayableAmount),
       deliveryChargeAmount: this.money(deliveryChargeAmount),
-      customerFinalAmount: this.money(customerFinalAmount),
+      shippingTaxableAmount: shippingTax.taxableAmount,
+      shippingTaxAmount: shippingTax.taxAmount,
+      shippingCgstAmount,
+      shippingSgstAmount,
+      shippingIgstAmount,
+      customerFinalAmount: this.money(sellerInvoiceAmount),
       placeOfSupply: shippingAddress.state || null,
       taxMode: totals.igstAmount > 0 ? "igst" : "cgst_sgst",
     };
@@ -1517,11 +1712,36 @@ class TaxService {
 
   buildInvoiceItem(item = {}) {
     const taxBreakup = this.normalizeJson(item.tax_breakup, {});
+    const pricingSnapshot = this.normalizeJson(item.pricing_snapshot, {});
+    const customerDiscountAmount = this.money(
+      pricingSnapshot.discountAmount ?? item.discount_amount,
+    );
+    const hasFundingSnapshot = [
+      "sellerFundedDiscountAmount",
+      "marketplaceFundedDiscountAmount",
+      "paymentPartnerFundedDiscountAmount",
+      "discountFundingType",
+    ].some((key) => Object.prototype.hasOwnProperty.call(pricingSnapshot, key));
+    // Orders created before funding snapshots existed treated the persisted
+    // line discount as seller-funded. Preserve that historical invoice value;
+    // new orders always carry an explicit funding split.
+    const sellerFundedDiscountAmount = this.money(
+      hasFundingSnapshot
+        ? pricingSnapshot.sellerFundedDiscountAmount
+        : item.discount_amount,
+    );
+    const marketplaceFundedDiscountAmount = this.money(
+      pricingSnapshot.marketplaceFundedDiscountAmount,
+    );
+    const paymentPartnerFundedDiscountAmount = this.money(
+      pricingSnapshot.paymentPartnerFundedDiscountAmount,
+    );
     const taxableAmount = this.money(taxBreakup.taxableAmount ?? Number(item.line_total || 0) - Number(item.discount_amount || 0));
     const cgstAmount = this.money(taxBreakup.cgstAmount);
     const sgstAmount = this.money(taxBreakup.sgstAmount);
     const igstAmount = this.money(taxBreakup.igstAmount);
     const taxAmount = this.money(item.tax_amount ?? taxBreakup.taxAmount ?? (cgstAmount + sgstAmount + igstAmount));
+    const sellerInvoiceAmount = this.money(taxableAmount + taxAmount);
 
     return {
       orderItemId: item.id,
@@ -1539,13 +1759,22 @@ class TaxService {
       quantity: Number(item.quantity || 0),
       unitPrice: this.money(item.unit_price),
       lineTotal: this.money(item.line_total),
-      discountAmount: this.money(item.discount_amount),
+      // A seller tax invoice can reduce its value only by the discount funded
+      // by that seller. Marketplace/payment-partner promotions are payment
+      // contributions and must not reduce the seller's taxable consideration.
+      discountAmount: sellerFundedDiscountAmount,
+      customerDiscountAmount,
+      sellerFundedDiscountAmount,
+      marketplaceFundedDiscountAmount,
+      paymentPartnerFundedDiscountAmount,
+      discountFundingType: pricingSnapshot.discountFundingType || null,
       taxableAmount,
       taxAmount,
       cgstAmount,
       sgstAmount,
       igstAmount,
       taxPayableAmount: this.money(taxBreakup.taxPayableAmount),
+      totalAmount: sellerInvoiceAmount,
       taxBreakup,
     };
   }
@@ -1636,12 +1865,21 @@ class TaxService {
     };
   }
 
-  getDeliveryChargeBySeller(order = {}, sellerId) {
+  getDeliveryChargeBySeller(order = {}, sellerId, organizationId = null) {
     const metadata = this.normalizeJson(order.metadata, {});
     const sellerCharges = Array.isArray(metadata.deliveryCharge?.sellers)
       ? metadata.deliveryCharge.sellers
       : [];
-    const sellerCharge = sellerCharges.find((entry) => String(entry.sellerId) === String(sellerId));
+    const matchingSellerCharges = sellerCharges.filter((entry) =>
+      String(entry.sellerId) === String(sellerId),
+    );
+    const sellerCharge = matchingSellerCharges.find((entry) =>
+      String(entry.organizationId || "default") === String(organizationId || "default"),
+    ) || (matchingSellerCharges.length === 1 ? matchingSellerCharges[0] : null);
+    const configuredPolicy = metadata.commerceSettings?.finance?.shippingPolicy;
+    if (resolveShippingPolicy(configuredPolicy, sellerCharge || {}) !== "reimburse_seller") {
+      return 0;
+    }
     return this.money(sellerCharge?.chargeAmount);
   }
 
@@ -1683,9 +1921,31 @@ class TaxService {
       );
   }
 
+  isOrderInvoiceReadyForBuyer(order = {}) {
+    if (
+      ["delivered", CUSTOMER_INVOICE_READY_STATUS, "completed"].includes(
+        String(order.status || "").toLowerCase(),
+      )
+    ) {
+      return true;
+    }
+    const items = order.items || [];
+    return items.length > 0 && items.every((item) => this.isDeliveredItem(item));
+  }
+
+  isPlatformCustomerFeeReadyForBuyer(order = {}) {
+    return ["captured", "paid", "completed"].includes(
+      String(order.payment_status || order.paymentStatus || "").toLowerCase(),
+    );
+  }
+
   isInvoiceReadyForBuyer(order = {}, invoice = {}) {
-    if (this.invoiceType(invoice) !== INVOICE_TYPES.SELLER_CUSTOMER) {
-      return order.status === CUSTOMER_INVOICE_READY_STATUS;
+    const invoiceType = this.invoiceType(invoice);
+    if (invoiceType === INVOICE_TYPES.PLATFORM_CUSTOMER_FEE) {
+      return this.isPlatformCustomerFeeReadyForBuyer(order);
+    }
+    if (invoiceType !== INVOICE_TYPES.SELLER_CUSTOMER) {
+      return this.isOrderInvoiceReadyForBuyer(order);
     }
     const sellerId = String(invoice.seller_id || "");
     const organizationId = String(invoice.organization_id || "default");
@@ -1706,7 +1966,7 @@ class TaxService {
 
     const ready = invoice
       ? this.isInvoiceReadyForBuyer(order, invoice)
-      : order.status === CUSTOMER_INVOICE_READY_STATUS;
+      : this.isOrderInvoiceReadyForBuyer(order);
     if (!ready) {
       throw new AppError("Invoice will be available after the relevant seller items are delivered", 409);
     }
@@ -1862,7 +2122,9 @@ class TaxService {
           title: "Amounts",
           rows: [
             { label: "Gross Sales", value: this.renderMoney(amounts.grossSalesAmount, currency) },
-            { label: "Discount", value: this.renderMoney(amounts.discountAmount, currency) },
+            { label: "Customer Promotion", value: this.renderMoney(amounts.customerDiscountAmount ?? amounts.discountAmount, currency) },
+            { label: "Paid by Marketplace", value: this.renderMoney(amounts.marketplaceFundedDiscountAmount, currency) },
+            { label: "Paid by Payment Partner", value: this.renderMoney(amounts.paymentPartnerFundedDiscountAmount, currency) },
             { label: "Taxable Amount", value: this.renderMoney(invoice.taxable_amount, currency) },
             { label: "CGST", value: this.renderMoney(invoice.cgst_amount, currency) },
             { label: "SGST", value: this.renderMoney(invoice.sgst_amount, currency) },
@@ -1895,7 +2157,9 @@ class TaxService {
       layout: "credit_note",
       title: metadata.creditNoteScope === "platform_commission_invoice"
         ? "Platform Commission Credit Note"
-        : "Seller Customer Credit Note",
+        : metadata.creditNoteScope === "platform_customer_fee_invoice"
+          ? "Customer Platform Fee Credit Note"
+          : "Seller Customer Credit Note",
       subtitle: `Credit Note ${creditNote.credit_note_number || creditNote.id}`,
       fileBaseName: creditNote.credit_note_number || `credit-note-${creditNote.id}`,
       generatedAt: new Date().toISOString(),
@@ -2079,7 +2343,11 @@ class TaxService {
     const type = this.invoiceType(invoice);
     if (type === INVOICE_TYPES.SELLER_CUSTOMER) return "Seller Customer Tax Invoice";
     if (type === INVOICE_TYPES.PLATFORM_COMMISSION) return "Platform Commission Tax Invoice";
-    if (type === INVOICE_TYPES.PLATFORM_CUSTOMER_FEE) return "Marketplace Customer Fee Tax Invoice";
+    if (type === INVOICE_TYPES.PLATFORM_CUSTOMER_FEE) {
+      return Number(invoice.tax_amount || 0) > 0
+        ? "Marketplace Customer Fee Tax Invoice"
+        : "Marketplace Customer Fee Invoice";
+    }
     return "Customer Order Receipt";
   }
 

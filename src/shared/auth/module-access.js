@@ -98,6 +98,8 @@ const MODULE_ALIASES = {
   seller_finance_management: "sellers/commissions",
   "seller-finance-summary": "sellers/commissions",
   seller_finance_summary: "sellers/commissions",
+  "promotion-funding-ledger": "sellers/commissions",
+  "seller-promotion-funding-ledger": "sellers/commissions",
   "seller-finance-payouts": "sellers/commissions",
   seller_finance_payouts: "sellers/commissions",
   "seller-my-payouts": "sellers/commissions",

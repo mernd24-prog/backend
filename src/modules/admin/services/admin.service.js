@@ -1312,39 +1312,6 @@ class AdminService {
     });
   }
 
-  async createPayout(payload) {
-    const grossAmount = Number(payload.grossAmount);
-    const commissionAmount = Number(payload.commissionAmount || 0);
-    const processingFeeAmount = Number(payload.processingFeeAmount || 0);
-    const taxWithheldAmount = Number(payload.taxWithheldAmount || 0);
-    const netPayoutAmount = Number(
-      payload.netPayoutAmount ??
-        (
-          grossAmount -
-          commissionAmount -
-          processingFeeAmount -
-          taxWithheldAmount
-        ).toFixed(2),
-    );
-
-    return this.adminRepository.createPayout({
-      ...payload,
-      grossAmount,
-      commissionAmount,
-      processingFeeAmount,
-      taxWithheldAmount,
-      netPayoutAmount,
-    });
-  }
-
-  async listPayouts(query) {
-    return this.adminRepository.listPayouts({
-      ...query,
-      limit: Number(query.limit || 50),
-      offset: Number(query.offset || 0),
-    });
-  }
-
   async getTaxReport(query) {
     return this.taxService.getTaxReport(query);
   }

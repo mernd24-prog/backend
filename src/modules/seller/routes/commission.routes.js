@@ -171,6 +171,20 @@ router.get("/my-summary", authenticate, financeView, async (req, res, next) => {
   }
 });
 
+router.get("/my-promotion-ledger", authenticate, financeView, async (req, res, next) => {
+  try {
+    const sellerId = req.auth?.ownerSellerId || req.auth?.sub;
+    if (!sellerId) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const ledger = await CommissionService.listPromotionFundingLedger({
+      ...sellerOrganizationQuery(req),
+      sellerId,
+    });
+    return res.status(200).json({ success: true, data: ledger });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // ==============================
 // Seller: Settlement history
 // ==============================
@@ -266,6 +280,15 @@ router.get("/wallet/:sellerId", authenticate, platformFinanceOnly, financeView, 
 // ==============================
 // Admin: List seller commissions
 // ==============================
+router.get("/promotion-ledger", authenticate, platformFinanceOnly, financeView, async (req, res, next) => {
+  try {
+    const ledger = await CommissionService.listPromotionFundingLedger(req.query);
+    return res.status(200).json({ success: true, data: ledger });
+  } catch (err) {
+    return next(err);
+  }
+});
+
 router.get("/", authenticate, platformFinanceOnly, financeView, async (req, res, next) => {
   try {
     const commissions = await CommissionService.listSellerCommissions(req.query);

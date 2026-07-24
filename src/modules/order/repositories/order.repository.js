@@ -4,6 +4,10 @@ const { OutboxRepository } = require("../../../infrastructure/postgres/outbox.re
 const { PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const { DELIVERY_STATUS } = require("../../delivery/models/delivery.model");
 const { UserModel } = require("../../user/models/user.model");
+const {
+  calculateInclusiveShippingTax,
+  resolveShippingPolicy,
+} = require("../../../shared/domain/seller-payout-rules");
 
 class OrderRepository {
   constructor({ outboxRepository = new OutboxRepository() } = {}) {
@@ -395,6 +399,7 @@ class OrderRepository {
           .where("id", existing.id)
           .update({
             status: nextStatus,
+            organization_id: organizationId || existing.organization_id || null,
             delivered_at: nextStatus === "delivered" ? existing.delivered_at || now : existing.delivered_at,
             provider: payload.provider || existing.provider || "manual",
             courier_name: courierName || existing.courier_name,
@@ -442,6 +447,7 @@ class OrderRepository {
           id,
           order_id: payload.orderId,
           seller_id: String(payload.sellerId),
+          organization_id: organizationId || null,
           provider: payload.provider || "manual",
           courier_name: courierName,
           awb_number: trackingNumber,
@@ -1070,189 +1076,927 @@ class OrderRepository {
     });
   }
 
-  buildSellerSettlements(items = [], sellers = [], order = {}) {
-    const orderMetadata = this.parseJson(order.metadata, {});
-    const financeSettings = orderMetadata.commerceSettings?.finance || {};
-    const platformFeeSettings = orderMetadata.commerceSettings?.platformFees || {};
-    const sellerCommissionType = platformFeeSettings.sellerCommissionType ||
-      platformFeeSettings.sellerFeeType || "percentage";
-    const sellerCommissionValue = Number(
-      platformFeeSettings.sellerCommissionValue ?? platformFeeSettings.sellerFeeValue ?? 0,
-    );
-    const shippingPolicy = financeSettings.shippingPolicy || "not_in_seller_payout";
-    const deliveryChargeSellers = Array.isArray(orderMetadata.deliveryCharge?.sellers)
-      ? orderMetadata.deliveryCharge.sellers
-      : [];
-    const deliveryBySeller = new Map(
-      deliveryChargeSellers.map((seller) => [
-        `${String(seller.sellerId)}:${seller.organizationId || "default"}`,
-        this.money(seller.chargeAmount),
-      ]),
-    );
-    const sellerNames = new Map(
-      sellers.map((seller) => [
-        String(seller.id),
-        seller.sellerProfile?.displayName ||
-          seller.sellerProfile?.businessName ||
-          seller.profile?.name ||
-          seller.email ||
-          seller.id,
-      ]),
+ buildSellerSettlements(items = [], sellers = [], order = {}) {
+  const orderMetadata = this.parseJson(order.metadata, {});
+
+  const financeSettings =
+    orderMetadata.commerceSettings?.finance || {};
+
+  const platformFeeSettings =
+    orderMetadata.commerceSettings?.platformFees || {};
+
+  const sellerCommissionType =
+    platformFeeSettings.sellerCommissionType ||
+    platformFeeSettings.sellerFeeType ||
+    "percentage";
+
+  const sellerCommissionValue = Number(
+    platformFeeSettings.sellerCommissionValue ??
+      platformFeeSettings.sellerFeeValue ??
+      0,
+  );
+
+  const deliveryChargeSellers = Array.isArray(
+    orderMetadata.deliveryCharge?.sellers,
+  )
+    ? orderMetadata.deliveryCharge.sellers
+    : [];
+
+  const deliveryBySeller = new Map(
+    deliveryChargeSellers.map((seller) => [
+      `${String(seller.sellerId)}:${
+        seller.organizationId || "default"
+      }`,
+      seller,
+    ]),
+  );
+
+  /*
+   * Checkout settlement snapshot.
+   *
+   * This was calculated during checkout and saved in order metadata.
+   * It must be preferred over recalculating the same financial amounts.
+   */
+  const checkoutSettlementBreakup = Array.isArray(
+    orderMetadata.pricingSummary?.sellerSettlementBreakup,
+  )
+    ? orderMetadata.pricingSummary.sellerSettlementBreakup
+    : [];
+
+  const checkoutSettlementBySeller = new Map(
+    checkoutSettlementBreakup.map((settlement) => [
+      `${String(settlement.sellerId)}:${
+        settlement.organizationId || "default"
+      }`,
+      settlement,
+    ]),
+  );
+
+  const sellerNames = new Map(
+    sellers.map((seller) => [
+      String(seller.id),
+      seller.sellerProfile?.displayName ||
+        seller.sellerProfile?.businessName ||
+        seller.profile?.name ||
+        seller.email ||
+        seller.id,
+    ]),
+  );
+
+  const grouped = new Map();
+
+  for (const item of items) {
+    const sellerId = String(
+      item.seller_id || "platform",
     );
 
-    const grouped = new Map();
-    for (const item of items) {
-      const sellerId = String(item.seller_id || "platform");
-      const organizationId = item.organization_id ? String(item.organization_id) : null;
-      const organizationSnapshot = this.parseJson(item.organization_snapshot, {});
-      const key = `${sellerId}:${organizationId || "default"}`;
-      const taxBreakup = this.parseJson(item.tax_breakup, {});
-      const pricing = this.parseJson(item.pricing_snapshot, {});
-      const current = grouped.get(key) || {
-        sellerId,
-        organizationId,
-        sellerName: sellerNames.get(sellerId) || sellerId,
-        organizationSnapshot,
-        grossSalesAmount: 0,
-        taxableAmount: 0,
-        taxAmount: 0,
-        commissionFeeAmount: 0,
-        fixedFeeAmount: 0,
-        closingFeeAmount: 0,
-        commissionRates: [],
-        commissionBreakdown: {},
-        platformFeeAmount: 0,
-        discountAmount: 0,
-        sellerFundedDiscountAmount: 0,
-        marketplaceFundedDiscountAmount: 0,
-        sellerPayoutAmount: 0,
-      };
+    const organizationId = item.organization_id
+      ? String(item.organization_id)
+      : null;
 
-      const lineTotal = this.money(item.line_total);
-      const snapshotGstRate = Number(taxBreakup.gstRate ?? item.gst_rate ?? 0);
-      const snapshotCessRate = Number(taxBreakup.cessRate ?? 0);
-      const discountedLineTotal = Math.max(lineTotal - this.money(item.discount_amount), 0);
-      const taxableAmount = this.money(taxBreakup.taxableAmount ?? (
-        taxBreakup.gstInclusive && snapshotGstRate + snapshotCessRate > 0
-          ? (discountedLineTotal * 100) / (100 + snapshotGstRate + snapshotCessRate)
-          : discountedLineTotal
-      ));
-      const sellerPayoutBaseAmount = this.money(
-        pricing.sellerPayoutBaseAmount ??
-        (financeSettings.sellerPayoutBase === "taxable_ex_gst" ? taxableAmount : lineTotal),
-      );
-      const sellerCommissionBaseAmount = this.money(
-        pricing.sellerCommissionBaseAmount ?? sellerPayoutBaseAmount,
-      );
-      let platformFeeAmount = this.money(item.platform_fee_amount || pricing.platformFeeAmount);
-      if (
-        sellerCommissionValue > 0 &&
-        (financeSettings.sellerPayoutBase !== "taxable_ex_gst" || platformFeeAmount <= 0)
-      ) {
-        platformFeeAmount = sellerCommissionType === "fixed"
-          ? this.money(sellerCommissionValue * Number(item.quantity || 1))
-          : this.money((
-            (financeSettings.sellerPayoutBase === "taxable_ex_gst" ? sellerCommissionBaseAmount : lineTotal) *
-            sellerCommissionValue
-          ) / 100);
-      }
-      let platformFeeTaxAmount = this.money(pricing.platformFeeTaxAmount);
-      const chargePlatformFeeTaxToSeller = pricing.chargePlatformFeeTaxToSeller ??
-        financeSettings.chargePlatformFeeTaxToSeller ?? true;
-      const platformFeeTaxRate = Number(
-        pricing.platformFeeTaxRate ?? financeSettings.platformFeeTaxRate ?? 0,
-      );
-      if (
-        chargePlatformFeeTaxToSeller && platformFeeTaxRate > 0 &&
-        (financeSettings.sellerPayoutBase !== "taxable_ex_gst" || platformFeeTaxAmount <= 0)
-      ) {
-        platformFeeTaxAmount = this.money((platformFeeAmount * platformFeeTaxRate) / 100);
-      }
-      const taxAmount = item.tax_amount !== undefined && item.tax_amount !== null
-        ? this.money(item.tax_amount)
-        : this.money(taxBreakup.taxAmount) + this.money(taxBreakup.cessAmount);
+    const organizationSnapshot = this.parseJson(
+      item.organization_snapshot,
+      {},
+    );
 
-      current.grossSalesAmount += lineTotal;
-      current.taxableAmount += taxableAmount;
-      current.taxAmount += taxAmount;
-      current.discountAmount = this.money(current.discountAmount) + this.money(pricing.discountAmount ?? item.discount_amount);
-      current.sellerFundedDiscountAmount = this.money(current.sellerFundedDiscountAmount) + this.money(pricing.sellerFundedDiscountAmount);
-      current.marketplaceFundedDiscountAmount = this.money(current.marketplaceFundedDiscountAmount) + this.money(pricing.marketplaceFundedDiscountAmount);
-      const commissionFeeAmount = sellerCommissionType === "percentage" &&
-        (financeSettings.sellerPayoutBase !== "taxable_ex_gst" || this.money(pricing.commissionFee) <= 0)
-        ? platformFeeAmount
-        : this.money(pricing.commissionFee);
-      const fixedFeeAmount = sellerCommissionType === "fixed" &&
-        (financeSettings.sellerPayoutBase !== "taxable_ex_gst" || this.money(pricing.fixedFee) <= 0)
-        ? platformFeeAmount
-        : this.money(pricing.fixedFee);
-      current.commissionFeeAmount += commissionFeeAmount;
-      current.fixedFeeAmount += fixedFeeAmount;
-      current.closingFeeAmount += this.money(pricing.closingFee);
-      const commissionRate = Number(pricing.commissionPercent ||
-        (sellerCommissionType === "percentage" ? sellerCommissionValue : 0));
-      if (commissionRate > 0) {
-        const rate = commissionRate;
-        current.commissionRates.push(rate);
-        current.commissionBreakdown[rate] = this.money(current.commissionBreakdown[rate]) + commissionFeeAmount;
-      }
-      current.platformFeeAmount += platformFeeAmount;
-      current.platformFeeTaxAmount = this.money(current.platformFeeTaxAmount) + platformFeeTaxAmount;
-      current.sellerPayoutBaseAmount = this.money(current.sellerPayoutBaseAmount) + sellerPayoutBaseAmount;
-      current.productTaxLiabilityAmount = this.money(current.productTaxLiabilityAmount) + taxAmount;
-      current.sellerPayoutAmount += Math.max(0, sellerPayoutBaseAmount - platformFeeAmount - platformFeeTaxAmount);
-      grouped.set(key, current);
+    const key = `${sellerId}:${
+      organizationId || "default"
+    }`;
+
+    const taxBreakup = this.parseJson(
+      item.tax_breakup,
+      {},
+    );
+
+    const pricing = this.parseJson(
+      item.pricing_snapshot,
+      {},
+    );
+
+    const current = grouped.get(key) || {
+      sellerId,
+      organizationId,
+      sellerName:
+        sellerNames.get(sellerId) || sellerId,
+      organizationSnapshot,
+
+      grossSalesAmount: 0,
+      taxableAmount: 0,
+      taxAmount: 0,
+
+      commissionFeeAmount: 0,
+      fixedFeeAmount: 0,
+      closingFeeAmount: 0,
+
+      commissionRates: [],
+      commissionBreakdown: {},
+
+      platformFeeAmount: 0,
+      platformFeeTaxAmount: 0,
+
+      sellerPayoutBaseAmount: 0,
+      productTaxLiabilityAmount: 0,
+
+      discountAmount: 0,
+      sellerFundedDiscountAmount: 0,
+      marketplaceFundedDiscountAmount: 0,
+
+      sellerPayoutAmount: 0,
+    };
+
+    const lineTotal = this.money(
+      item.line_total,
+    );
+
+    const snapshotGstRate = Number(
+      taxBreakup.gstRate ??
+        item.gst_rate ??
+        0,
+    );
+
+    const snapshotCessRate = Number(
+      taxBreakup.cessRate ?? 0,
+    );
+
+    const discountedLineTotal = Math.max(
+      lineTotal -
+        this.money(item.discount_amount),
+      0,
+    );
+
+    /*
+     * Product taxable amount.
+     *
+     * Prefer the saved tax snapshot.
+     * Recalculate only for legacy orders where the snapshot is missing.
+     */
+    const taxableAmount = this.money(
+      taxBreakup.taxableAmount ??
+        (
+          taxBreakup.gstInclusive &&
+          snapshotGstRate + snapshotCessRate > 0
+            ? (
+                discountedLineTotal * 100
+              ) /
+              (
+                100 +
+                snapshotGstRate +
+                snapshotCessRate
+              )
+            : discountedLineTotal
+        ),
+    );
+
+    /*
+     * Seller payout base.
+     *
+     * This remains dynamic based on the current checkout snapshot.
+     */
+    const sellerPayoutBaseAmount = this.money(
+      pricing.sellerPayoutBaseAmount ??
+        (
+          financeSettings.sellerPayoutBase ===
+          "taxable_ex_gst"
+            ? taxableAmount
+            : lineTotal
+        ),
+    );
+
+    /*
+     * Commission base must not depend on sellerPayoutBase.
+     *
+     * Commission should use the saved commission base from checkout.
+     * For old orders, product taxable amount is the fallback.
+     */
+    const sellerCommissionBaseAmount = this.money(
+      pricing.sellerCommissionBaseAmount ??
+        taxableAmount,
+    );
+
+    /*
+     * Platform fee.
+     *
+     * First preference:
+     * pricing_snapshot.platformFeeAmount
+     *
+     * Second preference:
+     * order_items.platform_fee_amount
+     *
+     * Recalculate only for legacy orders where both values are missing.
+     */
+    let platformFeeAmount = this.money(
+      pricing.platformFeeAmount ??
+        item.platform_fee_amount,
+    );
+
+    if (
+      platformFeeAmount <= 0 &&
+      sellerCommissionValue > 0
+    ) {
+      platformFeeAmount =
+        sellerCommissionType === "fixed"
+          ? this.money(
+              sellerCommissionValue *
+                Number(item.quantity || 1),
+            )
+          : this.money(
+              (
+                sellerCommissionBaseAmount *
+                sellerCommissionValue
+              ) / 100,
+            );
     }
 
-    return [...grouped.values()].map((seller) => {
-      const sellerDeliveryChargeAmount = this.money(
-        deliveryBySeller.get(`${String(seller.sellerId)}:${seller.organizationId || "default"}`) ??
-        deliveryBySeller.get(`${String(seller.sellerId)}:default`),
-      );
-      const shippingReimbursementAmount = shippingPolicy === "reimburse_seller" ? sellerDeliveryChargeAmount : 0;
-      const shippingDeductionAmount = shippingPolicy === "deduct_from_seller" ? sellerDeliveryChargeAmount : 0;
-      const payoutBeforeStatutoryDeductions = Math.max(
+    /*
+     * GST on seller platform fee.
+     *
+     * Use saved checkout GST first.
+     * Recalculate only for legacy orders.
+     */
+    const chargePlatformFeeTaxToSeller =
+      pricing.chargePlatformFeeTaxToSeller ??
+      financeSettings.chargePlatformFeeTaxToSeller ??
+      true;
+
+    let platformFeeTaxAmount =
+      chargePlatformFeeTaxToSeller
+        ? this.money(
+            pricing.platformFeeTaxAmount,
+          )
+        : 0;
+
+    const platformFeeTaxRate = Number(
+      pricing.platformFeeTaxRate ??
+        financeSettings.platformFeeTaxRate ??
         0,
-        seller.sellerPayoutAmount + shippingReimbursementAmount - shippingDeductionAmount,
+    );
+
+    if (
+      chargePlatformFeeTaxToSeller &&
+      platformFeeTaxAmount <= 0 &&
+      platformFeeTaxRate > 0
+    ) {
+      platformFeeTaxAmount = this.money(
+        (
+          platformFeeAmount *
+          platformFeeTaxRate
+        ) / 100,
       );
-      const gstTcsRate = financeSettings.gstTcsEnabled ? this.money(financeSettings.gstTcsRate) : 0;
-      const incomeTaxTdsRate = financeSettings.incomeTaxTdsEnabled ? this.money(financeSettings.incomeTaxTdsRate) : 0;
-      const gstTcsAmount = this.money((seller.taxableAmount * gstTcsRate) / 100);
-      const incomeTaxTdsAmount = this.money((seller.grossSalesAmount * incomeTaxTdsRate) / 100);
-      const sellerPayoutAmount = Math.max(0, payoutBeforeStatutoryDeductions - gstTcsAmount - incomeTaxTdsAmount);
+    }
+
+    const taxAmount =
+      item.tax_amount !== undefined &&
+      item.tax_amount !== null
+        ? this.money(item.tax_amount)
+        : this.money(
+            taxBreakup.taxAmount,
+          ) +
+          this.money(
+            taxBreakup.cessAmount,
+          );
+
+    /*
+     * Fee component breakup.
+     *
+     * Prefer saved checkout components.
+     */
+    let commissionFeeAmount = this.money(
+      pricing.commissionFee,
+    );
+
+    let fixedFeeAmount = this.money(
+      pricing.fixedFee,
+    );
+
+    const closingFeeAmount = this.money(
+      pricing.closingFee,
+    );
+
+    /*
+     * Legacy fallback:
+     * if component fields are missing but total platform fee exists.
+     */
+    if (
+      commissionFeeAmount <= 0 &&
+      fixedFeeAmount <= 0 &&
+      closingFeeAmount <= 0 &&
+      platformFeeAmount > 0
+    ) {
+      if (
+        sellerCommissionType === "fixed"
+      ) {
+        fixedFeeAmount =
+          platformFeeAmount;
+      } else {
+        commissionFeeAmount =
+          platformFeeAmount;
+      }
+    }
+
+    current.grossSalesAmount +=
+      lineTotal;
+
+    current.taxableAmount +=
+      taxableAmount;
+
+    current.taxAmount +=
+      taxAmount;
+
+    current.discountAmount =
+      this.money(
+        current.discountAmount,
+      ) +
+      this.money(
+        pricing.discountAmount ??
+          item.discount_amount,
+      );
+
+    current.sellerFundedDiscountAmount =
+      this.money(
+        current.sellerFundedDiscountAmount,
+      ) +
+      this.money(
+        pricing.sellerFundedDiscountAmount,
+      );
+
+    current.marketplaceFundedDiscountAmount =
+      this.money(
+        current.marketplaceFundedDiscountAmount,
+      ) +
+      this.money(
+        pricing.marketplaceFundedDiscountAmount,
+      );
+
+    current.commissionFeeAmount +=
+      commissionFeeAmount;
+
+    current.fixedFeeAmount +=
+      fixedFeeAmount;
+
+    current.closingFeeAmount +=
+      closingFeeAmount;
+
+    const commissionRate = Number(
+      pricing.commissionPercent ||
+        (
+          sellerCommissionType ===
+          "percentage"
+            ? sellerCommissionValue
+            : 0
+        ),
+    );
+
+    if (commissionRate > 0) {
+      current.commissionRates.push(
+        commissionRate,
+      );
+
+      current.commissionBreakdown[
+        commissionRate
+      ] =
+        this.money(
+          current.commissionBreakdown[
+            commissionRate
+          ],
+        ) +
+        commissionFeeAmount;
+    }
+
+    current.platformFeeAmount +=
+      platformFeeAmount;
+
+    current.platformFeeTaxAmount =
+      this.money(
+        current.platformFeeTaxAmount,
+      ) +
+      platformFeeTaxAmount;
+
+    current.sellerPayoutBaseAmount =
+      this.money(
+        current.sellerPayoutBaseAmount,
+      ) +
+      sellerPayoutBaseAmount;
+
+    current.productTaxLiabilityAmount =
+      this.money(
+        current.productTaxLiabilityAmount,
+      ) +
+      taxAmount;
+
+    /*
+     * Item-level payout before shipping, TCS and TDS.
+     */
+    current.sellerPayoutAmount +=
+      Math.max(
+        0,
+        sellerPayoutBaseAmount -
+          platformFeeAmount -
+          platformFeeTaxAmount,
+      );
+
+    grouped.set(key, current);
+  }
+
+  return [...grouped.values()].map(
+    (seller) => {
+      const sellerKey = `${String(
+        seller.sellerId,
+      )}:${
+        seller.organizationId ||
+        "default"
+      }`;
+
+      const deliveryEntry =
+        deliveryBySeller.get(
+          sellerKey,
+        ) ??
+        deliveryBySeller.get(
+          `${String(
+            seller.sellerId,
+          )}:default`,
+        ) ??
+        {};
+
+      const checkoutSettlement =
+        checkoutSettlementBySeller.get(
+          sellerKey,
+        ) ??
+        checkoutSettlementBySeller.get(
+          `${String(
+            seller.sellerId,
+          )}:default`,
+        ) ??
+        null;
+
+      const sellerDeliveryChargeAmount =
+        this.money(
+          checkoutSettlement
+            ?.sellerDeliveryChargeAmount ??
+            deliveryEntry.chargeAmount,
+        );
+
+      /*
+       * Global finance shipping policy is preferred.
+       *
+       * The delivery profile remains a fallback for legacy orders.
+       */
+      const shippingPolicy =
+        checkoutSettlement?.shippingPolicy ||
+        financeSettings.shippingPolicy ||
+        resolveShippingPolicy(
+          financeSettings.shippingPolicy,
+          deliveryEntry,
+        );
+
+      const shippingReimbursementAmount =
+        checkoutSettlement
+          ?.shippingReimbursementAmount !==
+          undefined &&
+        checkoutSettlement
+          ?.shippingReimbursementAmount !==
+          null
+          ? this.money(
+              checkoutSettlement
+                .shippingReimbursementAmount,
+            )
+          : shippingPolicy ===
+              "reimburse_seller"
+            ? sellerDeliveryChargeAmount
+            : 0;
+
+      const shippingDeductionAmount =
+        checkoutSettlement
+          ?.shippingDeductionAmount !==
+          undefined &&
+        checkoutSettlement
+          ?.shippingDeductionAmount !==
+          null
+          ? this.money(
+              checkoutSettlement
+                .shippingDeductionAmount,
+            )
+          : shippingPolicy ===
+              "deduct_from_seller"
+            ? sellerDeliveryChargeAmount
+            : 0;
+
+      /*
+       * Shipping tax is still required for invoice display.
+       *
+       * It is not added to GST TCS or Income Tax TDS base.
+       */
+      const shippingTax =
+        calculateInclusiveShippingTax(
+          sellerDeliveryChargeAmount,
+          seller.taxableAmount,
+          seller.taxAmount,
+        );
+
+      const calculatedPayoutBeforeStatutoryDeductions =
+        Math.max(
+          0,
+          seller.sellerPayoutAmount +
+            shippingReimbursementAmount -
+            shippingDeductionAmount,
+        );
+
+      const gstTcsRate =
+        checkoutSettlement
+          ?.gstTcsRate !== undefined &&
+        checkoutSettlement
+          ?.gstTcsRate !== null
+          ? this.money(
+              checkoutSettlement.gstTcsRate,
+            )
+          : financeSettings.gstTcsEnabled
+            ? this.money(
+                financeSettings.gstTcsRate,
+              )
+            : 0;
+
+      const incomeTaxTdsRate =
+        checkoutSettlement
+          ?.incomeTaxTdsRate !==
+          undefined &&
+        checkoutSettlement
+          ?.incomeTaxTdsRate !== null
+          ? this.money(
+              checkoutSettlement
+                .incomeTaxTdsRate,
+            )
+          : financeSettings
+              .incomeTaxTdsEnabled
+            ? this.money(
+                financeSettings
+                  .incomeTaxTdsRate,
+              )
+            : 0;
+
+      /*
+       * TCS base:
+       * product taxable amount only.
+       */
+      const gstTcsTaxableAmount =
+        checkoutSettlement
+          ?.gstTcsTaxableAmount !==
+          undefined &&
+        checkoutSettlement
+          ?.gstTcsTaxableAmount !==
+          null
+          ? this.money(
+              checkoutSettlement
+                .gstTcsTaxableAmount,
+            )
+          : Number(
+              Number(
+                seller.taxableAmount ||
+                  0,
+              ).toFixed(2),
+            );
+
+      const gstTcsAmount =
+        checkoutSettlement
+          ?.gstTcsAmount !==
+          undefined &&
+        checkoutSettlement
+          ?.gstTcsAmount !==
+          null
+          ? this.money(
+              checkoutSettlement
+                .gstTcsAmount,
+            )
+          : this.money(
+              (
+                gstTcsTaxableAmount *
+                gstTcsRate
+              ) / 100,
+            );
+
+      /*
+       * Income Tax TDS base:
+       * product taxable amount only.
+       */
+      const incomeTaxTdsTaxableAmount =
+        checkoutSettlement
+          ?.incomeTaxTdsTaxableAmount !==
+          undefined &&
+        checkoutSettlement
+          ?.incomeTaxTdsTaxableAmount !==
+          null
+          ? this.money(
+              checkoutSettlement
+                .incomeTaxTdsTaxableAmount,
+            )
+          : Number(
+              Number(
+                seller.taxableAmount ||
+                  0,
+              ).toFixed(2),
+            );
+
+      const incomeTaxTdsAmount =
+        checkoutSettlement
+          ?.incomeTaxTdsAmount !==
+          undefined &&
+        checkoutSettlement
+          ?.incomeTaxTdsAmount !==
+          null
+          ? this.money(
+              checkoutSettlement
+                .incomeTaxTdsAmount,
+            )
+          : this.money(
+              (
+                incomeTaxTdsTaxableAmount *
+                incomeTaxTdsRate
+              ) / 100,
+            );
+
+      const calculatedSellerPayoutAmount =
+        Math.max(
+          0,
+          calculatedPayoutBeforeStatutoryDeductions -
+            gstTcsAmount -
+            incomeTaxTdsAmount,
+        );
+
+      /*
+       * Prefer the immutable checkout settlement values.
+       *
+       * The locally calculated values remain available as fallback
+       * for older orders where checkout settlement snapshot is absent.
+       */
+      const finalGrossSalesAmount =
+        this.money(
+          checkoutSettlement
+            ?.grossSalesAmount ??
+            seller.grossSalesAmount,
+        );
+
+      const finalSellerPayoutBaseAmount =
+        this.money(
+          checkoutSettlement
+            ?.sellerPayoutBaseAmount ??
+            seller.sellerPayoutBaseAmount,
+        );
+
+      const finalTaxableAmount =
+        this.money(
+          checkoutSettlement
+            ?.taxableAmount ??
+            seller.taxableAmount,
+        );
+
+      const finalTaxAmount =
+        this.money(
+          checkoutSettlement
+            ?.taxAmount ??
+            seller.taxAmount,
+        );
+
+      const finalPlatformFeeAmount =
+        this.money(
+          checkoutSettlement
+            ?.platformFeeAmount ??
+            seller.platformFeeAmount,
+        );
+
+      const finalPlatformFeeTaxAmount =
+        this.money(
+          checkoutSettlement
+            ?.platformFeeTaxAmount ??
+            seller.platformFeeTaxAmount,
+        );
+
+      const finalSellerPayoutAmount =
+        this.money(
+          checkoutSettlement
+            ?.sellerPayoutAmount ??
+            calculatedSellerPayoutAmount,
+        );
+
+      /*
+       * commissionFeeAmount is equivalent to commission component.
+       *
+       * For your current percentage-only setup, it equals
+       * platformFeeAmount.
+       */
+      const finalCommissionFeeAmount =
+        checkoutSettlement
+          ?.commissionFeeAmount !==
+          undefined &&
+        checkoutSettlement
+          ?.commissionFeeAmount !==
+          null
+          ? this.money(
+              checkoutSettlement
+                .commissionFeeAmount,
+            )
+          : seller.commissionFeeAmount > 0
+            ? this.money(
+                seller.commissionFeeAmount,
+              )
+            : finalPlatformFeeAmount;
 
       return {
         ...seller,
-        grossSalesAmount: Number(seller.grossSalesAmount.toFixed(2)),
-        sellerPayoutBaseAmount: Number(this.money(seller.sellerPayoutBaseAmount).toFixed(2)),
-        taxableAmount: Number(seller.taxableAmount.toFixed(2)),
-        taxAmount: Number(seller.taxAmount.toFixed(2)),
-        commissionFeeAmount: Number(this.money(seller.commissionFeeAmount).toFixed(2)),
-        fixedFeeAmount: Number(this.money(seller.fixedFeeAmount).toFixed(2)),
-        closingFeeAmount: Number(this.money(seller.closingFeeAmount).toFixed(2)),
-        commissionRates: [...new Set(seller.commissionRates || [])].sort((left, right) => left - right),
-        commissionBreakdown: Object.entries(seller.commissionBreakdown || {})
-          .map(([rate, amount]) => ({ rate: Number(rate), amount: Number(this.money(amount).toFixed(2)) }))
-          .sort((left, right) => left.rate - right.rate),
-        platformFeeAmount: Number(seller.platformFeeAmount.toFixed(2)),
-        platformFeeTaxAmount: Number(this.money(seller.platformFeeTaxAmount).toFixed(2)),
-        productTaxLiabilityAmount: Number(this.money(seller.productTaxLiabilityAmount).toFixed(2)),
-        discountAmount: Number(this.money(seller.discountAmount).toFixed(2)),
-        sellerFundedDiscountAmount: Number(this.money(seller.sellerFundedDiscountAmount).toFixed(2)),
-        marketplaceFundedDiscountAmount: Number(this.money(seller.marketplaceFundedDiscountAmount).toFixed(2)),
-        sellerDeliveryChargeAmount: Number(sellerDeliveryChargeAmount.toFixed(2)),
-        shippingReimbursementAmount: Number(shippingReimbursementAmount.toFixed(2)),
-        shippingDeductionAmount: Number(shippingDeductionAmount.toFixed(2)),
+
+        grossSalesAmount: Number(
+          finalGrossSalesAmount.toFixed(2),
+        ),
+
+        sellerPayoutBaseAmount: Number(
+          finalSellerPayoutBaseAmount.toFixed(
+            2,
+          ),
+        ),
+
+        taxableAmount: Number(
+          finalTaxableAmount.toFixed(2),
+        ),
+
+        taxAmount: Number(
+          finalTaxAmount.toFixed(2),
+        ),
+
+        commissionFeeAmount: Number(
+          finalCommissionFeeAmount.toFixed(
+            2,
+          ),
+        ),
+
+        fixedFeeAmount: Number(
+          this.money(
+            seller.fixedFeeAmount,
+          ).toFixed(2),
+        ),
+
+        closingFeeAmount: Number(
+          this.money(
+            seller.closingFeeAmount,
+          ).toFixed(2),
+        ),
+
+        commissionRates: [
+          ...new Set(
+            seller.commissionRates || [],
+          ),
+        ].sort(
+          (left, right) =>
+            left - right,
+        ),
+
+        commissionBreakdown: Object.entries(
+          seller.commissionBreakdown || {},
+        )
+          .map(([rate, amount]) => ({
+            rate: Number(rate),
+            amount: Number(
+              this.money(
+                amount,
+              ).toFixed(2),
+            ),
+          }))
+          .sort(
+            (left, right) =>
+              left.rate - right.rate,
+          ),
+
+        platformFeeAmount: Number(
+          finalPlatformFeeAmount.toFixed(
+            2,
+          ),
+        ),
+
+        platformFeeTaxAmount: Number(
+          finalPlatformFeeTaxAmount.toFixed(
+            2,
+          ),
+        ),
+
+        productTaxLiabilityAmount:
+          Number(
+            this.money(
+              checkoutSettlement
+                ?.productTaxLiabilityAmount ??
+                seller
+                  .productTaxLiabilityAmount,
+            ).toFixed(2),
+          ),
+
+        discountAmount: Number(
+          this.money(
+            seller.discountAmount,
+          ).toFixed(2),
+        ),
+
+        sellerFundedDiscountAmount:
+          Number(
+            this.money(
+              checkoutSettlement
+                ?.sellerFundedDiscountAmount ??
+                seller
+                  .sellerFundedDiscountAmount,
+            ).toFixed(2),
+          ),
+
+        marketplaceFundedDiscountAmount:
+          Number(
+            this.money(
+              checkoutSettlement
+                ?.marketplaceFundedDiscountAmount ??
+                seller
+                  .marketplaceFundedDiscountAmount,
+            ).toFixed(2),
+          ),
+
+        sellerDeliveryChargeAmount:
+          Number(
+            sellerDeliveryChargeAmount.toFixed(
+              2,
+            ),
+          ),
+
+        shippingReimbursementAmount:
+          Number(
+            shippingReimbursementAmount.toFixed(
+              2,
+            ),
+          ),
+
+        shippingDeductionAmount:
+          Number(
+            shippingDeductionAmount.toFixed(
+              2,
+            ),
+          ),
+
+        shippingTaxableAmount: Number(
+          this.money(
+            checkoutSettlement
+              ?.shippingTaxableAmount ??
+              shippingTax.taxableAmount,
+          ).toFixed(2),
+        ),
+
+        shippingTaxAmount: Number(
+          this.money(
+            checkoutSettlement
+              ?.shippingTaxAmount ??
+              shippingTax.taxAmount,
+          ).toFixed(2),
+        ),
+
         shippingPolicy,
-        gstTcsRate: Number(gstTcsRate.toFixed(2)),
-        gstTcsAmount: Number(gstTcsAmount.toFixed(2)),
-        incomeTaxTdsRate: Number(incomeTaxTdsRate.toFixed(2)),
-        incomeTaxTdsAmount: Number(incomeTaxTdsAmount.toFixed(2)),
-        statutoryDeductionAmount: Number((gstTcsAmount + incomeTaxTdsAmount).toFixed(2)),
-        sellerPayoutAmount: Number(sellerPayoutAmount.toFixed(2)),
+
+        gstTcsRate: Number(
+          gstTcsRate.toFixed(2),
+        ),
+
+        gstTcsTaxableAmount: Number(
+          gstTcsTaxableAmount.toFixed(2),
+        ),
+
+        gstTcsAmount: Number(
+          gstTcsAmount.toFixed(2),
+        ),
+
+        incomeTaxTdsRate: Number(
+          incomeTaxTdsRate.toFixed(2),
+        ),
+
+        incomeTaxTdsTaxableAmount:
+          Number(
+            incomeTaxTdsTaxableAmount.toFixed(
+              2,
+            ),
+          ),
+
+        incomeTaxTdsAmount: Number(
+          incomeTaxTdsAmount.toFixed(2),
+        ),
+
+        statutoryDeductionAmount:
+          Number(
+            this.money(
+              checkoutSettlement
+                ?.statutoryDeductionAmount ??
+                (
+                  gstTcsAmount +
+                  incomeTaxTdsAmount
+                ),
+            ).toFixed(2),
+          ),
+
+        sellerPayoutAmount: Number(
+          finalSellerPayoutAmount.toFixed(
+            2,
+          ),
+        ),
       };
-    });
-  }
+    },
+  );
+}
 
   buildSellerFulfillmentGroups(order = {}, items = [], sellers = [], sellerSettlements = [], shipments = []) {
     const metadata = this.parseJson(order.metadata, {});

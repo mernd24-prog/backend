@@ -14,7 +14,7 @@ const couponSchema = new mongoose.Schema(
     maxDiscountAmount: { type: Number, default: null },
     fundingType: {
       type: String,
-      enum: ["marketplace", "seller", "shared"],
+      enum: ["marketplace", "seller", "shared", "payment_partner"],
       default: "marketplace",
     },
     sellerFundingPercent: { type: Number, min: 0, max: 100, default: 0 },

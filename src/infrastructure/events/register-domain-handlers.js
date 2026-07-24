@@ -5,6 +5,7 @@ const { ORDER_STATUS } = require("../../shared/domain/commerce-constants");
 const { InventoryService } = require("../../modules/inventory/services/inventory.service");
 const { WalletService } = require("../../modules/wallet/services/wallet.service");
 const { auditLogService } = require("../../shared/logger/audit-log.service");
+const { logger } = require("../../shared/logger/logger");
 
 let handlersRegistered = false;
 
@@ -28,6 +29,35 @@ function registerDomainHandlers() {
     await inventoryService.releaseForOrder(event.payload.orderId);
     await walletService.release(event.payload.buyerId, event.payload.orderId);
     await orderRepository.updateStatus(event.payload.orderId, ORDER_STATUS.PAYMENT_FAILED);
+  });
+
+  eventBus.subscribe(DOMAIN_EVENTS.SHIPMENT_RTO_V1, async (event) => {
+    const payload = event.payload || {};
+    try {
+      // Lazy loading avoids coupling delivery construction to the cancellation
+      // module while still routing all refund, credit-note, inventory, and
+      // seller-recovery work through the canonical cancellation workflow.
+      const { CancellationService } = require("../../modules/cancellation/services/cancellation.service");
+      const cancellationService = new CancellationService();
+      await cancellationService.cancelOrder(payload.orderId, {
+        source: "shipment_rto",
+        shipmentId: payload.shipmentId,
+        sellerId: payload.sellerId,
+        organizationId: payload.organizationId || null,
+        reasonCode: "shipment_rto",
+        reason: "Shipment returned to origin",
+        idempotencyKey: `shipment-rto:${payload.shipmentId}`,
+      }, {
+        userId: "shipment-rto-handler",
+        role: "super-admin",
+      });
+    } catch (error) {
+      logger.error({
+        orderId: payload.orderId,
+        shipmentId: payload.shipmentId,
+        error: error.message,
+      }, "Automatic RTO financial resolution failed");
+    }
   });
 
   const auditTargets = [

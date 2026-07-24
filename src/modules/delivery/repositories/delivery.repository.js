@@ -100,6 +100,7 @@ class DeliveryRepository {
           id,
           order_id: payload.orderId,
           seller_id: payload.sellerId,
+          organization_id: payload.organizationId || payload.organization_id || payload.metadata?.organizationId || null,
           provider: payload.provider || "manual",
           courier_name: payload.courierName || null,
           awb_number: payload.awbNumber || null,
@@ -124,7 +125,10 @@ class DeliveryRepository {
           manifest_id: payload.manifestId || null,
           expected_delivery_at: payload.expectedDeliveryAt || null,
           idempotency_key: payload.idempotencyKey || null,
-          metadata: payload.metadata || {},
+          metadata: {
+            ...(payload.metadata || {}),
+            organizationId: payload.organizationId || payload.organization_id || payload.metadata?.organizationId || null,
+          },
           created_by: payload.createdBy || null,
           updated_by: payload.updatedBy || payload.createdBy || null,
         })

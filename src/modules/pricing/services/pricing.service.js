@@ -1,5 +1,10 @@
 const { AppError } = require("../../../shared/errors/app-error");
-const { applyShippingPolicy, uniqueCommissionRates } = require("../../../shared/domain/seller-payout-rules");
+const {
+  applyShippingPolicy,
+  calculateInclusiveShippingTax,
+  resolveShippingPolicy,
+  uniqueCommissionRates,
+} = require("../../../shared/domain/seller-payout-rules");
 const { COUPON_TYPE } = require("../../../shared/domain/commerce-constants");
 const { PricingRepository } = require("../repositories/pricing.repository");
 const { ProductRepository } = require("../../product/repositories/product.repository");
@@ -206,7 +211,12 @@ class PricingService {
         (allocatedSellerFunding + item.sellerFundedDiscountAmount).toFixed(2),
       );
       item.marketplaceFundedDiscountAmount = Number(
-        (allocatedDiscount - item.sellerFundedDiscountAmount).toFixed(2),
+        (discount.fundingType === "payment_partner"
+          ? 0
+          : allocatedDiscount - item.sellerFundedDiscountAmount).toFixed(2),
+      );
+      item.paymentPartnerFundedDiscountAmount = Number(
+        (discount.fundingType === "payment_partner" ? allocatedDiscount : 0).toFixed(2),
       );
       item.discountFundingType = discount.fundingType || "marketplace";
     }
@@ -251,11 +261,15 @@ class PricingService {
         chargePlatformFeeTaxToSeller: Boolean(commerceSettings.finance.chargePlatformFeeTaxToSeller),
         sellerPayoutBase: commerceSettings.finance.sellerPayoutBase,
         sellerPayoutBaseAmount: item.sellerPayoutBaseAmount,
-        sellerCommissionBaseAmount: Number((fee?.sellerCommissionBaseAmount ?? sellerPayoutBaseAmount).toFixed(2)),
+     sellerCommissionBaseAmount: Number(
+    fee?.sellerCommissionBaseAmount ??
+    item.taxableAmount
+),
         sellerGrossLineTotal,
         discountAmount: Number(item.discountAmount || 0),
         discountFundingType: item.discountFundingType || "marketplace",
         marketplaceFundedDiscountAmount: Number(item.marketplaceFundedDiscountAmount || 0),
+        paymentPartnerFundedDiscountAmount: Number(item.paymentPartnerFundedDiscountAmount || 0),
         sellerFundedDiscountAmount,
         productTaxLiabilityAmount: item.productTaxLiabilityAmount,
         sellerReceivable: item.settlementAmount,
@@ -263,6 +277,15 @@ class PricingService {
       };
     }
     const customerItemsAmount = Number((subtotalAmount - discount.discountAmount).toFixed(2));
+    const sellerFundedDiscountAmount = Number(pricedItems.reduce(
+      (sum, item) => sum + Number(item.sellerFundedDiscountAmount || 0), 0,
+    ).toFixed(2));
+    const marketplaceFundedDiscountAmount = Number(pricedItems.reduce(
+      (sum, item) => sum + Number(item.marketplaceFundedDiscountAmount || 0), 0,
+    ).toFixed(2));
+    const paymentPartnerFundedDiscountAmount = Number(pricedItems.reduce(
+      (sum, item) => sum + Number(item.paymentPartnerFundedDiscountAmount || 0), 0,
+    ).toFixed(2));
     const deliveryCharge = await sellerChargeSettingsService.calculateDeliveryCharges(
       pricedItems,
       shippingAddress,
@@ -303,6 +326,9 @@ class PricingService {
         subtotalAmount,
         customerItemsAmount,
         discountAmount: discount.discountAmount,
+        sellerFundedDiscountAmount,
+        marketplaceFundedDiscountAmount,
+        paymentPartnerFundedDiscountAmount,
         walletAppliedAmount: walletBreakup.walletAppliedAmount,
         taxAmount: taxBreakup.totalTaxAmount,
         taxIncludedAmount: taxBreakup.taxIncludedAmount,
@@ -379,28 +405,88 @@ class PricingService {
     const shippingBySeller = new Map(
       (deliveryCharge?.breakup?.sellers || []).map((seller) => [
         `${String(seller.sellerId)}:${seller.organizationId || "default"}`,
-        Number(seller.chargeAmount || 0),
+        seller,
       ]),
     );
-    const shippingPolicy = financeSettings.shippingPolicy || "not_in_seller_payout";
 
     const normalized = [...sellers.values()].map((seller) => {
-      const sellerDeliveryChargeAmount = Number(
+      const deliveryEntry =
         shippingBySeller.get(`${String(seller.sellerId)}:${seller.organizationId || "default"}`) ||
         shippingBySeller.get(`${String(seller.sellerId)}:default`) ||
-        0,
-      );
-      const shippingReimbursementAmount = shippingPolicy === "reimburse_seller" ? sellerDeliveryChargeAmount : 0;
-      const shippingDeductionAmount = shippingPolicy === "deduct_from_seller" ? sellerDeliveryChargeAmount : 0;
-      const payoutBeforeStatutoryDeductions = applyShippingPolicy(
-        seller.sellerPayoutAmount,
-        sellerDeliveryChargeAmount,
-        shippingPolicy,
-      );
-      const gstTcsRate = financeSettings.gstTcsEnabled ? Number(financeSettings.gstTcsRate || 0) : 0;
-      const incomeTaxTdsRate = financeSettings.incomeTaxTdsEnabled ? Number(financeSettings.incomeTaxTdsRate || 0) : 0;
-      const gstTcsAmount = Number(((seller.taxableAmount * gstTcsRate) / 100).toFixed(2));
-      const incomeTaxTdsAmount = Number(((seller.grossSalesAmount * incomeTaxTdsRate) / 100).toFixed(2));
+        {};
+   const sellerDeliveryChargeAmount = Number(
+  deliveryEntry.chargeAmount || 0,
+);
+
+// Use the commerce finance setting.
+// deliveryEntry is only passed as a fallback.
+const shippingPolicy =
+  financeSettings.shippingPolicy ||
+  resolveShippingPolicy(
+    financeSettings.shippingPolicy,
+    deliveryEntry,
+  );
+
+const shippingReimbursementAmount =
+  shippingPolicy === "reimburse_seller"
+    ? sellerDeliveryChargeAmount
+    : 0;
+
+const shippingDeductionAmount =
+  shippingPolicy === "deduct_from_seller"
+    ? sellerDeliveryChargeAmount
+    : 0;
+
+// Calculate shipping tax from the actual shipping charge.
+// Do not use only reimbursement amount here.
+const shippingTax = calculateInclusiveShippingTax(
+  sellerDeliveryChargeAmount,
+  seller.taxableAmount,
+  seller.taxAmount,
+);
+
+const payoutBeforeStatutoryDeductions =
+  applyShippingPolicy(
+    seller.sellerPayoutAmount,
+    sellerDeliveryChargeAmount,
+    shippingPolicy,
+  );
+
+const gstTcsRate = financeSettings.gstTcsEnabled
+  ? Number(financeSettings.gstTcsRate || 0)
+  : 0;
+
+const incomeTaxTdsRate =
+  financeSettings.incomeTaxTdsEnabled
+    ? Number(financeSettings.incomeTaxTdsRate || 0)
+    : 0;
+
+// According to your current PDF flow,
+// TCS and TDS use product taxable value only.
+const gstTcsTaxableAmount = Number(
+  Number(seller.taxableAmount || 0).toFixed(2),
+);
+
+const gstTcsAmount = Number(
+  (
+    (gstTcsTaxableAmount * gstTcsRate) /
+    100
+  ).toFixed(2),
+);
+
+const incomeTaxTdsTaxableAmount = Number(
+  Number(seller.taxableAmount || 0).toFixed(2),
+);
+
+const incomeTaxTdsAmount = Number(
+  (
+    (
+      incomeTaxTdsTaxableAmount *
+      incomeTaxTdsRate
+    ) /
+    100
+  ).toFixed(2),
+);
       const sellerPayoutAmount = Math.max(0, Number(
         (payoutBeforeStatutoryDeductions - gstTcsAmount - incomeTaxTdsAmount).toFixed(2),
       ));
@@ -416,11 +502,15 @@ class PricingService {
         sellerDeliveryChargeAmount: Number(sellerDeliveryChargeAmount.toFixed(2)),
         shippingReimbursementAmount: Number(shippingReimbursementAmount.toFixed(2)),
         shippingDeductionAmount: Number(shippingDeductionAmount.toFixed(2)),
+        shippingTaxableAmount: shippingTax.taxableAmount,
+        shippingTaxAmount: shippingTax.taxAmount,
         shippingPolicy,
         commissionRates: uniqueCommissionRates(seller.commissionRates),
         gstTcsRate,
+        gstTcsTaxableAmount,
         gstTcsAmount,
         incomeTaxTdsRate,
+        incomeTaxTdsTaxableAmount,
         incomeTaxTdsAmount,
         statutoryDeductionAmount: Number((gstTcsAmount + incomeTaxTdsAmount).toFixed(2)),
         sellerPayoutAmount: Number(sellerPayoutAmount.toFixed(2)),
@@ -526,12 +616,9 @@ class PricingService {
     return Number(lineAmount.toFixed(2));
   }
 
-  resolveSellerCommissionBase(item = {}, financeSettings = {}) {
-    if (financeSettings.sellerPayoutBase === "taxable_ex_gst") {
-      return Number(item.taxableAmountBeforeDiscount ?? item.taxableAmount ?? 0);
-    }
-    return Number(item.sellerPayoutBaseAmount ?? item.lineTotal ?? item.discountedLineTotal ?? 0);
-  }
+ resolveSellerCommissionBase(item = {}) {
+  return Number(item.taxableAmount || 0);
+}
 
   async calculatePlatformFee(pricedItems, context = {}) {
     const settings = context.commerceSettings || await commerceSettingsService.getSettings();

@@ -16,6 +16,7 @@ const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
 const { prorateMoney } = require("../../../shared/domain/quantity-allocation");
+const { knex } = require("../../../infrastructure/postgres/postgres-client");
 
 const CANCELLABLE_ORDER_STATUSES = new Set([
   ORDER_STATUS.PENDING_PAYMENT,
@@ -149,7 +150,7 @@ class CancellationService {
     });
   }
 
-  calculateRefund(order, items, payment, fullCancellation = false) {
+  calculateRefund(order, items, payment, fullCancellation = false, additionalRefundAmount = 0) {
     const itemRefundAmount = this.round(items.reduce((sum, item) => sum + item.refundAmount, 0));
     const itemBase = items.reduce((sum, item) => sum + item.itemAmount, 0);
     const proportion = Number(order.subtotal_amount || 0) > 0
@@ -157,7 +158,11 @@ class CancellationService {
       : 0;
     const refundAmount = fullCancellation
       ? this.round(Number(order.total_amount || itemRefundAmount))
-      : this.round(itemRefundAmount + Number(order.cod_charge_amount || 0) * proportion);
+      : this.round(
+        itemRefundAmount +
+        Number(order.cod_charge_amount || 0) * proportion +
+        Number(additionalRefundAmount || 0),
+      );
     const walletRefundAmount = this.round(Math.min(
       fullCancellation
         ? Number(order.wallet_discount_amount || 0)
@@ -182,16 +187,35 @@ class CancellationService {
   async cancelOrder(orderId, payload = {}, actor = {}) {
     const order = await this.orderRepository.findByIdWithItems(orderId);
     if (!order) throw new AppError("Order not found", 404);
+    const rtoSettlement = payload.source === "shipment_rto";
+    if (rtoSettlement && !this.isAdmin(actor)) {
+      throw new AppError("Only the system or an admin can finalize an RTO settlement", 403);
+    }
     // A multi-seller parent order can already be `shipped` because another
     // seller handed over their package. Seller cancellation eligibility must
     // therefore be decided from the affected seller shipment(s), which is
     // enforced by assertShipmentsCancellable below. This also repairs legacy
     // shipments that were directly marked cancelled before the cancellation
     // workflow was introduced.
-    if (!this.isSeller(actor) && !CANCELLABLE_ORDER_STATUSES.has(order.status)) {
+    if (!rtoSettlement && !this.isSeller(actor) && !CANCELLABLE_ORDER_STATUSES.has(order.status)) {
       throw new AppError("Order cannot be cancelled after shipment handover. Use return or RTO flow.", 409);
     }
     let requestedItems = payload.items || [];
+    if (rtoSettlement && requestedItems.length === 0) {
+      requestedItems = (order.items || [])
+        .filter((item) =>
+          String(item.seller_id || "") === String(payload.sellerId || "") &&
+          String(item.organization_id || "default") === String(payload.organizationId || "default"),
+        )
+        .map((item) => ({
+          orderItemId: item.id,
+          quantity: Number(item.quantity || 0) - Number(item.cancelled_quantity || 0),
+        }))
+        .filter((item) => item.quantity > 0);
+      if (!requestedItems.length) {
+        throw new AppError("No active order items were found for the RTO shipment", 409);
+      }
+    }
     if (this.isSeller(actor) && requestedItems.length === 0) {
       const sellerId = String(actor.ownerSellerId || actor.userId);
       requestedItems = (order.items || [])
@@ -209,12 +233,29 @@ class CancellationService {
     await this.assertCanCancel(order, items, actor);
     const fullCancellation = this.isFullCancellation(order, items);
     const payment = await this.orderRepository.findRefundablePaymentByOrderId(orderId);
-    const refund = this.calculateRefund(order, items, payment, fullCancellation);
+    const shippingRefundAmount = rtoSettlement && !fullCancellation
+      ? this.getSellerShippingAmount(order, payload.sellerId, payload.organizationId)
+      : 0;
+    const refund = this.calculateRefund(
+      order,
+      items,
+      payment,
+      fullCancellation,
+      shippingRefundAmount,
+    );
     const idempotencyKey = this.makeIdempotencyKey(orderId, items, payload, actor);
     const existing = await this.cancellationRepository.findByIdempotencyKey(idempotencyKey);
-    if (existing) return existing;
+    if (existing) {
+      return rtoSettlement && existing.status !== "completed"
+        ? this.processCancellation(existing.id, actor)
+        : existing;
+    }
 
-    await this.assertShipmentsCancellable(order, items);
+    if (rtoSettlement) {
+      this.assertRtoShipment(order, payload);
+    } else {
+      await this.assertShipmentsCancellable(order, items);
+    }
     const cancellation = await this.cancellationRepository.create({
       id: uuidv4(),
       cancellationNumber: this.makeNumber(),
@@ -235,9 +276,91 @@ class CancellationService {
       idempotencyKey,
       requestedBy: actor.userId,
       requestedByRole: actor.role,
-      metadata: { fullCancellation, requestedAt: new Date().toISOString() },
+      metadata: {
+        fullCancellation,
+        sellerSupplyCancellation: rtoSettlement,
+        reverseSellerShipping: rtoSettlement,
+        rtoSettlement,
+        shipmentId: payload.shipmentId || null,
+        shippingRefundAmount,
+        requestedAt: new Date().toISOString(),
+      },
     });
     return this.processCancellation(cancellation.id, actor);
+  }
+
+  async reconcileRtoSettlements({ limit = 100 } = {}) {
+    const rows = await knex("shipments as s")
+      .leftJoin("order_cancellations as c", function joinRtoCancellation() {
+        this.on("c.order_id", "=", "s.order_id")
+          .andOnRaw("c.metadata ->> 'shipmentId' = s.id::text");
+      })
+      .where("s.status", "rto")
+      .where((builder) =>
+        builder.whereNull("c.id").orWhereNot("c.status", "completed"),
+      )
+      .select(
+        "s.id as shipment_id",
+        "s.order_id",
+        "s.seller_id",
+        knex.raw("COALESCE(s.organization_id::text, s.metadata->>'organizationId') as organization_id"),
+      )
+      .orderBy("s.updated_at", "asc")
+      .limit(Math.min(Math.max(Number(limit || 100), 1), 500));
+
+    const processed = [];
+    const failed = [];
+    for (const row of rows) {
+      try {
+        const cancellation = await this.cancelOrder(row.order_id, {
+          source: "shipment_rto",
+          shipmentId: row.shipment_id,
+          sellerId: row.seller_id,
+          organizationId: row.organization_id || null,
+          reasonCode: "shipment_rto",
+          reason: "Shipment returned to origin",
+          idempotencyKey: `shipment-rto:${row.shipment_id}`,
+        }, {
+          userId: "rto-reconciliation",
+          role: "super-admin",
+        });
+        processed.push({
+          shipmentId: row.shipment_id,
+          cancellationId: cancellation?.id || null,
+          status: cancellation?.status || null,
+        });
+      } catch (error) {
+        failed.push({ shipmentId: row.shipment_id, error: error.message });
+      }
+    }
+    return { scanned: rows.length, processed, failed };
+  }
+
+  getSellerShippingAmount(order = {}, sellerId, organizationId = null) {
+    const metadata = this.parseJson(order.metadata, {});
+    const entries = Array.isArray(metadata.deliveryCharge?.sellers)
+      ? metadata.deliveryCharge.sellers
+      : [];
+    const match = entries.find((entry) =>
+      String(entry.sellerId || "") === String(sellerId || "") &&
+      String(entry.organizationId || "default") === String(organizationId || "default"),
+    );
+    return this.round(match?.chargeAmount || 0);
+  }
+
+  assertRtoShipment(order = {}, payload = {}) {
+    const shipment = (order.relations?.shipments || []).find((entry) =>
+      String(entry.id || "") === String(payload.shipmentId || ""),
+    );
+    if (!shipment || String(shipment.status || "") !== "rto") {
+      throw new AppError("RTO settlement requires a shipment in RTO status", 409);
+    }
+    if (
+      String(shipment.seller_id || "") !== String(payload.sellerId || "") ||
+      String(shipment.organization_id || "default") !== String(payload.organizationId || "default")
+    ) {
+      throw new AppError("RTO shipment does not match the seller fulfillment group", 409);
+    }
   }
 
   async assertShipmentsCancellable(order, items) {
@@ -301,7 +424,13 @@ class CancellationService {
     });
 
     try {
-      if (!["cancelled", "not_required", "completed"].includes(cancellation.shipment_status)) {
+      if (cancellation.metadata?.rtoSettlement) {
+        if (cancellation.shipment_status !== "completed") {
+          cancellation = await this.cancellationRepository.update(cancellation.id, {
+            shipmentStatus: "completed",
+          });
+        }
+      } else if (!["cancelled", "not_required", "completed"].includes(cancellation.shipment_status)) {
         const shipmentStatus = await this.cancelShipments(order, cancellation, actor);
         cancellation = await this.cancellationRepository.update(cancellation.id, { shipmentStatus });
       }
@@ -468,6 +597,9 @@ class CancellationService {
     return this.commissionService.recordRefundAdjustment({
       id: cancellation.id,
       orderId: cancellation.order_id,
+      scope: cancellation.scope,
+      cancellationScope: cancellation.scope,
+      sellerSupplyCancellation: Boolean(cancellation.metadata?.sellerSupplyCancellation),
       items: cancellation.items || [],
     }, Number(cancellation.refund_amount || 0), actor);
   }
@@ -490,6 +622,7 @@ class CancellationService {
       metadata: {
         cancellationNumber: cancellation.cancellation_number,
         cancellationScope: cancellation.scope,
+        reverseSellerShipping: Boolean(cancellation.metadata?.reverseSellerShipping),
       },
     }, actor);
   }

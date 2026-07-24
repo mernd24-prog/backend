@@ -300,6 +300,12 @@ class OrderService {
             commerceSettings: pricedOrder.pricing.commerceSettingsSnapshot,
             pricingSummary: {
               customerItemsAmount: pricedOrder.pricing.customerItemsAmount,
+              discountAmount: pricedOrder.pricing.discountAmount,
+              discountFundingType: pricedOrder.pricing.discountFundingType,
+              sellerFundingPercent: pricedOrder.pricing.sellerFundingPercent,
+              sellerFundedDiscountAmount: pricedOrder.pricing.sellerFundedDiscountAmount,
+              marketplaceFundedDiscountAmount: pricedOrder.pricing.marketplaceFundedDiscountAmount,
+              paymentPartnerFundedDiscountAmount: pricedOrder.pricing.paymentPartnerFundedDiscountAmount,
               taxIncludedAmount: pricedOrder.pricing.taxIncludedAmount,
               taxPayableAmount: pricedOrder.pricing.taxPayableAmount,
               deliveryChargeAmount: pricedOrder.pricing.deliveryChargeAmount,
@@ -424,6 +430,10 @@ class OrderService {
         referralDiscountAmount: pricing.referralDiscountAmount || 0,
         subtotalAmount: pricing.subtotalAmount,
         discountAmount: pricing.discountAmount,
+        discountFundingType: pricing.discountFundingType,
+        sellerFundedDiscountAmount: pricing.sellerFundedDiscountAmount,
+        marketplaceFundedDiscountAmount: pricing.marketplaceFundedDiscountAmount,
+        paymentPartnerFundedDiscountAmount: pricing.paymentPartnerFundedDiscountAmount,
         walletAppliedAmount: pricing.walletAppliedAmount,
         taxAmount: pricing.taxAmount,
         taxIncludedAmount: pricing.taxIncludedAmount,
@@ -469,6 +479,10 @@ class OrderService {
         itemAmount: pricing.subtotalAmount,
         customerItemsAmount: pricing.customerItemsAmount,
         discountAmount: pricing.discountAmount,
+        discountFundingType: pricing.discountFundingType,
+        sellerFundedDiscountAmount: pricing.sellerFundedDiscountAmount,
+        marketplaceFundedDiscountAmount: pricing.marketplaceFundedDiscountAmount,
+        paymentPartnerFundedDiscountAmount: pricing.paymentPartnerFundedDiscountAmount,
         walletDiscountAmount: pricing.walletAppliedAmount,
         taxAmount: pricing.taxAmount,
         taxIncludedAmount: pricing.taxIncludedAmount,
@@ -675,10 +689,43 @@ class OrderService {
     const relations = order.relations || {};
     const metadata = this.normalizeJson(order.metadata, {});
     const sellers = (relations.sellers || []).filter((seller) => String(seller.id || seller._id || "") === sellerKey);
-    const sellerSettlements = (relations.sellerSettlements || []).filter((settlement) =>
-      String(settlement.sellerId || "") === sellerKey &&
-      (!organizationKey || String(settlement.organizationId || "") === organizationKey)
-    );
+  const pricingSummary = this.normalizeJson(
+  metadata.pricingSummary,
+  {},
+);
+
+const snapshotSettlements = Array.isArray(
+  pricingSummary.sellerSettlementBreakup,
+)
+  ? pricingSummary.sellerSettlementBreakup
+  : [];
+
+const relationSettlements = Array.isArray(
+  relations.sellerSettlements,
+)
+  ? relations.sellerSettlements
+  : [];
+
+const settlementSource = snapshotSettlements.length
+  ? snapshotSettlements
+  : relationSettlements;
+
+const sellerSettlements = settlementSource.filter(
+  (settlement) =>
+    String(settlement.sellerId || "") === sellerKey &&
+    (
+      !organizationKey ||
+      String(settlement.organizationId || "") === organizationKey
+    ),
+);
+
+const sellerPayoutAmount = Number(
+  sellerSettlements.reduce(
+    (sum, settlement) =>
+      sum + Number(settlement.sellerPayoutAmount || 0),
+    0,
+  ).toFixed(2),
+);
     const sellerShipments = (relations.shipments || []).filter((shipment) => String(shipment.seller_id || shipment.sellerId || "") === sellerKey);
     const sellerFulfillmentGroups = (relations.sellerFulfillmentGroups || [])
       .filter((group) => String(group.sellerId || group.seller_id || "") === sellerKey);
@@ -689,9 +736,7 @@ class OrderService {
     const sellerTaxBreakup = this.buildScopedTaxBreakup(taxBreakup, taxItems);
     const subtotalAmount = Number(items.reduce((sum, item) => sum + Number(item.line_total || item.lineTotal || 0), 0).toFixed(2));
     const platformFeeAmount = Number(items.reduce((sum, item) => sum + Number(item.platform_fee_amount || item.platformFeeAmount || 0), 0).toFixed(2));
-    const sellerPayoutAmount = Number(
-      sellerSettlements.reduce((sum, settlement) => sum + Number(settlement.sellerPayoutAmount || 0), 0).toFixed(2),
-    );
+ 
     const sellerDeliveryCharge = Array.isArray(metadata.deliveryCharge?.sellers)
       ? metadata.deliveryCharge.sellers.find((entry) => String(entry.sellerId) === sellerKey)
       : null;

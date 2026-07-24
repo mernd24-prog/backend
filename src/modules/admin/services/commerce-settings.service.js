@@ -83,7 +83,7 @@ const DEFAULT_SETTINGS = {
     payoutSchedule: "manual",
     payoutManualApprovalRequired: true,
     minimumPayoutAmount: 0,
-    shippingPolicy: "not_in_seller_payout",
+    shippingPolicy: "reimburse_seller",
     gstTcsEnabled: false,
     gstTcsRate: 0.5,
     incomeTaxTdsEnabled: false,
