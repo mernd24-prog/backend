@@ -2815,13 +2815,17 @@ gstTcsAmount,
         if (!commission) continue;
 
         const metadata = this.parseJson(commission.metadata, {});
+        const appliedRefunds = metadata.appliedRefunds || {};
         const remainingSellerPayable = this.round(Math.max(Number(commission.net_amount || 0), 0));
+        const retainedShippingAmount = fullCancellation
+          ? 0
+          : this.resolveRetainedShippingOnReturn(returnRequest, metadata);
         const sellerRecoveryRequest = this.resolveSellerRecoveryRequest({
           fullCancellation,
           customerRefundAmount: amount,
           remainingSellerPayable,
+          retainedShippingAmount,
         });
-        const appliedRefunds = metadata.appliedRefunds || {};
         if (appliedRefunds[returnId]) {
           const recordedCustomerRefund = this.round(appliedRefunds[returnId] || amount);
           const originalUnpaidPayable = this.round(
@@ -2993,13 +2997,22 @@ gstTcsAmount,
     fullCancellation = false,
     customerRefundAmount = 0,
     remainingSellerPayable = 0,
+    retainedShippingAmount = 0,
   } = {}) {
     const payable = this.round(Math.max(Number(remainingSellerPayable || 0), 0));
     if (fullCancellation) return payable;
-    return this.round(Math.min(
-      Math.max(Number(customerRefundAmount || 0), 0),
-      payable,
-    ));
+    const retainedShipping = this.round(Math.max(Number(retainedShippingAmount || 0), 0));
+    const recoveryAfterRetainedShipping = this.round(Math.max(payable - retainedShipping, 0));
+    return this.round(Math.min(recoveryAfterRetainedShipping, payable));
+  }
+
+  resolveRetainedShippingOnReturn(returnRequest = {}, commissionMetadata = {}) {
+    const refundBreakup = returnRequest.refundBreakup?.toObject?.() ||
+      returnRequest.refundBreakup ||
+      {};
+    const shippingRefunded = Number(refundBreakup.shippingRefund || 0) > 0;
+    if (shippingRefunded) return 0;
+    return Number(commissionMetadata.shippingReimbursementAmount || 0);
   }
 
   async auditCommissionCompleteness(orderId, client = knex) {

@@ -49,6 +49,22 @@ const DEFAULT_SETTINGS = {
     defaultWindowDays: 7,
     allowSellerOverrides: false,
     maxSellerOverrideDays: 7,
+    refundPolicy: {
+      shipping: {
+        fullCancellation: true,
+        sellerCancellation: true,
+        rtoDeliveryFailed: true,
+        customerReturn: false,
+        partialReturn: false,
+      },
+      platformFee: {
+        fullCancellation: true,
+        sellerCancellation: true,
+        rtoDeliveryFailed: false,
+        customerReturn: false,
+        partialReturn: false,
+      },
+    },
   },
   shippingDefaults: {
     defaultCharge: 0,
@@ -191,6 +207,14 @@ const bool = (value, fallback = false) => {
 const pickAllowed = (value, allowed, fallback) =>
   allowed.includes(value) ? value : fallback;
 
+const normalizeRefundComponentPolicy = (source = {}, fallback = {}) => ({
+  fullCancellation: bool(source.fullCancellation, fallback.fullCancellation),
+  sellerCancellation: bool(source.sellerCancellation, fallback.sellerCancellation),
+  rtoDeliveryFailed: bool(source.rtoDeliveryFailed, fallback.rtoDeliveryFailed),
+  customerReturn: bool(source.customerReturn, fallback.customerReturn),
+  partialReturn: bool(source.partialReturn, fallback.partialReturn),
+});
+
 class CommerceSettingsService {
   async ensureTable() {
     await knex.schema.createTableIfNotExists("admin_settings", (table) => {
@@ -320,6 +344,16 @@ class CommerceSettingsService {
         defaultWindowDays: Math.min(Math.max(num(source.returns.defaultWindowDays, 7), 1), 60),
         allowSellerOverrides: bool(source.returns.allowSellerOverrides, false),
         maxSellerOverrideDays: Math.min(Math.max(num(source.returns.maxSellerOverrideDays, 7), 1), 60),
+        refundPolicy: {
+          shipping: normalizeRefundComponentPolicy(
+            source.returns.refundPolicy?.shipping,
+            DEFAULT_SETTINGS.returns.refundPolicy.shipping,
+          ),
+          platformFee: normalizeRefundComponentPolicy(
+            source.returns.refundPolicy?.platformFee,
+            DEFAULT_SETTINGS.returns.refundPolicy.platformFee,
+          ),
+        },
       },
       shippingDefaults: {
         defaultCharge: Math.max(num(source.shippingDefaults.defaultCharge, 0), 0),

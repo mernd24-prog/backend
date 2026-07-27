@@ -600,6 +600,7 @@ class ReturnServiceClass {
       return orderItem;
     });
     const policySnapshot = await this.resolveReturnPolicy(order, matchedOrderItems);
+    const commerceSettings = await commerceSettingsService.getSettings();
     const existingReturns = await ReturnModel.find({ orderId, status: { $ne: "rejected" } }).lean();
 
     const normalizedItems = items.map((item, index) => {
@@ -633,6 +634,8 @@ class ReturnServiceClass {
       const orderItemTax = Number(orderItem.tax_amount || 0);
       const taxAmount = prorateMoney(orderItemTax, quantity, orderItem.quantity);
       const orderItemTaxBreakup = this.parseJson(orderItem.tax_breakup, {});
+      const orderItemProductSnapshot = this.parseJson(orderItem.product_snapshot, {});
+      const itemShippingAmount = this.resolveOrderItemShippingAmount(orderItem, orderItemProductSnapshot);
       // Inclusive GST is already contained in line_total. Only tax explicitly
       // charged in addition to the product price belongs on top of the refund.
       const additionalTaxAmount = prorateMoney(orderItemTaxBreakup.taxPayableAmount, quantity, orderItem.quantity);
@@ -654,6 +657,7 @@ class ReturnServiceClass {
         unitPrice,
         lineTotal,
         discountAmount,
+        shippingAmount: prorateMoney(itemShippingAmount, quantity, orderItem.quantity),
         taxAmount,
         additionalTaxAmount,
         refundAmount: 0,
@@ -681,7 +685,10 @@ class ReturnServiceClass {
     const createdReturns = [];
     for (const group of grouped.values()) {
       const { sellerId, organizationId, items: sellerItems } = group;
-      const refundBreakup = this.calculateRefundBreakup(sellerItems, order);
+      const refundBreakup = this.calculateRefundBreakup(sellerItems, order, {
+        commerceSettings,
+        fullReturn: normalizedItems.length === orderItems.length,
+      });
       this.allocateItemRefunds(sellerItems, refundBreakup.totalRefundAmount, { setEligible: true });
       const returnRequest = await ReturnModel.create({
         returnNumber: this.makeReturnNumber(),
@@ -751,7 +758,54 @@ class ReturnServiceClass {
       : { split: true, count: createdReturns.length, returns: createdReturns };
   }
 
-  calculateRefundBreakup(items, order) {
+  getOrderMoney(order = {}, keys = []) {
+    const metadata = this.parseJson(order.metadata, {});
+    const summary = metadata.summary || metadata.pricingSummary || metadata.checkoutSummary || {};
+    for (const key of keys) {
+      const value = order[key] ?? summary[key] ?? metadata[key];
+      if (value !== undefined && value !== null && value !== "") return Number(value || 0);
+    }
+    return 0;
+  }
+
+  shouldRefundReturnComponent(policy = {}, fullReturn = false) {
+    if (!fullReturn && policy.partialReturn) return true;
+    return Boolean(policy.customerReturn);
+  }
+
+  resolveOrderItemShippingAmount(orderItem = {}, productSnapshot = {}) {
+    const shipping = productSnapshot.shipping || {};
+    return Number(
+      orderItem.shipping_amount ??
+      orderItem.shipping_fee_amount ??
+      shipping.shippingCharge ??
+      shipping.shipping_charge ??
+      shipping.additionalCost ??
+      shipping.additional_cost ??
+      0,
+    ) || 0;
+  }
+
+  calculateReturnShippingRefund(items = [], order = {}, proportion = 0) {
+    const totalOrderShipping = this.getOrderMoney(order, [
+      "delivery_charge_amount",
+      "shipping_fee_amount",
+      "deliveryChargeAmount",
+      "deliveryCharge",
+      "shippingFeeAmount",
+    ]);
+    const itemShipping = this.round(
+      items.reduce((sum, item) => sum + Number(item.shippingAmount || item.shipping_amount || 0), 0),
+    );
+    if (itemShipping > 0) {
+      return this.round(Math.min(itemShipping, totalOrderShipping || itemShipping));
+    }
+    return this.round(totalOrderShipping * proportion);
+  }
+
+  calculateRefundBreakup(items, order, options = {}) {
+    const commerceSettings = options.commerceSettings || {};
+    const refundPolicy = commerceSettings.returns?.refundPolicy || {};
     const itemSubtotal = this.round(items.reduce((sum, item) => sum + Number(item.lineTotal || 0), 0));
     const orderSubtotal = Number(order.subtotal_amount || 0);
     const proportion = orderSubtotal > 0 ? Math.min(itemSubtotal / orderSubtotal, 1) : 0;
@@ -767,7 +821,35 @@ class ReturnServiceClass {
     const taxReversal = this.round(
       items.reduce((sum, item) => sum + Number(item.additionalTaxAmount || 0), 0),
     );
-    const totalRefundAmount = this.round(Math.max(itemSubtotal - discountReversal + taxReversal, 0));
+    const shippingRefund = this.shouldRefundReturnComponent(
+      refundPolicy.shipping,
+      Boolean(options.fullReturn),
+    )
+      ? this.calculateReturnShippingRefund(items, order, proportion)
+      : 0;
+    const platformFeeRefund = this.shouldRefundReturnComponent(
+      refundPolicy.platformFee,
+      Boolean(options.fullReturn),
+    )
+      ? this.round(this.getOrderMoney(order, [
+        "customer_platform_fee_amount",
+        "customer_platform_fee",
+        "customerPlatformFeeAmount",
+        "customerPlatformFee",
+      ]) * proportion)
+      : 0;
+    const platformFeeTaxRefund = platformFeeRefund > 0
+      ? this.round(this.getOrderMoney(order, [
+        "customer_platform_fee_tax_amount",
+        "customer_platform_fee_gst",
+        "customerPlatformFeeTaxAmount",
+        "customerPlatformFeeGST",
+      ]) * proportion)
+      : 0;
+    const totalRefundAmount = this.round(Math.max(
+      itemSubtotal - discountReversal + taxReversal + shippingRefund + platformFeeRefund + platformFeeTaxRefund,
+      0,
+    ));
     const walletRefundAmount = this.round(Math.min(
       Number(order.wallet_discount_amount || 0) * proportion,
       totalRefundAmount,
@@ -776,10 +858,16 @@ class ReturnServiceClass {
       itemSubtotal,
       discountReversal,
       taxReversal,
-      shippingRefund: 0,
+      shippingRefund,
+      platformFeeRefund,
+      platformFeeTaxRefund,
       walletRefundAmount,
       originalPaymentRefundAmount: this.round(totalRefundAmount - walletRefundAmount),
       totalRefundAmount,
+      refundPolicySnapshot: {
+        shipping: refundPolicy.shipping || {},
+        platformFee: refundPolicy.platformFee || {},
+      },
     };
   }
 
@@ -806,7 +894,6 @@ class ReturnServiceClass {
   }
 
   async approveReturn(returnId, refundAmount, actor = {}, payload = {}) {
-    this.assertSeller(actor, "accept a return");
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
     this.validateTransition(returnRequest.status, "approved");
@@ -892,7 +979,6 @@ class ReturnServiceClass {
   }
 
   async scheduleReversePickup(returnId, payload = {}, actor = {}) {
-    this.assertSeller(actor, "schedule return pickup");
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
     const manualShipBack = payload.mode === "manual_ship_back" || payload.manualShipBack;
@@ -1006,7 +1092,6 @@ class ReturnServiceClass {
   }
 
   async updateReverseShipment(returnId, payload = {}, actor = {}) {
-    this.assertSeller(actor, "update return tracking");
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
     const shipmentId = payload.shipmentId || returnRequest.reverseShipment?.shipmentId;
@@ -1117,7 +1202,6 @@ class ReturnServiceClass {
   }
 
   async receiveReturn(returnId, payload = {}, actor = {}) {
-    this.assertSeller(actor, "receive a return");
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
     if (returnRequest.status !== "shipped_back") {
@@ -1157,7 +1241,6 @@ class ReturnServiceClass {
   }
 
   async qcReturn(returnId, payload = {}, actor = {}) {
-    this.assertSeller(actor, "record return QC");
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
     if (!["received", "qc_failed"].includes(returnRequest.status)) {
@@ -1293,7 +1376,6 @@ class ReturnServiceClass {
   }
 
   async submitQcEvidence(returnId, payload = {}, actor = {}) {
-    this.assertSeller(actor, "submit QC evidence");
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
     if (returnRequest.status !== "qc_failed" || returnRequest.qcReview?.status !== "evidence_requested") {
@@ -1471,7 +1553,6 @@ class ReturnServiceClass {
   }
 
   async arrangeReturnToCustomer(returnId, payload = {}, actor = {}) {
-    this.assertSeller(actor, "arrange return-to-customer shipping");
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
     if (returnRequest.status !== "qc_failure_upheld" || returnRequest.returnToCustomer?.required === false) {
@@ -1493,7 +1574,6 @@ class ReturnServiceClass {
   }
 
   async updateReturnToCustomerTracking(returnId, payload = {}, actor = {}) {
-    this.assertSeller(actor, "update return-to-customer tracking");
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
     if (returnRequest.status !== "qc_failure_upheld" || !returnRequest.returnToCustomer?.trackingNumber) {
@@ -1920,6 +2000,7 @@ class ReturnServiceClass {
       },
     });
     await returnRequest.save();
+    await this.dispatchReturnCreditNotes(creditNote, actor);
     await this.syncParentOrderAfterReturnRefund(returnRequest, actor);
     await this.releaseReturnItemPayoutHolds(returnRequest, actor, "return_refund_finalized");
     await this.publishReturnEvent(DOMAIN_EVENTS.RETURN_REFUNDED_V1, returnRequest, actor, {
@@ -1933,6 +2014,47 @@ class ReturnServiceClass {
       method: returnRequest.refundMethod,
     });
     return returnRequest;
+  }
+
+  async dispatchReturnCreditNotes(creditNoteBundle, actor = {}) {
+    const creditNotes = [
+      ...(creditNoteBundle?.sellerCreditNotes || []),
+      ...(creditNoteBundle?.platformCommissionCreditNotes || []),
+      creditNoteBundle?.customerFeeCreditNote,
+      creditNoteBundle?.orderCreditNote,
+    ].filter((creditNote) => creditNote?.id);
+
+    if (!creditNotes.length) return;
+
+    const dispatchActor = {
+      ...actor,
+      role: "super-admin",
+      isSuperAdmin: true,
+      userId: actor.userId || "return-refund-system",
+    };
+
+    await Promise.allSettled(
+      creditNotes.map((creditNote) =>
+        this.taxService.dispatchCreditNoteDocument(
+          creditNote.id,
+          {
+            channels: ["email"],
+            subject: `Reverse invoice for return ${creditNoteBundle?.credit_note_number || creditNote.credit_note_number || ""}`.trim(),
+          },
+          dispatchActor,
+        ),
+      ),
+    ).then((results) => {
+      results.forEach((result, index) => {
+        if (result.status === "rejected") {
+          logger.warn({
+            err: result.reason,
+            creditNoteId: creditNotes[index]?.id,
+            returnCreditNoteId: creditNoteBundle?.id || null,
+          }, "Return reverse invoice email dispatch failed");
+        }
+      });
+    });
   }
 
   async recordSellerRefundAdjustment(returnRequest, refundAmount, actor) {
@@ -2216,7 +2338,9 @@ class ReturnServiceClass {
     const returnRequests = await ReturnModel.find({ orderId }).sort({ createdAt: -1 });
     if (!returnRequests.length) return null;
     await Promise.all(returnRequests.map((returnRequest) => this.assertCanView(returnRequest, actor)));
-    return returnRequests.map((returnRequest) => returnRequest.toObject());
+    return Promise.all(
+      returnRequests.map((returnRequest) => this.enrichReturnDetail(returnRequest.toObject())),
+    );
   }
 
   async listReturns(query = {}, actor = {}) {
