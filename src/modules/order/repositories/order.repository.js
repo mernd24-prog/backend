@@ -297,7 +297,10 @@ class OrderRepository {
        WHERE o.buyer_id = $1
          AND oi.product_id = $2
          AND o.id = $3
-         AND o.status IN ('delivered', 'fulfilled', 'completed')
+         AND (
+           o.status IN ('delivered', 'fulfilled', 'completed')
+           OR o.delivery_status IN ('delivered', 'fulfilled', 'completed', 'delivered_verified')
+         )
        LIMIT 1`,
       [buyerId, productId, orderId],
     );
@@ -315,15 +318,15 @@ class OrderRepository {
          o.buyer_id,
          o.status AS order_status,
          o.payment_status,
-         o.delivery_status,
+         o.delivery_status AS order_delivery_status,
          oi.id AS order_item_id,
          oi.product_id,
          oi.seller_id,
          oi.organization_id,
          oi.product_title,
          oi.product_image,
-         oi.delivery_status AS item_delivery_status,
-         oi.delivered_at AS item_delivered_at
+         NULL AS item_delivery_status,
+         NULL AS item_delivered_at
        FROM orders o
        JOIN order_items oi ON oi.order_id = o.id
        WHERE o.buyer_id = $1

@@ -733,6 +733,7 @@ class SellerOrganizationService {
       },
       kycStatus: organization.kycStatus || profile.kycStatus,
       bankVerificationStatus: organization.bankVerificationStatus || profile.bankVerificationStatus,
+      goLiveStatus: organization.goLiveStatus || profile.goLiveStatus || "pending",
       rejectionReason: organization.rejectionReason || profile.rejectionReason,
       organizationId: organization.id,
       organizationApprovalStatus: organization.approvalStatus,
@@ -887,6 +888,8 @@ class SellerOrganizationService {
       !this.isOrganizationApprovedForBusiness(organization),
     );
     const selected =
+      liveOrganizations.find((organization) => organization.isDefault) ||
+      liveOrganizations[0] ||
       approvedOrganizations.find((organization) => organization.isDefault) ||
       approvedOrganizations[0] ||
       items.find((organization) => organization.isDefault) ||

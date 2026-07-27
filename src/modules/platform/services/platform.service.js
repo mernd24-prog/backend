@@ -592,6 +592,7 @@ class PlatformService {
     const paidStatuses = new Set([PAYMENT_STATUS.CAPTURED, PAYMENT_STATUS.AUTHORIZED, "paid"]);
     const itemDelivered = Boolean(orderItem.item_delivered_at) ||
       deliveredStatuses.has(String(orderItem.item_delivery_status || "").toLowerCase()) ||
+      deliveredStatuses.has(String(orderItem.order_delivery_status || "").toLowerCase()) ||
       deliveredStatuses.has(String(orderItem.order_status || "").toLowerCase());
     if (!itemDelivered) {
       throw new AppError("Review can be submitted after this item is delivered", 400);
@@ -963,6 +964,40 @@ class PlatformService {
     if (payload.status) {
       this._syncProductRating(item.productId).catch(() => {});
     }
+    const [enriched] = await this.enrichProductReviewItems([updated]);
+    return enriched || updated;
+  }
+
+  async updateSellerProductReview(reviewId, payload = {}, actor = {}) {
+    const sellerId = actor.ownerSellerId || actor.userId;
+    if (!sellerId) throw AppError.forbidden("Seller context is required");
+    if (!["pending", "published", "hidden", "rejected"].includes(payload.status)) {
+      throw new AppError("Invalid review status", 400);
+    }
+
+    const item = await this.platformRepository.getProductReview(reviewId);
+    if (!item) throw AppError.notFound("Product review");
+
+    const product = await ProductModel.findOne({
+      _id: item.productId,
+      sellerId,
+      ...(actor.organizationId ? { organizationId: actor.organizationId } : {}),
+    }).select("_id").lean();
+    if (!product) throw AppError.forbidden("You can only moderate reviews for your own products");
+
+    const updatePayload = {
+      status: payload.status,
+      moderatedBy: actor.userId || actor.sub || actor.id || null,
+      moderatedAt: new Date(),
+    };
+    if (payload.status === "rejected") {
+      updatePayload.rejectionReason = payload.rejectionReason || payload.reason || "";
+    } else if (payload.status === "published") {
+      updatePayload.rejectionReason = "";
+    }
+
+    const updated = await this.platformRepository.updateProductReview(reviewId, updatePayload);
+    this._syncProductRating(item.productId).catch(() => {});
     const [enriched] = await this.enrichProductReviewItems([updated]);
     return enriched || updated;
   }

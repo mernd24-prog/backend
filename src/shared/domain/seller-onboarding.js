@@ -52,6 +52,18 @@ const DEFAULT_SELLER_CHECKLIST = Object.freeze({
   firstProductPublished: false,
 });
 
+const KYC_NOT_SUBMITTED_STATUSES = new Set([
+  "",
+  "not_submitted",
+  KYC_STATUS.DRAFT,
+]);
+
+const KYC_SUBMITTED_STATUSES = new Set([
+  KYC_STATUS.SUBMITTED,
+  KYC_STATUS.UNDER_REVIEW,
+  KYC_STATUS.VERIFIED,
+]);
+
 function cleanText(value) {
   return String(value || "").trim();
 }
@@ -174,6 +186,20 @@ function hasStartedOnboarding(checklist = {}) {
   return Object.values(checklist).some((value) => value === true);
 }
 
+function cleanStatus(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isKycSubmittedStatus(status) {
+  const value = cleanStatus(status);
+  return KYC_SUBMITTED_STATUSES.has(value);
+}
+
+function isKycNotSubmittedStatus(status) {
+  const value = cleanStatus(status);
+  return KYC_NOT_SUBMITTED_STATUSES.has(value);
+}
+
 function makeSellerOnboardingChecklist({
   sellerProfile = {},
   user = {},
@@ -183,13 +209,18 @@ function makeSellerOnboardingChecklist({
   const profile = sellerProfile || {};
   const storedChecklist = existingChecklist || profile.onboardingChecklist || {};
   const storedKycStatus = profile.kycStatus || profile.verificationStatus;
+  const kycVerificationStatus = kyc?.verification_status;
   const missingBillingFields = getMissingBillingAddressFields(profile);
   const missingDocumentFields = getMissingDocumentFields(profile, kyc);
+  const kycSubmitted =
+    isKycSubmittedStatus(kycVerificationStatus) ||
+    isKycSubmittedStatus(storedKycStatus) ||
+    (Boolean(kyc) && !isKycNotSubmittedStatus(kycVerificationStatus));
 
   return {
     ...DEFAULT_SELLER_CHECKLIST,
     profileCompleted: hasCompleteSellerProfile(profile, { user, kyc }),
-    kycSubmitted: Boolean(kyc) || Boolean(storedKycStatus),
+    kycSubmitted,
     gstVerified: kyc?.verification_status === KYC_STATUS.VERIFIED || storedKycStatus === KYC_STATUS.VERIFIED,
     bankLinked:
       profile.bankVerificationStatus !== "rejected" &&

@@ -5,6 +5,9 @@ const { KYC_STATUS } = require("../../../shared/domain/commerce-constants");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
+const { ROLES } = require("../../../shared/constants/roles");
+const { makeSellerOnboardingState } = require("../../../shared/domain/seller-onboarding");
+const { sellerOrganizationService } = require("../../seller/services/seller-organization.service");
 const {
   storageService: defaultStorageService,
 } = require("../../../shared/storage/storage-service");
@@ -35,7 +38,53 @@ class UserService {
       throw new AppError("User not found", 404);
     }
 
-    return user;
+    return this.withSellerProfileState(user);
+  }
+
+  toPlainObject(value = {}) {
+    if (!value) return {};
+    if (typeof value.toObject === "function") {
+      return value.toObject({ depopulate: true });
+    }
+    return { ...value };
+  }
+
+  async withSellerProfileState(user) {
+    if (user?.role !== ROLES.SELLER) {
+      return user;
+    }
+
+    const userObject = this.toPlainObject(user);
+    const sellerId = String(userObject._id || userObject.id || "");
+    const organizations = await sellerOrganizationService.organizationRepository.listBySeller(sellerId);
+    const organizationSummary = sellerOrganizationService.buildOrganizationCollectionSummary(organizations);
+    const selectedOrganizationId =
+      organizationSummary.selectedOrganizationId ||
+      organizationSummary.onboardingTargetOrganizationId;
+    const organization =
+      organizations.find((item) => String(item.id) === String(selectedOrganizationId)) ||
+      organizations.find((item) => item.isDefault) ||
+      organizations[0] ||
+      null;
+    const organizationBackedProfile = sellerOrganizationService.buildSellerProfileMirror(
+      userObject.sellerProfile || {},
+      organization,
+    );
+    const onboardingState = makeSellerOnboardingState({
+      sellerProfile: organizationBackedProfile,
+      user: userObject,
+      kyc: null,
+    });
+
+    return {
+      ...userObject,
+      sellerProfile: {
+        ...organizationBackedProfile,
+        onboardingChecklist: onboardingState.checklist,
+        onboardingStatus: onboardingState.onboardingStatus,
+        organizationSummary,
+      },
+    };
   }
 
   async updateProfile(userId, payload) {
