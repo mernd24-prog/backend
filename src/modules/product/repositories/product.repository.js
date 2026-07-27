@@ -800,7 +800,14 @@ class ProductRepository {
       })
       .sort((a, b) => {
         const key = metric === "revenue" ? "revenue" : metric === "views" ? "views" : "purchases";
-        return Number(b.analytics?.[key] || 0) - Number(a.analytics?.[key] || 0);
+        const primaryDiff = Number(b.analytics?.[key] || 0) - Number(a.analytics?.[key] || 0);
+        if (primaryDiff) return primaryDiff;
+
+        return (
+          Number(b.analytics?.views || 0) - Number(a.analytics?.views || 0) ||
+          Number(b.analytics?.cartAdds || 0) - Number(a.analytics?.cartAdds || 0) ||
+          Number(b.analytics?.wishlistAdds || 0) - Number(a.analytics?.wishlistAdds || 0)
+        );
       })
       .slice(0, safeLimit);
   }

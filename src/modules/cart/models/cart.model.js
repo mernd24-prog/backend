@@ -12,7 +12,7 @@ const cartSchema = new mongoose.Schema(
         attributes: { type: Object, default: {} },
         title: { type: String, default: "" },
         sku: { type: String, default: "" },
-        sellerId: { type: String, default: "", index: true },
+        sellerId: { type: String, default: "" },
         image: { type: String, default: "" },
         currency: { type: String, default: "INR" },
         mrp: { type: Number, default: 0, min: 0 },

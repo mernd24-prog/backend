@@ -25,6 +25,7 @@ const {
   getSellerOnboardingStatus,
 } = require("../../../shared/domain/seller-onboarding");
 const { sellerOrganizationService } = require("./seller-organization.service");
+const { UserModel } = require("../../user/models/user.model");
 
 const composeProfileName = (firstName = "", lastName = "") => {
   const first = String(firstName || "").trim();
@@ -591,6 +592,41 @@ class SellerService {
     };
   }
 
+  composeCustomerName(user = {}) {
+    const profile = user?.profile || {};
+    return [profile.firstName, profile.lastName]
+      .map((part) => String(part || "").trim())
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  async attachCustomerProfilesToOrders(orders = []) {
+    const buyerIds = Array.from(new Set(
+      (Array.isArray(orders) ? orders : [])
+        .map((order) => String(order.buyer_id || order.buyerId || ""))
+        .filter(Boolean),
+    ));
+    if (!buyerIds.length) return orders;
+
+    const buyers = await UserModel.find({ _id: { $in: buyerIds } })
+      .select("email phone profile")
+      .lean()
+      .catch(() => []);
+    const buyersById = new Map(buyers.map((buyer) => [String(buyer._id || buyer.id), buyer]));
+
+    return orders.map((order) => {
+      const buyer = buyersById.get(String(order.buyer_id || order.buyerId || ""));
+      const customerName = this.composeCustomerName(buyer);
+      return {
+        ...order,
+        buyerId: order.buyer_id || order.buyerId || null,
+        customerName: customerName || buyer?.email || order.customerName || null,
+        customerEmail: buyer?.email || order.customerEmail || null,
+        customerPhone: buyer?.phone || order.customerPhone || null,
+      };
+    });
+  }
+
   cleanTrackingQuery(query = {}) {
     return {
       status: query.status || null,
@@ -756,7 +792,7 @@ class SellerService {
     const fromDate = query.fromDate ? new Date(query.fromDate) : this.getDateBeforeDays(30);
     const toDate = query.toDate ? new Date(query.toDate) : new Date();
 
-    const [summary, topProducts, recentOrders, orderPerformance, orderStatusRows, seller, kyc, organization] = await Promise.all([
+    const [summary, topProducts, recentOrdersRaw, orderPerformance, orderStatusRows, seller, kyc, organization] = await Promise.all([
       this.sellerRepository.fetchDashboardSummary(sellerId, fromDate, toDate, organizationId),
       this.sellerRepository.fetchTopProducts(sellerId, fromDate, toDate, 5, organizationId),
       this.sellerRepository.fetchRecentOrders(sellerId, 10, organizationId),
@@ -768,6 +804,7 @@ class SellerService {
         ? sellerOrganizationService.assertOrganizationForSeller(sellerId, organizationId)
         : sellerOrganizationService.getDefaultOrOnlyOrganization(sellerId),
     ]);
+    const recentOrders = await this.attachCustomerProfilesToOrders(recentOrdersRaw);
 
     const totalOrders = Number(summary?.total_orders || 0);
     const gmv = Number(summary?.gmv || 0);

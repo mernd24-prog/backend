@@ -112,6 +112,12 @@ class SellerController {
     res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
   };
 
+  updateProductReview = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const review = await this.platformService.updateSellerProductReview(req.params.reviewId, req.body, actor);
+    res.json(okResponse(review, { message: "Product review updated successfully." }));
+  };
+
   listAccessModules = async (req, res) => {
     const actor = getCurrentUser(req);
     const modules = await this.sellerService.listAccessModules(req.query, actor);

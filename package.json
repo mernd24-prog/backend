@@ -21,6 +21,7 @@
     "db:repair:order-commissions": "node scripts/db/repair-order-commissions.js",
     "db:repair:refund-commission-balances": "node scripts/db/repair-refund-commission-balances.js",
     "db:backfill:shipments": "node scripts/db/backfill-missing-order-shipments.js",
+    "db:backfill:product-cart-wishlist-analytics": "node scripts/db/backfill-product-cart-wishlist-analytics.js",
     "db:migrate:influencer-accounts": "node scripts/db/migrate-influencer-users-to-accounts.js",
     "db:update-super-admin": "node scripts/db/update-super-admin.js",
     "db:reset": "node scripts/db/reset-all-databases.js",

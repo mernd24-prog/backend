@@ -1171,29 +1171,33 @@ class AdminService {
     }
     const profile = this.toPlainObject(seller.sellerProfile || {});
     const kyc = await this.adminRepository.getSellerKycById(sellerId);
-    const onboardingState = makeSellerOnboardingState({
-      sellerProfile: profile,
-      user: seller,
-      kyc,
-    });
-    const kycStatus = onboardingState.kycStatus;
-    const bankVerificationStatus = profile.bankVerificationStatus || "not_submitted";
-    const accountStatus = seller.accountStatus;
-    const bankDetailsComplete = onboardingState.requirements.bankDetails.completed === true;
-    const profileCompleted =
-      profile.profileCompleted === true ||
-      profile.onboardingChecklist?.profileCompleted === true ||
-      onboardingState.requirements.profile.completed === true ||
-      Boolean(profile.legalBusinessName && profile.supportEmail && profile.supportPhone);
-    const bankReady =
-      bankVerificationStatus === "verified" ||
-      (bankVerificationStatus === "submitted" && bankDetailsComplete);
     let organizations = await this.sellerOrganizationService.organizationRepository.listBySeller(sellerId);
     let organization = this.getPrimaryOrganization(organizations);
     if (!organization) {
       organization = await this.syncDefaultSellerOrganization(sellerId, profile, {}, actor);
       organizations = organization ? [organization] : [];
     }
+    const organizationBackedProfile = this.sellerOrganizationService.buildSellerProfileMirror(
+      profile,
+      organization,
+    );
+    const onboardingState = makeSellerOnboardingState({
+      sellerProfile: organizationBackedProfile,
+      user: seller,
+      kyc,
+    });
+    const kycStatus = onboardingState.kycStatus;
+    const bankVerificationStatus = organizationBackedProfile.bankVerificationStatus || "not_submitted";
+    const accountStatus = seller.accountStatus;
+    const bankDetailsComplete = onboardingState.requirements.bankDetails.completed === true;
+    const profileCompleted =
+      organizationBackedProfile.profileCompleted === true ||
+      organizationBackedProfile.onboardingChecklist?.profileCompleted === true ||
+      onboardingState.requirements.profile.completed === true ||
+      Boolean(organizationBackedProfile.legalBusinessName && organizationBackedProfile.supportEmail && organizationBackedProfile.supportPhone);
+    const bankReady =
+      bankVerificationStatus === "verified" ||
+      (bankVerificationStatus === "submitted" && bankDetailsComplete);
     if (payload.goLiveStatus === "live" && organizations.length > 1) {
       throw new AppError(
         "Use organization go-live approval for sellers with multiple organizations",

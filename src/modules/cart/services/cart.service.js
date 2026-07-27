@@ -41,20 +41,27 @@ class CartService {
   async upsertCart(userId, payload) {
     const hasItems = Object.prototype.hasOwnProperty.call(payload, "items");
     const hasWishlist = Object.prototype.hasOwnProperty.call(payload, "wishlist");
-    const existingCart = hasItems && hasWishlist
-      ? null
-      : await this.cartRepository.getByUserId(userId);
+    const existingCart = await this.cartRepository.getByUserId(userId);
+    const nextItems = await this.mergeItems(
+      hasItems ? payload.items || [] : existingCart?.items || [],
+    );
+    const nextWishlist = await this.normalizeWishlist(
+      hasWishlist ? payload.wishlist || [] : existingCart?.wishlist || [],
+    );
 
-    return this.refreshCartAvailability(await this.cartRepository.upsertCart(userId, {
+    const cart = await this.cartRepository.upsertCart(userId, {
       $set: {
-        items: await this.mergeItems(
-          hasItems ? payload.items || [] : existingCart?.items || [],
-        ),
-        wishlist: await this.normalizeWishlist(
-          hasWishlist ? payload.wishlist || [] : existingCart?.wishlist || [],
-        ),
+        items: nextItems,
+        wishlist: nextWishlist,
       },
-    }));
+    });
+
+    await this.recordCartAnalyticsDeltas(existingCart, {
+      items: nextItems,
+      wishlist: nextWishlist,
+    });
+
+    return this.refreshCartAvailability(cart);
   }
 
   itemKey(item = {}) {
@@ -67,6 +74,54 @@ class CartService {
       return String(value._id || value.id || value.productId || "");
     }
     return String(value);
+  }
+
+  itemQuantityByProduct(items = []) {
+    return (Array.isArray(items) ? items : []).reduce((lookup, item) => {
+      const productId = this.productId(item?.productId || item);
+      if (!productId) return lookup;
+      lookup[productId] = (lookup[productId] || 0) + Math.max(0, Number(item?.quantity || 0));
+      return lookup;
+    }, {});
+  }
+
+  wishlistSet(wishlist = []) {
+    return new Set(
+      (Array.isArray(wishlist) ? wishlist : [])
+        .map((item) => this.productId(item))
+        .filter(Boolean),
+    );
+  }
+
+  async incrementProductAnalytics(productId, field, increment = 1) {
+    if (!productId || !increment) return null;
+    return ProductModel.updateOne(
+      { _id: productId },
+      { $inc: { [`analytics.${field}`]: increment } },
+    );
+  }
+
+  async recordCartAnalyticsDeltas(previousCart = {}, nextCart = {}) {
+    const previousQuantities = this.itemQuantityByProduct(previousCart?.items);
+    const nextQuantities = this.itemQuantityByProduct(nextCart?.items);
+    const previousWishlist = this.wishlistSet(previousCart?.wishlist);
+    const nextWishlist = this.wishlistSet(nextCart?.wishlist);
+
+    const updates = [];
+    Object.entries(nextQuantities).forEach(([productId, quantity]) => {
+      const increment = quantity - Number(previousQuantities[productId] || 0);
+      if (increment > 0) {
+        updates.push(this.incrementProductAnalytics(productId, "cartAdds", increment));
+      }
+    });
+
+    nextWishlist.forEach((productId) => {
+      if (!previousWishlist.has(productId)) {
+        updates.push(this.incrementProductAnalytics(productId, "wishlistAdds", 1));
+      }
+    });
+
+    await Promise.all(updates);
   }
 
   assertProductId(productId) {
