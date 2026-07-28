@@ -1063,6 +1063,14 @@ class OrderRepository {
           metadataSum("taxableSupplyAmount") - gstTcsTaxableBaseReversalAmount,
         ),
         incomeTaxTdsReversalAmount,
+        incomeTaxTdsTaxableBaseAmount: metadataSum("incomeTaxTdsTaxableAmount"),
+        incomeTaxTdsTaxableBaseReversalAmount: reversedSum(
+          (_commission, metadata) => metadata.incomeTaxTdsTaxableAmount,
+        ),
+        netIncomeTaxTdsTaxableBaseAmount: this.money(
+          metadataSum("incomeTaxTdsTaxableAmount") -
+            reversedSum((_commission, metadata) => metadata.incomeTaxTdsTaxableAmount),
+        ),
         netIncomeTaxTdsAmount: this.money(metadataSum("incomeTaxTdsAmount") - incomeTaxTdsReversalAmount),
         sellerPayoutBaseReversalAmount,
         gstTcsRate: isFinanciallyLocked ? this.money(firstMetadata.gstTcsRate) : settlement.gstTcsRate,

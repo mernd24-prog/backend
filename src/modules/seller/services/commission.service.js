@@ -2435,6 +2435,21 @@ gstTcsAmount,
       ),
       0,
     ));
+    const grossAmount = this.round(Number(settlement.gross_amount || 0));
+    const marketplaceDiscount = productMetadataTotal("marketplaceFundedDiscountAmount");
+    const paymentPartnerDiscount = productMetadataTotal("paymentPartnerFundedDiscountAmount");
+    const sellerFundedDiscount = productMetadataTotal("sellerFundedDiscountAmount");
+    const shippingCollected = metadataTotal("sellerDeliveryChargeAmount");
+    const shippingReimbursed = metadataTotal("shippingReimbursementAmount");
+    const shippingDeducted = metadataTotal("shippingDeductionAmount");
+    const commissionAmount = this.round(Number(settlement.commission_amount || 0));
+    const commissionTax = this.round(Number(settlement.tax_amount || 0));
+    const gstTcsAmount = metadataTotal("gstTcsAmount");
+    const incomeTaxTdsAmount = metadataTotal("incomeTaxTdsAmount");
+    const refundAmount = this.round(Number(settlement.refund_amount || 0));
+    const adjustmentAmount = this.round(Number(settlement.adjustment_amount || 0));
+    const netAmount = this.round(Number(settlement.net_amount || 0));
+
     return {
       title: "Seller Settlement Statement",
       subtitle: `Settlement ${settlement.id}`,
@@ -2457,31 +2472,45 @@ gstTcsAmount,
           ],
         },
         {
-          title: "Amounts",
+          title: "Seller Receivable",
           rows: [
-            { label: "Gross Amount", value: this.renderMoney(settlement.gross_amount, currency) },
-            { label: "Customer Discount", value: this.renderMoney(productMetadataTotal("discountAmount"), currency) },
-            { label: "Marketplace-funded Discount", value: this.renderMoney(productMetadataTotal("marketplaceFundedDiscountAmount"), currency) },
-            { label: "Payment-partner-funded Discount", value: this.renderMoney(productMetadataTotal("paymentPartnerFundedDiscountAmount"), currency) },
-            { label: "Seller-funded Discount", value: this.renderMoney(productMetadataTotal("sellerFundedDiscountAmount"), currency) },
-            { label: "Shipping Collected For Seller", value: this.renderMoney(metadataTotal("sellerDeliveryChargeAmount"), currency) },
-            { label: "Shipping Reimbursed To Seller", value: this.renderMoney(metadataTotal("shippingReimbursementAmount"), currency) },
-            { label: "Shipping Deducted From Seller", value: this.renderMoney(metadataTotal("shippingDeductionAmount"), currency) },
-            { label: "Shipping Taxable Value", value: this.renderMoney(metadataTotal("shippingTaxableAmount"), currency) },
-            { label: "Shipping GST", value: this.renderMoney(metadataTotal("shippingTaxAmount"), currency) },
-            { label: "Commission Amount", value: this.renderMoney(settlement.commission_amount, currency) },
-            { label: "Commission Tax", value: this.renderMoney(settlement.tax_amount, currency) },
-            { label: "GST TCS Taxable Base", value: this.renderMoney(metadataTotal("taxableSupplyAmount"), currency) },
-            { label: "GST TCS Withheld", value: this.renderMoney(metadataTotal("gstTcsAmount"), currency) },
-            { label: "Income-tax TDS Gross Base", value: this.renderMoney(metadataTotal("incomeTaxTdsTaxableAmount"), currency) },
-            { label: "Income-tax TDS Withheld", value: this.renderMoney(metadataTotal("incomeTaxTdsAmount"), currency) },
-            { label: "Refund Amount", value: this.renderMoney(settlement.refund_amount, currency) },
-            { label: "Adjustment Amount", value: this.renderMoney(settlement.adjustment_amount, currency) },
-            { label: "Net Payout Amount", value: this.renderMoney(settlement.net_amount, currency) },
+            { label: "Product Amount", value: this.renderMoney(grossAmount, currency) },
+            { label: "Shipping Collected From Customer", value: this.renderMoney(shippingCollected, currency) },
+            { label: "Shipping Paid/Reimbursed To Seller", value: this.renderMoney(shippingReimbursed, currency) },
+            { label: "Marketplace-funded Discount Paid To Seller", value: this.renderMoney(marketplaceDiscount, currency) },
+            { label: "Payment-partner-funded Discount", value: this.renderMoney(paymentPartnerDiscount, currency) },
+            { label: "Seller-funded Discount", value: this.renderMoney(sellerFundedDiscount, currency) },
           ],
         },
         {
-          title: "Commission Lines",
+          title: "Platform Charges & Tax Withholding",
+          rows: [
+            { label: "Platform Commission Charged To Seller", value: `-${this.renderMoney(commissionAmount, currency)}` },
+            { label: "GST On Platform Commission", value: `-${this.renderMoney(commissionTax, currency)}` },
+            { label: "Shipping Deducted From Seller", value: `-${this.renderMoney(shippingDeducted, currency)}` },
+            { label: "GST TCS Withheld", value: `-${this.renderMoney(gstTcsAmount, currency)}` },
+            { label: "Income-tax TDS Withheld", value: `-${this.renderMoney(incomeTaxTdsAmount, currency)}` },
+          ],
+        },
+        {
+          title: "Settlement Adjustments & Final Payout",
+          rows: [
+            { label: "Refund / Return Recovery", value: `-${this.renderMoney(refundAmount, currency)}` },
+            { label: "Other Adjustment", value: `${adjustmentAmount < 0 ? "-" : ""}${this.renderMoney(Math.abs(adjustmentAmount), currency)}` },
+            { label: "Final Seller Payout", value: this.renderMoney(netAmount, currency) },
+          ],
+        },
+        {
+          title: "Tax / Base Reference",
+          rows: [
+            { label: "Shipping Taxable Value", value: this.renderMoney(metadataTotal("shippingTaxableAmount"), currency) },
+            { label: "Shipping GST", value: this.renderMoney(metadataTotal("shippingTaxAmount"), currency) },
+            { label: "GST TCS Taxable Base", value: this.renderMoney(metadataTotal("taxableSupplyAmount"), currency) },
+            { label: "Income-tax TDS Base", value: this.renderMoney(metadataTotal("incomeTaxTdsTaxableAmount"), currency) },
+          ],
+        },
+        {
+          title: "Order-wise Settlement Lines",
           rows: this.buildSettlementCommissionRows(commissions, currency),
         },
         {

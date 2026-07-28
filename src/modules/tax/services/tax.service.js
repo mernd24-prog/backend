@@ -11,7 +11,6 @@ const { documentRendererService } = require("../../../shared/services/document-r
 const { sendMail } = require("../../../infrastructure/mail/mailer");
 const { NotificationQueueModel } = require("../../notification/models/notification-preference.model");
 const {
-  calculateInclusiveShippingTax,
   resolveShippingPolicy,
 } = require("../../../shared/domain/seller-payout-rules");
 const { createQueue } = require("../../../shared/queues/queue-factory");
@@ -27,6 +26,9 @@ const ADMIN_ROLES = [ROLES.ADMIN, ROLES.SUB_ADMIN, ROLES.SUPER_ADMIN];
 const SELLER_ROLES = [ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN];
 const CUSTOMER_INVOICE_READY_STATUS = "fulfilled";
 const taxDocumentMailQueue = createQueue("notifications");
+const PLATFORM_COMMISSION_SAC_CODE = env.commerce.platformCommissionSacCode || "998599";
+const PLATFORM_CUSTOMER_FEE_SAC_CODE = env.commerce.platformCustomerFeeSacCode || PLATFORM_COMMISSION_SAC_CODE;
+const SHIPPING_SERVICE_SAC_CODE = env.commerce.shippingSacCode || "996812";
 
 class TaxService {
   constructor({
@@ -476,6 +478,7 @@ class TaxService {
         ? {
           description: "Delivery / shipping charge reversal",
           lineType: "seller_shipping_reversal",
+          hsnCode: sellerInvoiceAmounts.shippingSacCode || SHIPPING_SERVICE_SAC_CODE,
           quantity: 1,
           taxableAmount: this.money(sellerInvoiceAmounts.shippingTaxableAmount),
           taxAmount: this.money(sellerInvoiceAmounts.shippingTaxAmount),
@@ -629,11 +632,12 @@ class TaxService {
       throw new AppError("Invoice not found", 404);
     }
     this.assertInvoiceDocumentAccess(invoice, actor);
+    let order = null;
     if (invoice.order_id) {
-      const order = await this.orderRepository.findByIdWithItems(invoice.order_id);
+      order = await this.orderRepository.findByIdWithItems(invoice.order_id);
       this.assertBuyerInvoiceReady(order, actor, invoice);
     }
-    return documentRendererService.render(this.buildInvoiceDocument(invoice), {
+    return documentRendererService.render(this.buildInvoiceDocument(invoice, { order }), {
       format: query.format || "pdf",
       fileBaseName: invoice.invoice_number || `invoice-${invoice.id}`,
     });
@@ -954,22 +958,6 @@ class TaxService {
       .slice(0, 12) || "GST-S";
     const invoiceNumber = await this.taxRepository.nextInvoiceNumber(invoicePrefix);
     const invoiceItems = items.map((item) => this.buildInvoiceItem(item));
-    if (amounts.deliveryChargeAmount > 0) {
-      invoiceItems.push({
-        description: "Delivery / shipping collected by platform on behalf of seller",
-        hsnCode: null,
-        quantity: 1,
-        taxableAmount: amounts.shippingTaxableAmount,
-        taxAmount: amounts.shippingTaxAmount,
-        cgstAmount: amounts.shippingCgstAmount,
-        sgstAmount: amounts.shippingSgstAmount,
-        igstAmount: amounts.shippingIgstAmount,
-        totalAmount: amounts.deliveryChargeAmount,
-        lineType: "seller_shipping",
-        collectedBy: "platform",
-        beneficiary: "seller",
-      });
-    }
     const invoice = await this.taxRepository.createInvoice({
       invoiceNumber,
       orderId: order.id,
@@ -1145,6 +1133,7 @@ class TaxService {
         lineItems: [
           {
             description: "Marketplace commission/service charge",
+            hsnCode: PLATFORM_COMMISSION_SAC_CODE,
             taxableAmount: amounts.taxableAmount,
             taxAmount: amounts.taxAmount,
             totalAmount: amounts.totalAmount,
@@ -1155,7 +1144,7 @@ class TaxService {
           productId: item.product_id,
           productTitle: item.product_title,
           productSku: item.product_sku || item.variant_sku || null,
-          serviceSacCode: env.commerce.platformCommissionSacCode || null,
+          serviceSacCode: PLATFORM_COMMISSION_SAC_CODE,
           quantity: Number(item.quantity || 0),
           commissionRate: this.readJsonNumber(item.pricing_snapshot, "commissionPercent"),
           platformFeeAmount: this.money(item.platform_fee_amount),
@@ -1232,10 +1221,16 @@ class TaxService {
         orderNumber: order.order_number,
         buyer: this.buildBuyerSnapshot(order),
         shippingAddress,
-        amounts: { taxableAmount, taxAmount, totalAmount, taxPayableAmount: taxAmount },
+        amounts: {
+          taxableAmount,
+          taxAmount,
+          totalAmount,
+          taxPayableAmount: taxAmount,
+          customerPlatformFeeSacCode: PLATFORM_CUSTOMER_FEE_SAC_CODE,
+        },
         lineItems: [{
           description: "Marketplace customer platform service fee",
-          hsnCode: env.commerce.platformCustomerFeeSacCode || null,
+          hsnCode: PLATFORM_CUSTOMER_FEE_SAC_CODE,
           quantity: 1,
           taxableAmount,
           taxAmount,
@@ -1551,7 +1546,7 @@ class TaxService {
         productId: reference.productId || null,
         productTitle: `Commission reversal for ${reference.productTitle || "order item"}`,
         productSku: reference.productSku || null,
-        hsnCode: reference.serviceSacCode || null,
+        hsnCode: reference.serviceSacCode || PLATFORM_COMMISSION_SAC_CODE,
         quantity: reversedQuantity,
         taxableAmount,
         taxAmount,
@@ -1611,26 +1606,10 @@ class TaxService {
       taxPayableAmount: 0,
     });
 
-    const shippingTax = calculateInclusiveShippingTax(
-      deliveryChargeAmount,
-      totals.taxableAmount,
-      totals.taxAmount,
-    );
-    const productTaxSplitTotal = totals.cgstAmount + totals.sgstAmount + totals.igstAmount;
-    let shippingCgstAmount = 0;
-    let shippingSgstAmount = 0;
-    let shippingIgstAmount = 0;
-    if (productTaxSplitTotal > 0 && shippingTax.taxAmount > 0) {
-      if (totals.igstAmount > 0 && totals.cgstAmount + totals.sgstAmount === 0) {
-        shippingIgstAmount = shippingTax.taxAmount;
-      } else {
-        shippingCgstAmount = this.money(
-          shippingTax.taxAmount * totals.cgstAmount / productTaxSplitTotal,
-        );
-        shippingSgstAmount = this.money(shippingTax.taxAmount - shippingCgstAmount);
-      }
-    }
-    const sellerInvoiceAmount = totals.sellerInvoiceAmount + deliveryChargeAmount;
+    // Client requirement: seller-to-customer tax invoices should show only
+    // product supply. Shipping collected by platform for seller is exposed in
+    // seller settlement/payout documents, not in the seller customer invoice.
+    const sellerInvoiceAmount = totals.sellerInvoiceAmount;
     const thirdPartyContributionAmount =
       totals.marketplaceFundedDiscountAmount + totals.paymentPartnerFundedDiscountAmount;
     const customerPaidTowardInvoiceAmount = Math.max(
@@ -1647,18 +1626,22 @@ class TaxService {
       paymentPartnerFundedDiscountAmount: this.money(totals.paymentPartnerFundedDiscountAmount),
       thirdPartyContributionAmount: this.money(thirdPartyContributionAmount),
       customerPaidTowardInvoiceAmount: this.money(customerPaidTowardInvoiceAmount),
-      taxableAmount: this.money(totals.taxableAmount + shippingTax.taxableAmount),
-      taxAmount: this.money(totals.taxAmount + shippingTax.taxAmount),
-      cgstAmount: this.money(totals.cgstAmount + shippingCgstAmount),
-      sgstAmount: this.money(totals.sgstAmount + shippingSgstAmount),
-      igstAmount: this.money(totals.igstAmount + shippingIgstAmount),
+      taxableAmount: this.money(totals.taxableAmount),
+      taxAmount: this.money(totals.taxAmount),
+      cgstAmount: this.money(totals.cgstAmount),
+      sgstAmount: this.money(totals.sgstAmount),
+      igstAmount: this.money(totals.igstAmount),
       taxPayableAmount: this.money(totals.taxPayableAmount),
-      deliveryChargeAmount: this.money(deliveryChargeAmount),
-      shippingTaxableAmount: shippingTax.taxableAmount,
-      shippingTaxAmount: shippingTax.taxAmount,
-      shippingCgstAmount,
-      shippingSgstAmount,
-      shippingIgstAmount,
+      deliveryChargeAmount: 0,
+      shippingCollectedForSellerAmount: this.money(deliveryChargeAmount),
+      shippingSettlementNote: deliveryChargeAmount > 0
+        ? "Shipping was collected separately by the platform and is settled to the seller outside this product tax invoice."
+        : null,
+      shippingTaxableAmount: 0,
+      shippingTaxAmount: 0,
+      shippingCgstAmount: 0,
+      shippingSgstAmount: 0,
+      shippingIgstAmount: 0,
       customerFinalAmount: this.money(sellerInvoiceAmount),
       placeOfSupply: shippingAddress.state || null,
       taxMode: totals.igstAmount > 0 ? "igst" : "cgst_sgst",
@@ -2045,10 +2028,25 @@ class TaxService {
     throw new AppError("You are not allowed to view this tax document", 403);
   }
 
-  buildInvoiceDocument(invoice = {}) {
+  buildInvoiceDocument(invoice = {}, context = {}) {
     const metadata = this.normalizeJson(invoice.metadata, {});
-    const amounts = metadata.amounts || {};
+    const amounts = { ...(metadata.amounts || {}) };
     const invoiceType = this.invoiceType(invoice);
+    if (
+      invoiceType === INVOICE_TYPES.SELLER_CUSTOMER &&
+      Number(amounts.shippingCollectedForSellerAmount || 0) <= 0 &&
+      context.order
+    ) {
+      const shippingCollectedForSellerAmount = this.getDeliveryChargeBySeller(
+        context.order,
+        invoice.seller_id,
+        invoice.organization_id,
+      );
+      if (shippingCollectedForSellerAmount > 0) {
+        amounts.shippingCollectedForSellerAmount = shippingCollectedForSellerAmount;
+        amounts.shippingSettlementNote = "Shipping was collected separately by the platform and is settled to the seller outside this product tax invoice.";
+      }
+    }
     const commissionItems = (metadata.itemReferences || []).map((item) => {
       const taxableAmount = this.money(item.platformFeeAmount);
       const taxAmount = this.money(item.platformFeeTaxAmount);
@@ -2056,7 +2054,7 @@ class TaxService {
         description: `Marketplace commission for ${item.productTitle || "order item"}`,
         productTitle: item.productTitle || "Order item",
         productSku: item.productSku || null,
-        hsnCode: item.serviceSacCode || null,
+        hsnCode: item.serviceSacCode || PLATFORM_COMMISSION_SAC_CODE,
         quantity: item.quantity || 1,
         commissionRate: this.money(item.commissionRate),
         gstRate: this.money(item.platformFeeTaxRate),
@@ -2149,6 +2147,9 @@ class TaxService {
             { label: "TCS", value: this.renderMoney(invoice.tcs_amount, currency) },
             { label: "Tax Amount", value: this.renderMoney(invoice.tax_amount, currency) },
             { label: "Delivery Charge", value: this.renderMoney(amounts.deliveryChargeAmount, currency) },
+            { label: "Shipping Collected Separately", value: Number(amounts.shippingCollectedForSellerAmount || 0) > 0
+              ? `${this.renderMoney(amounts.shippingCollectedForSellerAmount, currency)} - settled to seller outside product invoice table`
+              : this.renderMoney(0, currency) },
             { label: "Customer Platform Fee", value: this.renderMoney(amounts.customerPlatformFeeAmount, currency) },
             { label: "Platform Fee GST", value: this.renderMoney(amounts.customerPlatformFeeTaxAmount, currency) },
             { label: "COD Charge", value: this.renderMoney(amounts.codChargeAmount, currency) },

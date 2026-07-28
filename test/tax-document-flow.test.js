@@ -292,7 +292,7 @@ test("zero-GST customer platform fee is still a downloadable fee invoice", () =>
   assert.doesNotMatch(pdf, /PLATFORM FEE TAX INVOICE/);
 });
 
-test("seller invoice exposes seller-managed shipping as a separate supply line", () => {
+test("seller invoice does not show seller-managed shipping", () => {
   const renderer = new DocumentRendererService();
   const pdf = renderer.renderPdf({
     layout: "invoice",
@@ -307,10 +307,10 @@ test("seller invoice exposes seller-managed shipping as a separate supply line",
       buyer: { email: "buyer@example.com" },
       amounts: {
         grossSalesAmount: 1000,
-        deliveryChargeAmount: 49,
-        shippingTaxableAmount: 41.53,
-        shippingTaxAmount: 7.47,
-        customerFinalAmount: 1049,
+        deliveryChargeAmount: 0,
+        shippingTaxableAmount: 0,
+        shippingTaxAmount: 0,
+        customerFinalAmount: 1000,
       },
       items: [
         {
@@ -320,20 +320,12 @@ test("seller invoice exposes seller-managed shipping as a separate supply line",
           taxAmount: 152.54,
           totalAmount: 1000,
         },
-        {
-          description: "Delivery / shipping collected by platform on behalf of seller",
-          quantity: 1,
-          taxableAmount: 41.53,
-          taxAmount: 7.47,
-          totalAmount: 49,
-          lineType: "seller_shipping",
-        },
       ],
     },
   }).toString("binary");
 
-  assert.match(pdf, /Delivery \/ shipping collected/);
-  assert.match(pdf, /INR 49\.00/);
+  assert.doesNotMatch(pdf, /Delivery \/ shipping collected/);
+  assert.doesNotMatch(pdf, /Delivery Charge/);
 });
 
 test("order discount allocation is exact after item-level rounding", async () => {
@@ -485,7 +477,7 @@ test("seller invoice records marketplace promotion as payment contribution", () 
     },
   }).toString("binary");
   assert.match(invoicePdf, /Customer Promotion/);
-  assert.match(invoicePdf, /AMOUNT PAID BY CUSTOMER/);
+  assert.match(invoicePdf, /Amount paid by customer/);
   assert.match(invoicePdf, /Tax invoice value/);
   assert.match(invoicePdf, /Marketplace promotion/);
 
@@ -506,7 +498,7 @@ test("seller invoice records marketplace promotion as payment contribution", () 
   assert.equal(reversal.totalAmount, 1180);
 });
 
-test("seller shipping GST split reconciles exactly without a negative remainder", () => {
+test("seller invoice excludes shipping even when seller shipping is reimbursed in settlement", () => {
   const amounts = service.calculateSellerCustomerAmounts(
     {
       shipping_address: { state: "Punjab" },
@@ -543,19 +535,13 @@ test("seller shipping GST split reconciles exactly without a negative remainder"
     }],
   );
 
-  assert.equal(amounts.shippingTaxableAmount, 41.53);
-  assert.equal(amounts.shippingTaxAmount, 7.47);
-  assert.equal(amounts.shippingCgstAmount, 3.74);
-  assert.equal(amounts.shippingSgstAmount, 3.73);
+  assert.equal(amounts.deliveryChargeAmount, 0);
+  assert.equal(amounts.shippingTaxableAmount, 0);
+  assert.equal(amounts.shippingTaxAmount, 0);
+  assert.equal(amounts.shippingCgstAmount, 0);
+  assert.equal(amounts.shippingSgstAmount, 0);
   assert.equal(amounts.shippingIgstAmount, 0);
-  assert.equal(
-    Number((
-      amounts.shippingCgstAmount +
-      amounts.shippingSgstAmount +
-      amounts.shippingIgstAmount
-    ).toFixed(2)),
-    amounts.shippingTaxAmount,
-  );
+  assert.equal(amounts.customerFinalAmount, 1000);
 });
 
 test("seller invoice shipping is scoped to the seller organization", () => {

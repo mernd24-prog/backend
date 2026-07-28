@@ -1,4 +1,10 @@
 const DEFAULT_CURRENCY = "INR";
+const PLATFORM_COMMISSION_SAC_CODE = process.env.PLATFORM_COMMISSION_SAC_CODE || "998599";
+const PLATFORM_CUSTOMER_FEE_SAC_CODE =
+  process.env.PLATFORM_CUSTOMER_FEE_SAC_CODE ||
+  process.env.PLATFORM_COMMISSION_SAC_CODE ||
+  "998599";
+const SHIPPING_SERVICE_SAC_CODE = process.env.PLATFORM_SHIPPING_SAC_CODE || process.env.SHIPPING_SAC_CODE || "996812";
 
 class DocumentRendererService {
   render(document = {}, options = {}) {
@@ -1058,16 +1064,31 @@ class DocumentRendererService {
     const issuerName = isCommission || isOrderReceipt || isCustomerFee
       ? (process.env.INVOICE_BRAND_NAME || "Sam Global")
       : sellerName;
-    const issuerGstin = isCommission || isCustomerFee
+    const issuerGstin = isCommission || isCustomerFee || isOrderReceipt
       ? inv.gstinMarketplace
-      : (isOrderReceipt ? null : inv.gstinSeller);
+      : inv.gstinSeller;
     const recipientName = isCommission ? sellerName : buyerName;
     const recipientAddress = isCommission
       ? sellerAddress
       : this.formatAddressLines(buyer.billingAddress || shipping);
     const invoiceDate = this.formatDate(inv.issuedAt);
     const orderReference = inv.orderNumber || (inv.orderId ? String(inv.orderId).slice(-8).toUpperCase() : "-");
-    const pageItems = this.chunk(items.length ? items : [{}], 12);
+    const customerPlatformFeeAmount = Number(amounts.customerPlatformFeeAmount || 0);
+    const customerPlatformFeeTaxAmount = Number(amounts.customerPlatformFeeTaxAmount || 0);
+    const visibleInvoiceItems = isSellerCustomer
+      ? items.filter((item) => String(item.lineType || item.line_type || "") !== "seller_shipping")
+      : items;
+    const receiptItems = isOrderReceipt
+      ? [{
+        description: "Customer platform service fee",
+        hsnCode: amounts.customerPlatformFeeSacCode || PLATFORM_CUSTOMER_FEE_SAC_CODE,
+        quantity: 1,
+        taxableAmount: customerPlatformFeeAmount,
+        taxAmount: customerPlatformFeeTaxAmount,
+        totalAmount: customerPlatformFeeAmount + customerPlatformFeeTaxAmount,
+      }]
+      : visibleInvoiceItems;
+    const pageItems = this.chunk(receiptItems.length ? receiptItems : [{}], 12);
     const streams = pageItems.map((pageRows, pageIndex) => {
       const commands = [];
       const text = (value, x, y, size = 9, bold = false, align = "left") => {
@@ -1121,7 +1142,7 @@ class DocumentRendererService {
         ? [process.env.INVOICE_REGISTERED_OFFICE].filter(Boolean)
         : sellerAddress;
       issuerAddress.slice(0, 2).forEach((addressLine, index) => text(compact(addressLine, 62), 40, 729 - index * 11, 8));
-      if (issuerGstin) text(`${isCommission ? "Marketplace" : "Supplier"} GSTIN: ${issuerGstin}`, 40, 703, 8, true);
+      if (issuerGstin) text(`${isCommission || isCustomerFee || isOrderReceipt ? "Marketplace" : "Supplier"} GSTIN: ${issuerGstin}`, 40, 703, 8, true);
 
       text("Invoice No.", 350, 754, 8);
       text(inv.number || "-", 555, 754, 9, true, "right");
@@ -1139,7 +1160,7 @@ class DocumentRendererService {
       const recipientGstin = isCommission ? inv.gstinSeller : (buyer.gstin || buyer.gstNumber);
       if (recipientGstin) text(`Recipient GSTIN: ${recipientGstin}`, 40, 612, 8);
 
-      if (isCommission || isCustomerFee) {
+      if (isCommission || isCustomerFee || isOrderReceipt) {
         text("SERVICE DETAILS", 310, 678, 8, true);
         text(isCommission
           ? "Marketplace commission and related services"
@@ -1167,7 +1188,12 @@ class DocumentRendererService {
       let y = 556;
       pageRows.forEach((item, index) => {
         const title = item.description || item.productTitle || item.product_title || (items.length ? "Item" : "No line items");
-        const hsn = item.hsnCode || item.hsn_code || "-";
+        const lineType = String(item.lineType || item.line_type || "");
+        const hsn = item.hsnCode || item.hsn_code ||
+          (isCommission ? PLATFORM_COMMISSION_SAC_CODE : "") ||
+          (isCustomerFee || isOrderReceipt ? PLATFORM_CUSTOMER_FEE_SAC_CODE : "") ||
+          (lineType.includes("shipping") ? SHIPPING_SERVICE_SAC_CODE : "") ||
+          "-";
         const qty = item.quantity ?? "-";
         const taxable = item.taxableAmount ?? item.taxable_amount ?? item.unitPrice ?? item.unit_price ?? 0;
         const tax = Number(item.taxAmount ?? item.tax_amount ?? 0) ||
@@ -1208,19 +1234,26 @@ class DocumentRendererService {
         const add = (label, value, negative = false) => {
           if (Number(value || 0) !== 0) summaryRows.push([label, Number(value), negative]);
         };
-        add("Subtotal", amounts.grossSalesAmount || amounts.taxableAmount);
-        add("Customer Promotion", amounts.customerDiscountAmount ?? amounts.discountAmount, true);
-        add("Delivery Charge", amounts.deliveryChargeAmount || amounts.shippingChargeAmount);
-        add("COD Charge", amounts.codChargeAmount);
-        add("Platform Fee", amounts.customerPlatformFeeAmount);
-        const taxTotal = Number(amounts.cgstAmount || 0) + Number(amounts.sgstAmount || 0) + Number(amounts.igstAmount || 0);
-        const displayedTax = taxTotal || amounts.taxAmount || amounts.productTaxLiabilityAmount;
-        add(isCommission
-          ? "GST on Commission"
-          : Number(amounts.taxPayableAmount || 0) > 0
-            ? "GST"
-            : "Included GST (information only)", displayedTax);
-        const invoiceValue = amounts.finalPayableAmount || amounts.totalAmount || amounts.customerFinalAmount || inv.totalAmount || 0;
+        if (isOrderReceipt) {
+          add("Platform Fee", customerPlatformFeeAmount);
+          add("GST on Platform Fee", customerPlatformFeeTaxAmount);
+        } else {
+          add("Subtotal", amounts.grossSalesAmount || amounts.taxableAmount);
+          add("Customer Promotion", amounts.customerDiscountAmount ?? amounts.discountAmount, true);
+          add("Delivery Charge", amounts.deliveryChargeAmount || amounts.shippingChargeAmount);
+          add("COD Charge", amounts.codChargeAmount);
+          add("Platform Fee", amounts.customerPlatformFeeAmount);
+          const taxTotal = Number(amounts.cgstAmount || 0) + Number(amounts.sgstAmount || 0) + Number(amounts.igstAmount || 0);
+          const displayedTax = taxTotal || amounts.taxAmount || amounts.productTaxLiabilityAmount;
+          add(isCommission
+            ? "GST on Commission"
+            : Number(amounts.taxPayableAmount || 0) > 0
+              ? "GST"
+              : "Included GST (information only)", displayedTax);
+        }
+        const invoiceValue = isOrderReceipt
+          ? customerPlatformFeeAmount + customerPlatformFeeTaxAmount
+          : amounts.finalPayableAmount || amounts.totalAmount || amounts.customerFinalAmount || inv.totalAmount || 0;
         const total = isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0
           ? amounts.customerPaidTowardInvoiceAmount
           : invoiceValue;
@@ -1233,14 +1266,21 @@ class DocumentRendererService {
         });
         const totalY = summaryTop - summaryRows.length * 16 - 4;
         line(350, totalY + 12, 559, totalY + 12, 0.8);
-        text(isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0
-          ? "AMOUNT PAID BY CUSTOMER"
-          : "GRAND TOTAL", 355, totalY - 2, 10, true);
+        const totalLabel = isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0
+          ? "Amount paid by customer"
+          : isOrderReceipt
+            ? "Total paid"
+            : "Grand total";
+        text(totalLabel, 355, totalY - 2, isOrderReceipt ? 9 : 10, true);
         text(money(total), 553, totalY - 2, 11, true, "right");
         if (isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0) {
           text(`Tax invoice value: ${money(invoiceValue)}`, 355, totalY - 16, 7.5);
         }
-        const contribution = Number(amounts.marketplaceFundedDiscountAmount || 0);
+        if (isSellerCustomer && Number(amounts.shippingCollectedForSellerAmount || 0) > 0) {
+          text(`Shipping collected separately: ${money(amounts.shippingCollectedForSellerAmount)}`, 355, totalY - 29, 7.5);
+          text("Shown in seller settlement; not included in product invoice table.", 355, totalY - 40, 7);
+        }
+        const contribution = isOrderReceipt ? 0 : Number(amounts.marketplaceFundedDiscountAmount || 0);
         const partnerContribution = Number(amounts.paymentPartnerFundedDiscountAmount || 0);
         if (contribution > 0 || partnerContribution > 0) {
           const allocation = [
@@ -1263,7 +1303,7 @@ class DocumentRendererService {
         text(isCommission || isCustomerFee
           ? "We declare that this invoice shows the marketplace services supplied and the applicable tax correctly."
           : isOrderReceipt
-            ? "This receipt summarizes payment for a multi-seller order. Seller tax invoices are provided separately."
+            ? "This receipt is only for the platform fee charged by the marketplace to the customer. Seller product tax invoices are provided separately."
           : "We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.", 40, 108, 7.5);
         text("This is a computer-generated tax invoice and does not require a physical signature.", 40, 96, 7.5);
         text(`For ${compact(issuerName, 34)}`, 553, 122, 8, true, "right");

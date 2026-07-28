@@ -857,6 +857,7 @@ class ReturnServiceClass {
     return {
       itemSubtotal,
       discountReversal,
+      productPaidAmount: this.round(Math.max(itemSubtotal - discountReversal + taxReversal, 0)),
       taxReversal,
       shippingRefund,
       platformFeeRefund,

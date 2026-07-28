@@ -208,11 +208,12 @@ const env = {
   commerce: {
     businessState: process.env.BUSINESS_STATE || "KARNATAKA",
     gstinMarketplace: process.env.GSTIN_MARKETPLACE || "",
-    platformCommissionSacCode: process.env.PLATFORM_COMMISSION_SAC_CODE || "",
+    platformCommissionSacCode: process.env.PLATFORM_COMMISSION_SAC_CODE || "998599",
     platformCustomerFeeSacCode:
       process.env.PLATFORM_CUSTOMER_FEE_SAC_CODE ||
       process.env.PLATFORM_COMMISSION_SAC_CODE ||
-      "",
+      "998599",
+    shippingSacCode: process.env.PLATFORM_SHIPPING_SAC_CODE || process.env.SHIPPING_SAC_CODE || "996812",
     referralReferrerBonus: Number(process.env.REFERRAL_REFERRER_BONUS || 100),
     referralRefereeBonus: Number(process.env.REFERRAL_REFEREE_BONUS || 50),
     maxWalletUsagePerOrderPercent: Number(process.env.MAX_WALLET_USAGE_PER_ORDER_PERCENT || 30),
