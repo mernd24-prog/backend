@@ -249,6 +249,14 @@ class ReturnServiceClass {
     );
   }
 
+  isReturnQuantityBlocking(returnRequest = {}) {
+    const status = String(returnRequest.status || "").toLowerCase();
+    const refundStatus = String(returnRequest.refund?.status || "").toLowerCase();
+    if (["rejected", "qc_failure_upheld"].includes(status)) return false;
+    if (status === "closed" && !["completed", "not_required"].includes(refundStatus)) return false;
+    return true;
+  }
+
   getReturnRefundedAmount(returnRequest = {}) {
     if (!this.isCompletedReturn(returnRequest)) return 0;
     return this.round(returnRequest.refund?.refundedAmount || returnRequest.refundAmount || 0);
@@ -548,8 +556,10 @@ class ReturnServiceClass {
   }
 
   findOrderItem(orderItems, requestedItem) {
+    if (requestedItem.orderItemId) {
+      return orderItems.find((candidate) => String(candidate.id) === String(requestedItem.orderItemId));
+    }
     return orderItems.find((candidate) => {
-      if (requestedItem.orderItemId && String(candidate.id) === String(requestedItem.orderItemId)) return true;
       return String(candidate.product_id) === String(requestedItem.productId) &&
         (!requestedItem.variantSku || String(candidate.variant_sku || "") === String(requestedItem.variantSku || "")) &&
         (!requestedItem.variantId || String(candidate.variant_id || "") === String(requestedItem.variantId || ""));
@@ -610,19 +620,20 @@ class ReturnServiceClass {
         throw new AppError("Return quantity must be a positive whole number", 400);
       }
       const alreadyReturned = existingReturns.reduce((sum, returnDoc) => {
-        const matched = (returnDoc.items || []).find((candidate) =>
-          String(candidate.orderItemId || "") === String(orderItem.id || "") ||
-          (
-            String(candidate.productId) === String(orderItem.product_id) &&
+        if (!this.isReturnQuantityBlocking(returnDoc)) return sum;
+        const matched = (returnDoc.items || []).find((candidate) => {
+          if (candidate.orderItemId) {
+            return String(candidate.orderItemId) === String(orderItem.id || "");
+          }
+          return String(candidate.productId) === String(orderItem.product_id) &&
             String(candidate.variantSku || candidate.variantId || "") ===
-              String(orderItem.variant_sku || orderItem.variant_id || "")
-          ),
-        );
+              String(orderItem.variant_sku || orderItem.variant_id || "");
+        });
         return sum + Number(matched?.approvedQuantity || matched?.requestedQuantity || matched?.quantity || 0);
       }, 0);
       const availableQty = Number(orderItem.quantity || 0) - alreadyReturned;
       if (quantity > availableQty) {
-        throw new AppError(`Return quantity exceeds eligible quantity for ${item.productId}`, 400);
+        throw new AppError(`Only ${Math.max(availableQty, 0)} unit(s) can be returned for this item because ${alreadyReturned} unit(s) are already in return/refund queue.`, 400);
       }
 
       const unitPrice = Number(orderItem.unit_price || item.unitPrice || 0);

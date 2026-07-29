@@ -5,6 +5,7 @@ const PLATFORM_CUSTOMER_FEE_SAC_CODE =
   process.env.PLATFORM_COMMISSION_SAC_CODE ||
   "998599";
 const SHIPPING_SERVICE_SAC_CODE = process.env.PLATFORM_SHIPPING_SAC_CODE || process.env.SHIPPING_SAC_CODE || "996812";
+const DEFAULT_PLATFORM_FEE_GST_RATE = Number(process.env.PLATFORM_CUSTOMER_FEE_GST_RATE || process.env.PLATFORM_FEE_GST_RATE || 18);
 
 class DocumentRendererService {
   render(document = {}, options = {}) {
@@ -107,10 +108,14 @@ class DocumentRendererService {
       ? (seller.legalBusinessName || seller.displayName || seller.businessName || "Seller")
       : (process.env.INVOICE_BRAND_NAME || "Sam Global");
     const brandName = process.env.INVOICE_BRAND_NAME || issuerName || "Sam Global";
+    const platformName = process.env.INVOICE_BRAND_NAME || "Sam Global";
+    const platformAddress = process.env.INVOICE_REGISTERED_OFFICE || d.marketplace?.registeredOffice || d.marketplace?.address || "";
     const logoUrl = process.env.INVOICE_LOGO_URL || d.marketplace?.logoUrl || document.logoUrl || "";
-    const issuerGstin = isSeller ? (inv.gstinSeller || seller.gstNumber || null) : (inv.gstinMarketplace || null);
+    const issuerGstin = isSeller
+      ? (inv.gstinSeller || seller.gstNumber || null)
+      : (inv.gstinMarketplace || d.marketplace?.gstin || process.env.GSTIN_MARKETPLACE || process.env.PLATFORM_GSTIN || null);
     const issuerAddrLines = isSeller ? this.formatAddressLines(seller.billingAddress || seller.businessAddress) : [];
-    const marketplaceGstin = inv.gstinMarketplace || null;
+    const marketplaceGstin = inv.gstinMarketplace || d.marketplace?.gstin || process.env.GSTIN_MARKETPLACE || process.env.PLATFORM_GSTIN || null;
 
     const recipientName = isCommission
       ? (seller.legalBusinessName || seller.displayName || seller.businessName || "Seller")
@@ -150,6 +155,10 @@ class DocumentRendererService {
       <div>
         <div class="hdr-brand">${this.escapeHtml(brandName)}</div>
         <div class="hdr-sub">Contact us: ${this.escapeHtml(process.env.INVOICE_CONTACT || process.env.SUPPORT_EMAIL || "support@samglobal.com")}</div>
+       
+        <div class="hdr-sub">Name: ${this.escapeHtml(platformName)}</div>
+        <div class="hdr-sub">Registered office: ${this.escapeHtml(platformAddress || "Not configured")}</div>
+        <div class="hdr-sub">Platform GSTIN: ${this.escapeHtml(marketplaceGstin || "Not configured")}</div>
       </div>
     </div>
     <div class="hdr-center">
@@ -177,11 +186,11 @@ class DocumentRendererService {
       ${this.renderCompactAddress(recipientName, [], recipientEmail)}
     </div>
     ${!isCommission
-      ? `<div class="address-block">
+        ? `<div class="address-block">
           <div class="addr-title">Shipping Address</div>
           ${this.renderCompactAddressFromObject(shippingAddr, recipientName)}
         </div>`
-      : `<div class="address-block">
+        : `<div class="address-block">
           <div class="addr-title">Billed To Seller</div>
           ${this.renderCompactAddress(recipientName, [], recipientEmail)}
         </div>`}
@@ -348,13 +357,13 @@ class DocumentRendererService {
     <div class="gst-col">
       <div class="col-title">Tax Reversed</div>
       ${this.renderTaxTable(
-        Number(amounts.cgstAmount || 0),
-        Number(amounts.sgstAmount || 0),
-        Number(amounts.igstAmount || 0),
-        0,
-        isIgst,
-        currency,
-      )}
+      Number(amounts.cgstAmount || 0),
+      Number(amounts.sgstAmount || 0),
+      Number(amounts.igstAmount || 0),
+      0,
+      isIgst,
+      currency,
+    )}
     </div>
     <div class="amt-col">
       <div class="col-title">Reversal Summary</div>
@@ -651,6 +660,15 @@ class DocumentRendererService {
   }
   .amt-row.grand .amt-lbl { font-size: 13px; font-weight: 700; color: #1B1D60; }
   .amt-row.grand .amt-val { font-size: 15px; font-weight: 700; color: #1B1D60; }
+  .amt-row.note {
+    border-bottom: none;
+    padding-top: 2px;
+  }
+  .amt-row.note .amt-lbl {
+    color: #6b7280;
+    font-size: 9.5px;
+    line-height: 1.35;
+  }
   /* Declaration */
   .declaration {
     color: #555;
@@ -872,7 +890,13 @@ class DocumentRendererService {
         <span class="amt-val">−${this.escapeHtml(this.money(amounts.walletDiscountAmount, currency))}</span>
       </div>`);
     }
-    const delivery = a(amounts.deliveryChargeAmount || amounts.shippingChargeAmount);
+    const shippingCollectedForSeller = a(amounts.shippingCollectedForSellerAmount);
+    if (shippingCollectedForSeller > 0) {
+      addRow("Delivery / shipping collected for seller", shippingCollectedForSeller);
+    }
+    const delivery = shippingCollectedForSeller > 0
+      ? 0
+      : a(amounts.deliveryChargeAmount || amounts.shippingChargeAmount);
     if (delivery > 0) addRow("Delivery Charge", delivery);
     if (a(amounts.codChargeAmount) > 0) addRow("COD Charge", amounts.codChargeAmount);
     if (a(amounts.customerPlatformFeeAmount) > 0) addRow("Platform Fee", amounts.customerPlatformFeeAmount);
@@ -883,12 +907,18 @@ class DocumentRendererService {
 
     const customerPaid = a(amounts.customerPaidTowardInvoiceAmount);
     const total = customerPaid > 0
-      ? customerPaid
+      ? customerPaid + shippingCollectedForSeller
       : a(amounts.finalPayableAmount || amounts.totalAmount || amounts.customerFinalAmount);
     rows.push(`<div class="amt-row grand">
       <span class="amt-lbl">${customerPaid > 0 ? "Amount Paid by Customer" : "Grand Total"}</span>
       <span class="amt-val">${this.escapeHtml(this.money(total, currency))}</span>
     </div>`);
+    if (shippingCollectedForSeller > 0) {
+      rows.push(`<div class="amt-row note">
+        <span class="amt-lbl">Product invoice table excludes shipping; shipping is shown in this summary and settled to the seller.</span>
+        <span class="amt-val"></span>
+      </div>`);
+    }
 
     return rows;
   }
@@ -991,6 +1021,7 @@ class DocumentRendererService {
   renderPdf(document = {}) {
     if (document.layout === "invoice") return this.renderInvoicePdf(document);
     if (document.layout === "credit_note") return this.renderCreditNotePdf(document);
+    if (document.layout === "settlement") return this.renderSettlementPdf(document);
     const lines = this.flattenDocument(document).flatMap((line) => this.wrapLine(line, 92));
     const pages = this.chunk(lines.length ? lines : ["No data."], 48);
     const objects = [];
@@ -1009,6 +1040,197 @@ class DocumentRendererService {
     objects[2] = `<< /Type /Pages /Kids [${pageObjectIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageObjectIds.length} >>`;
     objects[fontObjectId] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
 
+    return this.buildPdf(objects);
+  }
+
+  renderSettlementPdf(document = {}) {
+    const raw = document.raw || {};
+    const settlement = raw.settlement || {};
+    const payout = raw.payout || {};
+    const sections = Array.isArray(document.sections) ? document.sections : [];
+    const currency = settlement.currency || payout.currency || DEFAULT_CURRENCY;
+    const platformName = process.env.INVOICE_BRAND_NAME || "Sam Global";
+    const platformAddress = process.env.INVOICE_REGISTERED_OFFICE || "";
+    const platformGstin = process.env.GSTIN_MARKETPLACE || process.env.PLATFORM_GSTIN || "";
+    const settlementId = settlement.id || document.subtitle || "-";
+    const status = settlement.status || payout.status || "-";
+    const generatedAt = this.formatDate(document.generatedAt || new Date());
+
+    const rowsFromSection = (title) =>
+      sections.find((section) => String(section.title || "").toLowerCase().includes(title))?.rows || [];
+    const valueOf = (rows, labelPart) => {
+      const row = rows.find((entry) =>
+        !Array.isArray(entry) && String(entry.label || "").toLowerCase().includes(labelPart),
+      );
+      return row?.value || "-";
+    };
+    const sellerCredits = rowsFromSection("seller credits");
+    const platformCharges = rowsFromSection("platform charges");
+    const withholding = rowsFromSection("tax withholding");
+    const payoutRows = rowsFromSection("final seller payout");
+    const itemRows = rowsFromSection("item-wise");
+    const finalPayout = valueOf(payoutRows, "final seller payout") ||
+      this.money(settlement.net_amount, currency);
+
+    const streams = [];
+    let commands = [];
+    let pageNo = 0;
+    let y = 0;
+
+    const text = (value, x, yy, size = 9, bold = false, align = "left", color = "0.10 0.11 0.14") => {
+      const safe = this.escapePdfText(value);
+      const approximateWidth = safe.length * size * 0.5;
+      const tx = align === "right" ? x - approximateWidth : x;
+      commands.push(
+        `${color} rg`,
+        "BT",
+        `/${bold ? "F2" : "F1"} ${size} Tf`,
+        `${tx.toFixed(1)} ${yy.toFixed(1)} Td`,
+        `(${safe}) Tj`,
+        "ET",
+      );
+    };
+    const line = (x1, yy1, x2, yy2, width = 0.6, gray = 0.78) => {
+      commands.push(`${gray} G`, `${width} w`, `${x1} ${yy1} m ${x2} ${yy2} l S`);
+    };
+    const fill = (x, yy, width, height, r, g, b) => {
+      commands.push(`${r} ${g} ${b} rg`, `${x} ${yy} ${width} ${height} re f`);
+    };
+    const compact = (value, limit = 56) => {
+      const normalized = String(value ?? "-").replace(/\s+/g, " ").trim();
+      return normalized.length > limit ? `${normalized.slice(0, limit - 3)}...` : normalized;
+    };
+    const money = (value) => this.money(value, currency);
+
+    const startPage = () => {
+      if (commands.length) streams.push(commands.join("\n"));
+      pageNo += 1;
+      commands = [];
+      fill(0, 0, 595, 842, 1, 1, 1);
+      fill(36, 765, 523, 4, 0.81, 0.62, 0.18);
+      text(platformName, 40, 808, 16, true);
+      text("SELLER SETTLEMENT STATEMENT", 555, 806, 14, true, "right");
+      text("Payout advice / accounting statement", 555, 790, 8, false, "right", "0.35 0.37 0.45");
+      text("PLATFORM DETAILS", 40, 748, 7.5, true, "left", "0.35 0.37 0.45");
+      text(compact(platformAddress || "Registered office not configured", 72), 40, 734, 8);
+      text(`Platform GSTIN: ${platformGstin || "Not configured"}`, 40, 721, 8, true);
+      text(`Generated: ${generatedAt}`, 555, 734, 8, false, "right");
+      text(`Status: ${String(status).replace(/_/g, " ")}`, 555, 721, 8, true, "right");
+      line(36, 702, 559, 702, 0.8, 0.25);
+      y = 678;
+    };
+    const ensure = (height = 60) => {
+      if (y - height < 54) startPage();
+    };
+    const sectionTitle = (title) => {
+      ensure(48);
+      fill(36, y - 18, 523, 24, 0.95, 0.93, 0.87);
+      text(title, 44, y - 3, 10, true);
+      y -= 34;
+    };
+    const keyValueRows = (rows = [], options = {}) => {
+      rows.forEach((row) => {
+        if (Array.isArray(row)) return;
+        ensure(24);
+        const label = compact(row.label, options.labelLimit || 46);
+        const value = compact(row.value, options.valueLimit || 54);
+        text(label, 44, y, 8.2, false, "left", "0.35 0.37 0.45");
+        text(value, 553, y, 8.4, Boolean(options.boldValues), "right");
+        line(42, y - 8, 553, y - 8, 0.25, 0.88);
+        y -= 20;
+      });
+    };
+    const summaryCard = (x, title, value, subtitle, tone = "blue") => {
+      const isGreen = tone === "green";
+      fill(x, y - 60, 166, 72, isGreen ? 0.93 : 0.95, isGreen ? 0.98 : 0.97, isGreen ? 0.94 : 1);
+      text(title, x + 10, y - 10, 8, true, "left", isGreen ? "0.05 0.45 0.18" : "0.10 0.11 0.45");
+      text(value, x + 156, y - 31, 13, true, "right", isGreen ? "0.05 0.45 0.18" : "0.10 0.11 0.45");
+      text(compact(subtitle, 31), x + 10, y - 49, 7, false, "left", "0.35 0.37 0.45");
+    };
+
+    startPage();
+
+    summaryCard(36, "Final seller payout", finalPayout, "Amount payable / paid to seller", "green");
+    summaryCard(214, "Seller credits", valueOf(sellerCredits, "total seller credits"), "Product, shipping, discounts");
+    summaryCard(392, "Deductions", valueOf(platformCharges, "total platform deductions"), "Commission, GST, shipping");
+    y -= 92;
+
+    sectionTitle("Settlement details");
+    keyValueRows([
+      { label: "Settlement ID", value: settlementId },
+      { label: "Seller ID", value: settlement.seller_id || "-" },
+      { label: "Payout ID", value: settlement.payout_id || "-" },
+      { label: "Payment Reference", value: payout.payment_reference || "-" },
+      { label: "Payment Method", value: payout.payment_method || "-" },
+      { label: "Period", value: `${settlement.period_start || "-"} to ${settlement.period_end || "-"}` },
+    ]);
+
+    sectionTitle("Seller gets");
+    keyValueRows(sellerCredits, { boldValues: true });
+
+    sectionTitle("Platform charges");
+    keyValueRows(platformCharges, { boldValues: true });
+
+    sectionTitle("Tax withholding");
+    keyValueRows(withholding, { boldValues: true });
+
+    rowsFromSection("return").length && sectionTitle("Return / refund adjustments");
+    if (rowsFromSection("return").length) keyValueRows(rowsFromSection("return"), { boldValues: true });
+
+    sectionTitle("Final calculation");
+    keyValueRows(payoutRows, { boldValues: true });
+
+    const tableRows = Array.isArray(itemRows) && itemRows.length ? itemRows : [];
+    if (tableRows.length > 1) {
+      sectionTitle("Item-wise settlement lines");
+      const headers = tableRows[0].slice(0, 7);
+      const dataRows = tableRows.slice(1);
+      const colX = [42, 116, 184, 252, 330, 408, 484];
+      ensure(36);
+      fill(38, y - 15, 516, 22, 0.95, 0.93, 0.87);
+      headers.forEach((header, index) => text(compact(header, 12), colX[index], y - 2, 7, true));
+      y -= 28;
+      dataRows.forEach((row) => {
+        ensure(34);
+        row.slice(0, 7).forEach((cell, index) => {
+          text(compact(cell, index === 0 ? 13 : 11), colX[index], y, 7);
+        });
+        line(38, y - 8, 554, y - 8, 0.25, 0.86);
+        y -= 22;
+      });
+    }
+
+    const notes = rowsFromSection("document notes");
+    if (notes.length) {
+      sectionTitle("Notes");
+      keyValueRows(notes, { labelLimit: 34, valueLimit: 76 });
+    }
+
+    streams.push(commands.join("\n"));
+    const objects = [];
+    const pageObjectIds = [];
+    const fontRegularId = 3 + streams.length * 2;
+    const fontBoldId = fontRegularId + 1;
+    objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+    streams.forEach((stream, index) => {
+      const footer = [
+        stream,
+        "0.35 0.37 0.45 rg",
+        "BT",
+        "/F1 8 Tf",
+        `505 38 Td`,
+        `(Page ${index + 1} of ${streams.length}) Tj`,
+        "ET",
+      ].join("\n");
+      const pageId = 3 + index * 2;
+      const contentId = pageId + 1;
+      pageObjectIds.push(pageId);
+      objects[pageId] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents ${contentId} 0 R /Resources << /Font << /F1 ${fontRegularId} 0 R /F2 ${fontBoldId} 0 R >> >> >>`;
+      objects[contentId] = `<< /Length ${Buffer.byteLength(footer, "binary")} >>\nstream\n${footer}\nendstream`;
+    });
+    objects[2] = `<< /Type /Pages /Kids [${pageObjectIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageObjectIds.length} >>`;
+    objects[fontRegularId] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+    objects[fontBoldId] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>";
     return this.buildPdf(objects);
   }
 
@@ -1064,8 +1286,11 @@ class DocumentRendererService {
     const issuerName = isCommission || isOrderReceipt || isCustomerFee
       ? (process.env.INVOICE_BRAND_NAME || "Sam Global")
       : sellerName;
+    const platformName = process.env.INVOICE_BRAND_NAME || "SAM GLOBAL";
+    const platformAddress = process.env.INVOICE_REGISTERED_OFFICE || data.marketplace?.registeredOffice || data.marketplace?.address || "";
+    const platformGstin = inv.gstinMarketplace || data.marketplace?.gstin || process.env.GSTIN_MARKETPLACE || process.env.PLATFORM_GSTIN || "";
     const issuerGstin = isCommission || isCustomerFee || isOrderReceipt
-      ? inv.gstinMarketplace
+      ? platformGstin
       : inv.gstinSeller;
     const recipientName = isCommission ? sellerName : buyerName;
     const recipientAddress = isCommission
@@ -1073,8 +1298,34 @@ class DocumentRendererService {
       : this.formatAddressLines(buyer.billingAddress || shipping);
     const invoiceDate = this.formatDate(inv.issuedAt);
     const orderReference = inv.orderNumber || (inv.orderId ? String(inv.orderId).slice(-8).toUpperCase() : "-");
-    const customerPlatformFeeAmount = Number(amounts.customerPlatformFeeAmount || 0);
-    const customerPlatformFeeTaxAmount = Number(amounts.customerPlatformFeeTaxAmount || 0);
+    const rawCustomerPlatformFeeAmount = Number(
+      amounts.customerPlatformFeeAmount ??
+      (isCustomerFee ? amounts.taxableAmount : 0) ??
+      0,
+    );
+    const rawCustomerPlatformFeeTaxAmount = Number(
+      amounts.customerPlatformFeeTaxAmount ??
+      (isCustomerFee ? amounts.taxAmount || amounts.taxPayableAmount : 0) ??
+      0,
+    );
+    const platformFeeGstRate = Number(
+      amounts.platformFeeTaxRate ??
+      amounts.customerPlatformFeeTaxRate ??
+      DEFAULT_PLATFORM_FEE_GST_RATE,
+    );
+    const platformFeeIsInclusive = (isCustomerFee || isOrderReceipt) &&
+      rawCustomerPlatformFeeAmount > 0 &&
+      rawCustomerPlatformFeeTaxAmount <= 0 &&
+      platformFeeGstRate > 0;
+    const customerPlatformFeeTaxAmount = platformFeeIsInclusive
+      ? Number((rawCustomerPlatformFeeAmount - (rawCustomerPlatformFeeAmount / (1 + (platformFeeGstRate / 100)))).toFixed(2))
+      : rawCustomerPlatformFeeTaxAmount;
+    const customerPlatformFeeAmount = platformFeeIsInclusive
+      ? Number((rawCustomerPlatformFeeAmount - customerPlatformFeeTaxAmount).toFixed(2))
+      : rawCustomerPlatformFeeAmount;
+    const customerPlatformFeeInvoiceValue = platformFeeIsInclusive
+      ? rawCustomerPlatformFeeAmount
+      : customerPlatformFeeAmount + customerPlatformFeeTaxAmount;
     const visibleInvoiceItems = isSellerCustomer
       ? items.filter((item) => String(item.lineType || item.line_type || "") !== "seller_shipping")
       : items;
@@ -1085,10 +1336,11 @@ class DocumentRendererService {
         quantity: 1,
         taxableAmount: customerPlatformFeeAmount,
         taxAmount: customerPlatformFeeTaxAmount,
-        totalAmount: customerPlatformFeeAmount + customerPlatformFeeTaxAmount,
+        totalAmount: customerPlatformFeeInvoiceValue,
       }]
       : visibleInvoiceItems;
-    const pageItems = this.chunk(receiptItems.length ? receiptItems : [{}], 12);
+    const invoiceRowsPerPage = 8;
+    const pageItems = this.chunk(receiptItems.length ? receiptItems : [{}], invoiceRowsPerPage);
     const streams = pageItems.map((pageRows, pageIndex) => {
       const commands = [];
       const text = (value, x, y, size = 9, bold = false, align = "left") => {
@@ -1117,75 +1369,81 @@ class DocumentRendererService {
       };
 
       fill(0, 0, 595, 842, 1, 1, 1);
-      fill(36, 775, 523, 4, 0.81, 0.62, 0.18);
-      text(process.env.INVOICE_BRAND_NAME || "SAM GLOBAL", 40, 798, 18, true);
+      fill(36, 765, 523, 4, 0.81, 0.62, 0.18);
+      text(platformName, 40, 808, 16, true);
       const documentTitle = inv.displayTitle || (isCommission
         ? "COMMISSION TAX INVOICE"
         : isCustomerFee
           ? Number(amounts.taxAmount || amounts.taxPayableAmount || 0) > 0
             ? "PLATFORM FEE TAX INVOICE"
             : "PLATFORM FEE INVOICE"
-        : isOrderReceipt
-          ? "ORDER RECEIPT"
-          : "TAX INVOICE");
-      text(documentTitle, 555, 800, isCommission ? 13 : 17, true, "right");
-      text("Original for Recipient", 555, 785, 8, false, "right");
+          : isOrderReceipt
+            ? "ORDER RECEIPT"
+            : "TAX INVOICE");
+      text(documentTitle, 555, 806, isCommission ? 13 : 17, true, "right");
+      text("Original for Recipient", 555, 790, 8, false, "right");
+      text("PLATFORM DETAILS", 40, 752, 7.5, true);
+      text(platformName, 40, 737, 12, true);
+      text(`Marketplace / Platform Operator`, 40, 723, 8);
+      text(compact(platformAddress || "Registered office not configured", 62), 40, 710, 8);
+      text(`Platform GSTIN: ${platformGstin || "Not configured"}`, 40, 697, 8, true);
+
+      text("Invoice No.", 350, 748, 8);
+      text(inv.number || "-", 555, 748, 9, true, "right");
+      text("Invoice Date", 350, 732, 8);
+      text(invoiceDate, 555, 732, 9, true, "right");
+      text(inv.isCreditNote ? "Against Invoice" : "Order Reference", 350, 716, 8);
+      text(inv.isCreditNote ? inv.parentInvoiceNumber || "-" : orderReference, 555, 716, 9, true, "right");
+      text("Place of Supply", 350, 700, 8);
+      text(inv.placeOfSupply || "-", 555, 700, 9, true, "right");
+      line(36, 666, 559, 666, 0.8);
+
       text(isCommission
         ? "ISSUED BY / SERVICE PROVIDER"
         : isCustomerFee
           ? "ISSUED BY / SERVICE PROVIDER"
-        : isOrderReceipt
-          ? "ISSUED BY / MARKETPLACE"
-          : "SOLD BY / SUPPLIER", 40, 758, 7.5, true);
-      text(issuerName, 40, 743, 12, true);
+          : isOrderReceipt
+            ? "ISSUED BY / MARKETPLACE"
+            : "SOLD BY / SUPPLIER", 40, 650, 7.5, true);
+      text(issuerName, 40, 636, 10, true);
       const issuerAddress = isCommission || isOrderReceipt || isCustomerFee
         ? [process.env.INVOICE_REGISTERED_OFFICE].filter(Boolean)
         : sellerAddress;
-      issuerAddress.slice(0, 2).forEach((addressLine, index) => text(compact(addressLine, 62), 40, 729 - index * 11, 8));
-      if (issuerGstin) text(`${isCommission || isCustomerFee || isOrderReceipt ? "Marketplace" : "Supplier"} GSTIN: ${issuerGstin}`, 40, 703, 8, true);
+      issuerAddress.slice(0, 3).forEach((addressLine, index) => text(compact(addressLine, 46), 40, 622 - index * 10, 7.5));
+      if (issuerGstin) text(`${isCommission || isCustomerFee || isOrderReceipt ? "Marketplace" : "Supplier"} GSTIN: ${issuerGstin}`, 40, 587, 7.5, true);
 
-      text("Invoice No.", 350, 754, 8);
-      text(inv.number || "-", 555, 754, 9, true, "right");
-      text("Invoice Date", 350, 738, 8);
-      text(invoiceDate, 555, 738, 9, true, "right");
-      text(inv.isCreditNote ? "Against Invoice" : "Order Reference", 350, 722, 8);
-      text(inv.isCreditNote ? inv.parentInvoiceNumber || "-" : orderReference, 555, 722, 9, true, "right");
-      text("Place of Supply", 350, 706, 8);
-      text(inv.placeOfSupply || "-", 555, 706, 9, true, "right");
-      line(36, 694, 559, 694, 0.8);
-
-      text(isCommission ? "BILLED TO / SELLER" : "BILL TO / CUSTOMER", 40, 678, 8, true);
-      text(recipientName, 40, 663, 10, true);
-      recipientAddress.slice(0, 3).forEach((addressLine, index) => text(compact(addressLine, 48), 40, 649 - index * 11, 8));
+      text(isCommission ? "BILLED TO / SELLER" : "BILL TO / CUSTOMER", 220, 650, 8, true);
+      text(recipientName, 220, 636, 10, true);
+      recipientAddress.slice(0, 3).forEach((addressLine, index) => text(compact(addressLine, 34), 220, 622 - index * 11, 8));
       const recipientGstin = isCommission ? inv.gstinSeller : (buyer.gstin || buyer.gstNumber);
-      if (recipientGstin) text(`Recipient GSTIN: ${recipientGstin}`, 40, 612, 8);
+      if (recipientGstin) text(`Recipient GSTIN: ${recipientGstin}`, 220, 576, 8);
 
       if (isCommission || isCustomerFee || isOrderReceipt) {
-        text("SERVICE DETAILS", 310, 678, 8, true);
+        text("SERVICE DETAILS", 400, 650, 8, true);
         text(isCommission
           ? "Marketplace commission and related services"
-          : "Customer platform services", 310, 663, 9, true);
-        text(`Related order: ${orderReference}`, 310, 649, 8);
+          : "Customer platform services", 400, 636, 9, true);
+        text(`Related order: ${orderReference}`, 400, 622, 8);
         text(isCommission
           ? "This document is not a customer product invoice."
-          : "Seller product tax invoices are provided separately.", 310, 638, 8);
+          : "Seller product tax invoices are provided separately.", 400, 611, 8);
       } else {
-        text("SHIP TO", 310, 678, 8, true);
-        text(shipping.fullName || shipping.full_name || shipping.name || buyerName, 310, 663, 10, true);
-        shippingAddress.slice(0, 3).forEach((addressLine, index) => text(compact(addressLine, 48), 310, 649 - index * 11, 8));
+        text("SHIP TO", 400, 650, 8, true);
+        text(shipping.fullName || shipping.full_name || shipping.name || buyerName, 400, 636, 10, true);
+        shippingAddress.slice(0, 3).forEach((addressLine, index) => text(compact(addressLine, 32), 400, 622 - index * 11, 8));
       }
-      line(36, 600, 559, 600, 0.8);
+      line(36, 558, 559, 558, 0.8);
 
-      fill(36, 574, 523, 22, 0.95, 0.93, 0.87);
-      text("#", 43, 582, 8, true);
-      text("Description", 62, 582, 8, true);
-      text("HSN/SAC", 270, 582, 8, true);
-      text("Qty", 326, 582, 8, true);
-      text("Taxable Value", 414, 582, 8, true, "right");
-      text("GST", 484, 582, 8, true, "right");
-      text("Invoice Value", 553, 582, 8, true, "right");
+      fill(36, 532, 523, 22, 0.95, 0.93, 0.87);
+      text("#", 43, 540, 8, true);
+      text("Description", 62, 540, 8, true);
+      text("HSN/SAC", 270, 540, 8, true);
+      text("Qty", 326, 540, 8, true);
+      text("Taxable Value", 414, 540, 8, true, "right");
+      text("GST", 484, 540, 8, true, "right");
+      text("Invoice Value", 553, 540, 8, true, "right");
 
-      let y = 556;
+      let y = 514;
       pageRows.forEach((item, index) => {
         const title = item.description || item.productTitle || item.product_title || (items.length ? "Item" : "No line items");
         const lineType = String(item.lineType || item.line_type || "");
@@ -1200,7 +1458,7 @@ class DocumentRendererService {
           Number(item.cgstAmount ?? item.cgst_amount ?? 0) + Number(item.sgstAmount ?? item.sgst_amount ?? 0) + Number(item.igstAmount ?? item.igst_amount ?? 0);
         const total = item.totalAmount ?? item.total_amount ??
           (Number(taxable || 0) + Number(tax || 0));
-        text(String(pageIndex * 12 + index + 1), 43, y, 8);
+        text(String(pageIndex * invoiceRowsPerPage + index + 1), 43, y, 8);
         text(compact(title, 34), 62, y, 8, true);
         const sku = item.productSku || item.variantSku || item.product_sku || item.variant_sku;
         if (sku) text(`SKU: ${compact(sku, 30)}`, 62, y - 11, 7);
@@ -1231,16 +1489,23 @@ class DocumentRendererService {
 
       if (pageIndex === pageItems.length - 1) {
         const summaryRows = [];
-        const add = (label, value, negative = false) => {
-          if (Number(value || 0) !== 0) summaryRows.push([label, Number(value), negative]);
+        const add = (label, value, negative = false, force = false) => {
+          if (force || Number(value || 0) !== 0) summaryRows.push([label, Number(value), negative]);
         };
-        if (isOrderReceipt) {
-          add("Platform Fee", customerPlatformFeeAmount);
-          add("GST on Platform Fee", customerPlatformFeeTaxAmount);
+        if (isOrderReceipt || isCustomerFee) {
+          add(platformFeeIsInclusive ? "Platform fee taxable value" : "Platform fee base", customerPlatformFeeAmount, false, true);
+          add(platformFeeIsInclusive ? `Included GST on platform fee (${platformFeeGstRate}%)` : "GST on platform fee", customerPlatformFeeTaxAmount, false, true);
         } else {
           add("Subtotal", amounts.grossSalesAmount || amounts.taxableAmount);
           add("Customer Promotion", amounts.customerDiscountAmount ?? amounts.discountAmount, true);
-          add("Delivery Charge", amounts.deliveryChargeAmount || amounts.shippingChargeAmount);
+          const sellerShipping = isSellerCustomer
+            ? Number(amounts.shippingCollectedForSellerAmount || 0)
+            : 0;
+          if (sellerShipping > 0) {
+            add("Delivery / shipping collected for seller", sellerShipping);
+          } else {
+            add("Delivery Charge", amounts.deliveryChargeAmount || amounts.shippingChargeAmount);
+          }
           add("COD Charge", amounts.codChargeAmount);
           add("Platform Fee", amounts.customerPlatformFeeAmount);
           const taxTotal = Number(amounts.cgstAmount || 0) + Number(amounts.sgstAmount || 0) + Number(amounts.igstAmount || 0);
@@ -1251,11 +1516,17 @@ class DocumentRendererService {
               ? "GST"
               : "Included GST (information only)", displayedTax);
         }
-        const invoiceValue = isOrderReceipt
-          ? customerPlatformFeeAmount + customerPlatformFeeTaxAmount
+        const productInvoiceValue = isOrderReceipt
+          ? customerPlatformFeeInvoiceValue
           : amounts.finalPayableAmount || amounts.totalAmount || amounts.customerFinalAmount || inv.totalAmount || 0;
+        const sellerShippingAmount = isSellerCustomer
+          ? Number(amounts.shippingCollectedForSellerAmount || 0)
+          : 0;
+        const invoiceValue = isSellerCustomer
+          ? Number(productInvoiceValue || 0) + sellerShippingAmount
+          : productInvoiceValue;
         const total = isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0
-          ? amounts.customerPaidTowardInvoiceAmount
+          ? Number(amounts.customerPaidTowardInvoiceAmount || 0) + sellerShippingAmount
           : invoiceValue;
         const summaryTop = Math.min(y - 4, 205 + summaryRows.length * 17);
         text("AMOUNT SUMMARY", 355, summaryTop + 18, 8, true);
@@ -1276,9 +1547,11 @@ class DocumentRendererService {
         if (isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0) {
           text(`Tax invoice value: ${money(invoiceValue)}`, 355, totalY - 16, 7.5);
         }
-        if (isSellerCustomer && Number(amounts.shippingCollectedForSellerAmount || 0) > 0) {
-          text(`Shipping collected separately: ${money(amounts.shippingCollectedForSellerAmount)}`, 355, totalY - 29, 7.5);
-          text("Shown in seller settlement; not included in product invoice table.", 355, totalY - 40, 7);
+        if (isSellerCustomer && sellerShippingAmount > 0) {
+          text("Product table excludes shipping; shipping is shown in summary and settled to seller.", 355, totalY - 29, 7);
+        }
+        if (platformFeeIsInclusive) {
+          text(`Platform fee is GST-inclusive. Gross fee: ${money(rawCustomerPlatformFeeAmount)}`, 355, totalY - 16, 7.5);
         }
         const contribution = isOrderReceipt ? 0 : Number(amounts.marketplaceFundedDiscountAmount || 0);
         const partnerContribution = Number(amounts.paymentPartnerFundedDiscountAmount || 0);
@@ -1304,7 +1577,7 @@ class DocumentRendererService {
           ? "We declare that this invoice shows the marketplace services supplied and the applicable tax correctly."
           : isOrderReceipt
             ? "This receipt is only for the platform fee charged by the marketplace to the customer. Seller product tax invoices are provided separately."
-          : "We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.", 40, 108, 7.5);
+            : "We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.", 40, 108, 7.5);
         text("This is a computer-generated tax invoice and does not require a physical signature.", 40, 96, 7.5);
         text(`For ${compact(issuerName, 34)}`, 553, 122, 8, true, "right");
         text(`Electronically issued by the ${isCommission || isOrderReceipt || isCustomerFee ? "platform" : "supplier"}`, 553, 96, 8, false, "right");

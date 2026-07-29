@@ -2450,15 +2450,21 @@ gstTcsAmount,
     const adjustmentAmount = this.round(Number(settlement.adjustment_amount || 0));
     const netAmount = this.round(Number(settlement.net_amount || 0));
 
+    const sellerCredits = this.round(grossAmount + shippingReimbursed + marketplaceDiscount + paymentPartnerDiscount);
+    const platformDeductions = this.round(commissionAmount + commissionTax + shippingDeducted);
+    const taxWithholding = this.round(gstTcsAmount + incomeTaxTdsAmount);
+    const totalAdjustments = this.round(refundAmount - adjustmentAmount);
+
     return {
-      title: "Seller Settlement Statement",
+      layout: "settlement",
+      title: "Seller Settlement Statement / Payout Advice",
       subtitle: `Settlement ${settlement.id}`,
       fileBaseName: `settlement-${settlement.id}`,
       generatedAt: new Date().toISOString(),
       raw: { settlement, payout, commissions },
       sections: [
         {
-          title: "Settlement Summary",
+          title: "1. Settlement Header",
           rows: [
             { label: "Settlement ID", value: settlement.id },
             { label: "Seller ID", value: settlement.seller_id },
@@ -2472,36 +2478,54 @@ gstTcsAmount,
           ],
         },
         {
-          title: "Seller Receivable",
+          title: "2. Seller Credits",
           rows: [
-            { label: "Product Amount", value: this.renderMoney(grossAmount, currency) },
-            { label: "Shipping Collected From Customer", value: this.renderMoney(shippingCollected, currency) },
-            { label: "Shipping Paid/Reimbursed To Seller", value: this.renderMoney(shippingReimbursed, currency) },
-            { label: "Marketplace-funded Discount Paid To Seller", value: this.renderMoney(marketplaceDiscount, currency) },
-            { label: "Payment-partner-funded Discount", value: this.renderMoney(paymentPartnerDiscount, currency) },
-            { label: "Seller-funded Discount", value: this.renderMoney(sellerFundedDiscount, currency) },
+            { label: "Product value payable to seller", value: this.renderMoney(grossAmount, currency) },
+            { label: "Shipping collected from customer", value: this.renderMoney(shippingCollected, currency) },
+            { label: "Shipping paid/reimbursed to seller", value: `+${this.renderMoney(shippingReimbursed, currency)}` },
+            { label: "Marketplace-funded discount reimbursement", value: `+${this.renderMoney(marketplaceDiscount, currency)}` },
+            { label: "Payment-partner-funded discount reimbursement", value: `+${this.renderMoney(paymentPartnerDiscount, currency)}` },
+            { label: "Seller-funded discount", value: `-${this.renderMoney(sellerFundedDiscount, currency)} (already reduced in seller product value)` },
+            { label: "Total seller credits", value: this.renderMoney(sellerCredits, currency) },
           ],
         },
         {
-          title: "Platform Charges & Tax Withholding",
+          title: "3. Platform Charges",
           rows: [
-            { label: "Platform Commission Charged To Seller", value: `-${this.renderMoney(commissionAmount, currency)}` },
-            { label: "GST On Platform Commission", value: `-${this.renderMoney(commissionTax, currency)}` },
-            { label: "Shipping Deducted From Seller", value: `-${this.renderMoney(shippingDeducted, currency)}` },
+            { label: "Platform commission charged to seller", value: `-${this.renderMoney(commissionAmount, currency)}` },
+            { label: "GST on platform commission", value: `-${this.renderMoney(commissionTax, currency)}` },
+            { label: "Shipping deducted from seller", value: `-${this.renderMoney(shippingDeducted, currency)}` },
+            { label: "Total platform deductions", value: `-${this.renderMoney(platformDeductions, currency)}` },
+          ],
+        },
+        {
+          title: "4. Tax Withholding",
+          rows: [
             { label: "GST TCS Withheld", value: `-${this.renderMoney(gstTcsAmount, currency)}` },
             { label: "Income-tax TDS Withheld", value: `-${this.renderMoney(incomeTaxTdsAmount, currency)}` },
+            { label: "Total statutory withholding", value: `-${this.renderMoney(taxWithholding, currency)}` },
           ],
         },
         {
-          title: "Settlement Adjustments & Final Payout",
+          title: "5. Return / Refund / Recovery Adjustments",
           rows: [
-            { label: "Refund / Return Recovery", value: `-${this.renderMoney(refundAmount, currency)}` },
-            { label: "Other Adjustment", value: `${adjustmentAmount < 0 ? "-" : ""}${this.renderMoney(Math.abs(adjustmentAmount), currency)}` },
-            { label: "Final Seller Payout", value: this.renderMoney(netAmount, currency) },
+            { label: "Refund / return recovery", value: `-${this.renderMoney(refundAmount, currency)}` },
+            { label: "Other adjustment", value: `${adjustmentAmount < 0 ? "-" : "+"}${this.renderMoney(Math.abs(adjustmentAmount), currency)}` },
+            { label: "Net adjustment impact", value: `${totalAdjustments >= 0 ? "-" : "+"}${this.renderMoney(Math.abs(totalAdjustments), currency)}` },
           ],
         },
         {
-          title: "Tax / Base Reference",
+          title: "6. Final Seller Payout",
+          rows: [
+            { label: "Seller credits", value: this.renderMoney(sellerCredits, currency) },
+            { label: "Less: platform charges", value: `-${this.renderMoney(platformDeductions, currency)}` },
+            { label: "Less: GST TCS / income-tax TDS", value: `-${this.renderMoney(taxWithholding, currency)}` },
+            { label: "Less/Add: returns and adjustments", value: `${totalAdjustments >= 0 ? "-" : "+"}${this.renderMoney(Math.abs(totalAdjustments), currency)}` },
+            { label: "Final seller payout", value: this.renderMoney(netAmount, currency) },
+          ],
+        },
+        {
+          title: "7. Tax / Base Reference",
           rows: [
             { label: "Shipping Taxable Value", value: this.renderMoney(metadataTotal("shippingTaxableAmount"), currency) },
             { label: "Shipping GST", value: this.renderMoney(metadataTotal("shippingTaxAmount"), currency) },
@@ -2510,14 +2534,16 @@ gstTcsAmount,
           ],
         },
         {
-          title: "Order-wise Settlement Lines",
+          title: "8. Item-wise Settlement Lines",
           rows: this.buildSettlementCommissionRows(commissions, currency),
         },
         {
-          title: "Notes",
+          title: "9. Document Notes",
           rows: [
-            { label: "Statement Notes", value: settlement.notes || "-" },
-            { label: "Generated From", value: "seller_commissions, seller_payouts, seller_settlements" },
+            { label: "Commission tax invoice", value: "Issued separately by platform to seller for platform commission and GST." },
+            { label: "Reverse invoice / credit note", value: "Generated separately when a returned/cancelled item reverses seller invoice or platform commission." },
+            { label: "Discount funding", value: "Marketplace/payment-partner funded discounts are seller credits/reimbursements, not seller deductions." },
+            { label: "Statement notes", value: settlement.notes || "-" },
           ],
         },
       ],
@@ -2529,16 +2555,22 @@ gstTcsAmount,
       return [{ label: "Commissions", value: "No commission lines available" }];
     }
     return [
-      ["Order", "Status", "Gross", "Commission", "Tax", "TCS Base", "TCS", "TDS", "Refund", "Net"],
+      ["Order", "Status", "Product", "Shipping", "Mkt Discount", "Commission", "GST", "TCS", "TDS", "Refund", "Net"],
       ...commissions.map((commission) => {
         const metadata = this.parseJson(commission.metadata, {});
+        const marketplaceDiscount = (metadata.products || []).reduce(
+          (sum, product) => sum + Number(product.marketplaceFundedDiscountAmount || 0),
+          0,
+        );
+        const shippingNet = Number(metadata.shippingReimbursementAmount || 0) - Number(metadata.shippingDeductionAmount || 0);
         return [
           commission.order_id || "-",
           commission.status || "-",
           this.renderMoney(commission.amount, currency),
+          this.renderMoney(shippingNet, currency),
+          this.renderMoney(marketplaceDiscount, currency),
           this.renderMoney(commission.commission_amount, currency),
           this.renderMoney(commission.tax_amount, currency),
-          this.renderMoney(metadata.taxableSupplyAmount, currency),
           this.renderMoney(metadata.gstTcsAmount, currency),
           this.renderMoney(metadata.incomeTaxTdsAmount, currency),
           this.renderMoney(commission.refund_amount, currency),
@@ -2790,9 +2822,10 @@ gstTcsAmount,
 
     const orderItems = await knex("order_items")
       .where("order_id", orderId)
-      .select("id", "seller_id", "organization_id", "organization_snapshot", "product_id", "variant_id", "variant_sku", "line_total");
+      .select("id", "seller_id", "organization_id", "organization_snapshot", "product_id", "variant_id", "variant_sku", "quantity", "line_total");
     const itemMap = new Map();
     orderItems.forEach((item) => {
+      itemMap.set(String(item.id), item);
       itemMap.set(`${item.product_id}:${item.variant_sku || item.variant_id || ""}`, item);
       itemMap.set(`${item.product_id}:`, item);
     });
@@ -2801,10 +2834,12 @@ gstTcsAmount,
     (returnRequest.items || []).forEach((item) => {
       const sellerId = item.sellerId ||
         item.seller_id ||
+        itemMap.get(String(item.orderItemId || item.order_item_id || ""))?.seller_id ||
         itemMap.get(`${item.productId}:${item.variantSku || item.variantId || ""}`)?.seller_id ||
         itemMap.get(`${item.productId}:`)?.seller_id;
       if (!sellerId) return;
       const matchedItem =
+        itemMap.get(String(item.orderItemId || item.order_item_id || "")) ||
         itemMap.get(`${item.productId}:${item.variantSku || item.variantId || ""}`) ||
         itemMap.get(`${item.productId}:`) ||
         {};
@@ -2812,14 +2847,22 @@ gstTcsAmount,
       const orderItemId = item.orderItemId || matchedItem.id || null;
       const key = `${String(sellerId)}:${organizationId || "default"}:${orderItemId || item.productId}`;
       const amount = this.round(item.refundAmount || item.lineTotal || 0);
+      const orderedQuantity = Math.max(Number(matchedItem.quantity || item.orderedQuantity || item.ordered_quantity || item.quantity || 1), 1);
+      const returnedQuantity = Math.min(
+        orderedQuantity,
+        Math.max(Number(item.approvedQuantity ?? item.approved_quantity ?? item.receivedQuantity ?? item.received_quantity ?? item.requestedQuantity ?? item.requested_quantity ?? item.quantity ?? 1), 0),
+      );
       const current = sellerRefunds.get(key) || {
         sellerId: String(sellerId),
         organizationId,
         orderItemId,
         organizationSnapshot: this.parseJson(matchedItem.organization_snapshot, {}),
         amount: 0,
+        orderedQuantity,
+        returnedQuantity: 0,
       };
       current.amount = this.round(current.amount + amount);
+      current.returnedQuantity = this.round(Math.min(current.orderedQuantity, current.returnedQuantity + returnedQuantity));
       sellerRefunds.set(key, current);
     });
 
@@ -2828,7 +2871,7 @@ gstTcsAmount,
     const adjustments = [];
     await knex.transaction(async (trx) => {
       for (const refund of sellerRefunds.values()) {
-        const { sellerId, organizationId, organizationSnapshot, orderItemId, amount } = refund;
+        const { sellerId, organizationId, organizationSnapshot, orderItemId, amount, orderedQuantity, returnedQuantity } = refund;
         const commissionQuery = trx("seller_commissions")
           .where({ seller_id: sellerId, order_id: orderId });
         if (orderItemId) commissionQuery.where("order_item_id", orderItemId);
@@ -2845,25 +2888,25 @@ gstTcsAmount,
 
         const metadata = this.parseJson(commission.metadata, {});
         const appliedRefunds = metadata.appliedRefunds || {};
-        const remainingSellerPayable = this.round(Math.max(Number(commission.net_amount || 0), 0));
+        const appliedSellerRefunds = metadata.appliedSellerRefunds || {};
+        const originalUnpaidPayable = this.round(
+          Math.max(Number(commission.net_amount || 0) + Number(commission.refund_amount || 0), 0),
+        );
+        const reversalRatio = fullCancellation
+          ? 1
+          : Math.min(Math.max(Number(returnedQuantity || 0) / Math.max(Number(orderedQuantity || 1), 1), 0), 1);
         const retainedShippingAmount = fullCancellation
           ? 0
-          : this.resolveRetainedShippingOnReturn(returnRequest, metadata);
-        const sellerRecoveryRequest = this.resolveSellerRecoveryRequest({
-          fullCancellation,
-          customerRefundAmount: amount,
-          remainingSellerPayable,
-          retainedShippingAmount,
-        });
+          : this.round(this.resolveRetainedShippingOnReturn(returnRequest, metadata) * reversalRatio);
+        const sellerRecoveryRequest = this.round(Math.max((originalUnpaidPayable * reversalRatio) - retainedShippingAmount, 0));
         if (appliedRefunds[returnId]) {
           const recordedCustomerRefund = this.round(appliedRefunds[returnId] || amount);
-          const originalUnpaidPayable = this.round(
-            Math.max(Number(commission.net_amount || 0) + Number(commission.refund_amount || 0), 0),
-          );
-          const correctedLiability = this.round(Math.min(recordedCustomerRefund, originalUnpaidPayable));
+          const recordedSellerRefund = this.round(appliedSellerRefunds[returnId] || sellerRecoveryRequest);
+          const correctedLiability = this.round(Math.min(recordedSellerRefund, originalUnpaidPayable));
           const requiresRepair = Number(commission.net_amount || 0) < 0 ||
-            Number(commission.refund_amount || 0) > originalUnpaidPayable ||
-            (correctedLiability >= originalUnpaidPayable && commission.status !== "refunded");
+            Number(commission.refund_amount || 0) > correctedLiability ||
+            (correctedLiability >= originalUnpaidPayable && commission.status !== "refunded") ||
+            (correctedLiability < originalUnpaidPayable && commission.status === "refunded");
           if (requiresRepair && commission.status !== "paid") {
             await trx("seller_commissions").where("id", commission.id).update({
               refund_amount: correctedLiability,
@@ -2876,6 +2919,11 @@ gstTcsAmount,
                   returnId,
                   customerRefundAmount: recordedCustomerRefund,
                   sellerRefundLiability: correctedLiability,
+                  originalSellerPayable: originalUnpaidPayable,
+                  orderedQuantity,
+                  returnedQuantity,
+                  reversalRatio,
+                  retainedShippingAmount,
                   reconciledLegacyOverDeduction: true,
                   actorId: actor.userId || actor.sub || null,
                   at: new Date().toISOString(),
@@ -2883,7 +2931,7 @@ gstTcsAmount,
               }),
               updated_at: knex.fn.now(),
             });
-            if (orderItemId && correctedLiability >= originalUnpaidPayable) {
+            if (orderItemId && correctedLiability >= originalUnpaidPayable && reversalRatio >= 1) {
               await trx("order_items").where("id", orderItemId).update({
                 payout_status: "refunded",
                 payout_hold_reason: null,
@@ -2930,6 +2978,11 @@ gstTcsAmount,
                 commissionId: commission.id,
                 customerRefundAmount: amount,
                 sellerRefundLiability: sellerRecoveryRequest,
+                originalSellerPayable: originalUnpaidPayable,
+                orderedQuantity,
+                returnedQuantity,
+                reversalRatio,
+                retainedShippingAmount,
                 fullCancellation,
                 actorId: actor.userId || actor.sub || null,
               }),
@@ -2972,10 +3025,19 @@ gstTcsAmount,
                 ...appliedRefunds,
                 [returnId]: amount,
               },
+              appliedSellerRefunds: {
+                ...appliedSellerRefunds,
+                [returnId]: sellerRefundLiability,
+              },
               lastRefundAdjustment: {
                 returnId,
                 customerRefundAmount: amount,
                 sellerRefundLiability,
+                originalSellerPayable: originalUnpaidPayable,
+                orderedQuantity,
+                returnedQuantity,
+                reversalRatio,
+                retainedShippingAmount,
                 fullCancellation,
                 actorId: actor.userId || actor.sub || null,
                 at: new Date().toISOString(),

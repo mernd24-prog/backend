@@ -1226,6 +1226,7 @@ class TaxService {
           taxAmount,
           totalAmount,
           taxPayableAmount: taxAmount,
+          platformFeeTaxRate: Number(pricingSummary.platformFeeTaxRate || 0),
           customerPlatformFeeSacCode: PLATFORM_CUSTOMER_FEE_SAC_CODE,
         },
         lineItems: [{

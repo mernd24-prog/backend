@@ -935,6 +935,10 @@ class OrderRepository {
     const sellerPlatformFeeAmount = this.money(metadata.pricingSummary?.sellerPlatformFeeAmount ?? platformFeeAmount);
     const customerPlatformFeeAmount = this.money(metadata.pricingSummary?.customerPlatformFeeAmount);
     const customerPlatformFeeTaxAmount = this.money(metadata.pricingSummary?.customerPlatformFeeTaxAmount);
+    const refundPolicySnapshot =
+      metadata.commerceSettings?.returns?.refundPolicy ||
+      metadata.settings?.returns?.refundPolicy ||
+      null;
 
     return {
       itemAmount: Number(itemAmount.toFixed(2)),
@@ -955,6 +959,7 @@ class OrderRepository {
       customerPayableAmount: this.money(order.payable_amount),
       sellerPayoutAmount: Number(sellerPayoutAmount.toFixed(2)),
       platformFeeChargedToCustomer: customerPlatformFeeAmount > 0,
+      refundPolicySnapshot,
     };
   }
 
@@ -979,16 +984,22 @@ class OrderRepository {
         metadataRows.reduce((total, metadata) => total + this.money(metadata[field]), 0),
       );
       const refundRatio = (commission, metadata) => {
-        if (commission.status === "refunded") return 1;
-        const appliedRefundTotal = Object.values(metadata.appliedRefunds || {}).reduce(
+        const explicitRatio = this.money(
+          metadata.lastRefundAdjustment?.reversalRatio ??
+          metadata.refundReversalRatio ??
+          metadata.reversalRatio ??
+          0,
+        );
+        if (explicitRatio > 0) return Math.min(explicitRatio, 1);
+        const appliedSellerRefundTotal = Object.values(metadata.appliedSellerRefunds || {}).reduce(
           (total, amount) => total + this.money(amount),
           0,
         );
-        const originalAmount = this.money(commission.amount);
-        if (appliedRefundTotal > 0 && originalAmount > 0) {
-          return Math.min(appliedRefundTotal / originalAmount, 1);
-        }
         const originalPayable = this.money(commission.net_amount) + this.money(commission.refund_amount);
+        if (appliedSellerRefundTotal > 0 && originalPayable > 0) {
+          return Math.min(appliedSellerRefundTotal / originalPayable, 1);
+        }
+        if (commission.status === "refunded") return 1;
         return originalPayable > 0
           ? Math.min(this.money(commission.refund_amount) / originalPayable, 1)
           : 0;
@@ -1204,6 +1215,7 @@ class OrderRepository {
 
       platformFeeAmount: 0,
       platformFeeTaxAmount: 0,
+      platformFeeTaxRate: 0,
 
       sellerPayoutBaseAmount: 0,
       productTaxLiabilityAmount: 0,
@@ -1481,6 +1493,10 @@ class OrderRepository {
         current.platformFeeTaxAmount,
       ) +
       platformFeeTaxAmount;
+    current.platformFeeTaxRate = Math.max(
+      Number(current.platformFeeTaxRate || 0),
+      Number(platformFeeTaxRate || 0),
+    );
 
     current.sellerPayoutBaseAmount =
       this.money(
@@ -1883,6 +1899,9 @@ class OrderRepository {
           finalPlatformFeeTaxAmount.toFixed(
             2,
           ),
+        ),
+        platformFeeTaxRate: Number(
+          seller.platformFeeTaxRate || 0,
         ),
 
         productTaxLiabilityAmount:

@@ -19,6 +19,7 @@ const { logger } = require("../../../shared/logger/logger");
 const { ReferralService } = require("../../referral/services/referral.service");
 const { ROLES } = require("../../../shared/constants/roles");
 const { UserModel } = require("../../user/models/user.model");
+const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
 
 class OrderService {
   constructor({
@@ -651,8 +652,9 @@ class OrderService {
       return order;
     }
 
+    const activeCommerceSettings = isOwner ? await commerceSettingsService.getSettings().catch(() => null) : null;
     const scopedOrder = isOwner
-      ? this.filterOrderForBuyer(order)
+      ? this.filterOrderForBuyer(order, activeCommerceSettings?.returns?.refundPolicy || null)
       : !isOwner && isSeller
         ? this.filterOrderForSeller(order, sellerId, actor.organizationId)
         : order;
@@ -670,7 +672,7 @@ class OrderService {
     return { ...scopedOrder, notes: visibleNotes };
   }
 
-  filterOrderForBuyer(order = {}) {
+  filterOrderForBuyer(order = {}, fallbackRefundPolicy = null) {
     const relations = order.relations || {};
     const sanitizeTrackingEvent = (event = {}) => {
       const { raw_payload, rawPayload, actor_id, actorId, ...visible } = event;
@@ -719,10 +721,21 @@ class OrderService {
         },
       };
     });
-    const { metadata, platform_fee_breakup, ...visibleOrder } = order;
+    const orderMetadata = this.normalizeJson(order.metadata, {});
+    const refundPolicySnapshot =
+      orderMetadata.commerceSettings?.returns?.refundPolicy ||
+      orderMetadata.settings?.returns?.refundPolicy ||
+      order.summary?.refundPolicySnapshot ||
+      fallbackRefundPolicy ||
+      null;
+    const { metadata: hiddenMetadata, platform_fee_breakup, ...visibleOrder } = order;
 
     return {
       ...visibleOrder,
+      summary: {
+        ...(visibleOrder.summary || {}),
+        ...(refundPolicySnapshot ? { refundPolicySnapshot } : {}),
+      },
       items,
       relations: {
         buyer: relations.buyer || null,
