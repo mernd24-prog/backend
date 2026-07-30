@@ -52,6 +52,191 @@ class DocumentRendererService {
     return `${currency} ${amount}`;
   }
 
+  roundMoney(value) {
+    const num = Number(value ?? 0);
+    if (!Number.isFinite(num)) return 0;
+    return Math.round((num + Number.EPSILON) * 100) / 100;
+  }
+
+  clampMoney(value, min = 0, max = Number.POSITIVE_INFINITY) {
+    const num = this.roundMoney(value);
+    const lower = Number.isFinite(Number(min)) ? Number(min) : 0;
+    const upper = Number.isFinite(Number(max)) ? Number(max) : Number.POSITIVE_INFINITY;
+    return this.roundMoney(Math.min(Math.max(num, lower), upper));
+  }
+
+  pickMoney(...values) {
+    for (const value of values) {
+      if (value !== undefined && value !== null && value !== "") return this.roundMoney(value);
+    }
+    return 0;
+  }
+
+  getCreditNoteContext(data = {}) {
+    const creditNote = data.creditNote || data.credit_note || {};
+    const parentInvoice = data.parentInvoice || data.parent_invoice || {};
+    const reversalContext = data.reversalContext || data.reversal_context || {};
+    return {
+      creditNote,
+      parentInvoice,
+      reversalContext: {
+        overallWeight: reversalContext.overallWeight ?? reversalContext.overall_weight ?? null,
+        originalTotals: reversalContext.originalTotals || reversalContext.original_totals || {},
+        alreadyReversedTotals: reversalContext.alreadyReversedTotals || reversalContext.already_reversed_totals || {},
+        componentPolicies: reversalContext.componentPolicies || reversalContext.component_policies || {},
+      },
+    };
+  }
+
+  normalizeCreditNoteItems(data = {}) {
+    const items = Array.isArray(data.items) ? data.items : [];
+    return items
+      .map((item) => {
+        const originalQuantity = Number(item.originalQuantity ?? item.original_quantity ?? item.invoiceQuantity ?? item.invoice_quantity ?? item.quantity ?? 0) || 0;
+        const alreadyReversedQuantity = Number(item.alreadyReversedQuantity ?? item.already_reversed_quantity ?? 0) || 0;
+        const requestedQuantity = Number(item.quantity ?? item.reversedQuantity ?? item.reversed_quantity ?? 0) || 0;
+        const quantity = originalQuantity > 0
+          ? this.clampMoney(requestedQuantity, 0, Math.max(0, originalQuantity - alreadyReversedQuantity))
+          : this.roundMoney(requestedQuantity);
+        const explicitWeight = item.reversalWeight ?? item.reversal_weight;
+        const reversalWeight = explicitWeight !== undefined && explicitWeight !== null
+          ? Number(explicitWeight)
+          : originalQuantity > 0
+            ? quantity / originalQuantity
+            : 1;
+        const originalLineTotal = this.pickMoney(item.originalLineTotal, item.original_line_total, item.invoiceLineTotal, item.invoice_line_total, item.totalAmount, item.total_amount);
+        const alreadyReversedTotalAmount = this.pickMoney(item.alreadyReversedTotalAmount, item.already_reversed_total_amount);
+        const maxLineTotal = originalLineTotal > 0
+          ? Math.max(0, originalLineTotal - alreadyReversedTotalAmount)
+          : Number.POSITIVE_INFINITY;
+        const fallbackTotal = originalLineTotal > 0
+          ? this.roundMoney(originalLineTotal * Math.max(0, Math.min(1, reversalWeight)))
+          : this.pickMoney(item.totalAmount, item.total_amount);
+        const totalAmount = this.clampMoney(
+          this.pickMoney(item.totalAmount, item.total_amount, fallbackTotal),
+          0,
+          maxLineTotal,
+        );
+        const explicitTaxable = item.taxableAmount ?? item.taxable_amount;
+        const explicitTax = item.taxAmount ?? item.tax_amount;
+        const taxAmount = explicitTax !== undefined && explicitTax !== null
+          ? this.pickMoney(explicitTax)
+          : this.pickMoney(item.cgstAmount, item.cgst_amount) +
+            this.pickMoney(item.sgstAmount, item.sgst_amount) +
+            this.pickMoney(item.igstAmount, item.igst_amount);
+        const taxableAmount = explicitTaxable !== undefined && explicitTaxable !== null
+          ? this.pickMoney(explicitTaxable)
+          : this.roundMoney(Math.max(0, totalAmount - taxAmount));
+
+        return {
+          ...item,
+          orderItemId: item.orderItemId || item.order_item_id || null,
+          productTitle: item.productTitle || item.product_title || item.description || "Reversed item",
+          productSku: item.productSku || item.product_sku || item.variantSku || item.variant_sku || item.sku || "",
+          hsnCode: item.hsnCode || item.hsn_code || item.sacCode || item.sac_code || "-",
+          originalQuantity,
+          quantity,
+          reversalWeight: Number.isFinite(reversalWeight) ? reversalWeight : 0,
+          taxableAmount,
+          taxAmount: this.roundMoney(taxAmount),
+          cgstAmount: this.pickMoney(item.cgstAmount, item.cgst_amount),
+          sgstAmount: this.pickMoney(item.sgstAmount, item.sgst_amount),
+          igstAmount: this.pickMoney(item.igstAmount, item.igst_amount),
+          totalAmount,
+          originalLineTotal,
+          alreadyReversedQuantity,
+          alreadyReversedTotalAmount,
+        };
+      })
+      .filter((item) => Number(item.quantity || 0) > 0 || Number(item.totalAmount || 0) > 0);
+  }
+
+  getCreditNoteAmounts(data = {}, normalizedItems = []) {
+    const { creditNote, reversalContext } = this.getCreditNoteContext(data);
+    const input = data.amounts || data.refundBreakup || data.refund_breakup || {};
+    const original = reversalContext.originalTotals || {};
+    const already = reversalContext.alreadyReversedTotals || {};
+    const policies = reversalContext.componentPolicies || {};
+    const itemTaxable = this.roundMoney(normalizedItems.reduce((sum, item) => sum + Number(item.taxableAmount || 0), 0));
+    const itemTax = this.roundMoney(normalizedItems.reduce((sum, item) => sum + Number(item.taxAmount || 0), 0));
+    const itemCgst = this.roundMoney(normalizedItems.reduce((sum, item) => sum + Number(item.cgstAmount || 0), 0));
+    const itemSgst = this.roundMoney(normalizedItems.reduce((sum, item) => sum + Number(item.sgstAmount || 0), 0));
+    const itemIgst = this.roundMoney(normalizedItems.reduce((sum, item) => sum + Number(item.igstAmount || 0), 0));
+    const itemTotal = this.roundMoney(normalizedItems.reduce((sum, item) => sum + Number(item.totalAmount || 0), 0));
+    const originalEligibleGross = this.pickMoney(original.invoiceValue, original.grossSalesAmount, original.totalAmount, itemTotal);
+    const explicitWeight = reversalContext.overallWeight ?? reversalContext.overall_weight;
+    const overallWeight = explicitWeight !== undefined && explicitWeight !== null
+      ? Number(explicitWeight)
+      : originalEligibleGross > 0
+        ? itemTotal / originalEligibleGross
+        : 0;
+    const originalInvoiceValue = this.pickMoney(original.invoiceValue, original.totalAmount, original.grossSalesAmount);
+    const alreadyInvoiceValue = this.pickMoney(already.invoiceValue, already.totalAmount, already.grossSalesAmount);
+    const closesRemainingInvoice =
+      String(creditNote.reversalMode || creditNote.reversal_mode || "").toLowerCase() === "full" ||
+      (originalInvoiceValue > 0 && this.roundMoney(originalInvoiceValue - alreadyInvoiceValue - itemTotal) <= 0.01);
+    const reverseComponent = (key, policy = "prorate", explicitValue) => {
+      if (explicitValue !== undefined && explicitValue !== null) return this.pickMoney(explicitValue);
+      if (policy === "none" || policy === "separate_invoice") return 0;
+      const originalAmount = this.pickMoney(original[key], original[`${key}Amount`]);
+      const alreadyAmount = this.pickMoney(already[key], already[`${key}Amount`]);
+      const remaining = Math.max(0, originalAmount - alreadyAmount);
+      if (policy === "full" || closesRemainingInvoice) return this.roundMoney(remaining);
+      return this.clampMoney(originalAmount * Math.max(0, Math.min(1, overallWeight || 0)), 0, remaining);
+    };
+    const taxableAmount = this.pickMoney(input.taxableAmount, input.taxable_amount, itemTaxable);
+    const taxAmount = this.pickMoney(input.taxAmount, input.tax_amount, itemTax);
+    const totalAmount = this.pickMoney(input.totalAmount, input.total_amount, input.productInvoiceValueReversed, itemTotal || taxableAmount + taxAmount);
+    const promotion = reverseComponent(
+      "customerPromotionAmount",
+      policies.promotion || "prorate",
+      input.customerPromotionReversalAmount ?? input.customer_promotion_reversal_amount ?? input.promotionReversalAmount,
+    );
+    const shipping = reverseComponent(
+      "shippingAmount",
+      policies.shipping || "prorate",
+      input.shippingReversalAmount ?? input.shipping_reversal_amount,
+    );
+    const platformFee = reverseComponent(
+      "customerPlatformFeeAmount",
+      policies.customerPlatformFee || policies.customer_platform_fee || "separate_invoice",
+      input.customerPlatformFeeReversalAmount ?? input.customer_platform_fee_reversal_amount,
+    );
+    const customerRefund = this.pickMoney(
+      input.customerRefundAmount,
+      input.customer_refund_amount,
+      input.refundAmount,
+      input.refund_amount,
+      Math.max(0, totalAmount - promotion + shipping + platformFee),
+    );
+    return {
+      ...input,
+      taxableAmount,
+      taxAmount,
+      cgstAmount: this.pickMoney(input.cgstAmount, input.cgst_amount, itemCgst),
+      sgstAmount: this.pickMoney(input.sgstAmount, input.sgst_amount, itemSgst),
+      igstAmount: this.pickMoney(input.igstAmount, input.igst_amount, itemIgst),
+      totalAmount,
+      customerPromotionReversalAmount: promotion,
+      shippingReversalAmount: shipping,
+      customerPlatformFeeReversalAmount: platformFee,
+      customerRefundAmount: customerRefund,
+      remainingInvoiceBalance: this.pickMoney(input.remainingInvoiceBalance, input.remaining_invoice_balance, Math.max(0, this.pickMoney(original.invoiceValue, original.totalAmount) - this.pickMoney(already.invoiceValue, already.totalAmount) - totalAmount)),
+      remainingCustomerBalance: this.pickMoney(input.remainingCustomerBalance, input.remaining_customer_balance, Math.max(0, this.pickMoney(original.customerPaid) - this.pickMoney(already.customerRefundAmount) - customerRefund)),
+      overallWeight: Number.isFinite(overallWeight) ? overallWeight : 0,
+    };
+  }
+
+  formatReversalMoney(value, currency = DEFAULT_CURRENCY) {
+    return `-${this.money(Math.abs(this.roundMoney(value)), currency)}`;
+  }
+
+  formatReversalQuantity(value) {
+    const num = Number(value ?? 0);
+    if (!Number.isFinite(num)) return "-0";
+    return `-${Number.isInteger(num) ? String(num) : this.roundMoney(num).toFixed(2)}`;
+  }
+
   safeFileName(value) {
     return String(value || "document")
       .trim()
@@ -273,35 +458,49 @@ class DocumentRendererService {
 
   renderCreditNoteHtml(document = {}) {
     const d = document.data || {};
-    const cn = d.creditNote || {};
-    const parentInvoice = d.parentInvoice || {};
+    const { creditNote: cn, parentInvoice } = this.getCreditNoteContext(d);
     const seller = d.seller || {};
     const buyer = d.buyer || {};
-    const amounts = d.amounts || {};
-    const items = d.items || [];
+    const items = this.normalizeCreditNoteItems(d);
+    const amounts = this.getCreditNoteAmounts(d, items);
     const currency = cn.currency || DEFAULT_CURRENCY;
     const isIgst = parentInvoice.taxMode === "igst";
+    const isCommission = cn.scope === "platform_commission_invoice";
+    const isCustomerFee = cn.scope === "platform_customer_fee_invoice";
+    const isSellerCustomer = !isCommission && !isCustomerFee;
 
-    const issuerName = "Marketplace Platform";
-    const issuerGstin = parentInvoice.gstinMarketplace || cn.gstinMarketplace || null;
-    const recipientName = cn.scope === "platform_commission_invoice"
+    const issuerName = isSellerCustomer
+      ? (seller.legalBusinessName || seller.displayName || seller.businessName || "Seller")
+      : (process.env.INVOICE_BRAND_NAME || d.marketplace?.name || "Sam Global");
+    const issuerGstin = isSellerCustomer
+      ? (parentInvoice.gstinSeller || cn.gstinSeller || seller.gstNumber || null)
+      : (parentInvoice.gstinMarketplace || cn.gstinMarketplace || d.marketplace?.gstin || process.env.GSTIN_MARKETPLACE || process.env.PLATFORM_GSTIN || null);
+    const issuerAddress = isSellerCustomer
+      ? this.formatAddressLines(seller.billingAddress || seller.businessAddress)
+      : [process.env.INVOICE_REGISTERED_OFFICE || d.marketplace?.registeredOffice || d.marketplace?.address].filter(Boolean);
+    const recipientName = isCommission
       ? (seller.legalBusinessName || seller.displayName || "Seller")
       : this.getBuyerName(buyer);
-    const recipientEmail = cn.scope === "platform_commission_invoice" ? seller.email : buyer.email;
+    const recipientEmail = isCommission ? seller.email : buyer.email;
+    const recipientAddress = isCommission
+      ? this.formatAddressLines(seller.billingAddress || seller.businessAddress)
+      : this.formatAddressLines(buyer.billingAddress || d.shippingAddress || buyer.shippingAddress);
 
     const cnDate = this.formatDate(cn.issuedAt);
     const orderRef = cn.orderNumber || (cn.orderId ? `#${String(cn.orderId).slice(-8).toUpperCase()}` : "—");
+    const reference = cn.referenceNumber || cn.reference_number || cn.rmaNumber || cn.cancellationNumber || "—";
+    const title = isCommission ? "COMMISSION CREDIT NOTE" : "CREDIT NOTE / REVERSE INVOICE";
 
     const itemRowsHtml = items.length
       ? items.map((item, i) => this.renderCreditNoteItemRow(item, i + 1, currency)).join("")
-      : `<tr><td colspan="5" class="empty-row">No reversed items on record</td></tr>`;
+      : `<tr><td colspan="8" class="empty-row">No reversed items on record</td></tr>`;
 
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Credit Note — ${this.escapeHtml(cn.number || "")}</title>
+  <title>${this.escapeHtml(title)} — ${this.escapeHtml(cn.number || "")}</title>
   ${this.invoiceStyles("credit")}
 </head>
 <body>
@@ -314,7 +513,7 @@ class DocumentRendererService {
       ${issuerGstin ? `<div class="hdr-sub">GSTIN: ${this.escapeHtml(issuerGstin)}</div>` : ""}
     </div>
     <div class="hdr-right">
-      <div class="hdr-doctype">Credit Note</div>
+      <div class="hdr-doctype">${this.escapeHtml(title)}</div>
       <div class="hdr-invnum">${this.escapeHtml(cn.number || "")}</div>
       <div class="hdr-date">${cnDate}</div>
     </div>
@@ -327,13 +526,16 @@ class DocumentRendererService {
     ${this.metaCell("Date", cnDate)}
     ${this.metaCell("Against Invoice", cn.invoiceNumber || "—")}
     ${this.metaCell("Order Ref.", orderRef)}
+    ${this.metaCell("Return / Cancel Ref.", reference)}
+    ${this.metaCell("Source", cn.sourceType || cn.source_type || "—")}
+    ${this.metaCell("Mode", cn.reversalMode || cn.reversal_mode || "—")}
     ${this.metaCell("Reason", (cn.reason || "—").replace(/_/g, " "))}
   </div>
 
   <!-- Parties -->
   <div class="parties">
-    ${this.renderPartyBlock("Issued By", issuerName, [], issuerGstin, null)}
-    ${this.renderPartyBlock("Credit To", recipientName, [], null, recipientEmail || null)}
+    ${this.renderPartyBlock("Issued By", issuerName, issuerAddress, issuerGstin, null)}
+    ${this.renderPartyBlock("Credit To", recipientName, recipientAddress, isCommission ? (parentInvoice.gstinSeller || seller.gstNumber || null) : (buyer.gstin || buyer.gstNumber || null), recipientEmail || null)}
   </div>
 
   <!-- Reversed items -->
@@ -343,10 +545,12 @@ class DocumentRendererService {
       <tr>
         <th class="l" style="width:4%">#</th>
         <th class="l">Description</th>
+        <th class="c" style="width:9%">HSN/SAC</th>
         <th class="c" style="width:7%">Qty</th>
-        <th style="width:13%">Taxable</th>
-        <th style="width:13%">Tax</th>
-        <th style="width:13%">Reversal</th>
+        <th style="width:9%">Weight</th>
+        <th style="width:13%">Taxable Reversed</th>
+        <th style="width:13%">GST Reversed</th>
+        <th style="width:13%">Invoice Value Reversed</th>
       </tr>
     </thead>
     <tbody>${itemRowsHtml}</tbody>
@@ -356,10 +560,10 @@ class DocumentRendererService {
   <div class="footer-grid">
     <div class="gst-col">
       <div class="col-title">Tax Reversed</div>
-      ${this.renderTaxTable(
-      Number(amounts.cgstAmount || 0),
-      Number(amounts.sgstAmount || 0),
-      Number(amounts.igstAmount || 0),
+      ${this.renderCreditNoteTaxTable(
+      Number(amounts.cgstAmount ?? 0),
+      Number(amounts.sgstAmount ?? 0),
+      Number(amounts.igstAmount ?? 0),
       0,
       isIgst,
       currency,
@@ -372,7 +576,7 @@ class DocumentRendererService {
   </div>
 
   <div class="declaration">
-    This credit note reverses the tax liability on the referenced invoice.
+    This credit note reverses only the referenced invoice value, tax and eligible customer credits shown above.
     ${issuerGstin ? `&nbsp;·&nbsp; GSTIN: ${this.escapeHtml(issuerGstin)}` : ""}
     &nbsp;·&nbsp; Generated: ${new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
   </div>
@@ -811,14 +1015,22 @@ class DocumentRendererService {
 
   renderCreditNoteItemRow(item, index, currency) {
     const title = item.productTitle || item.product_title || item.description || "—";
-    const qty = item.quantity ?? "—";
-    const taxable = this.money(item.taxableAmount ?? item.taxable_amount, currency);
-    const tax = this.money(item.taxAmount ?? item.tax_amount, currency);
-    const total = this.money(item.totalAmount ?? item.total_amount, currency);
+    const sku = item.productSku || item.product_sku || item.variantSku || item.variant_sku || item.sku || "";
+    const hsn = item.hsnCode || item.hsn_code || item.sacCode || item.sac_code || "-";
+    const qty = this.formatReversalQuantity(item.quantity ?? item.reversedQuantity ?? item.reversed_quantity ?? 0);
+    const weight = Number(item.reversalWeight ?? item.reversal_weight ?? 0);
+    const taxable = this.formatReversalMoney(item.taxableAmount ?? item.taxable_amount, currency);
+    const tax = this.formatReversalMoney(item.taxAmount ?? item.tax_amount, currency);
+    const total = this.formatReversalMoney(item.totalAmount ?? item.total_amount, currency);
     return `<tr>
       <td class="l c" style="color:#8b90a7">${index}</td>
-      <td class="l"><div class="item-title">${this.escapeHtml(title)}</div></td>
+      <td class="l">
+        <div class="item-title">${this.escapeHtml(title)}</div>
+        ${sku ? `<div class="item-sub">SKU: ${this.escapeHtml(sku)}</div>` : ""}
+      </td>
+      <td class="c">${this.escapeHtml(hsn)}</td>
       <td class="c">${this.escapeHtml(String(qty))}</td>
+      <td>${this.escapeHtml(Number.isFinite(weight) ? `${(weight * 100).toFixed(2)}%` : "—")}</td>
       <td>${this.escapeHtml(taxable)}</td>
       <td>${this.escapeHtml(tax)}</td>
       <td class="item-total">${this.escapeHtml(total)}</td>
@@ -852,6 +1064,38 @@ class DocumentRendererService {
         <tr class="tax-total">
           <td class="l">Total Tax</td>
           <td>${this.escapeHtml(this.money(total, currency))}</td>
+        </tr>
+      </tbody>
+    </table>`;
+  }
+
+  renderCreditNoteTaxTable(cgst, sgst, igst, tcs, isIgst, currency) {
+    const rows = [];
+    if (!isIgst && cgst > 0) rows.push({ component: "CGST reversed", amount: cgst });
+    if (!isIgst && sgst > 0) rows.push({ component: "SGST reversed", amount: sgst });
+    if (igst > 0) rows.push({ component: "IGST reversed", amount: igst });
+    if (tcs > 0) rows.push({ component: "GST TCS reversed", amount: tcs });
+
+    if (!rows.length) {
+      return `<p style="color:#b0b4c9;font-style:italic;font-size:11px;padding:8px 0">No tax reversed</p>`;
+    }
+
+    const total = rows.reduce((sum, r) => sum + r.amount, 0);
+    return `<table class="tax-tbl">
+      <thead>
+        <tr>
+          <th class="l">Component</th>
+          <th>Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map((r) => `<tr>
+          <td class="l">${this.escapeHtml(r.component)}</td>
+          <td>${this.escapeHtml(this.formatReversalMoney(r.amount, currency))}</td>
+        </tr>`).join("")}
+        <tr class="tax-total">
+          <td class="l">Total Tax Reversed</td>
+          <td>${this.escapeHtml(this.formatReversalMoney(total, currency))}</td>
         </tr>
       </tbody>
     </table>`;
@@ -924,23 +1168,38 @@ class DocumentRendererService {
   }
 
   buildCreditNoteAmountRows(amounts = {}, currency) {
-    const a = (v) => Number(v || 0);
     const rows = [];
-    const addRow = (label, value) => {
+    const addRow = (label, value, { reversal = true, force = false, note = "" } = {}) => {
+      if (!force && Number(value ?? 0) === 0) return;
       rows.push(`<div class="amt-row">
         <span class="amt-lbl">${this.escapeHtml(label)}</span>
-        <span class="amt-val">${this.escapeHtml(this.money(value, currency))}</span>
+        <span class="amt-val">${this.escapeHtml(reversal ? this.formatReversalMoney(value, currency) : this.money(value, currency))}</span>
       </div>`);
+      if (note) {
+        rows.push(`<div class="amt-row note">
+          <span class="amt-lbl">${this.escapeHtml(note)}</span>
+          <span class="amt-val"></span>
+        </div>`);
+      }
     };
-    if (a(amounts.taxableAmount) > 0) addRow("Taxable Amount", amounts.taxableAmount);
-    if (a(amounts.cgstAmount) > 0) addRow("CGST Reversed", amounts.cgstAmount);
-    if (a(amounts.sgstAmount) > 0) addRow("SGST Reversed", amounts.sgstAmount);
-    if (a(amounts.igstAmount) > 0) addRow("IGST Reversed", amounts.igstAmount);
-    if (a(amounts.taxAmount) > 0) addRow("Total Tax Reversed", amounts.taxAmount);
+    addRow("Product taxable value reversed", amounts.taxableAmount);
+    addRow("CGST reversed", amounts.cgstAmount);
+    addRow("SGST reversed", amounts.sgstAmount);
+    addRow("IGST reversed", amounts.igstAmount);
+    addRow("Total GST reversed", amounts.taxAmount);
+    addRow("Product invoice value reversed", amounts.totalAmount, { force: true });
+    addRow("Customer promotion reversed", amounts.customerPromotionReversalAmount, { force: true });
+    addRow("Shipping reversed", amounts.shippingReversalAmount, { force: true });
+    addRow("Refundable platform fee reversed", amounts.customerPlatformFeeReversalAmount, {
+      force: true,
+      note: "Shown only when this credit note belongs to the platform-fee invoice or policy allows refund here.",
+    });
     rows.push(`<div class="amt-row grand">
-      <span class="amt-lbl">Total Credit</span>
-      <span class="amt-val">${this.escapeHtml(this.money(a(amounts.totalAmount), currency))}</span>
+      <span class="amt-lbl">Customer refund / total credit</span>
+      <span class="amt-val">${this.escapeHtml(this.formatReversalMoney(amounts.customerRefundAmount, currency))}</span>
     </div>`);
+    addRow("Remaining invoice balance", amounts.remainingInvoiceBalance, { reversal: false, force: true });
+    addRow("Remaining customer-paid balance", amounts.remainingCustomerBalance, { reversal: false, force: true });
     return rows;
   }
 
@@ -1236,15 +1495,17 @@ class DocumentRendererService {
 
   renderCreditNotePdf(document = {}) {
     const data = document.data || {};
-    const creditNote = data.creditNote || {};
-    const parentInvoice = data.parentInvoice || {};
+    const { creditNote, parentInvoice } = this.getCreditNoteContext(data);
+    const items = this.normalizeCreditNoteItems(data);
+    const amounts = this.getCreditNoteAmounts(data, items);
     const isCommission = creditNote.scope === "platform_commission_invoice";
+    const isCustomerFee = creditNote.scope === "platform_customer_fee_invoice";
     return this.renderInvoicePdf({
       layout: "invoice",
       data: {
         invoice: {
           number: creditNote.number,
-          type: isCommission ? "platform_commission" : "seller_customer",
+          type: isCommission ? "platform_commission" : isCustomerFee ? "platform_customer_fee" : "seller_customer",
           issuedAt: creditNote.issuedAt,
           orderId: creditNote.orderId,
           orderNumber: creditNote.orderNumber,
@@ -1253,15 +1514,20 @@ class DocumentRendererService {
           taxMode: parentInvoice.taxMode,
           gstinMarketplace: parentInvoice.gstinMarketplace,
           gstinSeller: parentInvoice.gstinSeller,
-          displayTitle: isCommission ? "COMMISSION CREDIT NOTE" : "CREDIT NOTE",
+          displayTitle: isCommission ? "COMMISSION CREDIT NOTE" : "CREDIT NOTE / REVERSE INVOICE",
           parentInvoiceNumber: creditNote.invoiceNumber,
+          referenceNumber: creditNote.referenceNumber || creditNote.reference_number || creditNote.rmaNumber || creditNote.cancellationNumber || null,
+          reason: creditNote.reason || null,
+          sourceType: creditNote.sourceType || creditNote.source_type || null,
+          reversalMode: creditNote.reversalMode || creditNote.reversal_mode || null,
           isCreditNote: true,
         },
         seller: data.seller || {},
         buyer: data.buyer || {},
         shippingAddress: data.shippingAddress || {},
-        amounts: data.amounts || {},
-        items: data.items || [],
+        marketplace: data.marketplace || {},
+        amounts,
+        items,
       },
     });
   }
@@ -1279,6 +1545,7 @@ class DocumentRendererService {
     const isOrderReceipt = inv.type === "order_customer";
     const isCustomerFee = inv.type === "platform_customer_fee";
     const isSellerCustomer = inv.type === "seller_customer";
+    const isCreditNote = inv.isCreditNote === true || document.layout === "credit_note";
     const sellerName = seller.legalBusinessName || seller.displayName || seller.businessName || "Seller";
     const buyerName = this.getBuyerName(buyer);
     const sellerAddress = this.formatAddressLines(seller.billingAddress || seller.businessAddress);
@@ -1363,9 +1630,35 @@ class DocumentRendererService {
         commands.push(`${r} ${g} ${b} rg`, `${x} ${y} ${width} ${height} re f`);
       };
       const money = (value) => `${currency} ${Number(value || 0).toFixed(2)}`;
+      const reversalMoney = (value) => `-${money(Math.abs(Number(value || 0)))}`;
+      const reversalQty = (value) => {
+        const num = Number(value ?? 0);
+        if (!Number.isFinite(num)) return "-0";
+        return `-${Number.isInteger(num) ? String(num) : Number(num).toFixed(2)}`;
+      };
       const compact = (value, limit = 44) => {
         const normalized = String(value || "-").replace(/\s+/g, " ").trim();
         return normalized.length > limit ? `${normalized.slice(0, limit - 3)}...` : normalized;
+      };
+      const textLines = (value, x, y, size = 8, bold = false, limit = 44, maxLines = 2, gap = 10) => {
+        const raw = String(value || "-").replace(/\s+/g, " ").trim();
+        const words = raw.split(" ");
+        const lines = [];
+        let current = "";
+        words.forEach((word) => {
+          const next = current ? `${current} ${word}` : word;
+          if (next.length > limit && current) {
+            lines.push(current);
+            current = word;
+          } else {
+            current = next;
+          }
+        });
+        if (current) lines.push(current);
+        lines.slice(0, maxLines).forEach((lineText, index) => {
+          const suffix = index === maxLines - 1 && lines.length > maxLines ? "..." : "";
+          text(`${lineText}${suffix}`, x, y - index * gap, size, bold);
+        });
       };
 
       fill(0, 0, 595, 842, 1, 1, 1);
@@ -1380,22 +1673,26 @@ class DocumentRendererService {
           : isOrderReceipt
             ? "ORDER RECEIPT"
             : "TAX INVOICE");
-      text(documentTitle, 555, 806, isCommission ? 13 : 17, true, "right");
-      text("Original for Recipient", 555, 790, 8, false, "right");
+      text(documentTitle, 555, 806, isCreditNote ? 14 : isCommission ? 13 : 17, true, "right");
+      text(isCreditNote ? "Credit Note for Recipient" : "Original for Recipient", 555, 790, 8, false, "right");
       text("PLATFORM DETAILS", 40, 752, 7.5, true);
       text(platformName, 40, 737, 12, true);
       text(`Marketplace / Platform Operator`, 40, 723, 8);
-      text(compact(platformAddress || "Registered office not configured", 62), 40, 710, 8);
-      text(`Platform GSTIN: ${platformGstin || "Not configured"}`, 40, 697, 8, true);
+      textLines(platformAddress || "Registered office not configured", 40, 710, 7.5, false, 48, 2, 10);
+      text(`Platform GSTIN: ${compact(platformGstin || "Not configured", 34)}`, 40, 688, 7.5, true);
 
       text("Invoice No.", 350, 748, 8);
-      text(inv.number || "-", 555, 748, 9, true, "right");
+      text(compact(inv.number || "-", 30), 555, 748, 9, true, "right");
       text("Invoice Date", 350, 732, 8);
       text(invoiceDate, 555, 732, 9, true, "right");
-      text(inv.isCreditNote ? "Against Invoice" : "Order Reference", 350, 716, 8);
-      text(inv.isCreditNote ? inv.parentInvoiceNumber || "-" : orderReference, 555, 716, 9, true, "right");
-      text("Place of Supply", 350, 700, 8);
-      text(inv.placeOfSupply || "-", 555, 700, 9, true, "right");
+      text(isCreditNote ? "Against Invoice" : "Order Reference", 350, 716, 8);
+      text(compact(isCreditNote ? inv.parentInvoiceNumber || "-" : orderReference, 30), 555, 716, 9, true, "right");
+      text(isCreditNote ? "Return / Cancel Ref." : "Place of Supply", 350, 700, 8);
+      text(compact(isCreditNote ? inv.referenceNumber || "-" : inv.placeOfSupply || "-", 30), 555, 700, 9, true, "right");
+      if (isCreditNote) {
+        text(`Reason: ${compact(inv.reason || "-", 46)}`, 350, 684, 7.5);
+        text(`Source: ${compact(inv.sourceType || "-", 18)} · Mode: ${compact(inv.reversalMode || "-", 18)}`, 350, 672, 7.5);
+      }
       line(36, 666, 559, 666, 0.8);
 
       text(isCommission
@@ -1439,9 +1736,9 @@ class DocumentRendererService {
       text("Description", 62, 540, 8, true);
       text("HSN/SAC", 270, 540, 8, true);
       text("Qty", 326, 540, 8, true);
-      text("Taxable Value", 414, 540, 8, true, "right");
-      text("GST", 484, 540, 8, true, "right");
-      text("Invoice Value", 553, 540, 8, true, "right");
+      text(isCreditNote ? "Taxable" : "Taxable Value", 414, 540, 8, true, "right");
+      text(isCreditNote ? "GST" : "GST", 484, 540, 8, true, "right");
+      text(isCreditNote ? "Value Reversed" : "Invoice Value", 553, 540, 8, true, "right");
 
       let y = 514;
       pageRows.forEach((item, index) => {
@@ -1459,7 +1756,7 @@ class DocumentRendererService {
         const total = item.totalAmount ?? item.total_amount ??
           (Number(taxable || 0) + Number(tax || 0));
         text(String(pageIndex * invoiceRowsPerPage + index + 1), 43, y, 8);
-        text(compact(title, 34), 62, y, 8, true);
+        text(compact(title, isCreditNote ? 30 : 34), 62, y, 8, true);
         const sku = item.productSku || item.variantSku || item.product_sku || item.variant_sku;
         if (sku) text(`SKU: ${compact(sku, 30)}`, 62, y - 11, 7);
         const customerPromotion = Number(
@@ -1473,16 +1770,19 @@ class DocumentRendererService {
             : partnerFunding > 0
               ? "payment partner funded"
               : "seller funded";
-          text(`Customer promotion: -${money(customerPromotion)} (${fundingLabel})`, 140, y - 11, 7);
+          text(`Promotion: -${money(customerPromotion)} (${fundingLabel})`, 140, y - 11, 7);
         }
         if (isCommission && Number(item.commissionRate || 0) > 0) {
           text(`Commission: ${Number(item.commissionRate).toFixed(2)}%`, 160, y - 11, 7);
         }
         text(hsn, 270, y, 8);
-        text(String(qty), 330, y, 8);
-        text(money(taxable), 414, y, 8, false, "right");
-        text(money(tax), 484, y, 8, false, "right");
-        text(money(total), 553, y, 8, true, "right");
+        if (isCreditNote && item.reversalWeight !== undefined) {
+          text(`Reversal: ${(Number(item.reversalWeight || 0) * 100).toFixed(2)}%`, 160, y - 11, 7);
+        }
+        text(isCreditNote ? reversalQty(qty) : String(qty), 330, y, 8);
+        text(isCreditNote ? reversalMoney(taxable) : money(taxable), 414, y, 8, false, "right");
+        text(isCreditNote ? reversalMoney(tax) : money(tax), 484, y, 8, false, "right");
+        text(isCreditNote ? reversalMoney(total) : money(total), 553, y, 8, true, "right");
         line(36, y - 18, 559, y - 18, 0.35, 0.75);
         y -= 34;
       });
@@ -1492,7 +1792,14 @@ class DocumentRendererService {
         const add = (label, value, negative = false, force = false) => {
           if (force || Number(value || 0) !== 0) summaryRows.push([label, Number(value), negative]);
         };
-        if (isOrderReceipt || isCustomerFee) {
+        if (isCreditNote) {
+          add("Product taxable value reversed", amounts.taxableAmount, true);
+          add("Total GST reversed", amounts.taxAmount, true);
+          add("Product invoice value reversed", amounts.totalAmount, true, true);
+          add("Customer promotion reversed", amounts.customerPromotionReversalAmount, true, true);
+          add("Shipping reversed", amounts.shippingReversalAmount, true, true);
+          add("Refundable platform fee reversed", amounts.customerPlatformFeeReversalAmount, true, true);
+        } else if (isOrderReceipt || isCustomerFee) {
           add(platformFeeIsInclusive ? "Platform fee taxable value" : "Platform fee base", customerPlatformFeeAmount, false, true);
           add(platformFeeIsInclusive ? `Included GST on platform fee (${platformFeeGstRate}%)` : "GST on platform fee", customerPlatformFeeTaxAmount, false, true);
         } else {
@@ -1516,7 +1823,9 @@ class DocumentRendererService {
               ? "GST"
               : "Included GST (information only)", displayedTax);
         }
-        const productInvoiceValue = isOrderReceipt
+        const productInvoiceValue = isCreditNote
+          ? amounts.totalAmount || 0
+          : isOrderReceipt
           ? customerPlatformFeeInvoiceValue
           : amounts.finalPayableAmount || amounts.totalAmount || amounts.customerFinalAmount || inv.totalAmount || 0;
         const sellerShippingAmount = isSellerCustomer
@@ -1537,25 +1846,31 @@ class DocumentRendererService {
         });
         const totalY = summaryTop - summaryRows.length * 16 - 4;
         line(350, totalY + 12, 559, totalY + 12, 0.8);
-        const totalLabel = isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0
+        const totalLabel = isCreditNote
+          ? "Customer refund / total credit"
+          : isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0
           ? "Amount paid by customer"
           : isOrderReceipt
             ? "Total paid"
             : "Grand total";
         text(totalLabel, 355, totalY - 2, isOrderReceipt ? 9 : 10, true);
-        text(money(total), 553, totalY - 2, 11, true, "right");
-        if (isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0) {
+        text(isCreditNote ? reversalMoney(amounts.customerRefundAmount) : money(total), 553, totalY - 2, 11, true, "right");
+        if (isCreditNote) {
+          text(`Remaining invoice balance: ${money(amounts.remainingInvoiceBalance || 0)}`, 355, totalY - 16, 7.5);
+          text(`Remaining customer-paid balance: ${money(amounts.remainingCustomerBalance || 0)}`, 355, totalY - 29, 7.5);
+        }
+        if (!isCreditNote && isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0) {
           text(`Tax invoice value: ${money(invoiceValue)}`, 355, totalY - 16, 7.5);
         }
-        if (isSellerCustomer && sellerShippingAmount > 0) {
+        if (!isCreditNote && isSellerCustomer && sellerShippingAmount > 0) {
           text("Product table excludes shipping; shipping is shown in summary and settled to seller.", 355, totalY - 29, 7);
         }
-        if (platformFeeIsInclusive) {
+        if (!isCreditNote && platformFeeIsInclusive) {
           text(`Platform fee is GST-inclusive. Gross fee: ${money(rawCustomerPlatformFeeAmount)}`, 355, totalY - 16, 7.5);
         }
         const contribution = isOrderReceipt ? 0 : Number(amounts.marketplaceFundedDiscountAmount || 0);
         const partnerContribution = Number(amounts.paymentPartnerFundedDiscountAmount || 0);
-        if (contribution > 0 || partnerContribution > 0) {
+        if (!isCreditNote && (contribution > 0 || partnerContribution > 0)) {
           const allocation = [
             Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0
               ? `Customer: ${money(amounts.customerPaidTowardInvoiceAmount)}`
@@ -1565,15 +1880,19 @@ class DocumentRendererService {
           ].filter(Boolean).join(" · ");
           text(`Payment allocation: ${compact(allocation, 78)}`, 40, 188, 7.5);
         }
-        text("Amount in words: As per the grand total shown above.", 40, 174, 8);
-        text("Payment status and transaction reference are available in the order details.", 40, 159, 8);
+        text(isCreditNote ? "Amount in words: As per the customer refund / total credit shown above." : "Amount in words: As per the grand total shown above.", 40, 174, 8);
+        text(isCreditNote ? "This document reverses the referenced invoice values only; refund settlement may be processed separately." : "Payment status and transaction reference are available in the order details.", 40, 159, 8);
         line(36, 138, 559, 138, 0.8);
-        text(isCommission || isCustomerFee
+        text(isCreditNote
+          ? "Credit Note Declaration"
+          : isCommission || isCustomerFee
           ? "Service Provider Declaration"
           : isOrderReceipt
             ? "Receipt Information"
             : "Supplier Declaration", 40, 122, 8, true);
-        text(isCommission || isCustomerFee
+        text(isCreditNote
+          ? "We declare that this credit note reverses the eligible value and tax of the referenced invoice correctly."
+          : isCommission || isCustomerFee
           ? "We declare that this invoice shows the marketplace services supplied and the applicable tax correctly."
           : isOrderReceipt
             ? "This receipt is only for the platform fee charged by the marketplace to the customer. Seller product tax invoices are provided separately."
@@ -1585,7 +1904,7 @@ class DocumentRendererService {
         text("Continued on next page", 553, 100, 8, true, "right");
       }
       text(`Page ${pageIndex + 1} of ${pageItems.length}`, 553, 42, 8, false, "right");
-      text("Thank you for shopping with us.", 40, 42, 8);
+      text(isCreditNote ? "Credit note generated against the referenced invoice." : "Thank you for shopping with us.", 40, 42, 8);
       return commands.join("\n");
     });
 

@@ -717,6 +717,16 @@ class SellerChargeSettingsService {
         throw new AppError(
           `${productTitle} is not deliverable to ${parts.pincode || "the selected pincode"}: ${serviceability.reason}`,
           400,
+          {
+            productTitle,
+            pincode: parts.pincode || null,
+            sellerId: group.sellerId || null,
+            organizationId: group.organizationId || null,
+            shippingProfileId: profile.id,
+            shippingProfileName: profile.name,
+            reason: serviceability.reason || "Not in seller delivery area",
+          },
+          "PINCODE_NOT_SERVICEABLE",
         );
       }
 
@@ -865,11 +875,21 @@ class SellerChargeSettingsService {
       if (workingGroup.items.length) {
         const serviceability = this.assertDeliveryServiceable(settings, workingGroup, address);
         if (!serviceability.allowed) {
+          const productTitle = serviceability.productTitle || null;
+          const pincode = this.getPostalCode(address) || null;
           throw new AppError(
-            serviceability.productTitle
-              ? serviceability.productTitle + " is not deliverable to " + (this.getPostalCode(address) || "the selected pincode")
-              : "Seller " + group.sellerId + " is not deliverable to " + (this.getPostalCode(address) || "the selected pincode"),
+            productTitle
+              ? productTitle + " is not deliverable to " + (pincode || "the selected pincode")
+              : "Seller " + group.sellerId + " is not deliverable to " + (pincode || "the selected pincode"),
             400,
+            {
+              productTitle,
+              pincode,
+              sellerId: group.sellerId || null,
+              organizationId: group.organizationId || null,
+              reason: serviceability.reason || "Not in seller delivery area",
+            },
+            "PINCODE_NOT_SERVICEABLE",
           );
         }
       }
