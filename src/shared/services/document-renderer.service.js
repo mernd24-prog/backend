@@ -1367,8 +1367,8 @@ class DocumentRendererService {
       commands = [];
       fill(0, 0, 595, 842, 1, 1, 1);
       fill(36, 765, 523, 4, 0.81, 0.62, 0.18);
-      text(platformName, 40, 808, 16, true);
-      text("SELLER SETTLEMENT STATEMENT", 555, 806, 14, true, "right");
+      text(platformName, 40, 808, 14, true);
+      text("SETTLEMENT STATEMENT", 555, 806, 12, true, "right");
       text("Payout advice / accounting statement", 555, 790, 8, false, "right", "0.35 0.37 0.45");
       text("PLATFORM DETAILS", 40, 748, 7.5, true, "left", "0.35 0.37 0.45");
       text(compact(platformAddress || "Registered office not configured", 72), 40, 734, 8);
@@ -1610,7 +1610,7 @@ class DocumentRendererService {
     const pageItems = this.chunk(receiptItems.length ? receiptItems : [{}], invoiceRowsPerPage);
     const streams = pageItems.map((pageRows, pageIndex) => {
       const commands = [];
-      const text = (value, x, y, size = 9, bold = false, align = "left") => {
+      const text = (value, x, y, size = 7, bold = false, align = "left") => {
         let safe = this.escapePdfText(value);
         const approximateWidth = safe.length * size * 0.5;
         const tx = align === "right" ? x - approximateWidth : x;
@@ -1673,7 +1673,7 @@ class DocumentRendererService {
           : isOrderReceipt
             ? "ORDER RECEIPT"
             : "TAX INVOICE");
-      text(documentTitle, 555, 806, isCreditNote ? 14 : isCommission ? 13 : 17, true, "right");
+      text(documentTitle, 555, 806, isCreditNote ? 14 : isCommission ? 11 : 15, true, "right");
       text(isCreditNote ? "Credit Note for Recipient" : "Original for Recipient", 555, 790, 8, false, "right");
       text("PLATFORM DETAILS", 40, 752, 7.5, true);
       text(platformName, 40, 737, 12, true);
