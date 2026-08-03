@@ -25,10 +25,22 @@ async function createApp() {
   const app = express();
 
   app.disable("x-powered-by");
+  app.disable("etag");
   app.set("trust proxy", 1);
 
   app.use(pinoHttp({ logger }));
   app.use(helmet());
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/api/")) {
+      delete req.headers["if-none-match"];
+      delete req.headers["if-modified-since"];
+      res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.set("Pragma", "no-cache");
+      res.set("Expires", "0");
+      res.set("Surrogate-Control", "no-store");
+    }
+    next();
+  });
   app.use(
     cors({
       origin: env.cors.origin === "*" ? true : env.cors.origin,

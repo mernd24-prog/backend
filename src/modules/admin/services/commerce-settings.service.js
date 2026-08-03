@@ -463,6 +463,13 @@ class CommerceSettingsService {
           liveRequested: env.razorpay.liveRequested,
           missingKeys: env.razorpay.missingKeys,
         },
+        razorpayX: {
+          configured: env.razorpayX.configured,
+          enabled: env.razorpayX.enabled,
+          mode: env.razorpayX.mode,
+          liveRequested: env.razorpayX.liveRequested,
+          missingKeys: env.razorpayX.missingKeys,
+        },
         commerce: {
           businessState: env.commerce.businessState,
           maxWalletUsagePerOrderPercent: env.commerce.maxWalletUsagePerOrderPercent,

@@ -166,12 +166,11 @@ const shippingSchema = new mongoose.Schema(
     processingDays: { type: Number, min: 0, default: 1 },
     serviceabilityMode: {
       type: String,
-      enum: ["inherit", "all_pincodes", "allowlist", "blocklist", "regions", "disabled"],
+      enum: ["inherit", "all_pincodes", "allowlist", "regions", "disabled"],
       default: "inherit",
     },
     serviceablePincodes: [{ type: String, trim: true }],
     allowPincodes: [{ type: String, trim: true }],
-    blockPincodes: [{ type: String, trim: true }],
     regions: [{ type: String, trim: true }],
     states: [{ type: String, trim: true }],
     cities: [{ type: String, trim: true }],

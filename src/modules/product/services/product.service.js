@@ -1170,11 +1170,17 @@ class ProductService {
     await this.validateProductReferences(payload, actor);
     this._validateProductType(productType, payload);
 
-    const status = isSeller
-      ? payload.status === PRODUCT_STATUS.DRAFT
-        ? PRODUCT_STATUS.DRAFT
-        : PRODUCT_STATUS.PENDING_APPROVAL
-      : payload.status || PRODUCT_STATUS.DRAFT;
+    /*
+     * Previous approval workflow — kept for quick rollback.
+     *
+     * const status = isSeller
+     *   ? payload.status === PRODUCT_STATUS.DRAFT
+     *     ? PRODUCT_STATUS.DRAFT
+     *     : PRODUCT_STATUS.PENDING_APPROVAL
+     *   : payload.status || PRODUCT_STATUS.DRAFT;
+     */
+    const status = PRODUCT_STATUS.ACTIVE;
+    const autoApprovedAt = new Date();
 
     const hasVariants = payload.hasVariants === true || (payload.variants || []).length > 0;
 
@@ -1190,16 +1196,21 @@ class ProductService {
       warehouseId: payload.warehouseId || null,
       hasVariants,
       slug: slugify(`${payload.title}-${Date.now()}`, { lower: true, strict: true }),
-      publishedAt: status === PRODUCT_STATUS.ACTIVE ? new Date() : null,
+      publishedAt: autoApprovedAt,
+      approvedAt: autoApprovedAt,
+      approvedBy: actor.userId,
       moderation: {
-        submittedAt: status === PRODUCT_STATUS.DRAFT ? null : new Date(),
+        submittedAt: autoApprovedAt,
+        reviewedAt: autoApprovedAt,
+        reviewedBy: actor.userId,
+        notes: "Temporarily auto-approved on product creation.",
         checklist: {
-          titleVerified: false,
-          categoryVerified: false,
-          complianceVerified: false,
-          mediaVerified: false,
-          pricingVerified: false,
-          inventoryVerified: false,
+          titleVerified: true,
+          categoryVerified: true,
+          complianceVerified: true,
+          mediaVerified: true,
+          pricingVerified: true,
+          inventoryVerified: true,
         },
       },
       createdBy: actor.userId,

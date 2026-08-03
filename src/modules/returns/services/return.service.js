@@ -1374,7 +1374,9 @@ class ReturnServiceClass {
       qcResults: Array.from(results),
       approvedRefundAmount: qcApprovedRefundAmount,
     });
-    return returnRequest;
+    return this.maybeAutoProcessRefund(returnRequest, actor, {
+      note: "Automatic refund triggered after return QC",
+    });
   }
 
   findReturnItem(returnRequest, candidate = {}) {
@@ -1561,7 +1563,9 @@ class ReturnServiceClass {
     this.appendTimeline(returnRequest, `qc_${payload.decision}`, actor, { reason: payload.reason, metadata: { approvedRefundAmount: returnRequest.refundAmount } });
     await returnRequest.save();
     await this.publishReturnStatusUpdated(returnRequest, actor, { qcDecision: payload.decision, approvedRefundAmount: returnRequest.refundAmount });
-    return returnRequest;
+    return this.maybeAutoProcessRefund(returnRequest, actor, {
+      note: "Automatic refund triggered after admin QC decision",
+    });
   }
 
   async arrangeReturnToCustomer(returnId, payload = {}, actor = {}) {
@@ -1642,6 +1646,71 @@ class ReturnServiceClass {
     }
 
     return { amount, method, walletAmount, providerAmount, isRazorpay };
+  }
+
+  async maybeAutoProcessRefund(returnRequest, triggerActor = {}, context = {}) {
+    if (!["qc_passed", "qc_completed"].includes(returnRequest.status)) return returnRequest;
+    if (!["refund", "refund_or_replacement"].includes(String(returnRequest.resolution || "refund"))) return returnRequest;
+    if (Number(returnRequest.refund?.approvedAmount || returnRequest.refundAmount || 0) <= 0) return returnRequest;
+    if (["pending", "provider_pending", "completed", "manual_review"].includes(String(returnRequest.refund?.status || ""))) {
+      return returnRequest;
+    }
+
+    const settings = await commerceSettingsService.getSettings().catch(() => null);
+    const policy = String(settings?.payments?.refundPolicy || "manual_review");
+    if (policy === "manual_review") return returnRequest;
+
+    const methodByPolicy = {
+      auto_after_return: "auto",
+      gateway_original: "original_payment",
+      instant_wallet: "wallet",
+    };
+    const method = methodByPolicy[policy];
+    if (!method) return returnRequest;
+
+    const systemActor = {
+      userId: "system-auto-refund",
+      role: "super-admin",
+      isSuperAdmin: true,
+      triggeredBy: triggerActor.userId || null,
+    };
+
+    try {
+      return await this.processRefund(returnRequest._id, systemActor, {
+        method,
+        refundAmount: returnRequest.refund?.approvedAmount || returnRequest.refundAmount,
+        referenceId: returnRequest.refund?.referenceId || `return_${returnRequest._id}`,
+        note: context.note || `Auto refund triggered by ${policy}`,
+      });
+    } catch (error) {
+      logger.warn({
+        err: error,
+        returnId: this.getReturnId(returnRequest),
+        policy,
+      }, "Automatic return refund failed");
+
+      const latest = await this.getReturnOrThrow(returnRequest._id);
+      if (!["refunded", "refund_pending"].includes(String(latest.status || ""))) {
+        latest.status = "refund_failed";
+        latest.refund = {
+          ...(latest.refund?.toObject?.() || latest.refund || {}),
+          status: "failed",
+          failureReason: error.message,
+          method,
+          approvedAmount: latest.refund?.approvedAmount || latest.refundAmount || 0,
+        };
+        latest.lastError = error.message;
+        latest.retryCount = Number(latest.retryCount || 0) + 1;
+        this.appendTimeline(latest, "refund_failed", systemActor, {
+          reason: error.message,
+          note: "Automatic refund failed. Admin can retry from Returns.",
+          metadata: { policy, method },
+        });
+        await latest.save();
+        return latest;
+      }
+      return latest;
+    }
   }
 
   async processRefund(returnId, actor = {}, payload = {}) {

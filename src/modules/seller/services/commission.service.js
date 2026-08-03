@@ -13,13 +13,17 @@ const { UserModel } = require("../../user/models/user.model");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
+const { env } = require("../../../config/env");
+const { RazorpayXPayoutProvider } = require("../../../infrastructure/payouts/providers/razorpayx.provider");
 const {
   calculateInclusiveShippingTax,
   resolveShippingPolicy,
 } = require("../../../shared/domain/seller-payout-rules");
 
 class SellerCommissionService {
-  constructor() { }
+  constructor({ razorpayXProvider = new RazorpayXPayoutProvider() } = {}) {
+    this.razorpayXProvider = razorpayXProvider;
+  }
 
   async publishPayoutEvent(payout = {}, actor = {}) {
     if (!payout?.id || !payout?.seller_id) return;
@@ -74,6 +78,213 @@ class SellerCommissionService {
     } catch {
       return fallback;
     }
+  }
+
+  isRazorpayXRequested(paymentMethod) {
+    return ["razorpayx", "razorpay_x", "bank_transfer_auto"].includes(String(paymentMethod || "").toLowerCase());
+  }
+
+  async resolvePayoutBankDetails(payout = {}) {
+    let organization = null;
+    if (payout.organization_id) {
+      organization = await knex("seller_organizations").where("id", payout.organization_id).first();
+    }
+    const seller = await UserModel.findById(payout.seller_id).lean().catch(() => null);
+    const orgBank = this.parseJson(organization?.bank_details, {});
+    const profileBank = seller?.sellerProfile?.bankDetails || {};
+    const bank = Object.keys(orgBank || {}).length ? orgBank : profileBank;
+    const accountHolderName = bank.accountHolderName || bank.holderName || bank.account_holder_name;
+    const accountNumber = bank.accountNumber || bank.account_number;
+    const ifscCode = bank.ifscCode || bank.ifsc || bank.ifsc_code;
+    const bankName = bank.bankName || bank.bank_name;
+    const verified = ["verified", "approved"].includes(String(
+      organization?.bank_verification_status || seller?.sellerProfile?.bankVerificationStatus || "",
+    ).toLowerCase());
+    if (!accountHolderName || !accountNumber || !ifscCode || !bankName) {
+      throw new AppError("Seller bank details are incomplete. Complete seller onboarding bank details before RazorpayX payout.", 409);
+    }
+    if (!verified) {
+      throw new AppError("Seller bank account is not verified. Verify bank details before RazorpayX payout.", 409);
+    }
+    return {
+      seller,
+      organization,
+      bank: { accountHolderName, accountNumber, ifscCode, bankName },
+    };
+  }
+
+  async initiateRazorpayXPayout(payoutId, options = {}) {
+    let payout = await knex("seller_payouts").where("id", payoutId).first();
+    if (!payout) throw new AppError("Payout not found", 404);
+    if (payout.status === "completed") return payout;
+    if (["pending", "on_hold"].includes(payout.status)) {
+      const metadata = {
+        ...this.parseJson(payout.metadata, {}),
+        approvedBy: options.actor?.userId || options.actor?.sub || null,
+        approvedAt: new Date().toISOString(),
+        approvalNote: options.note || "Approved for RazorpayX payout",
+        autoApprovedForRazorpayX: true,
+      };
+      const [approved] = await knex("seller_payouts").where("id", payoutId).update({
+        status: "processing",
+        payment_method: "razorpayx",
+        metadata: this.jsonb(metadata),
+        updated_at: knex.fn.now(),
+      }).returning("*");
+      await knex("seller_commissions")
+        .where("payout_id", payoutId)
+        .whereIn("status", ["pending", "approved"])
+        .update({ status: "approved", updated_at: knex.fn.now() });
+      payout = approved;
+    }
+    if (!["processing", "approved"].includes(payout.status)) {
+      throw new AppError(`RazorpayX payout cannot be initiated from ${payout.status}`, 409);
+    }
+    if (!env.razorpayX.enabled) {
+      throw new AppError("RazorpayX payouts are not enabled. Use manual payout or configure RazorpayX.", 503);
+    }
+
+    const metadata = this.parseJson(payout.metadata, {});
+    if (metadata.razorpayX?.payoutId) return payout;
+    const { seller, organization, bank } = await this.resolvePayoutBankDetails(payout);
+    const sellerName = organization?.legal_business_name || seller?.profile?.name || seller?.email || payout.seller_id;
+    const contact = await this.razorpayXProvider.createContact({
+      name: sellerName,
+      email: seller?.email || organization?.support_email || undefined,
+      contact: seller?.phone || organization?.support_phone || undefined,
+      referenceId: String(payout.seller_id),
+      notes: { sellerId: String(payout.seller_id), organizationId: payout.organization_id || "" },
+    });
+    const fundAccount = await this.razorpayXProvider.createFundAccount({
+      contactId: contact.id,
+      accountHolderName: bank.accountHolderName,
+      accountNumber: bank.accountNumber,
+      ifsc: bank.ifscCode,
+      notes: { sellerId: String(payout.seller_id), organizationId: payout.organization_id || "" },
+    });
+    const providerPayout = await this.razorpayXProvider.createPayout({
+      fundAccountId: fundAccount.id,
+      amount: payout.net_amount,
+      currency: payout.currency || "INR",
+      referenceId: payout.id,
+      narration: "Seller payout",
+      notes: { sellerPayoutId: payout.id, sellerId: String(payout.seller_id) },
+    });
+    const providerStatus = String(providerPayout.status || "processing").toLowerCase();
+    const providerMeta = {
+      provider: "razorpayx",
+      mode: env.razorpayX.mode,
+      contactId: contact.id,
+      fundAccountId: fundAccount.id,
+      payoutId: providerPayout.id,
+      status: providerStatus,
+      initiatedAt: new Date().toISOString(),
+      initiatedBy: options.actor?.userId || options.actor?.sub || null,
+      bank: {
+        accountHolderName: bank.accountHolderName,
+        accountNumberLast4: String(bank.accountNumber).slice(-4),
+        ifscCode: bank.ifscCode,
+        bankName: bank.bankName,
+      },
+      raw: providerPayout,
+    };
+    if (["processed", "completed"].includes(providerStatus)) {
+      await knex("seller_payouts").where("id", payoutId).update({
+        status: "processing",
+        payment_method: "razorpayx",
+        payment_reference: providerPayout.id,
+        metadata: this.jsonb({ ...metadata, razorpayX: providerMeta }),
+        updated_at: knex.fn.now(),
+      });
+      return this.processPayout(payoutId, providerPayout.id, {
+        paymentMethod: "razorpayx",
+        notes: "RazorpayX payout processed",
+        actor: options.actor,
+      });
+    }
+    const [updated] = await knex("seller_payouts").where("id", payoutId).update({
+      status: "processing",
+      payment_method: "razorpayx",
+      payment_reference: providerPayout.id,
+      metadata: this.jsonb({ ...metadata, razorpayX: providerMeta }),
+      updated_at: knex.fn.now(),
+    }).returning("*");
+    await this.publishPayoutEvent(updated, options.actor);
+    return updated;
+  }
+
+  async handleRazorpayXPayoutWebhook(entity = {}, eventType = "payout.processed", actor = {}) {
+    const providerPayoutId = entity.id;
+    if (!providerPayoutId) throw new AppError("RazorpayX payout ID is missing", 400);
+    const payout = await knex("seller_payouts")
+      .where("payment_reference", providerPayoutId)
+      .orWhereRaw("COALESCE(metadata, '{}'::jsonb) #>> '{razorpayX,payoutId}' = ?", [providerPayoutId])
+      .first();
+    if (!payout) return { acknowledged: true, ignored: true };
+    const providerStatus = String(entity.status || eventType.split(".")[1] || "processing").toLowerCase();
+    const metadata = {
+      ...this.parseJson(payout.metadata, {}),
+      razorpayX: {
+        ...(this.parseJson(payout.metadata, {}).razorpayX || {}),
+        payoutId: providerPayoutId,
+        status: providerStatus,
+        lastWebhookEvent: eventType,
+        lastWebhookAt: new Date().toISOString(),
+        rawWebhook: entity,
+      },
+    };
+    await knex("seller_payouts").where("id", payout.id).update({
+      payment_method: "razorpayx",
+      payment_reference: providerPayoutId,
+      metadata: this.jsonb(metadata),
+      updated_at: knex.fn.now(),
+    });
+    if (["processed", "completed"].includes(providerStatus)) {
+      if (payout.status === "completed") return { ...payout, metadata, status: "completed" };
+      return this.processPayout(payout.id, providerPayoutId, {
+        paymentMethod: "razorpayx",
+        notes: "RazorpayX payout confirmed by webhook",
+        actor,
+      });
+    }
+    if (["failed", "rejected", "cancelled"].includes(providerStatus)) {
+      if (payout.status === "completed") {
+        await knex("seller_payouts").where("id", payout.id).update({ status: "failed", updated_at: knex.fn.now() });
+        const failed = { ...payout, status: "failed", metadata };
+        await this.publishPayoutEvent(failed, actor);
+        return failed;
+      }
+      return this.failPayout(payout.id, entity.failure_reason || entity.status_details?.description || `RazorpayX ${providerStatus}`, actor);
+    }
+    const [updated] = await knex("seller_payouts").where("id", payout.id).update({
+      status: "processing",
+      metadata: this.jsonb(metadata),
+      updated_at: knex.fn.now(),
+    }).returning("*");
+    await this.publishPayoutEvent(updated, actor);
+    return updated;
+  }
+
+  async syncRazorpayXPayoutStatus(payoutId, actor = {}) {
+    const payout = await knex("seller_payouts").where("id", payoutId).first();
+    if (!payout) throw new AppError("Payout not found", 404);
+    const metadata = this.parseJson(payout.metadata, {});
+    const providerPayoutId = payout.payment_reference || metadata.razorpayX?.payoutId;
+    if (String(payout.payment_method || "").toLowerCase() !== "razorpayx" && !providerPayoutId) {
+      throw new AppError("This payout was not initiated through RazorpayX", 409);
+    }
+    if (!providerPayoutId) {
+      throw new AppError("RazorpayX provider payout ID is missing. Start payout first.", 409);
+    }
+    if (!env.razorpayX.enabled) {
+      throw new AppError("RazorpayX payouts are not enabled. Configure RazorpayX before syncing status.", 503);
+    }
+    const providerPayout = await this.razorpayXProvider.fetchPayout(providerPayoutId);
+    return this.handleRazorpayXPayoutWebhook(
+      providerPayout,
+      `payout.${String(providerPayout.status || "pending").toLowerCase()}`,
+      actor,
+    );
   }
 
   normalizeMoney(value) {
@@ -1064,6 +1275,10 @@ const incomeTaxTdsAmount = this.round(
           shippingDeductionAmount,
           shippingTaxableAmount: shippingTax.taxableAmount,
           shippingTaxAmount: shippingTax.taxAmount,
+          sellerCommissionBaseAmount: this.round(group.products.reduce(
+            (sum, product) => sum + Number(product.sellerCommissionBaseAmount || product.taxableAmount || 0),
+            0,
+          )),
 taxableSupplyAmount:
   productTaxableSupplyAmount,
           gstTcsEnabled: Boolean(financeSnapshot.gstTcsEnabled),
@@ -1379,7 +1594,8 @@ gstTcsAmount,
       }
 
       const payoutId = uuidv4();
-      const payoutStatus = payoutPolicy.manualApprovalRequired ? "pending" : "processing";
+      const razorpayXSelected = this.isRazorpayXRequested(options.paymentMethod) || options.autoProcess === true;
+      const payoutStatus = razorpayXSelected ? "processing" : (payoutPolicy.manualApprovalRequired ? "pending" : "processing");
       const skippedCommissions = evaluations
         .filter(({ release }) => !release.available)
         .map(({ release }) => ({
@@ -1640,7 +1856,7 @@ gstTcsAmount,
   }
 
   async approvePayout(payoutId, options = {}) {
-    return knex.transaction(async (trx) => {
+    const updated = await knex.transaction(async (trx) => {
       const payout = await trx("seller_payouts").where("id", payoutId).first().forUpdate();
       if (!payout) throw new AppError("Payout not found", 404);
       if (!["pending", "on_hold"].includes(payout.status)) {
@@ -1671,6 +1887,10 @@ gstTcsAmount,
       await this.publishPayoutEvent(updated, options.actor);
       return updated;
     });
+    if (this.isRazorpayXRequested(options.paymentMethod) || (env.razorpayX.enabled && options.autoProcess === true)) {
+      return this.initiateRazorpayXPayout(payoutId, options);
+    }
+    return updated;
   }
 
   async holdPayout(payoutId, reason, actor = {}) {
@@ -1699,7 +1919,7 @@ gstTcsAmount,
   }
 
   async releasePayoutHold(payoutId, options = {}) {
-    return knex.transaction(async (trx) => {
+    const updated = await knex.transaction(async (trx) => {
       const payout = await trx("seller_payouts").where("id", payoutId).first().forUpdate();
       if (!payout) throw new AppError("Payout not found", 404);
       if (payout.status !== "on_hold") throw new AppError(`Payout is not on hold`, 409);
@@ -1725,6 +1945,10 @@ gstTcsAmount,
       await this.publishPayoutEvent(updated, options.actor);
       return updated;
     });
+    if (options.approve === true && (this.isRazorpayXRequested(options.paymentMethod) || (env.razorpayX.enabled && options.autoProcess === true))) {
+      return this.initiateRazorpayXPayout(payoutId, options);
+    }
+    return updated;
   }
 
   async retryFailedPayout(payoutId, options = {}) {
@@ -1733,7 +1957,7 @@ gstTcsAmount,
     if (payout.status !== "failed") {
       throw new AppError(`Only failed payouts can be retried`, 409);
     }
-    return this.processBatchPayouts(payout.seller_id, {
+    const newPayoutId = await this.processBatchPayouts(payout.seller_id, {
       periodStart: payout.period_start,
       periodEnd: payout.period_end,
       organizationId: payout.organization_id || undefined,
@@ -1744,6 +1968,10 @@ gstTcsAmount,
       autoProcess: options.autoProcess === true,
       actor: options.actor,
     });
+    if (this.isRazorpayXRequested(options.paymentMethod || payout.payment_method) || (env.razorpayX.enabled && options.autoProcess === true)) {
+      return this.initiateRazorpayXPayout(newPayoutId, options);
+    }
+    return newPayoutId;
   }
 
   async getSellerCommissions(sellerId, query = {}) {
@@ -2147,6 +2375,9 @@ gstTcsAmount,
         payoutPolicy,
         message: "Payout is pending manual approval",
       };
+    }
+    if (this.isRazorpayXRequested(options.paymentMethod) || (env.razorpayX.enabled && options.autoProcess === true)) {
+      return this.initiateRazorpayXPayout(payoutId, options);
     }
     return this.processPayout(payoutId, options.paymentReference || `batch_${Date.now()}`, options);
   }

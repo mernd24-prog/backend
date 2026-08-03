@@ -498,7 +498,6 @@ class SellerChargeSettingsService {
       shipping.serviceabilityMode ||
       shipping.codAvailable !== undefined ||
       (shipping.allowPincodes || shipping.serviceablePincodes || []).length ||
-      (shipping.blockPincodes || []).length ||
       (shipping.regions || []).length ||
       (shipping.states || []).length ||
       (shipping.cities || []).length,
@@ -517,7 +516,6 @@ class SellerChargeSettingsService {
       freeDeliveryMinOrderAmount: nullableMoney(shipping.freeShippingMinOrder ?? shipping.freeShippingMinOrderAmount),
       serviceabilityMode: mode,
       serviceablePincodes: uniqueStrings(shipping.serviceablePincodes || shipping.allowPincodes),
-      blockPincodes: uniqueStrings(shipping.blockPincodes),
       regions: uniqueStrings(shipping.regions),
       states: uniqueStrings(shipping.states),
       cities: uniqueStrings(shipping.cities),
@@ -537,7 +535,6 @@ class SellerChargeSettingsService {
     if (rule.serviceabilityMode === "disabled" || rule.active === false) return false;
     const pin = this.getPostalCode(address);
     if (rule.serviceabilityMode === "allowlist" && !this.listHasValue(rule.serviceablePincodes, pin)) return false;
-    if (rule.serviceabilityMode === "blocklist" && this.listHasValue(rule.blockPincodes, pin)) return false;
     if (rule.serviceabilityMode === "regions" && (rule.regions || []).length) {
       return this.ruleMatchesLocation(rule, address);
     }
@@ -550,7 +547,6 @@ class SellerChargeSettingsService {
     const rawRule = {
       serviceabilityMode: shipping.serviceabilityMode || "all_pincodes",
       serviceablePincodes: uniqueStrings(shipping.serviceablePincodes || shipping.allowPincodes),
-      blockPincodes: uniqueStrings(shipping.blockPincodes),
       regions: uniqueStrings(shipping.regions),
       states: uniqueStrings(shipping.states),
       cities: uniqueStrings(shipping.cities),

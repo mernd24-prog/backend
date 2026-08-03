@@ -41,13 +41,13 @@ function verifyRazorpaySignature({ orderId, paymentId, signature }) {
   return expectedSignature === signature;
 }
 
-function verifyRazorpayWebhookSignature(rawBody, signature) {
-  if (!env.razorpay.webhookSecret) {
+function verifyRazorpayWebhookSignature(rawBody, signature, secret = env.razorpay.webhookSecret) {
+  if (!secret) {
     return false;
   }
 
   const expectedSignature = crypto
-    .createHmac("sha256", env.razorpay.webhookSecret)
+    .createHmac("sha256", secret)
     .update(rawBody)
     .digest("hex");
 

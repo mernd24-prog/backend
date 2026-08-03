@@ -96,6 +96,20 @@ const razorpayMode = razorpayLiveRequested && razorpayConfigured
     ? "mock"
     : "disabled";
 
+const razorpayXMissingKeys = findMissingConfig([
+  { key: "RAZORPAYX_KEY_ID", value: process.env.RAZORPAYX_KEY_ID || process.env.RAZORPAY_KEY_ID },
+  { key: "RAZORPAYX_KEY_SECRET", value: process.env.RAZORPAYX_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET },
+  { key: "RAZORPAYX_ACCOUNT_NUMBER", value: process.env.RAZORPAYX_ACCOUNT_NUMBER },
+]);
+const razorpayXConfigured = razorpayXMissingKeys.length === 0;
+const razorpayXLiveRequested = readBooleanFlag(["ENABLE_RAZORPAYX_PAYOUTS", "USE_LIVE_RAZORPAYX"], false);
+const razorpayXMockEnabled = readBooleanFlag(["ENABLE_RAZORPAYX_MOCK", "USE_MOCK_RAZORPAYX"], false);
+const razorpayXMode = razorpayXLiveRequested && razorpayXConfigured
+  ? "live"
+  : razorpayXMockEnabled
+    ? "mock"
+    : "disabled";
+
 const elasticsearchConfigured = hasEnvValue(process.env.ELASTICSEARCH_NODE);
 const elasticsearchEnabled = readBooleanFlag(
   ["ENABLE_ELASTICSEARCH", "USE_ELASTICSEARCH"],
@@ -197,6 +211,19 @@ const env = {
     liveRequested: razorpayLiveRequested,
     missingKeys: razorpayMissingKeys,
     mockAutoCapture: readBooleanFlag(["RAZORPAY_MOCK_AUTO_CAPTURE"], true),
+  },
+  razorpayX: {
+    keyId: process.env.RAZORPAYX_KEY_ID || process.env.RAZORPAY_KEY_ID || "",
+    keySecret: process.env.RAZORPAYX_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET || "",
+    accountNumber: process.env.RAZORPAYX_ACCOUNT_NUMBER || "",
+    webhookSecret: process.env.RAZORPAYX_WEBHOOK_SECRET || "",
+    configured: razorpayXConfigured,
+    live: razorpayXMode === "live",
+    mock: razorpayXMode === "mock",
+    enabled: razorpayXMode !== "disabled",
+    mode: razorpayXMode,
+    liveRequested: razorpayXLiveRequested,
+    missingKeys: razorpayXMissingKeys,
   },
   delivery: {
     webhookSecret: process.env.DELIVERY_WEBHOOK_SECRET || "",

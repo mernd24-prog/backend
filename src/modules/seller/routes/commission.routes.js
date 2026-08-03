@@ -395,15 +395,18 @@ router.post("/negative-balances/:settlementId/resolve", authenticate, platformFi
 // ==============================
 router.post("/payouts/:payoutId/process", authenticate, platformFinanceOnly, financeManage, async (req, res, next) => {
   try {
-    const result = await CommissionService.processPayout(
-      req.params.payoutId,
-      req.body?.paymentReference || `manual_${Date.now()}`,
-      {
-        paymentMethod: req.body?.paymentMethod,
-        notes: req.body?.notes,
-        actor: req.auth,
-      },
-    );
+    const paymentMethod = req.body?.paymentMethod;
+    const result = ["razorpayx", "razorpay_x", "bank_transfer_auto"].includes(String(paymentMethod || "").toLowerCase())
+      ? await CommissionService.initiateRazorpayXPayout(req.params.payoutId, { actor: req.auth })
+      : await CommissionService.processPayout(
+        req.params.payoutId,
+        req.body?.paymentReference || `manual_${Date.now()}`,
+        {
+          paymentMethod,
+          notes: req.body?.notes,
+          actor: req.auth,
+        },
+      );
     return res.status(200).json({
       success: true,
       message: "Payout completed",
@@ -439,14 +442,29 @@ router.post("/payouts/:payoutId/cancel", authenticate, platformFinanceOnly, fina
   }
 });
 
+router.post("/payouts/:payoutId/sync-razorpayx", authenticate, platformFinanceOnly, financeManage, async (req, res, next) => {
+  try {
+    const result = await CommissionService.syncRazorpayXPayoutStatus(req.params.payoutId, req.auth);
+    return res.status(200).json({
+      success: true,
+      message: result?.status === "completed" ? "RazorpayX payout completed" : "RazorpayX payout status synced",
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ==============================
 // Admin: Approve payout for processing
 // ==============================
 router.post("/payouts/:payoutId/approve", authenticate, platformFinanceOnly, financeManage, async (req, res, next) => {
   try {
+    const approvalNote = req.body?.note ?? req.body?.notes;
     const result = await CommissionService.approvePayout(req.params.payoutId, {
-      note: req.body?.note,
+      note: approvalNote,
       paymentMethod: req.body?.paymentMethod,
+      autoProcess: req.body?.autoProcess === true,
       actor: req.auth,
     });
     return res.status(200).json({
@@ -483,6 +501,8 @@ router.post("/payouts/:payoutId/release-hold", authenticate, platformFinanceOnly
     const result = await CommissionService.releasePayoutHold(req.params.payoutId, {
       approve: req.body?.approve === true,
       note: req.body?.note,
+      paymentMethod: req.body?.paymentMethod,
+      autoProcess: req.body?.autoProcess === true,
       actor: req.auth,
     });
     return res.status(200).json({
@@ -593,11 +613,41 @@ router.post(
           actor: req.auth,
         },
       );
+      const shouldAutoPayout = value.autoProcess === true ||
+        ["razorpayx", "razorpay_x", "bank_transfer_auto"].includes(String(req.body?.paymentMethod || "").toLowerCase());
+      let finalResult = result;
+      if (shouldAutoPayout) {
+        const resolveCreatedPayoutId = (entry) => {
+          if (!entry) return null;
+          if (typeof entry === "string") return entry;
+          const metadata = typeof entry.metadata === "string"
+            ? (() => { try { return JSON.parse(entry.metadata); } catch { return {}; } })()
+            : (entry.metadata || {});
+          if (metadata.razorpayX?.payoutId || entry.payment_method === "razorpayx") return null;
+          if (["completed", "processing"].includes(String(entry.status || "").toLowerCase()) && entry.payment_reference) return null;
+          return entry.payout?.id || entry.id || entry.payoutId || null;
+        };
+        if (result?.organizationWise && Array.isArray(result.results)) {
+          finalResult = {
+            ...result,
+            results: await Promise.all(result.results.map(async (entry) => {
+              const createdPayoutId = resolveCreatedPayoutId(entry);
+              if (!createdPayoutId) return entry;
+              return CommissionService.initiateRazorpayXPayout(createdPayoutId, { actor: req.auth });
+            })),
+          };
+        } else {
+          const createdPayoutId = resolveCreatedPayoutId(result);
+          finalResult = createdPayoutId
+            ? await CommissionService.initiateRazorpayXPayout(createdPayoutId, { actor: req.auth })
+            : result;
+        }
+      }
 
       return res.status(200).json({
         success: true,
         message: "Payouts processed successfully",
-        data: result,
+        data: finalResult,
       });
     } catch (err) {
       next(err);

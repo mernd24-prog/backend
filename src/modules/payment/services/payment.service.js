@@ -618,11 +618,13 @@ class PaymentService {
       throw new AppError("Invalid Razorpay webhook request", 400);
     }
 
-    if (!env.razorpay.webhookSecret) {
+    if (!env.razorpay.webhookSecret && !env.razorpayX.webhookSecret) {
       throw new AppError("Razorpay webhook secret is not configured", 503);
     }
 
-    if (!verifyRazorpayWebhookSignature(rawBody, signature)) {
+    const validPaymentWebhook = verifyRazorpayWebhookSignature(rawBody, signature, env.razorpay.webhookSecret);
+    const validPayoutWebhook = verifyRazorpayWebhookSignature(rawBody, signature, env.razorpayX.webhookSecret);
+    if (!validPaymentWebhook && !validPayoutWebhook) {
       throw new AppError("Invalid Razorpay webhook signature", 401);
     }
 
@@ -633,6 +635,28 @@ class PaymentService {
       throw new AppError("Invalid Razorpay webhook payload", 400);
     }
     const eventType = payload.event;
+
+    if (["payout.created", "payout.queued", "payout.pending", "payout.processed", "payout.reversed", "payout.failed", "payout.rejected", "payout.cancelled"].includes(eventType)) {
+      const entity = payload.payload?.payout?.entity;
+      if (!entity?.id) throw new AppError("Invalid RazorpayX payout webhook payload", 400);
+      const eventId = payload.id || `${eventType}:${entity.id}:${entity.status || "unknown"}`;
+      const duplicate = await this.processWebhookEvent({
+        provider: "razorpayx",
+        providerEventId: eventId,
+        eventType,
+        paymentId: null,
+        orderId: null,
+        payload,
+      }, async () => {
+        const { CommissionService } = require("../../seller/services/commission.service");
+        await CommissionService.handleRazorpayXPayoutWebhook(entity, eventType, {
+          userId: "razorpayx-webhook",
+          role: "system",
+        });
+      });
+      if (duplicate) return duplicate;
+      return { acknowledged: true };
+    }
 
     if (["refund.created", "refund.processed", "refund.failed"].includes(eventType)) {
       const entity = payload.payload?.refund?.entity;
