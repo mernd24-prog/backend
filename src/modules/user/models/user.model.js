@@ -102,7 +102,22 @@ const userAddressSchema = new mongoose.Schema(
 const userSchema = new mongoose.Schema(
   {
     email: { type: String, required: true, unique: true, index: true },
-    phone: { type: String, index: true },
+phone: {
+  type: String,
+  trim: true,
+  default: "",
+},
+
+phoneNormalized: {
+  type: String,
+  trim: true,
+  default: undefined,
+},
+
+phoneVerified: {
+  type: Boolean,
+  default: false,
+},
     passwordHash: { type: String },
     role: {
       type: String,
@@ -173,7 +188,16 @@ const userSchema = new mongoose.Schema(
 );
 
 userSchema.index({ "authProviders.provider": 1, "authProviders.providerUserId": 1 });
-
+userSchema.index(
+  {
+    phoneNormalized: 1,
+  },
+  {
+    unique: true,
+    sparse: true,
+    name: "user_phone_normalized_unique",
+  },
+);
 const UserModel = mongoose.model("User", userSchema);
 
 module.exports = { UserModel };

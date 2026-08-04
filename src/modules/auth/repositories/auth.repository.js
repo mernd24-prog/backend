@@ -14,7 +14,13 @@ class AuthRepository {
   async findUserByEmail(email) {
     return this.userRepository.findByEmail(email);
   }
-
+  async findUserByPhone(phone) {
+    return this.userRepository.findUserByPhone(phone);
+  }
+  async markOtpIdentityVerified(userId,
+    identity,) {
+    return this.userRepository.markOtpIdentityVerified(userId, identity);
+  }
   async createUser(payload) {
     return this.userRepository.create(payload);
   }

@@ -61,6 +61,19 @@ class OrderController {
     res.json(orderResponse(order, "Order details fetched successfully"));
   };
 
+  downloadBoxLabel = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const rendered = await this.orderService.downloadBoxLabel(
+      req.params.orderId,
+      req.params.shipmentId,
+      actor,
+      req.query.format || "pdf",
+    );
+    res.setHeader("Content-Type", rendered.contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="${rendered.fileName}"`);
+    res.send(rendered.body);
+  };
+
   cancel = async (req, res) => {
     const actor = getCurrentUser(req);
     const cancellation = await this.cancellationService.cancelOrder(req.params.orderId, req.body, actor);

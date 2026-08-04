@@ -269,11 +269,21 @@ class DocumentRendererService {
     return `${rows.map((row) => row.map((cell) => this.escapeCsv(cell)).join(",")).join("\n")}\n`;
   }
 
-  renderHtml(document = {}) {
-    if (document.layout === "invoice") return this.renderInvoiceHtml(document);
-    if (document.layout === "credit_note") return this.renderCreditNoteHtml(document);
-    return this.renderGenericHtml(document);
+renderHtml(document = {}) {
+  if (document.layout === "invoice") {
+    return this.renderInvoiceHtml(document);
   }
+
+  if (document.layout === "credit_note") {
+    return this.renderCreditNoteHtml(document);
+  }
+
+  if (document.layout === "box_label") {
+    return this.renderBoxLabelHtml(document);
+  }
+
+  return this.renderGenericHtml(document);
+}
 
   /* ─────────────────── INVOICE HTML ─────────────────── */
 
@@ -1281,6 +1291,10 @@ class DocumentRendererService {
     if (document.layout === "invoice") return this.renderInvoicePdf(document);
     if (document.layout === "credit_note") return this.renderCreditNotePdf(document);
     if (document.layout === "settlement") return this.renderSettlementPdf(document);
+
+  if (document.layout === "box_label") {
+    return this.renderBoxLabelPdf(document);
+  }
     const lines = this.flattenDocument(document).flatMap((line) => this.wrapLine(line, 92));
     const pages = this.chunk(lines.length ? lines : ["No data."], 48);
     const objects = [];
@@ -1301,7 +1315,288 @@ class DocumentRendererService {
 
     return this.buildPdf(objects);
   }
+getBoxLabelView(document = {}) {
+  const data = document.data || document.raw || {};
+  const brand = data.brand || {};
+  const order = data.order || {};
+  const shipment = data.shipment || {};
+  const recipient = data.recipient || data.shippingAddress || {};
+  const sender = data.sender || {};
+  const payment = data.payment || {};
+  const packageData = data.package || {};
 
+  const firstValue = (...values) =>
+    values.find(
+      (value) =>
+        value !== undefined &&
+        value !== null &&
+        String(value).trim() !== "",
+    );
+
+  const addressLines = (address = {}) => {
+    const cityStatePincode = [
+      firstValue(address.city, address.district),
+      firstValue(address.state, address.stateName, address.state_name),
+      firstValue(
+        address.postalCode,
+        address.postal_code,
+        address.pincode,
+        address.zipCode,
+        address.zip_code,
+      ),
+    ]
+      .filter(Boolean)
+      .join(", ");
+
+    return [
+      firstValue(
+        address.line1,
+        address.addressLine1,
+        address.address_line_1,
+        address.address1,
+        address.street,
+      ),
+      firstValue(
+        address.line2,
+        address.addressLine2,
+        address.address_line_2,
+        address.address2,
+        address.landmark,
+      ),
+      cityStatePincode,
+      firstValue(address.country, address.countryName, address.country_name),
+    ].filter(Boolean);
+  };
+
+  const itemSource = Array.isArray(data.items) ? data.items : [];
+
+  const items = itemSource.map((item) => ({
+    title:
+      firstValue(
+        item.productTitle,
+        item.product_title,
+        item.title,
+        item.name,
+        item.description,
+      ) || "Product",
+
+    sku:
+      firstValue(
+        item.productSku,
+        item.product_sku,
+        item.variantSku,
+        item.variant_sku,
+        item.sku,
+      ) || "",
+
+    quantity: Number(
+      firstValue(
+        item.quantity,
+        item.shippedQuantity,
+        item.shipped_quantity,
+        1,
+      ),
+    ),
+  }));
+
+  const paymentMethod = String(
+    firstValue(payment.method, order.paymentMethod, "PREPAID"),
+  ).toUpperCase();
+
+  const rawCod = firstValue(
+    payment.isCod,
+    payment.is_cod,
+    order.isCod,
+    order.is_cod,
+  );
+
+  const isCod =
+    rawCod === true ||
+    String(rawCod).toLowerCase() === "true" ||
+    paymentMethod === "COD" ||
+    paymentMethod.includes("CASH_ON_DELIVERY");
+
+  const weight = firstValue(
+    packageData.weight,
+    packageData.weightKg,
+    packageData.weight_kg,
+  );
+
+  const length = firstValue(
+    packageData.length,
+    packageData.lengthCm,
+    packageData.length_cm,
+  );
+
+  const width = firstValue(
+    packageData.width,
+    packageData.widthCm,
+    packageData.width_cm,
+  );
+
+  const height = firstValue(
+    packageData.height,
+    packageData.heightCm,
+    packageData.height_cm,
+  );
+
+  const dimensions =
+    length || width || height
+      ? `${length || "-"} x ${width || "-"} x ${height || "-"} cm`
+      : "-";
+
+  return {
+    brandName:
+      firstValue(
+        brand.name,
+        process.env.INVOICE_BRAND_NAME,
+        "Sam Global",
+      ),
+
+    logoUrl:
+      firstValue(
+        brand.logoUrl,
+        brand.logo_url,
+        process.env.INVOICE_LOGO_URL,
+      ) || "",
+
+    support:
+      firstValue(
+        brand.support,
+        process.env.INVOICE_CONTACT,
+        process.env.SUPPORT_EMAIL,
+      ) || "",
+
+    orderNumber:
+      firstValue(
+        order.number,
+        order.orderNumber,
+        order.order_number,
+        order.id,
+      ) || "-",
+
+    orderDate: this.formatDate(
+      firstValue(
+        order.placedAt,
+        order.placed_at,
+        order.createdAt,
+        order.created_at,
+      ),
+    ),
+
+    shipmentNumber:
+      firstValue(
+        shipment.number,
+        shipment.shipmentNumber,
+        shipment.shipment_number,
+        shipment.id,
+      ) || "-",
+
+    trackingNumber:
+      firstValue(
+        shipment.trackingNumber,
+        shipment.tracking_number,
+        shipment.awbNumber,
+        shipment.awb_number,
+        shipment.awb,
+        shipment.id,
+      ) || "-",
+
+    carrier:
+      firstValue(
+        shipment.carrier,
+        shipment.carrierName,
+        shipment.carrier_name,
+        shipment.provider,
+        "Self Shipping",
+      ),
+
+    service:
+      firstValue(
+        shipment.service,
+        shipment.serviceName,
+        shipment.service_name,
+        "Standard Delivery",
+      ),
+
+    recipientName:
+      firstValue(
+        recipient.fullName,
+        recipient.full_name,
+        recipient.name,
+        "Customer",
+      ),
+
+    recipientPhone:
+      firstValue(
+        recipient.phone,
+        recipient.phoneNumber,
+        recipient.phone_number,
+        recipient.mobile,
+      ) || "",
+
+    recipientAddress: addressLines(recipient),
+
+    senderName:
+      firstValue(
+        sender.fullName,
+        sender.full_name,
+        sender.name,
+        "Seller",
+      ),
+
+    senderPhone:
+      firstValue(
+        sender.phone,
+        sender.phoneNumber,
+        sender.phone_number,
+        sender.mobile,
+      ) || "",
+
+    senderAddress: addressLines(sender),
+
+    destinationPincode:
+      firstValue(
+        recipient.postalCode,
+        recipient.postal_code,
+        recipient.pincode,
+        recipient.zipCode,
+        recipient.zip_code,
+      ) || "-",
+
+    isCod,
+
+    paymentLabel: isCod
+      ? "CASH ON DELIVERY"
+      : paymentMethod || "PREPAID",
+
+    amountToCollect: Number(
+      firstValue(
+        payment.amountToCollect,
+        payment.amount_to_collect,
+        0,
+      ),
+    ),
+
+    weight: weight ? `${weight} kg` : "-",
+    dimensions,
+
+    itemCount: Number(
+      firstValue(
+        packageData.itemCount,
+        packageData.item_count,
+        items.reduce(
+          (total, item) => total + Number(item.quantity || 0),
+          0,
+        ),
+        0,
+      ),
+    ),
+
+    items,
+    generatedAt: this.formatDate(document.generatedAt || new Date()),
+  };
+}
   renderSettlementPdf(document = {}) {
     const raw = document.raw || {};
     const settlement = raw.settlement || {};
@@ -1492,7 +1787,537 @@ class DocumentRendererService {
     objects[fontBoldId] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>";
     return this.buildPdf(objects);
   }
+renderBoxLabelPdf(document = {}) {
+  const label = this.getBoxLabelView(document);
 
+  // 4 x 6 inch page at 72 PDF points per inch.
+  const PAGE_WIDTH = 288;
+  const PAGE_HEIGHT = 432;
+
+  const commands = [];
+
+  const text = (
+    value,
+    x,
+    y,
+    size = 8,
+    bold = false,
+    align = "left",
+    color = "0.10 0.11 0.14",
+  ) => {
+    const safe = this.escapePdfText(value);
+    const approximateWidth = safe.length * size * 0.48;
+
+    let tx = x;
+
+    if (align === "right") {
+      tx = x - approximateWidth;
+    } else if (align === "center") {
+      tx = x - approximateWidth / 2;
+    }
+
+    commands.push(
+      `${color} rg`,
+      "BT",
+      `/${bold ? "F2" : "F1"} ${size} Tf`,
+      `${tx.toFixed(1)} ${y.toFixed(1)} Td`,
+      `(${safe}) Tj`,
+      "ET",
+    );
+  };
+
+  const fill = (x, y, width, height, r, g, b) => {
+    commands.push(
+      `${r} ${g} ${b} rg`,
+      `${x} ${y} ${width} ${height} re f`,
+    );
+  };
+
+  const line = (
+    x1,
+    y1,
+    x2,
+    y2,
+    width = 0.6,
+    gray = 0.75,
+  ) => {
+    commands.push(
+      `${gray} G`,
+      `${width} w`,
+      `${x1} ${y1} m ${x2} ${y2} l S`,
+    );
+  };
+
+  const strokeRect = (
+    x,
+    y,
+    width,
+    height,
+    lineWidth = 0.8,
+    gray = 0.25,
+  ) => {
+    commands.push(
+      `${gray} G`,
+      `${lineWidth} w`,
+      `${x} ${y} ${width} ${height} re S`,
+    );
+  };
+
+  const compact = (value, limit = 42) => {
+    const normalized = String(value ?? "-")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (normalized.length <= limit) return normalized;
+
+    return `${normalized.slice(0, Math.max(1, limit - 3))}...`;
+  };
+
+  const wrapText = (
+    value,
+    maxCharacters = 42,
+    maximumLines = 3,
+  ) => {
+    const normalized = String(value ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!normalized) return [];
+
+    const words = normalized.split(" ");
+    const lines = [];
+    let current = "";
+
+    for (const word of words) {
+      if (word.length > maxCharacters) {
+        if (current) {
+          lines.push(current);
+          current = "";
+        }
+
+        for (
+          let index = 0;
+          index < word.length;
+          index += maxCharacters
+        ) {
+          lines.push(word.slice(index, index + maxCharacters));
+        }
+
+        continue;
+      }
+
+      const candidate = current ? `${current} ${word}` : word;
+
+      if (candidate.length <= maxCharacters) {
+        current = candidate;
+      } else {
+        lines.push(current);
+        current = word;
+      }
+    }
+
+    if (current) lines.push(current);
+
+    const visible = lines.slice(0, maximumLines);
+
+    if (lines.length > maximumLines && visible.length) {
+      visible[visible.length - 1] = compact(
+        visible[visible.length - 1],
+        maxCharacters,
+      );
+    }
+
+    return visible;
+  };
+
+  // White background and outer border.
+  fill(0, 0, PAGE_WIDTH, PAGE_HEIGHT, 1, 1, 1);
+  strokeRect(7, 7, PAGE_WIDTH - 14, PAGE_HEIGHT - 14, 1.2, 0.11);
+
+  // Gold brand header.
+  fill(8, 374, 272, 50, 0.81, 0.62, 0.18);
+
+  text(
+    compact(label.brandName, 22),
+    16,
+    404,
+    15,
+    true,
+    "left",
+    "1 1 1",
+  );
+
+  if (label.support) {
+    text(
+      compact(label.support, 34),
+      16,
+      388,
+      6.5,
+      false,
+      "left",
+      "1 1 1",
+    );
+  }
+
+  text(
+    "BOX LABEL",
+    272,
+    405,
+    11,
+    true,
+    "right",
+    "1 1 1",
+  );
+
+  text(
+    compact(label.service, 23),
+    272,
+    389,
+    6.5,
+    false,
+    "right",
+    "1 1 1",
+  );
+
+  // Delivery address.
+  text(
+    "DELIVER TO",
+    16,
+    358,
+    7,
+    true,
+    "left",
+    "0.81 0.62 0.18",
+  );
+
+  text(
+    compact(label.recipientName, 28),
+    16,
+    342,
+    13,
+    true,
+    "left",
+    "0.10 0.11 0.38",
+  );
+
+  text(
+    "DESTINATION",
+    272,
+    358,
+    6,
+    true,
+    "right",
+    "0.40 0.42 0.48",
+  );
+
+  text(
+    compact(label.destinationPincode, 10),
+    272,
+    338,
+    16,
+    true,
+    "right",
+    "0.10 0.11 0.38",
+  );
+
+  let addressY = 326;
+
+  label.recipientAddress
+    .flatMap((addressLine) => wrapText(addressLine, 42, 2))
+    .slice(0, 3)
+    .forEach((addressLine) => {
+      text(addressLine, 16, addressY, 8);
+      addressY -= 11;
+    });
+
+  if (label.recipientPhone) {
+    text(
+      `Phone: ${compact(label.recipientPhone, 24)}`,
+      16,
+      289,
+      8,
+      true,
+    );
+  }
+
+  line(12, 279, 276, 279, 1, 0.11);
+
+  // Tracking details.
+  text(
+    "TRACKING NUMBER / AWB",
+    16,
+    265,
+    7,
+    true,
+    "left",
+    "0.81 0.62 0.18",
+  );
+
+  const trackingLines = wrapText(
+    label.trackingNumber,
+    34,
+    2,
+  );
+
+  trackingLines.forEach((trackingLine, index) => {
+    text(
+      trackingLine,
+      16,
+      248 - index * 14,
+      index === 0 ? 12 : 10,
+      true,
+      "left",
+      "0.10 0.11 0.38",
+    );
+  });
+
+  text(
+    `Carrier: ${compact(label.carrier, 24)}`,
+    16,
+    220,
+    7.5,
+  );
+
+  text(
+    `Shipment: ${compact(label.shipmentNumber, 22)}`,
+    272,
+    220,
+    7.5,
+    false,
+    "right",
+  );
+
+  // Payment banner.
+  if (label.isCod) {
+    fill(12, 184, 264, 26, 1, 0.97, 0.88);
+    strokeRect(12, 184, 264, 26, 0.8, 0.70);
+
+    text(
+      label.amountToCollect > 0
+        ? `COD - COLLECT ${this.money(label.amountToCollect)}`
+        : "CASH ON DELIVERY",
+      144,
+      193,
+      10,
+      true,
+      "center",
+      "0.48 0.32 0.06",
+    );
+  } else {
+    fill(12, 184, 264, 26, 0.94, 0.99, 0.95);
+    strokeRect(12, 184, 264, 26, 0.8, 0.55);
+
+    text(
+      "PREPAID",
+      144,
+      193,
+      10,
+      true,
+      "center",
+      "0.08 0.40 0.18",
+    );
+  }
+
+  // Package details.
+  text("ORDER", 16, 168, 6.5, true, "left", "0.40 0.42 0.48");
+  text(
+    compact(label.orderNumber, 26),
+    16,
+    155,
+    9,
+    true,
+    "left",
+    "0.10 0.11 0.38",
+  );
+
+  text(
+    "ORDER DATE",
+    144,
+    168,
+    6.5,
+    true,
+    "center",
+    "0.40 0.42 0.48",
+  );
+
+  text(
+    compact(label.orderDate, 18),
+    144,
+    155,
+    8,
+    true,
+    "center",
+  );
+
+  text(
+    "PACKAGE",
+    272,
+    168,
+    6.5,
+    true,
+    "right",
+    "0.40 0.42 0.48",
+  );
+
+  text(
+    `${label.itemCount} pc / ${compact(label.weight, 12)}`,
+    272,
+    155,
+    8,
+    true,
+    "right",
+  );
+
+  text(
+    `Dimensions: ${compact(label.dimensions, 34)}`,
+    16,
+    141,
+    7,
+  );
+
+  line(12, 132, 276, 132, 0.8, 0.55);
+
+  // Package contents.
+  text(
+    "PACKAGE CONTENTS",
+    16,
+    118,
+    7,
+    true,
+    "left",
+    "0.81 0.62 0.18",
+  );
+
+  text(
+    "QTY",
+    272,
+    118,
+    7,
+    true,
+    "right",
+    "0.81 0.62 0.18",
+  );
+
+  const visibleItems = label.items.slice(0, 4);
+  let itemY = 104;
+
+  if (!visibleItems.length) {
+    text(
+      "Package item details not provided",
+      16,
+      itemY,
+      7.5,
+      false,
+      "left",
+      "0.40 0.42 0.48",
+    );
+  } else {
+    visibleItems.forEach((item) => {
+      text(
+        compact(item.title, 36),
+        16,
+        itemY,
+        7.5,
+        true,
+      );
+
+      text(
+        String(item.quantity || 0),
+        272,
+        itemY,
+        8,
+        true,
+        "right",
+      );
+
+      if (item.sku) {
+        text(
+          `SKU: ${compact(item.sku, 26)}`,
+          16,
+          itemY - 9,
+          6,
+          false,
+          "left",
+          "0.40 0.42 0.48",
+        );
+      }
+
+      itemY -= item.sku ? 23 : 15;
+    });
+  }
+
+  if (label.items.length > visibleItems.length) {
+    text(
+      `+ ${label.items.length - visibleItems.length} additional product(s)`,
+      16,
+      Math.max(53, itemY),
+      6.5,
+      false,
+      "left",
+      "0.40 0.42 0.48",
+    );
+  }
+
+  // Sender and footer.
+  line(12, 46, 276, 46, 0.6, 0.65);
+
+  text(
+    `Shipped by: ${compact(label.senderName, 38)}`,
+    16,
+    34,
+    6.5,
+    true,
+    "left",
+    "0.10 0.11 0.38",
+  );
+
+  text(
+    `Generated: ${compact(label.generatedAt, 18)}`,
+    272,
+    34,
+    6,
+    false,
+    "right",
+    "0.40 0.42 0.48",
+  );
+
+  text(
+    "Handle package carefully. Verify recipient address before dispatch.",
+    144,
+    20,
+    5.8,
+    false,
+    "center",
+    "0.40 0.42 0.48",
+  );
+
+  const stream = commands.join("\n");
+
+  const objects = [];
+
+  objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+
+  objects[2] =
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
+
+  objects[3] =
+    `<< /Type /Page /Parent 2 0 R ` +
+    `/MediaBox [0 0 ${PAGE_WIDTH} ${PAGE_HEIGHT}] ` +
+    `/Contents 4 0 R ` +
+    `/Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>`;
+
+  objects[4] =
+    `<< /Length ${Buffer.byteLength(stream, "binary")} >>\n` +
+    `stream\n${stream}\nendstream`;
+
+  objects[5] =
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+
+  objects[6] =
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>";
+
+  return this.buildPdf(objects);
+}
   renderCreditNotePdf(document = {}) {
     const data = document.data || {};
     const { creditNote, parentInvoice } = this.getCreditNoteContext(data);
@@ -2035,6 +2860,477 @@ class DocumentRendererService {
     }
     return cell;
   }
+  renderBoxLabelHtml(document = {}) {
+  const label = this.getBoxLabelView(document);
+
+  const recipientAddress = label.recipientAddress.length
+    ? label.recipientAddress
+        .map(
+          (line) =>
+            `<div class="address-line">${this.escapeHtml(line)}</div>`,
+        )
+        .join("")
+    : `<div class="address-line muted">Address not available</div>`;
+
+  const senderAddress = label.senderAddress.length
+    ? label.senderAddress
+        .map(
+          (line) =>
+            `<div class="sender-line">${this.escapeHtml(line)}</div>`,
+        )
+        .join("")
+    : `<div class="sender-line muted">Address not available</div>`;
+
+  const visibleItems = label.items.slice(0, 4);
+
+  const itemRows = visibleItems.length
+    ? visibleItems
+        .map(
+          (item) => `
+            <tr>
+              <td>
+                <strong>${this.escapeHtml(item.title)}</strong>
+                ${
+                  item.sku
+                    ? `<div class="muted">SKU: ${this.escapeHtml(item.sku)}</div>`
+                    : ""
+                }
+              </td>
+              <td class="qty">${this.escapeHtml(item.quantity)}</td>
+            </tr>
+          `,
+        )
+        .join("")
+    : `
+      <tr>
+        <td colspan="2" class="muted">Package items not provided</td>
+      </tr>
+    `;
+
+  const remainingItems = Math.max(
+    0,
+    label.items.length - visibleItems.length,
+  );
+
+  const paymentText = label.isCod
+    ? label.amountToCollect > 0
+      ? `COD · COLLECT ${this.money(label.amountToCollect)}`
+      : "CASH ON DELIVERY"
+    : "PREPAID";
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Box Label - ${this.escapeHtml(label.orderNumber)}</title>
+
+  <style>
+    @page {
+      size: 4in 6in;
+      margin: 0;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #f3f4f6;
+      color: #171717;
+      font-family: Arial, Helvetica, sans-serif;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    .label {
+      width: 4in;
+      min-height: 6in;
+      margin: 0 auto;
+      background: #ffffff;
+      border: 1.5px solid #1B1D60;
+      overflow: hidden;
+    }
+
+    .header {
+      min-height: 0.72in;
+      padding: 12px 14px;
+      background: #CE9F2D;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .logo {
+      max-width: 85px;
+      max-height: 38px;
+      object-fit: contain;
+      background: #ffffff;
+      border-radius: 4px;
+      padding: 3px;
+    }
+
+    .brand-name {
+      font-size: 19px;
+      line-height: 1;
+      font-weight: 900;
+    }
+
+    .brand-sub {
+      margin-top: 4px;
+      font-size: 8px;
+      opacity: 0.92;
+    }
+
+    .document-type {
+      text-align: right;
+    }
+
+    .document-type strong {
+      display: block;
+      font-size: 14px;
+      letter-spacing: 0.8px;
+    }
+
+    .document-type span {
+      display: block;
+      margin-top: 4px;
+      font-size: 8px;
+    }
+
+    .destination {
+      padding: 12px 14px 10px;
+      border-bottom: 2px solid #1B1D60;
+      position: relative;
+    }
+
+    .section-label {
+      margin-bottom: 5px;
+      color: #CE9F2D;
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    .recipient-name {
+      max-width: 75%;
+      font-size: 17px;
+      font-weight: 900;
+      color: #1B1D60;
+      line-height: 1.15;
+    }
+
+    .address-line {
+      max-width: 78%;
+      margin-top: 2px;
+      font-size: 11px;
+      line-height: 1.25;
+    }
+
+    .phone {
+      margin-top: 6px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .pincode {
+      position: absolute;
+      top: 12px;
+      right: 14px;
+      text-align: right;
+    }
+
+    .pincode span {
+      display: block;
+      color: #6b7280;
+      font-size: 8px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .pincode strong {
+      display: block;
+      color: #1B1D60;
+      font-size: 20px;
+      margin-top: 2px;
+    }
+
+    .tracking {
+      padding: 10px 14px;
+      border-bottom: 1px solid #d1d5db;
+    }
+
+    .tracking-number {
+      color: #1B1D60;
+      font-family: "Courier New", monospace;
+      font-size: 16px;
+      font-weight: 900;
+      letter-spacing: 0.7px;
+      overflow-wrap: anywhere;
+    }
+
+    .carrier {
+      margin-top: 5px;
+      color: #4b5563;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 9px;
+    }
+
+    .payment-banner {
+      margin: 9px 14px;
+      padding: 8px 10px;
+      border: 1px solid ${
+        label.isCod ? "#CE9F2D" : "#15803d"
+      };
+      background: ${label.isCod ? "#fff8e7" : "#f0fdf4"};
+      color: ${label.isCod ? "#7a5210" : "#166534"};
+      font-size: 13px;
+      font-weight: 900;
+      text-align: center;
+      letter-spacing: 0.4px;
+    }
+
+    .details-grid {
+      padding: 0 14px 9px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 7px;
+    }
+
+    .detail {
+      border: 1px solid #e5e7eb;
+      border-radius: 4px;
+      padding: 6px 7px;
+    }
+
+    .detail span {
+      display: block;
+      color: #6b7280;
+      font-size: 7.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .detail strong {
+      display: block;
+      margin-top: 3px;
+      color: #1B1D60;
+      font-size: 10px;
+      overflow-wrap: anywhere;
+    }
+
+    .items {
+      padding: 0 14px 8px;
+    }
+
+    .items table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .items th {
+      padding: 5px;
+      background: #1B1D60;
+      color: #ffffff;
+      font-size: 8px;
+      text-align: left;
+      text-transform: uppercase;
+    }
+
+    .items td {
+      padding: 5px;
+      border-bottom: 1px solid #e5e7eb;
+      font-size: 8.5px;
+      vertical-align: top;
+    }
+
+    .items .qty {
+      width: 38px;
+      text-align: center;
+      font-weight: 900;
+    }
+
+    .more-items {
+      padding-top: 4px;
+      color: #6b7280;
+      font-size: 8px;
+      font-style: italic;
+    }
+
+    .sender {
+      margin: 0 14px;
+      padding: 7px 0;
+      border-top: 1px dashed #9ca3af;
+      color: #4b5563;
+      font-size: 8px;
+      line-height: 1.3;
+    }
+
+    .sender strong {
+      color: #1B1D60;
+    }
+
+    .footer {
+      padding: 6px 14px 8px;
+      border-top: 1px solid #e5e7eb;
+      color: #6b7280;
+      font-size: 7px;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .muted {
+      color: #6b7280;
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+      }
+
+      .label {
+        border: none;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="label">
+    <header class="header">
+      <div class="brand">
+        ${
+          label.logoUrl
+            ? `<img class="logo" src="${this.escapeHtml(label.logoUrl)}" alt="Logo">`
+            : ""
+        }
+
+        <div>
+          <div class="brand-name">${this.escapeHtml(label.brandName)}</div>
+          ${
+            label.support
+              ? `<div class="brand-sub">${this.escapeHtml(label.support)}</div>`
+              : ""
+          }
+        </div>
+      </div>
+
+      <div class="document-type">
+        <strong>BOX LABEL</strong>
+        <span>${this.escapeHtml(label.service)}</span>
+      </div>
+    </header>
+
+    <section class="destination">
+      <div class="section-label">Deliver To</div>
+      <div class="recipient-name">
+        ${this.escapeHtml(label.recipientName)}
+      </div>
+
+      ${recipientAddress}
+
+      ${
+        label.recipientPhone
+          ? `<div class="phone">Phone: ${this.escapeHtml(label.recipientPhone)}</div>`
+          : ""
+      }
+
+      <div class="pincode">
+        <span>Destination</span>
+        <strong>${this.escapeHtml(label.destinationPincode)}</strong>
+      </div>
+    </section>
+
+    <section class="tracking">
+      <div class="section-label">Tracking Number / AWB</div>
+      <div class="tracking-number">
+        ${this.escapeHtml(label.trackingNumber)}
+      </div>
+
+      <div class="carrier">
+        <span>Carrier: ${this.escapeHtml(label.carrier)}</span>
+        <span>Shipment: ${this.escapeHtml(label.shipmentNumber)}</span>
+      </div>
+    </section>
+
+    <div class="payment-banner">${this.escapeHtml(paymentText)}</div>
+
+    <section class="details-grid">
+      <div class="detail">
+        <span>Order Number</span>
+        <strong>${this.escapeHtml(label.orderNumber)}</strong>
+      </div>
+
+      <div class="detail">
+        <span>Order Date</span>
+        <strong>${this.escapeHtml(label.orderDate)}</strong>
+      </div>
+
+      <div class="detail">
+        <span>Package Weight</span>
+        <strong>${this.escapeHtml(label.weight)}</strong>
+      </div>
+
+      <div class="detail">
+        <span>Pieces / Dimensions</span>
+        <strong>
+          ${this.escapeHtml(label.itemCount)} pc ·
+          ${this.escapeHtml(label.dimensions)}
+        </strong>
+      </div>
+    </section>
+
+    <section class="items">
+      <table>
+        <thead>
+          <tr>
+            <th>Package Contents</th>
+            <th class="qty">Qty</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${itemRows}
+        </tbody>
+      </table>
+
+      ${
+        remainingItems
+          ? `<div class="more-items">+ ${remainingItems} additional product(s)</div>`
+          : ""
+      }
+    </section>
+
+    <section class="sender">
+      <strong>Shipped By: ${this.escapeHtml(label.senderName)}</strong>
+      ${senderAddress}
+      ${
+        label.senderPhone
+          ? `<div>Phone: ${this.escapeHtml(label.senderPhone)}</div>`
+          : ""
+      }
+    </section>
+
+    <footer class="footer">
+      <span>Handle package carefully.</span>
+      <span>Generated: ${this.escapeHtml(label.generatedAt)}</span>
+    </footer>
+  </main>
+</body>
+</html>`;
+}
 }
 
 const documentRendererService = new DocumentRendererService();

@@ -17,6 +17,7 @@ const {
   forgotPasswordSchema,
   resetPasswordSchema,
   changePasswordSchema,
+  buyerOtpAuthSchema,
 } = require("../validation/auth.validation");
 
 const authRoutes = express.Router();
@@ -34,7 +35,11 @@ authRoutes.post(
 );
 authRoutes.post("/social", checkInput(socialLoginSchema), catchErrors(authController.socialLogin));
 authRoutes.post("/refresh", checkInput(refreshSchema), catchErrors(authController.refresh));
-
+authRoutes.post(
+  "/otp-auth",
+  checkInput(buyerOtpAuthSchema),
+  catchErrors(authController.buyerOtpAuth),
+);
 authRoutes.post("/send-otp", checkInput(sendOtpSchema), catchErrors(authController.sendOtp));
 authRoutes.post("/verify-otp", checkInput(verifyOtpSchema), catchErrors(authController.verifyOtp));
 authRoutes.post("/resend-otp", checkInput(resendOtpSchema), catchErrors(authController.resendOtp));
@@ -44,4 +49,4 @@ authRoutes.post("/change-password", authenticate, checkInput(changePasswordSchem
 authRoutes.get("/status", authenticateForStatus, catchErrors(authController.status));
 
 module.exports = { authRoutes };
-  
+

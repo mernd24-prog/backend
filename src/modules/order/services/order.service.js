@@ -20,6 +20,7 @@ const { ReferralService } = require("../../referral/services/referral.service");
 const { ROLES } = require("../../../shared/constants/roles");
 const { UserModel } = require("../../user/models/user.model");
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
+const { documentRendererService } = require("../../../shared/services/document-renderer.service");
 
 class OrderService {
   constructor({
@@ -238,6 +239,12 @@ class OrderService {
         cod: order.payment_provider === PAYMENT_PROVIDER.COD,
         provider: tracking.carrierName ? "manual" : undefined,
         shipToSnapshot: this.normalizeJson(order.shipping_address, {}),
+        labelData: {
+          type: "packing_box_label",
+          orderId,
+          orderNumber: order.order_number || null,
+          barcodeValue: `${orderId}:${sellerId}:${organizationId || "default"}`,
+        },
         dealId: fulfillment.dealId,
         fulfillmentModel: fulfillment.fulfillmentModel,
         metadata: {
@@ -270,6 +277,12 @@ class OrderService {
         cod: order.payment_provider === PAYMENT_PROVIDER.COD,
         provider: "manual",
         shipToSnapshot: this.normalizeJson(order.shipping_address, {}),
+        labelData: {
+          type: "packing_box_label",
+          orderId,
+          orderNumber: order.order_number || null,
+          barcodeValue: `${orderId}:${sellerId}:${organizationId || "default"}`,
+        },
         dealId: fulfillment.dealId,
         fulfillmentModel: fulfillment.fulfillmentModel,
         metadata: {
@@ -670,6 +683,374 @@ class OrderService {
     });
 
     return { ...scopedOrder, notes: visibleNotes };
+  }
+
+  isBoxLabelAllowed(order = {}) {
+    const blocked = new Set([
+      ORDER_STATUS.PENDING_PAYMENT,
+      ORDER_STATUS.PAYMENT_FAILED,
+      ORDER_STATUS.CANCELLED,
+    ]);
+    return order?.status && !blocked.has(order.status);
+  }
+
+  getAddressLines(address = {}) {
+    return [
+      address.fullName || address.name,
+      address.line1 || address.addressLine1 || address.address,
+      address.line2 || address.addressLine2,
+      [address.city, address.state, address.postalCode || address.pincode].filter(Boolean).join(", "),
+      address.country,
+      address.phone ? `Phone: ${address.phone}` : null,
+    ].filter(Boolean);
+  }
+
+  getSellerAddressLines(seller = {}, shipment = {}) {
+    const sellerProfile = seller.sellerProfile || {};
+    const pickup = shipment.pickup_address_snapshot || shipment.pickupAddressSnapshot ||
+      sellerProfile.pickupAddress || sellerProfile.businessAddress || {};
+    return [
+      sellerProfile.businessName || sellerProfile.displayName || seller.profile?.firstName || seller.email || "Seller",
+      ...this.getAddressLines(pickup).filter((line, index) => index !== 0),
+      sellerProfile.supportPhone ? `Contact: ${sellerProfile.supportPhone}` : null,
+      sellerProfile.supportEmail ? `Email: ${sellerProfile.supportEmail}` : null,
+    ].filter(Boolean);
+  }
+
+buildBoxLabelDocument(order = {}, shipment = {}) {
+  const relations = order.relations || {};
+  const shipmentRelations = shipment.relations || {};
+
+  const customer =
+    relations.customer ||
+    relations.buyer ||
+    order.customer ||
+    order.buyer ||
+    {};
+
+  const seller =
+    shipmentRelations.seller ||
+    shipment.seller ||
+    relations.seller ||
+    order.seller ||
+    {};
+
+  const shippingAddress =
+    shipment.shippingAddress ||
+    shipment.shipping_address ||
+    order.shippingAddress ||
+    order.shipping_address ||
+    relations.shippingAddress ||
+    relations.shipping_address ||
+    {};
+
+  const pickupAddress =
+    shipment.pickupAddress ||
+    shipment.pickup_address ||
+    seller.pickupAddress ||
+    seller.pickup_address ||
+    seller.businessAddress ||
+    seller.business_address ||
+    seller.billingAddress ||
+    seller.billing_address ||
+    {};
+
+  const shipmentItems =
+    shipmentRelations.items ||
+    shipment.items ||
+    shipment.shipmentItems ||
+    shipment.shipment_items ||
+    [];
+
+  const orderItems =
+    relations.items ||
+    order.items ||
+    order.orderItems ||
+    order.order_items ||
+    [];
+
+  const items = shipmentItems.length ? shipmentItems : orderItems;
+
+  const orderNumber =
+    order.orderNumber ||
+    order.order_number ||
+    order.number ||
+    order.displayId ||
+    order.display_id ||
+    order.id;
+
+  const shipmentNumber =
+    shipment.shipmentNumber ||
+    shipment.shipment_number ||
+    shipment.number ||
+    shipment.id;
+
+  const trackingNumber =
+    shipment.trackingNumber ||
+    shipment.tracking_number ||
+    shipment.awbNumber ||
+    shipment.awb_number ||
+    shipment.awb ||
+    shipment.trackingId ||
+    shipment.tracking_id ||
+    shipmentNumber;
+
+  const paymentMethod =
+    order.paymentMethod ||
+    order.payment_method ||
+    order.payment?.method ||
+    order.payment?.paymentMethod ||
+    "PREPAID";
+
+  const isCod =
+    String(paymentMethod).toLowerCase() === "cod" ||
+    String(paymentMethod).toLowerCase().includes("cash_on_delivery") ||
+    order.isCod === true ||
+    order.is_cod === true;
+
+  const collectAmount = isCod
+    ? Number(
+        order.codAmount ??
+        order.cod_amount ??
+        order.amountToCollect ??
+        order.amount_to_collect ??
+        order.finalPayableAmount ??
+        order.final_payable_amount ??
+        order.totalAmount ??
+        order.total_amount ??
+        0,
+      )
+    : 0;
+
+  const mappedItems = items.map((item) => ({
+    productTitle:
+      item.productTitle ||
+      item.product_title ||
+      item.title ||
+      item.name ||
+      item.product?.title ||
+      item.product?.name ||
+      item.orderItem?.productTitle ||
+      item.order_item?.product_title ||
+      "Product",
+
+    sku:
+      item.productSku ||
+      item.product_sku ||
+      item.variantSku ||
+      item.variant_sku ||
+      item.sku ||
+      item.variant?.sku ||
+      item.orderItem?.productSku ||
+      item.order_item?.product_sku ||
+      "",
+
+    quantity: Number(
+      item.quantity ??
+      item.shippedQuantity ??
+      item.shipped_quantity ??
+      item.orderItem?.quantity ??
+      item.order_item?.quantity ??
+      1,
+    ),
+  }));
+
+  const totalPieces = mappedItems.reduce(
+    (total, item) => total + Number(item.quantity || 0),
+    0,
+  );
+
+  const document = {
+    layout: "box_label",
+    title: "Box Label",
+    subtitle: `Order ${orderNumber}`,
+    fileBaseName: `box-label-${orderNumber}-${shipmentNumber}`,
+    generatedAt: new Date().toISOString(),
+
+    data: {
+      brand: {
+        name: process.env.INVOICE_BRAND_NAME || "Sam Global",
+        logoUrl: process.env.INVOICE_LOGO_URL || "",
+        support:
+          process.env.INVOICE_CONTACT ||
+          process.env.SUPPORT_EMAIL ||
+          "support@samglobal.com",
+      },
+
+      order: {
+        id: order.id,
+        number: orderNumber,
+        placedAt:
+          order.placedAt ||
+          order.placed_at ||
+          order.createdAt ||
+          order.created_at,
+      },
+
+      shipment: {
+        id: shipment.id,
+        number: shipmentNumber,
+        trackingNumber,
+        carrier:
+          shipment.carrierName ||
+          shipment.carrier_name ||
+          shipment.courierName ||
+          shipment.courier_name ||
+          shipment.provider ||
+          "Self Shipping",
+
+        service:
+          shipment.serviceName ||
+          shipment.service_name ||
+          shipment.shippingMethod ||
+          shipment.shipping_method ||
+          "Standard Delivery",
+      },
+
+      recipient: {
+        ...shippingAddress,
+        fullName:
+          shippingAddress.fullName ||
+          shippingAddress.full_name ||
+          shippingAddress.name ||
+          customer.profile?.displayName ||
+          [
+            customer.profile?.firstName,
+            customer.profile?.lastName,
+          ].filter(Boolean).join(" ") ||
+          customer.name ||
+          "Customer",
+
+        phone:
+          shippingAddress.phone ||
+          shippingAddress.phoneNumber ||
+          shippingAddress.phone_number ||
+          shippingAddress.mobile ||
+          customer.phone ||
+          customer.mobile ||
+          "",
+      },
+
+      sender: {
+        ...pickupAddress,
+        fullName:
+          seller.legalBusinessName ||
+          seller.legal_business_name ||
+          seller.displayName ||
+          seller.display_name ||
+          seller.businessName ||
+          seller.business_name ||
+          seller.name ||
+          "Seller",
+
+        phone:
+          pickupAddress.phone ||
+          pickupAddress.mobile ||
+          seller.phone ||
+          seller.mobile ||
+          "",
+      },
+
+      payment: {
+        method: isCod ? "COD" : String(paymentMethod).toUpperCase(),
+        isCod,
+        amountToCollect: collectAmount,
+      },
+
+      package: {
+        weight:
+          shipment.weight ||
+          shipment.weightKg ||
+          shipment.weight_kg ||
+          shipment.packageWeight ||
+          shipment.package_weight ||
+          null,
+
+        length:
+          shipment.length ||
+          shipment.lengthCm ||
+          shipment.length_cm ||
+          null,
+
+        width:
+          shipment.width ||
+          shipment.widthCm ||
+          shipment.width_cm ||
+          null,
+
+        height:
+          shipment.height ||
+          shipment.heightCm ||
+          shipment.height_cm ||
+          null,
+
+        itemCount: totalPieces,
+      },
+
+      items: mappedItems,
+    },
+
+    // Keeps TXT and CSV output useful.
+    sections: [
+      {
+        title: "Shipment",
+        rows: [
+          { label: "Order Number", value: orderNumber },
+          { label: "Shipment Number", value: shipmentNumber },
+          { label: "Tracking Number", value: trackingNumber },
+          {
+            label: "Carrier",
+            value:
+              shipment.carrierName ||
+              shipment.carrier_name ||
+              shipment.provider ||
+              "Self Shipping",
+          },
+          {
+            label: "Payment",
+            value: isCod ? `COD - Collect INR ${collectAmount.toFixed(2)}` : "Prepaid",
+          },
+        ],
+      },
+      {
+        title: "Package",
+        rows: [
+          { label: "Total Pieces", value: totalPieces },
+          {
+            label: "Weight",
+            value:
+              shipment.weight ||
+              shipment.weightKg ||
+              shipment.weight_kg ||
+              "-",
+          },
+        ],
+      },
+    ],
+  };
+
+  return document;
+}
+
+  async downloadBoxLabel(orderId, shipmentId, actor, format = "pdf") {
+    const order = await this.orderRepository.findByIdWithItems(orderId);
+    if (!order) throw AppError.notFound("Order");
+    await this.getOrder(orderId, actor);
+
+    if (!this.isBoxLabelAllowed(order)) {
+      throw new AppError("Box label is available only after order is confirmed or COD order is accepted", 409);
+    }
+
+    const shipment = (order.relations?.shipments || []).find((item) => String(item.id) === String(shipmentId));
+    if (!shipment || String(shipment.direction || "forward") === "reverse") {
+      throw AppError.notFound("Shipment");
+    }
+
+    const document = this.buildBoxLabelDocument(order, shipment);
+    return documentRendererService.render(document, {
+      format,
+      fileBaseName: document.fileBaseName,
+    });
   }
 
   filterOrderForBuyer(order = {}, fallbackRefundPolicy = null) {

@@ -7,7 +7,7 @@ const { forget } = require("../../../shared/tools/cache");
 const { ProductModel } = require("../../product/models/product.model");
 const { OrderRepository } = require("../../order/repositories/order.repository");
 const { UserModel } = require("../../user/models/user.model");
-const { ORDER_STATUS, PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
+const { PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const {
   AdminTaxModel,
   AdminSubTaxModel,
@@ -588,15 +588,7 @@ class PlatformService {
       throw new AppError("Only purchased products can be reviewed", 403);
     }
 
-    const deliveredStatuses = new Set([ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED, "completed"]);
     const paidStatuses = new Set([PAYMENT_STATUS.CAPTURED, PAYMENT_STATUS.AUTHORIZED, "paid"]);
-    const itemDelivered = Boolean(orderItem.item_delivered_at) ||
-      deliveredStatuses.has(String(orderItem.item_delivery_status || "").toLowerCase()) ||
-      deliveredStatuses.has(String(orderItem.order_delivery_status || "").toLowerCase()) ||
-      deliveredStatuses.has(String(orderItem.order_status || "").toLowerCase());
-    if (!itemDelivered) {
-      throw new AppError("Review can be submitted after this item is delivered", 400);
-    }
     if (!paidStatuses.has(orderItem.payment_status)) {
       throw new AppError("Review can be submitted after successful payment", 400);
     }
@@ -605,6 +597,7 @@ class PlatformService {
       productId,
       buyerId,
       payload.orderId,
+      orderItem.order_item_id || payload.orderItemId,
     );
     if (existing) throw AppError.duplicate("Review", "already reviewed this product for this order");
 

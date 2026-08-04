@@ -49,6 +49,11 @@ orderRoutes.get(
   checkInput(orderParamSchema),
   catchErrors(orderController.getOne),
 );
+orderRoutes.get(
+  "/:orderId/shipments/:shipmentId/box-label",
+  authenticate,
+  catchErrors(orderController.downloadBoxLabel),
+);
 orderRoutes.post(
   "/:orderId/cancel",
   authenticate,

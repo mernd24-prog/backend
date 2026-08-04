@@ -16,6 +16,21 @@ class AuthController {
     const result = await this.authService.registerWithOtp(req.body, getRequestInfo(req));
     res.status(201).json(okResponse(result));
   };
+ 
+  buyerOtpAuth = async (req, res) => {
+    const result = await this.authService.buyerOtpAuth(
+      req.body,
+      getRequestInfo(req),
+    );
+
+    const isNewRegistration =
+      Boolean(req.body.otp) &&
+      result?.otpAuth?.action === "register";
+
+    res
+      .status(isNewRegistration ? 201 : 200)
+      .json(okResponse(result));
+  };
 
   verifyRegistration = async (req, res) => {
     const result = await this.authService.verifyRegistration(req.body, getRequestInfo(req));

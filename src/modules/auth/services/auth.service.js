@@ -24,6 +24,14 @@ const { sendMail } = require("../../../infrastructure/mail/mailer");
 const otpEmailTemplate = require("../../../../templates/otp-email.ejs");
 const { env } = require("../../../config/env");
 const {
+  createHash,
+  timingSafeEqual,
+} = require("crypto");
+
+const {
+  sendSmsOtp,
+} = require("../../../infrastructure/msg/msg-otp");
+const {
   SELLER_ONBOARDING_STATUS,
   makeSellerOnboardingState,
   getSellerKycStatus,
@@ -54,7 +62,12 @@ const {
   getStatusAuthError,
   normalizeAccountStatus,
 } = require("../../../shared/auth/session-state");
+const BUYER_OTP_PURPOSE = "buyer_auth";
 
+const BUYER_OTP_TTL_SECONDS = 300;
+const BUYER_OTP_CONTEXT_TTL_SECONDS = 600;
+const BUYER_OTP_RESEND_SECONDS = 60;
+const BUYER_OTP_MAX_ATTEMPTS = 5;
 class AuthService {
   constructor({
     authRepository = new AuthRepository(),
@@ -84,6 +97,8 @@ class AuthService {
       registration: "Account Registration",
       forgot_password: "Password Reset",
       login: "Seller Login",
+      buyer_auth: "Sam Global Login",
+
     };
     return labels[purpose] || "Verification";
   }
@@ -777,12 +792,12 @@ class AuthService {
           accountStatus: isSeller ? "pending_approval" : "active",
           ...(isSeller
             ? {
-                sellerProfile: this.makeInitialSellerProfile({
-                  email: providerProfile.email,
-                  phone: null,
-                  profile,
-                }),
-              }
+              sellerProfile: this.makeInitialSellerProfile({
+                email: providerProfile.email,
+                phone: null,
+                profile,
+              }),
+            }
             : {}),
           authProviders: [
             {
@@ -818,7 +833,734 @@ class AuthService {
       throw error;
     }
   }
+  normalizeBuyerOtpIdentity(payload = {}) {
+    const rawEmail = String(payload?.email || "").trim();
 
+    const rawMobile = String(
+      payload?.mobile ||
+      payload?.phone ||
+      "",
+    ).trim();
+
+    const suppliedCount =
+      Number(Boolean(rawEmail)) +
+      Number(Boolean(rawMobile));
+
+    if (suppliedCount !== 1) {
+      throw new AppError(
+        "Provide exactly one of email or mobile",
+        400,
+      );
+    }
+
+    if (rawEmail) {
+      const email = rawEmail.toLowerCase();
+
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        throw new AppError(
+          "Enter a valid email address",
+          400,
+        );
+      }
+
+      return {
+        channel: "email",
+        identifier: email,
+        email,
+        mobile: null,
+      };
+    }
+
+    let digits = rawMobile.replace(/\D/g, "");
+
+    // 09876543210 -> 9876543210
+    if (
+      digits.length === 11 &&
+      digits.startsWith("0")
+    ) {
+      digits = digits.slice(1);
+    }
+
+    // 919876543210 -> 9876543210
+    if (
+      digits.length === 12 &&
+      digits.startsWith("91")
+    ) {
+      digits = digits.slice(2);
+    }
+
+    if (!/^[6-9]\d{9}$/.test(digits)) {
+      throw new AppError(
+        "Enter a valid 10-digit Indian mobile number",
+        400,
+      );
+    }
+
+    const mobile = `+91${digits}`;
+
+    return {
+      channel: "mobile",
+      identifier: mobile,
+      email: null,
+      mobile,
+    };
+  }
+
+  makeBuyerOtpSubject(identity) {
+    return createHash("sha256")
+      .update(
+        `${identity.channel}:${identity.identifier}`,
+      )
+      .digest("hex");
+  }
+
+  makeBuyerOtpKeys(identity) {
+    const subject = this.makeBuyerOtpSubject(identity);
+
+    return {
+      otpKey:
+        `buyer_otp:${BUYER_OTP_PURPOSE}:${subject}`,
+
+      contextKey:
+        `buyer_otp_context:${BUYER_OTP_PURPOSE}:${subject}`,
+
+      attemptsKey:
+        `buyer_otp_attempts:${BUYER_OTP_PURPOSE}:${subject}`,
+
+      cooldownKey:
+        `buyer_otp_cooldown:${BUYER_OTP_PURPOSE}:${subject}`,
+    };
+  }
+
+  maskBuyerOtpIdentifier(identity) {
+    if (identity.channel === "email") {
+      const [name, domain] =
+        identity.identifier.split("@");
+
+      return `${name.slice(0, 2)}***@${domain}`;
+    }
+
+    return (
+      `${identity.identifier.slice(0, 3)}` +
+      `******` +
+      `${identity.identifier.slice(-4)}`
+    );
+  }
+
+  isInternalMobileEmail(email) {
+    return String(email || "")
+      .toLowerCase()
+      .endsWith("@mobile.samglobal.local");
+  }
+
+  makeMobileOnlyInternalEmail(mobile) {
+    const digits =
+      String(mobile || "").replace(/\D/g, "");
+
+    /*
+     * Your current refresh-token flow searches users by
+     * token email. Mobile-only accounts therefore receive
+     * a stable internal email.
+     */
+    return `mobile-${digits}@mobile.samglobal.local`;
+  }
+
+  secureOtpMatches(storedOtp, providedOtp) {
+    const stored = Buffer.from(
+      String(storedOtp || ""),
+    );
+
+    const provided = Buffer.from(
+      String(providedOtp || ""),
+    );
+
+    if (
+      !stored.length ||
+      stored.length !== provided.length
+    ) {
+      return false;
+    }
+
+    return timingSafeEqual(stored, provided);
+  }
+
+  async findBuyerOtpUser(identity) {
+    if (identity.channel === "email") {
+      return this.authRepository.findUserByEmail(
+        identity.email,
+      );
+    }
+
+    return this.authRepository.findUserByPhone(
+      identity.mobile,
+    );
+  }
+
+  /*
+   * SINGLE PUBLIC SERVICE METHOD
+   *
+   * Without OTP:
+   *   request OTP
+   *
+   * With OTP:
+   *   verify and automatically login/register
+   */
+  async buyerOtpAuth(
+    payload = {},
+    requestContext = {},
+  ) {
+    const hasOtp =
+      payload.otp !== undefined &&
+      payload.otp !== null &&
+      String(payload.otp).trim();
+
+    if (hasOtp) {
+      return this.verifyBuyerOtpAuth(
+        payload,
+        requestContext,
+      );
+    }
+
+    return this.requestBuyerOtpAuth(
+      payload,
+      requestContext,
+    );
+  }
+
+  /*
+   * PHASE 1: REQUEST OTP
+   */
+  async requestBuyerOtpAuth(
+    payload = {},
+    requestContext = {},
+  ) {
+    const identity =
+      this.normalizeBuyerOtpIdentity(payload);
+
+    const keys = this.makeBuyerOtpKeys(identity);
+
+    const existingUser =
+      await this.findBuyerOtpUser(identity);
+
+    /*
+     * Buyer OTP endpoint must never authenticate seller,
+     * admin, influencer or other account types.
+     */
+    if (
+      existingUser &&
+      existingUser.role !== ROLES.BUYER
+    ) {
+      throw new AppError(
+        "This identifier cannot be used for buyer login",
+        403,
+      );
+    }
+
+    if (existingUser) {
+      await this.assertUserCanAuthenticate(existingUser);
+    }
+
+    const cooldownTtl =
+      await redis.ttl(keys.cooldownKey);
+
+    if (cooldownTtl > 0) {
+      throw new AppError(
+        `Please wait ${cooldownTtl} seconds before requesting another OTP`,
+        429,
+      );
+    }
+
+    const profile = {
+      firstName:
+        String(
+          payload.profile?.firstName ||
+          payload.firstName ||
+          "Customer",
+        ).trim() || "Customer",
+
+      lastName: String(
+        payload.profile?.lastName ||
+        payload.lastName ||
+        "",
+      ).trim(),
+    };
+
+    const referralCode =
+      String(payload.referralCode || "").trim() ||
+      null;
+
+    if (!existingUser && referralCode) {
+      await this.referralService
+        .getReferrerByCode(referralCode);
+    }
+
+    if (env.auth.otpMode === "disabled") {
+      throw new AppError(
+        "OTP delivery is disabled by environment configuration",
+        503,
+      );
+    }
+
+    const isStaticOtp =
+      env.auth.otpMode === "static";
+
+    const otp = String(
+      isStaticOtp
+        ? env.auth.staticOtp
+        : createOtp(),
+    );
+
+    const authContext = {
+      channel: identity.channel,
+      identifier: identity.identifier,
+
+      /*
+       * This is stored for logging/debugging only.
+       * Verification still checks the database again.
+       */
+      intendedAction:
+        existingUser ? "login" : "register",
+
+      profile,
+      referralCode,
+      requestedAt: new Date().toISOString(),
+    };
+
+    await Promise.all([
+      redis.setex(
+        keys.otpKey,
+        BUYER_OTP_TTL_SECONDS,
+        otp,
+      ),
+
+      redis.setex(
+        keys.contextKey,
+        BUYER_OTP_CONTEXT_TTL_SECONDS,
+        JSON.stringify(authContext),
+      ),
+
+      redis.setex(
+        keys.cooldownKey,
+        BUYER_OTP_RESEND_SECONDS,
+        "1",
+      ),
+
+      redis.del(keys.attemptsKey),
+    ]);
+
+    let delivery = null;
+
+    try {
+      /*
+       * Email OTP
+       */
+      if (
+        !isStaticOtp &&
+        identity.channel === "email"
+      ) {
+        const html = otpEmailTemplate({
+          firstName:
+            existingUser?.profile?.firstName ||
+            profile.firstName,
+
+          otp,
+
+          purpose:
+            this.getOtpPurposeLabel(
+              BUYER_OTP_PURPOSE,
+            ),
+        });
+
+        delivery = await sendMail({
+          to: identity.email,
+
+          subject:
+            `OTP for ${this.getOtpPurposeLabel(
+              BUYER_OTP_PURPOSE,
+            )}`,
+
+          html,
+        });
+      }
+
+      /*
+       * Mobile OTP
+       */
+      if (
+        !isStaticOtp &&
+        identity.channel === "mobile"
+      ) {
+        delivery = await sendSmsOtp({
+          mobile: identity.mobile,
+          otp,
+          purpose: BUYER_OTP_PURPOSE,
+        });
+      }
+    } catch (error) {
+      /*
+       * Do not leave a valid OTP when delivery failed.
+       */
+      await Promise.all([
+        redis.del(keys.otpKey),
+        redis.del(keys.contextKey),
+        redis.del(keys.cooldownKey),
+        redis.del(keys.attemptsKey),
+      ]);
+
+      throw new AppError(
+        "Unable to send OTP. Please try again.",
+        502,
+      );
+    }
+
+    await eventPublisher
+      .publish(
+        makeEvent(
+          DOMAIN_EVENTS.OTP_SENT_V1,
+          {
+            email:
+              identity.channel === "email"
+                ? identity.email
+                : null,
+
+            phone:
+              identity.channel === "mobile"
+                ? identity.mobile
+                : null,
+
+            channel: identity.channel,
+            purpose: BUYER_OTP_PURPOSE,
+          },
+          {
+            source: "auth-module",
+          },
+        ),
+      )
+      .catch(() => null);
+
+    return {
+      message: isStaticOtp
+        ? "Static OTP ready"
+        : "OTP sent successfully",
+
+      nextStep: "verify_otp",
+      channel: identity.channel,
+
+      identifier:
+        this.maskBuyerOtpIdentifier(identity),
+
+      expiresIn: BUYER_OTP_TTL_SECONDS,
+      resendAfter: BUYER_OTP_RESEND_SECONDS,
+
+      deliveryMode: isStaticOtp
+        ? "static"
+        : identity.channel === "email"
+          ? "email"
+          : "sms",
+
+      ...(isStaticOtp &&
+        env.auth.exposeStaticOtp
+        ? { otp }
+        : {}),
+
+      ...(delivery?.requestId
+        ? {
+          requestId: delivery.requestId,
+        }
+        : {}),
+    };
+  }
+
+  /*
+   * PHASE 2: VERIFY OTP
+   *
+   * Existing buyer:
+   *   login
+   *
+   * New email/mobile:
+   *   register buyer and login
+   */
+  async verifyBuyerOtpAuth(
+    payload = {},
+    requestContext = {},
+  ) {
+    const identity =
+      this.normalizeBuyerOtpIdentity(payload);
+
+    const otp =
+      String(payload.otp || "").trim();
+
+    if (!/^\d{4,8}$/.test(otp)) {
+      throw new AppError(
+        "Enter a valid OTP",
+        400,
+      );
+    }
+
+    const keys = this.makeBuyerOtpKeys(identity);
+
+    const [
+      storedOtp,
+      contextRaw,
+    ] = await Promise.all([
+      redis.get(keys.otpKey),
+      redis.get(keys.contextKey),
+    ]);
+
+    if (!storedOtp || !contextRaw) {
+      throw new AppError(
+        "OTP is invalid or has expired",
+        400,
+      );
+    }
+
+    let authContext;
+
+    try {
+      authContext = JSON.parse(contextRaw);
+    } catch {
+      throw new AppError(
+        "OTP session is invalid. Request a new OTP.",
+        400,
+      );
+    }
+
+    if (
+      authContext.channel !== identity.channel ||
+      authContext.identifier !== identity.identifier
+    ) {
+      throw new AppError(
+        "OTP session does not match the identifier",
+        400,
+      );
+    }
+
+    const attempts =
+      await redis.incr(keys.attemptsKey);
+
+    if (attempts === 1) {
+      await redis.expire(
+        keys.attemptsKey,
+        BUYER_OTP_TTL_SECONDS,
+      );
+    }
+
+    if (attempts > BUYER_OTP_MAX_ATTEMPTS) {
+      await Promise.all([
+        redis.del(keys.otpKey),
+        redis.del(keys.contextKey),
+        redis.del(keys.attemptsKey),
+        redis.del(keys.cooldownKey),
+      ]);
+
+      throw new AppError(
+        "Too many invalid OTP attempts. Request a new OTP.",
+        429,
+      );
+    }
+
+    if (
+      !this.secureOtpMatches(
+        storedOtp,
+        otp,
+      )
+    ) {
+      throw new AppError(
+        "OTP is invalid or has expired",
+        400,
+      );
+    }
+
+    /*
+     * OTP is single-use.
+     */
+    await Promise.all([
+      redis.del(keys.otpKey),
+      redis.del(keys.contextKey),
+      redis.del(keys.attemptsKey),
+      redis.del(keys.cooldownKey),
+    ]);
+
+    let user =
+      await this.findBuyerOtpUser(identity);
+
+    let authAction = "login";
+
+    if (
+      user &&
+      user.role !== ROLES.BUYER
+    ) {
+      throw new AppError(
+        "This identifier cannot be used for buyer login",
+        403,
+      );
+    }
+
+    /*
+     * REGISTER NEW BUYER
+     */
+    if (!user) {
+      authAction = "register";
+
+      const profile = {
+        firstName:
+          String(
+            authContext.profile?.firstName ||
+            "Customer",
+          ).trim() || "Customer",
+
+        lastName:
+          String(
+            authContext.profile?.lastName ||
+            "",
+          ).trim(),
+      };
+
+      const provider =
+        identity.channel === "email"
+          ? "email_otp"
+          : "mobile_otp";
+
+      const userPayload = {
+        /*
+         * Keep email populated because your current refresh
+         * token flow finds users by token email.
+         */
+        email:
+          identity.channel === "email"
+            ? identity.email
+            : this.makeMobileOnlyInternalEmail(
+              identity.mobile,
+            ),
+
+        phone:
+          identity.channel === "mobile"
+            ? identity.mobile
+            : "",
+
+        phoneNormalized:
+          identity.channel === "mobile"
+            ? identity.mobile
+            : undefined,
+
+        phoneVerified:
+          identity.channel === "mobile",
+
+        passwordHash: undefined,
+
+        role: ROLES.BUYER,
+        profile,
+
+        referralCode:
+          this.makeReferralCode(
+            profile.firstName || "USER",
+          ),
+
+        accountStatus: "active",
+
+        emailVerified:
+          identity.channel === "email",
+
+        authProviders: [
+          {
+            provider,
+            providerUserId:
+              identity.identifier,
+          },
+        ],
+
+        refreshSessions: [],
+      };
+
+      try {
+        user =
+          await this.authRepository
+            .createUser(userPayload);
+      } catch (error) {
+        /*
+         * Handles two simultaneous verification requests.
+         */
+        if (Number(error?.code) !== 11000) {
+          throw error;
+        }
+
+        user =
+          await this.findBuyerOtpUser(identity);
+
+        if (!user) {
+          throw error;
+        }
+
+        authAction = "login";
+      }
+
+      if (authAction === "register") {
+        await Promise.all([
+          this.walletService.ensureWallet(
+            user.id,
+          ),
+
+          this.assignDefaultRbacRole(user),
+        ]);
+
+        if (authContext.referralCode) {
+          await this.referralService
+            .rewardReferral(
+              authContext.referralCode,
+              user,
+            );
+        }
+      }
+    } else {
+      /*
+       * LOGIN EXISTING BUYER
+       */
+      await this.assertUserCanAuthenticate(user);
+
+      const updatedUser =
+        await this.authRepository
+          .markOtpIdentityVerified(
+            user.id,
+            {
+              channel: identity.channel,
+              email: identity.email,
+              mobile: identity.mobile,
+            },
+          );
+
+      user = updatedUser || user;
+    }
+
+    await this.authRepository.updateLastLogin(
+      user.id,
+      new Date(),
+    );
+
+    const tokenProvider =
+      identity.channel === "email"
+        ? "buyer-email-otp"
+        : "buyer-mobile-otp";
+
+    const result = await this.issueTokens(
+      user,
+      requestContext,
+      tokenProvider,
+    );
+
+    return {
+      ...result,
+
+      otpAuth: {
+        action: authAction,
+        channel: identity.channel,
+
+        identifier:
+          this.maskBuyerOtpIdentifier(identity),
+
+        verified: true,
+      },
+    };
+  }
   async sendOtp(payload, requestContext = {}) {
     const { email, purpose = "registration" } = payload;
 

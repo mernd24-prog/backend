@@ -290,53 +290,77 @@ class OrderRepository {
   }
 
   async hasBuyerPurchasedProduct(buyerId, productId, orderId) {
-    const { rows } = await postgresPool.query(
-      `SELECT 1
-       FROM orders o
-       JOIN order_items oi ON oi.order_id = o.id
-       WHERE o.buyer_id = $1
-         AND oi.product_id = $2
-         AND o.id = $3
-         AND (
-           o.status IN ('delivered', 'fulfilled', 'completed')
-           OR o.delivery_status IN ('delivered', 'fulfilled', 'completed', 'delivered_verified')
-         )
-       LIMIT 1`,
-      [buyerId, productId, orderId],
-    );
-    return rows.length > 0;
+    const item = await this.findReviewableOrderItem({ buyerId, productId, orderId });
+    return Boolean(item);
   }
 
   async findReviewableOrderItem({ buyerId, productId, orderId, orderItemId = null }) {
-    const values = [buyerId, productId, orderId];
-    const itemClause = orderItemId ? "AND oi.id = $4" : "";
-    if (orderItemId) values.push(orderItemId);
+    const order = await this.findByIdWithItems(orderId);
+    if (!order || String(order.buyer_id) !== String(buyerId)) return null;
 
-    const { rows } = await postgresPool.query(
-      `SELECT
-         o.id AS order_id,
-         o.buyer_id,
-         o.status AS order_status,
-         o.payment_status,
-         o.delivery_status AS order_delivery_status,
-         oi.id AS order_item_id,
-         oi.product_id,
-         oi.seller_id,
-         oi.organization_id,
-         oi.product_title,
-         oi.product_image,
-         NULL AS item_delivery_status,
-         NULL AS item_delivered_at
-       FROM orders o
-       JOIN order_items oi ON oi.order_id = o.id
-       WHERE o.buyer_id = $1
-         AND oi.product_id = $2
-         AND o.id = $3
-         ${itemClause}
-       LIMIT 1`,
-      values,
-    );
-    return rows[0] || null;
+    const items = order.items || [];
+    const matched = items.find((item) => {
+      if (String(item.product_id || "") !== String(productId || "")) return false;
+      if (orderItemId && String(item.id || "") !== String(orderItemId)) return false;
+      return true;
+    });
+
+    if (!matched || !this.isOrderItemDelivered(order, matched)) return null;
+
+    return {
+      order_id: order.id,
+      buyer_id: order.buyer_id,
+      order_status: order.status,
+      payment_status: order.payment_status,
+      order_delivery_status: order.delivery_status,
+      order_item_id: matched.id,
+      product_id: matched.product_id,
+      seller_id: matched.seller_id,
+      organization_id: matched.organization_id,
+      product_title: matched.product_title,
+      product_image: matched.product_image,
+      item_delivery_status: matched.delivery_status || null,
+      item_delivered_at: matched.delivered_at || null,
+    };
+  }
+
+  isOrderItemDelivered(order = {}, orderItem = {}) {
+    const deliveredStatuses = ["delivered", "fulfilled", "completed", "delivered_verified"];
+    if (
+      orderItem.delivered_at ||
+      deliveredStatuses.includes(String(orderItem.delivery_status || orderItem.deliveryStatus || "").toLowerCase())
+    ) {
+      return true;
+    }
+
+    const itemId = String(orderItem.id || "");
+    const sellerId = String(orderItem.seller_id || orderItem.sellerId || "platform");
+    const organizationId = String(orderItem.organization_id || orderItem.organizationId || "");
+    const shipments = order.relations?.shipments || order.shipments || [];
+    const forwardShipment = shipments.find((shipment) => {
+      if (!this.isForwardShipment(shipment)) return false;
+      if (!deliveredStatuses.includes(String(shipment.status || "").toLowerCase())) return false;
+
+      const metadata = this.parseJson(shipment.metadata, {});
+      const shipmentItemIds = Array.isArray(metadata.orderItemIds)
+        ? metadata.orderItemIds.map(String)
+        : [];
+      if (shipmentItemIds.length) return shipmentItemIds.includes(itemId);
+
+      return String(shipment.seller_id || shipment.sellerId || "platform") === sellerId &&
+        (!organizationId ||
+          String(
+            shipment.organization_id ||
+              shipment.organizationId ||
+              metadata.organizationId ||
+              "",
+          ) === organizationId);
+    });
+
+    if (forwardShipment) return true;
+
+    return deliveredStatuses.includes(String(order.status || "").toLowerCase()) ||
+      deliveredStatuses.includes(String(order.delivery_status || order.deliveryStatus || "").toLowerCase());
   }
 
   async hasNonCancellableShipment(orderId) {

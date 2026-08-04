@@ -3313,9 +3313,14 @@ class ProductService {
   async submitReview(productId, payload, actor) {
     const buyerId = actor.userId || actor.sub || actor.id;
     const orderRepo = new OrderRepository();
-    const purchased = await orderRepo.hasBuyerPurchasedProduct(buyerId, productId, payload.orderId);
-    if (!purchased) {
-      throw AppError.validation("You can only review a product from a delivered order.");
+    const reviewableItem = await orderRepo.findReviewableOrderItem({
+      buyerId,
+      productId,
+      orderId: payload.orderId,
+      orderItemId: payload.orderItemId,
+    });
+    if (!reviewableItem) {
+      throw AppError.validation("You can review this product only after this item is delivered.");
     }
     const platformService = new PlatformService();
     return platformService.createProductReview(productId, payload, actor);

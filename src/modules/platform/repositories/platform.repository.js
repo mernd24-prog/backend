@@ -223,8 +223,13 @@ class PlatformRepository {
     return ProductReviewModel.findById(reviewId);
   }
 
-  async getProductReviewByBuyerAndOrder(productId, buyerId, orderId) {
-    return ProductReviewModel.findOne({ productId, buyerId, orderId });
+  async getProductReviewByBuyerAndOrder(productId, buyerId, orderId, orderItemId = null) {
+    return ProductReviewModel.findOne({
+      productId,
+      buyerId,
+      orderId,
+      ...(orderItemId ? { orderItemId } : {}),
+    });
   }
 
   async getProductReviewByProductAndBuyer(productId, buyerIds = []) {
