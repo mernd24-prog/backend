@@ -5,14 +5,14 @@ const SIDEBAR_MODULES = [
   { moduleName: "Products", moduleKey: "products-menu", moduleSlug: "products-menu", icon: "MdListAlt", moduleType: "group", order: 11, parentModule: "catalog-management", requiredModule: "products" },
   { moduleName: "All Products", moduleKey: "product-catalog", moduleSlug: "product-catalog", icon: "MdViewList", routePath: "/app/product-catalog", moduleType: "page", order: 12, parentModule: "products-menu", requiredModule: "products" },
   { moduleName: "Product Moderation Queue", moduleKey: "product-moderation-queue", moduleSlug: "product-moderation-queue", icon: "MdFactCheck", routePath: "/app/product-moderation-queue", moduleType: "page", order: 14, parentModule: "products-menu", requiredModule: "products" },
-  { moduleName: "Add Product", moduleKey: "add-product", moduleSlug: "add-product", icon: "MdAddBox", routePath: "/app/product-catalog/form", moduleType: "page", order: 13, parentModule: "products-menu", requiredModule: "products" },
+  // { moduleName: "Add Product", moduleKey: "add-product", moduleSlug: "add-product", icon: "MdAddBox", routePath: "/app/product-catalog/form", moduleType: "page", order: 13, parentModule: "products-menu", requiredModule: "products" },
 
   { moduleName: "Catalog Masters", moduleKey: "catalog-masters", moduleSlug: "catalog-masters", icon: "MdCategory", moduleType: "group", order: 20, parentModule: "catalog-management", requiredModule: "platform" },
   { moduleName: "Category Tree", moduleKey: "categories", moduleSlug: "categories", icon: "MdAccountTree", routePath: "/app/categories", moduleType: "page", order: 21, parentModule: "catalog-masters", requiredModule: "categories" },
   { moduleName: "Brands", moduleKey: "brands", moduleSlug: "brands", icon: "MdBrandingWatermark", routePath: "/app/brands", moduleType: "page", order: 23, parentModule: "catalog-masters", requiredModule: "brands" },
   { moduleName: "Product Families", moduleKey: "product-families", moduleSlug: "product-families", icon: "MdFamilyRestroom", routePath: "/app/product-families", moduleType: "page", order: 24, parentModule: "catalog-masters", requiredModule: "platform" },
   { moduleName: "Option Masters", moduleKey: "product-options", moduleSlug: "product-options", icon: "MdSettings", routePath: "/app/product-options", moduleType: "page", order: 25, parentModule: "catalog-masters", requiredModule: "option_masters" },
-  { moduleName: "Option Values", moduleKey: "product-option-values", moduleSlug: "product-option-values", icon: "MdListAlt", routePath: "/app/product-option-values", moduleType: "page", order: 26, parentModule: "catalog-masters", requiredModule: "option_values" },
+  // { moduleName: "Option Values", moduleKey: "product-option-values", moduleSlug: "product-option-values", icon: "MdListAlt", routePath: "/app/product-option-values", moduleType: "page", order: 26, parentModule: "catalog-masters", requiredModule: "option_values" },
   { moduleName: "Product Variants", moduleKey: "product-variants", moduleSlug: "product-variants", icon: "MdGridView", routePath: "/app/product-variants", moduleType: "page", order: 27, parentModule: "catalog-masters", requiredModule: "platform" },
   { moduleName: "Product Reviews", moduleKey: "product-reviews", moduleSlug: "product-reviews", icon: "MdReviews", routePath: "/app/product-reviews", moduleType: "page", order: 28, parentModule: "catalog-masters", requiredModule: "reviews" },
 
@@ -21,14 +21,13 @@ const SIDEBAR_MODULES = [
 
   { moduleName: "Orders Management", moduleKey: "orders-management", moduleSlug: "orders-management", icon: "MdShoppingCart", moduleType: "group", order: 70, parentModule: null, requiredModule: "orders" },
   { moduleName: "Orders", moduleKey: "orders", moduleSlug: "orders", icon: "MdReceipt", routePath: "/app/orders", moduleType: "page", order: 71, parentModule: "orders-management", requiredModule: "orders" },
-  { moduleName: "Checkout Quotes", moduleKey: "checkout-quote", moduleSlug: "checkout-quote", icon: "MdCalculate", routePath: "/app/checkout-quote", moduleType: "page", order: 72, parentModule: "orders-management", requiredModule: "orders" },
-  { moduleName: "Abandoned Carts", moduleKey: "carts", moduleSlug: "carts", icon: "MdShoppingBag", routePath: "/app/carts", moduleType: "page", order: 73, parentModule: "orders-management", requiredModule: "carts" },
+  // { moduleName: "Checkout Quotes", moduleKey: "checkout-quote", moduleSlug: "checkout-quote", icon: "MdCalculate", routePath: "/app/checkout-quote", moduleType: "page", order: 72, parentModule: "orders-management", requiredModule: "orders" },
+  // { moduleName: "Abandoned Carts", moduleKey: "carts", moduleSlug: "carts", icon: "MdShoppingBag", routePath: "/app/carts", moduleType: "page", order: 73, parentModule: "orders-management", requiredModule: "carts" },
   { moduleName: "Subscription Orders", moduleKey: "subscription-orders", moduleSlug: "subscription-orders", icon: "MdSubscriptions", routePath: "/app/subscription-orders", moduleType: "page", order: 74, parentModule: "orders-management", requiredModule: "subscriptions" },
 
   { moduleName: "Payments & Finance", moduleKey: "payments-finance", moduleSlug: "payments-finance", icon: "MdPayment", moduleType: "group", order: 80, parentModule: null, requiredModule: "payments" },
   { moduleName: "Payments", moduleKey: "payments", moduleSlug: "payments", icon: "MdPayment", routePath: "/app/payments", moduleType: "page", order: 81, parentModule: "payments-finance", requiredModule: "payments" },
   { moduleName: "COD Collections", moduleKey: "cod-collections", moduleSlug: "cod-collections", icon: "MdPayments", routePath: "/app/cod-collections", moduleType: "page", order: 81.5, parentModule: "payments-finance", requiredModule: "payments" },
-  { moduleName: "Chargebacks", moduleKey: "chargebacks", moduleSlug: "chargebacks", icon: "MdSecurityUpdate", routePath: "/app/chargebacks", moduleType: "page", order: 82, parentModule: "payments-finance", requiredModule: "fraud" },
   { moduleName: "Fraud Cases", moduleKey: "fraud-cases", moduleSlug: "fraud-cases", icon: "MdGppBad", routePath: "/app/fraud-cases", moduleType: "page", order: 83, parentModule: "payments-finance", requiredModule: "fraud" },
   { moduleName: "Admin Wallet", moduleKey: "wallet-management", moduleSlug: "wallet-management", icon: "MdAccountBalanceWallet", routePath: "/app/wallet-management", moduleType: "page", order: 84, parentModule: "payments-finance", requiredModule: "wallets" },
 
