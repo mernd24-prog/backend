@@ -1,12 +1,24 @@
 const { UserModel } = require("../models/user.model");
 
+const escapeRegExp = (value) =>
+  String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 class UserRepository {
   async create(payload) {
     return UserModel.create(payload);
   }
 
   async findByEmail(email) {
-    return UserModel.findOne({ email });
+    if (!email) {
+      return null;
+    }
+
+    const normalizedEmail = String(email || "").trim();
+    return UserModel.findOne({
+      email: {
+        $regex: new RegExp(`^${escapeRegExp(normalizedEmail)}$`, "i"),
+      },
+    });
   }
   async findUserByPhone(phone) {
     const normalized =

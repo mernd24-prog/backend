@@ -101,7 +101,14 @@ const userAddressSchema = new mongoose.Schema(
 
 const userSchema = new mongoose.Schema(
   {
-    email: { type: String, required: true, unique: true, index: true },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+      trim: true,
+      lowercase: true,
+    },
 phone: {
   type: String,
   trim: true,
