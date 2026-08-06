@@ -95,6 +95,12 @@ class PaymentController {
     );
     res.json(okResponse(result));
   };
+
+  webhookCashfree = async (req, res) => {
+    const signature = req.headers["x-webhook-signature"] || req.headers["x-cashfree-signature"] || null;
+    const result = await this.paymentService.handleCashfreeWebhook(signature, req.rawBody);
+    res.json(okResponse(result));
+  };
 }
 
 module.exports = { PaymentController };

@@ -77,6 +77,95 @@ class PaymentService {
     return value;
   }
 
+  getDisplayNameFromProfile(profile = {}, fallback = "Customer") {
+    return [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim() ||
+      profile.fullName ||
+      fallback;
+  }
+
+  normalizeCashfreePhone(value) {
+    const digits = String(value || "").replace(/\D/g, "");
+    if (!digits) return null;
+    if (digits.length > 10 && digits.startsWith("91")) return digits.slice(-10);
+    return digits.slice(-15);
+  }
+
+  isInternalMobileEmail(email) {
+    return String(email || "").toLowerCase().endsWith("@mobile.samglobal.local");
+  }
+
+  async resolveCashfreeCustomer({ actor = {}, order = {}, payload = {} } = {}) {
+    const metadata = this.normalizeJson(order.metadata, {});
+    const shippingAddress = this.normalizeJson(order.shipping_address || order.shippingAddress, {});
+    const buyer = actor.userId
+      ? await UserModel.findById(actor.userId).select("email phone profile").lean().catch(() => null)
+      : null;
+    const buyerEmail = [
+      payload.customer?.email,
+      payload.notes?.customerEmail,
+      payload.notes?.buyerEmail,
+      metadata.customerEmail,
+      metadata.buyerEmail,
+      actor.email,
+      buyer?.email,
+    ].find((email) => email && !this.isInternalMobileEmail(email));
+    const buyerName =
+      payload.customer?.name ||
+      payload.notes?.customerName ||
+      payload.notes?.buyerName ||
+      shippingAddress.fullName ||
+      shippingAddress.full_name ||
+      metadata.customerName ||
+      metadata.buyerName ||
+      this.getDisplayNameFromProfile(buyer?.profile, buyerEmail || "Customer");
+    const buyerPhone = this.normalizeCashfreePhone(
+      payload.customer?.phone ||
+      payload.notes?.customerPhone ||
+      payload.notes?.buyerPhone ||
+      shippingAddress.phone ||
+      shippingAddress.phoneNumber ||
+      shippingAddress.phone_number ||
+      shippingAddress.mobile ||
+      metadata.customerPhone ||
+      metadata.buyerPhone ||
+      buyer?.phone,
+    );
+
+    return {
+      id: String(actor.userId || order.buyer_id || order.buyerId || payload.orderId),
+      name: buyerName || "Customer",
+      email: buyerEmail || "customer@example.com",
+      phone: buyerPhone || "9999999999",
+    };
+  }
+
+  getCashfreeProviderAmount(payment = {}) {
+    const metadata = this.normalizeJson(payment.metadata, {});
+    const response = metadata.response || {};
+    const providerAmount = Number(response.order_amount ?? response.orderAmount);
+    return Number.isFinite(providerAmount) ? providerAmount : null;
+  }
+
+  isStaleCashfreePayment(payment = {}, payableAmount) {
+    if (payment.provider !== PAYMENT_PROVIDER.CASHFREE) return false;
+    const cashfreeProviderAmount = this.getCashfreeProviderAmount(payment);
+    return cashfreeProviderAmount !== null &&
+      Math.round(cashfreeProviderAmount * 100) !== Math.round(Number(payableAmount || 0) * 100);
+  }
+
+  async failStaleCashfreePayment(payment, payableAmount) {
+    await this.paymentRepository.updatePaymentStatus(payment.id, {
+      status: PAYMENT_STATUS.FAILED,
+      failedReason: "stale_cashfree_amount",
+      metadata: {
+        staleCashfreeAmount: true,
+        expectedAmount: payableAmount,
+        providerOrderAmount: this.getCashfreeProviderAmount(payment),
+        failedAt: new Date().toISOString(),
+      },
+    });
+  }
+
   async enrichAdminPayments(payments = []) {
     if (!payments.length) return payments;
     const buyerIds = Array.from(new Set(
@@ -219,6 +308,19 @@ class PaymentService {
               }),
         },
         {
+          provider: PAYMENT_PROVIDER.CASHFREE,
+          label: env.cashfree.mode === "production" ? "Online Payment (Cashfree)" : "Online Payment (Cashfree Sandbox)",
+          enabled: env.cashfree.configured && env.cashfree.enabled !== false,
+          chargeAmount: 0,
+          payableNow: true,
+          mode: env.cashfree.mode,
+          ...(env.cashfree.configured
+            ? {}
+            : {
+                disabledReason: env.cashfree.missingKeys && env.cashfree.missingKeys.length ? "Cashfree credentials are missing" : "Cashfree is disabled by environment configuration",
+              }),
+        },
+        {
           provider: PAYMENT_PROVIDER.COD,
           label: "Cash on Delivery",
           enabled: codAvailable,
@@ -266,14 +368,21 @@ class PaymentService {
   }
 
   async initiatePayment(payload, actor) {
-    const existingByKey = await this.paymentRepository.findByIdempotencyKey(payload.idempotencyKey);
-    if (existingByKey) {
-      return mapPaymentResponse(existingByKey);
-    }
-
     const order = await this.orderRepository.findByIdAndBuyer(payload.orderId, actor.userId);
     if (!order) {
       throw new AppError("Order not found", 404);
+    }
+
+    const payableAmount = Number(order.payable_amount ?? order.total_amount);
+    let idempotencyKey = payload.idempotencyKey || null;
+    const existingByKey = await this.paymentRepository.findByIdempotencyKey(idempotencyKey);
+    if (existingByKey) {
+      if (this.isStaleCashfreePayment(existingByKey, payableAmount)) {
+        await this.failStaleCashfreePayment(existingByKey, payableAmount);
+        idempotencyKey = null;
+      } else {
+        return mapPaymentResponse(existingByKey);
+      }
     }
 
     const existingPayment = await this.paymentRepository.findByOrderId(payload.orderId, actor.userId);
@@ -282,17 +391,20 @@ class PaymentService {
       existingPayment.status !== PAYMENT_STATUS.FAILED &&
       existingPayment.provider === payload.provider
     ) {
-      const response = mapPaymentResponse(existingPayment);
-      if (
-        response.provider === PAYMENT_PROVIDER.RAZORPAY &&
-        response.status === PAYMENT_STATUS.INITIATED
-      ) {
-        response.checkout = buildRazorpayCheckout(response);
+      if (this.isStaleCashfreePayment(existingPayment, payableAmount)) {
+        await this.failStaleCashfreePayment(existingPayment, payableAmount);
+      } else {
+        const response = mapPaymentResponse(existingPayment);
+        if (
+          response.provider === PAYMENT_PROVIDER.RAZORPAY &&
+          response.status === PAYMENT_STATUS.INITIATED
+        ) {
+          response.checkout = buildRazorpayCheckout(response);
+        }
+        return response;
       }
-      return response;
     }
 
-    const payableAmount = Number(order.payable_amount ?? order.total_amount);
     if (payload.provider === PAYMENT_PROVIDER.WALLET_ONLY) {
       if (payableAmount > 0) {
         throw new AppError("Wallet-only payment is allowed only when payable amount is zero", 400);
@@ -405,14 +517,30 @@ class PaymentService {
         source: "payment-module",
       });
     }
+    const cashfreeCustomer =
+      payload.provider === PAYMENT_PROVIDER.CASHFREE
+        ? await this.resolveCashfreeCustomer({ actor, order, payload })
+        : null;
+
     const providerOrder = await provider.createOrder({
       amount: payableAmount,
       currency: payload.currency || order.currency,
       receipt: buildProviderReceipt(payload.orderId),
+      ...(cashfreeCustomer ? { customer: cashfreeCustomer } : {}),
       notes: {
         orderId: payload.orderId,
         buyerId: actor.userId,
         ...payload.notes,
+        ...(cashfreeCustomer
+          ? {
+              buyerName: cashfreeCustomer.name,
+              customerName: cashfreeCustomer.name,
+              buyerEmail: cashfreeCustomer.email,
+              customerEmail: cashfreeCustomer.email,
+              buyerPhone: cashfreeCustomer.phone,
+              customerPhone: cashfreeCustomer.phone,
+            }
+          : {}),
       },
     });
 
@@ -440,7 +568,7 @@ class PaymentService {
         currency: payload.currency || order.currency || "INR",
         providerOrderId: providerOrder.providerOrderId,
         metadata: providerOrder.metadata,
-        idempotencyKey: payload.idempotencyKey || null,
+        idempotencyKey,
       },
       paymentEvent,
     );
@@ -869,6 +997,213 @@ class PaymentService {
 
     return { acknowledged: true };
   }
+
+ async handleCashfreeWebhook(signature, rawBody) {
+  console.log("\n================ HANDLE CASHFREE WEBHOOK ================\n");
+
+  console.log("Configured:", env.cashfree.configured);
+  console.log("Webhook Secret:", env.cashfree.webhookSecret ? "YES" : "NO");
+  console.log("Signature:", signature);
+
+  if (rawBody) {
+    console.log("\nRaw Body:");
+    console.log(rawBody.toString("utf8"));
+  }
+
+  const { verifyWebhookSignature } = require("../../../infrastructure/payments/cashfree-client");
+
+  if (!env.cashfree.configured) {
+    console.log("Cashfree Disabled");
+    return {
+      acknowledged: true,
+      ignored: true,
+      reason: "cashfree_disabled",
+    };
+  }
+
+  if (!signature || !rawBody) {
+    console.log("Missing signature or body");
+    throw new AppError("Invalid Cashfree webhook request", 400);
+  }
+
+  if (!env.cashfree.webhookSecret) {
+    console.log("Webhook secret missing");
+    throw new AppError("Cashfree webhook secret is not configured", 503);
+  }
+
+  const valid = verifyWebhookSignature(
+    rawBody,
+    signature,
+    env.cashfree.webhookSecret
+  );
+
+  console.log("Signature Valid:", valid);
+
+  if (!valid) {
+    throw new AppError("Invalid Cashfree webhook signature", 401);
+  }
+
+  let payload;
+
+  try {
+    payload = JSON.parse(rawBody.toString("utf8"));
+
+    console.log("\nPayload:");
+    console.log(JSON.stringify(payload, null, 2));
+
+  } catch (e) {
+    console.error("JSON Parse Error");
+    throw new AppError("Invalid Cashfree webhook payload", 400);
+  }
+
+  const orderId =
+    payload.orderId ||
+    payload.referenceId ||
+    payload.data?.orderId ||
+    null;
+
+  const txStatus =
+    payload.txStatus ||
+    payload.data?.txStatus ||
+    payload.status ||
+    null;
+
+  const txId =
+    payload.txId ||
+    payload.data?.txId ||
+    payload.transactionId ||
+    null;
+
+  console.log("\nExtracted Values:");
+  console.log({
+    orderId,
+    txStatus,
+    txId,
+  });
+
+  const eventId =
+    payload.id ||
+    `${orderId || "unknown"}:${txId || Date.now()}`;
+
+  const duplicate = await this.processWebhookEvent(
+    {
+      provider: "cashfree",
+      providerEventId: eventId,
+      eventType: txStatus || "cashfree_event",
+      paymentId: null,
+      orderId,
+      payload,
+    },
+    async () => {
+
+      console.log("\nSearching Payment...");
+      console.log(orderId);
+
+      if (!orderId) {
+        console.log("No Order Id");
+        return null;
+      }
+
+      const payment =
+        await this.paymentRepository.findByProviderOrderId(orderId);
+
+      console.log("\nPayment Found:");
+      console.log(payment);
+
+      if (!payment) {
+        console.log("Payment not found.");
+        return null;
+      }
+
+      const success =
+        String(txStatus || "")
+          .toLowerCase()
+          .includes("success") ||
+        String(txStatus || "")
+          .toLowerCase()
+          .includes("paid");
+
+      console.log("Payment Success:", success);
+
+      if (success) {
+
+        console.log("Updating Payment -> CAPTURED");
+
+        await this.paymentRepository.updatePaymentStatus(
+          payment.id,
+          {
+            status: PAYMENT_STATUS.CAPTURED,
+            providerPaymentId: txId,
+            verificationMethod: "webhook",
+            metadata: payload,
+            verifiedAt: new Date(),
+          }
+        );
+
+        console.log("Payment Updated");
+
+        await this.orderService.markPaymentCaptured(
+          payment.order_id,
+          {
+            userId: payment.buyer_id,
+            role: "system",
+            metadata: {
+              provider: payment.provider,
+              providerPaymentId: txId,
+            },
+          }
+        );
+
+        console.log("Order Updated -> Paid");
+
+      } else {
+
+        console.log("Updating Payment -> FAILED");
+
+        await this.paymentRepository.updatePaymentStatus(
+          payment.id,
+          {
+            status: PAYMENT_STATUS.FAILED,
+            providerPaymentId: txId,
+            verificationMethod: "webhook",
+            metadata: payload,
+            failedReason: txStatus,
+          }
+        );
+
+        console.log("Payment Failed Updated");
+
+        await this.orderService.markPaymentFailed(
+          payment.order_id,
+          {
+            userId: payment.buyer_id,
+            role: "system",
+            reason: txStatus,
+            metadata: {
+              provider: payment.provider,
+              providerPaymentId: txId,
+            },
+          }
+        );
+
+        console.log("Order Updated -> Failed");
+      }
+    }
+  );
+
+  console.log("\nDuplicate Event:");
+  console.log(duplicate);
+
+  console.log("\n================ END WEBHOOK =================\n");
+
+  if (duplicate) {
+    return duplicate;
+  }
+
+  return {
+    acknowledged: true,
+  };
+}
 
   async listPayments(actor) {
     const payments = await this.paymentRepository.listPaymentsByBuyer(actor.userId);

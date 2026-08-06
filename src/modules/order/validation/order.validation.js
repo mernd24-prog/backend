@@ -42,7 +42,14 @@ const createOrderSchema = Joi.object({
   body: Joi.object({
     currency: Joi.string().default("INR"),
     paymentProvider: Joi.string()
-      .valid(PAYMENT_PROVIDER.RAZORPAY, PAYMENT_PROVIDER.COD, PAYMENT_PROVIDER.MANUAL_BANK_TRANSFER, PAYMENT_PROVIDER.MANUAL_UPI, PAYMENT_PROVIDER.WALLET_ONLY)
+      .valid(
+        PAYMENT_PROVIDER.RAZORPAY,
+        PAYMENT_PROVIDER.CASHFREE,
+        PAYMENT_PROVIDER.COD,
+        PAYMENT_PROVIDER.MANUAL_BANK_TRANSFER,
+        PAYMENT_PROVIDER.MANUAL_UPI,
+        PAYMENT_PROVIDER.WALLET_ONLY,
+      )
       .default(PAYMENT_PROVIDER.RAZORPAY),
     idempotencyKey: Joi.string().trim().max(128).allow("", null),
     couponCode: Joi.string().trim().uppercase().allow("", null),

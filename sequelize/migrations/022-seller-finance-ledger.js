@@ -19,87 +19,126 @@ module.exports = {
       }
     }
 
-    await q(`
-      CREATE TABLE IF NOT EXISTS seller_payouts (
-        id UUID PRIMARY KEY,
-        seller_id VARCHAR(64) NOT NULL,
-        period_start DATE NOT NULL,
-        period_end DATE NOT NULL,
-        total_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        commission_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        tax_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        refund_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        adjustment_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        net_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        currency VARCHAR(8) NOT NULL DEFAULT 'INR',
-        status VARCHAR(32) NOT NULL DEFAULT 'pending',
-        payment_method VARCHAR(64),
-        payment_reference VARCHAR(160),
-        scheduled_at TIMESTAMPTZ,
-        processed_at TIMESTAMPTZ,
-        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
+    // Create seller_payouts table if it doesn't exist
+    const hasPayoutsTable = await queryInterface.sequelize
+      .query("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'seller_payouts');", {
+        transaction,
+      })
+      .then((result) => result[0]?.[0]?.exists || false);
 
-    await q(`
-      CREATE TABLE IF NOT EXISTS seller_commissions (
-        id UUID PRIMARY KEY,
-        seller_id VARCHAR(64) NOT NULL,
-        order_id UUID NOT NULL,
-        order_item_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
-        amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        commission_rate DECIMAL(8,4) NOT NULL DEFAULT 0,
-        commission_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        tax_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        refund_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        net_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        currency VARCHAR(8) NOT NULL DEFAULT 'INR',
-        status VARCHAR(32) NOT NULL DEFAULT 'pending',
-        payout_id UUID,
-        source_status VARCHAR(64),
-        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    if (!hasPayoutsTable) {
+      await queryInterface.createTable(
+        "seller_payouts",
+        {
+          id: { type: Sequelize.UUID, primaryKey: true, allowNull: false },
+          seller_id: { type: Sequelize.STRING(64), allowNull: false },
+          period_start: { type: Sequelize.DATEONLY, allowNull: false },
+          period_end: { type: Sequelize.DATEONLY, allowNull: false },
+          total_amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          commission_amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          tax_amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          refund_amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          adjustment_amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          net_amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          currency: { type: Sequelize.STRING(8), allowNull: false, defaultValue: "INR" },
+          status: { type: Sequelize.STRING(32), allowNull: false, defaultValue: "pending" },
+          payment_method: { type: Sequelize.STRING(64), allowNull: true },
+          payment_reference: { type: Sequelize.STRING(160), allowNull: true },
+          scheduled_at: { type: Sequelize.DATE, allowNull: true },
+          processed_at: { type: Sequelize.DATE, allowNull: true },
+          metadata: { type: Sequelize.JSONB, allowNull: false, defaultValue: {} },
+          created_at: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.fn("NOW") },
+          updated_at: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.fn("NOW") },
+        },
+        { transaction },
       );
-    `);
+    }
 
-    await q(`
-      CREATE TABLE IF NOT EXISTS seller_settlements (
-        id UUID PRIMARY KEY,
-        seller_id VARCHAR(64) NOT NULL,
-        payout_id UUID,
-        settlement_date DATE NOT NULL DEFAULT CURRENT_DATE,
-        period_start DATE,
-        period_end DATE,
-        gross_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        commission_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        tax_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        refund_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        adjustment_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        net_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-        currency VARCHAR(8) NOT NULL DEFAULT 'INR',
-        status VARCHAR(32) NOT NULL DEFAULT 'pending',
-        notes TEXT,
-        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    // Create seller_commissions table if it doesn't exist
+    const hasCommissionsTable = await queryInterface.sequelize
+      .query("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'seller_commissions');", {
+        transaction,
+      })
+      .then((result) => result[0]?.[0]?.exists || false);
+
+    if (!hasCommissionsTable) {
+      await queryInterface.createTable(
+        "seller_commissions",
+        {
+          id: { type: Sequelize.UUID, primaryKey: true, allowNull: false },
+          seller_id: { type: Sequelize.STRING(64), allowNull: false },
+          order_id: { type: Sequelize.UUID, allowNull: false },
+          order_item_ids: { type: Sequelize.JSONB, allowNull: false, defaultValue: [] },
+          amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          commission_rate: { type: Sequelize.DECIMAL(8, 4), allowNull: false, defaultValue: 0 },
+          commission_amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          tax_amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          refund_amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          net_amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          currency: { type: Sequelize.STRING(8), allowNull: false, defaultValue: "INR" },
+          status: { type: Sequelize.STRING(32), allowNull: false, defaultValue: "pending" },
+          payout_id: { type: Sequelize.UUID, allowNull: true },
+          source_status: { type: Sequelize.STRING(64), allowNull: true },
+          metadata: { type: Sequelize.JSONB, allowNull: false, defaultValue: {} },
+          created_at: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.fn("NOW") },
+          updated_at: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.fn("NOW") },
+        },
+        { transaction },
       );
-    `);
+    }
+
+    // Create seller_settlements table if it doesn't exist
+    const hasSettlementsTable = await queryInterface.sequelize
+      .query("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'seller_settlements');", {
+        transaction,
+      })
+      .then((result) => result[0]?.[0]?.exists || false);
+
+    if (!hasSettlementsTable) {
+      await queryInterface.createTable(
+        "seller_settlements",
+        {
+          id: { type: Sequelize.UUID, primaryKey: true, allowNull: false },
+          seller_id: { type: Sequelize.STRING(64), allowNull: false },
+          payout_id: { type: Sequelize.UUID, allowNull: true },
+          settlement_date: { type: Sequelize.DATEONLY, allowNull: false, defaultValue: Sequelize.fn("CURRENT_DATE") },
+          period_start: { type: Sequelize.DATEONLY, allowNull: true },
+          period_end: { type: Sequelize.DATEONLY, allowNull: true },
+          gross_amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          commission_amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          tax_amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          refund_amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          adjustment_amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          net_amount: { type: Sequelize.DECIMAL(14, 2), allowNull: false, defaultValue: 0 },
+          currency: { type: Sequelize.STRING(8), allowNull: false, defaultValue: "INR" },
+          status: { type: Sequelize.STRING(32), allowNull: false, defaultValue: "pending" },
+          notes: { type: Sequelize.TEXT, allowNull: true },
+          metadata: { type: Sequelize.JSONB, allowNull: false, defaultValue: {} },
+          created_at: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.fn("NOW") },
+          updated_at: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.fn("NOW") },
+        },
+        { transaction },
+      );
+    }
 
     const payoutColumns = await describe("seller_payouts");
     const commissionColumns = await describe("seller_commissions");
     const settlementColumns = await describe("seller_settlements");
 
     if (payoutColumns.seller_id) {
-      await q("ALTER TABLE seller_payouts ALTER COLUMN seller_id TYPE VARCHAR(64) USING seller_id::text;");
+      await q("ALTER TABLE seller_payouts ALTER COLUMN seller_id TYPE VARCHAR(64) USING seller_id::text;").catch(
+        () => {},
+      );
     }
     if (commissionColumns.seller_id) {
-      await q("ALTER TABLE seller_commissions ALTER COLUMN seller_id TYPE VARCHAR(64) USING seller_id::text;");
+      await q("ALTER TABLE seller_commissions ALTER COLUMN seller_id TYPE VARCHAR(64) USING seller_id::text;").catch(
+        () => {},
+      );
     }
     if (settlementColumns.seller_id) {
-      await q("ALTER TABLE seller_settlements ALTER COLUMN seller_id TYPE VARCHAR(64) USING seller_id::text;");
+      await q("ALTER TABLE seller_settlements ALTER COLUMN seller_id TYPE VARCHAR(64) USING seller_id::text;").catch(
+        () => {},
+      );
     }
 
     await addColumnIfMissing("seller_payouts", payoutColumns, "refund_amount", {

@@ -5,6 +5,7 @@ const { ProductService } = require("../../modules/product/services/product.servi
 const { CommissionService } = require("../../modules/seller/services/commission.service");
 const { settlementLifecycleService } = require("../../modules/seller/services/settlement-lifecycle.service");
 const { CancellationService } = require("../../modules/cancellation/services/cancellation.service");
+const { ORDER_STATUS } = require("../../shared/domain/commerce-constants");
 const { knex } = require("../postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
 const os = require("os");
@@ -69,8 +70,29 @@ function registerCronJobs() {
 
   const productService = new ProductService();
   const cancellationService = new CancellationService();
+  const expiryMinutes = Number(env.pendingPaymentExpiryMinutes || 30);
 
-  runPeriodicJob("order-cleanup", async () => {}, 10 * 60 * 1000);
+  runPeriodicJob("order-cleanup", async () => {
+    // Find orders stuck in PENDING_PAYMENT older than expiryMinutes and cancel them
+    const cutoff = new Date(Date.now() - expiryMinutes * 60 * 1000).toISOString();
+    const rows = await knex("orders")
+      .select("id")
+      .where("status", ORDER_STATUS.PENDING_PAYMENT)
+      .andWhere("created_at", "<", cutoff)
+      .limit(100);
+    if (!rows.length) return { cleaned: 0 };
+    let cleaned = 0;
+    for (const r of rows) {
+      try {
+        // Use cancellation workflow to release inventory/wallet and notify systems
+        await cancellationService.cancelOrder(r.id, { reason: "payment_timeout" }, { userId: "system", role: "system" });
+        cleaned += 1;
+      } catch (err) {
+        logger.warn({ orderId: r.id, err: err.message }, "Failed to auto-cancel pending payment order");
+      }
+    }
+    return { cleaned };
+  }, 10 * 60 * 1000);
   runPeriodicJob("payment-retries", async () => {}, 5 * 60 * 1000);
   runPeriodicJob("analytics-aggregation", async () => {}, 30 * 60 * 1000);
   runPeriodicJob("product-scheduled-publish", async () => {

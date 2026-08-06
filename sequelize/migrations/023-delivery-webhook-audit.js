@@ -17,27 +17,35 @@ module.exports = {
       }, { transaction });
     }
 
-    await queryInterface.sequelize.query(
-      `
-      CREATE TABLE IF NOT EXISTS delivery_webhook_events (
-        id UUID PRIMARY KEY,
-        provider VARCHAR(64) NOT NULL,
-        provider_event_id VARCHAR(180) NOT NULL,
-        shipment_id UUID,
-        status VARCHAR(32) NOT NULL DEFAULT 'processing',
-        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE(provider, provider_event_id)
-      );
-      `,
-      { transaction },
-    );
+    // Check if table exists
+    const hasTable = await queryInterface.sequelize
+      .query(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'delivery_webhook_events');",
+        { transaction },
+      )
+      .then((result) => result[0]?.[0]?.exists || false);
 
-    await queryInterface.addIndex("delivery_webhook_events", ["shipment_id", "created_at"], {
-      name: "idx_delivery_webhook_shipment_created",
-      transaction,
-    }).catch(() => {});
+    if (!hasTable) {
+      await queryInterface.createTable(
+        "delivery_webhook_events",
+        {
+          id: { type: Sequelize.UUID, primaryKey: true, allowNull: false },
+          provider: { type: Sequelize.STRING(64), allowNull: false },
+          provider_event_id: { type: Sequelize.STRING(180), allowNull: false },
+          shipment_id: { type: Sequelize.UUID, allowNull: true },
+          status: { type: Sequelize.STRING(32), allowNull: false, defaultValue: "processing" },
+          payload: { type: Sequelize.JSONB, allowNull: false, defaultValue: {} },
+          created_at: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.fn("NOW") },
+          updated_at: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.fn("NOW") },
+        },
+        { transaction, uniqueKeys: { uniq_provider_event: { fields: ["provider", "provider_event_id"] } } },
+      );
+
+      await queryInterface.addIndex("delivery_webhook_events", ["shipment_id", "created_at"], {
+        name: "idx_delivery_webhook_shipment_created",
+        transaction,
+      });
+    }
   },
 
   async down({ queryInterface, transaction }) {

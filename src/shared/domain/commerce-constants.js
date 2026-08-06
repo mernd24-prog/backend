@@ -106,6 +106,7 @@ const PAYMENT_STATUS = {
 
 const PAYMENT_PROVIDER = {
   RAZORPAY: "razorpay",
+  CASHFREE: "cashfree",
   STRIPE: "stripe",
   COD: "cod",
   MANUAL_BANK_TRANSFER: "manual_bank_transfer",

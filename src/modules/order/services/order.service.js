@@ -332,30 +332,38 @@ class OrderService {
       actor.email,
       payload.shippingAddress,
     );
-    const orderEvent = makeEvent(
-      DOMAIN_EVENTS.ORDER_CREATED_V1,
-      {
-        orderId,
-        orderNumber,
-        buyerId: actor.userId,
-        ...buyerNotificationPayload,
-        sellerIds: this.sellerIdsFromItems(pricedOrder.items),
-        totalAmount: pricedOrder.pricing.totalAmount,
-        payableAmount: pricedOrder.pricing.payableAmount,
-        status: payableAmount > 0 ? ORDER_STATUS.PENDING_PAYMENT : ORDER_STATUS.CONFIRMED,
-        paymentStatus: payableAmount > 0 ? PAYMENT_STATUS.INITIATED : PAYMENT_STATUS.CAPTURED,
-        paymentProvider: pricedOrder.pricing.paymentProvider,
-        platformFeeAmount: pricedOrder.pricing.platformFeeAmount,
-        codChargeAmount: pricedOrder.pricing.codChargeAmount,
-        shippingFeeAmount: pricedOrder.pricing.shippingFeeAmount,
-        currency: payload.currency || "INR",
-        itemCount: pricedOrder.items.length,
-        items: this.notificationItemsFromOrderItems(pricedOrder.items),
-      },
-      {
-        source: "order-module",
-      },
-    );
+    const orderStatus = payableAmount > 0 ? ORDER_STATUS.PENDING_PAYMENT : ORDER_STATUS.CONFIRMED;
+    const orderPaymentStatus = payableAmount > 0 ? PAYMENT_STATUS.INITIATED : PAYMENT_STATUS.CAPTURED;
+
+    // Build order event only for immediate (zero-payable) orders. For paid flows
+    // we defer publishing events and shipments until payment is captured to avoid
+    // exposing orders when payment isn't completed.
+    const orderEvent = payableAmount > 0
+      ? null
+      : makeEvent(
+          DOMAIN_EVENTS.ORDER_CREATED_V1,
+          {
+            orderId,
+            orderNumber,
+            buyerId: actor.userId,
+            ...buyerNotificationPayload,
+            sellerIds: this.sellerIdsFromItems(pricedOrder.items),
+            totalAmount: pricedOrder.pricing.totalAmount,
+            payableAmount: pricedOrder.pricing.payableAmount,
+            status: orderStatus,
+            paymentStatus: orderPaymentStatus,
+            paymentProvider: pricedOrder.pricing.paymentProvider,
+            platformFeeAmount: pricedOrder.pricing.platformFeeAmount,
+            codChargeAmount: pricedOrder.pricing.codChargeAmount,
+            shippingFeeAmount: pricedOrder.pricing.shippingFeeAmount,
+            currency: payload.currency || "INR",
+            itemCount: pricedOrder.items.length,
+            items: this.notificationItemsFromOrderItems(pricedOrder.items),
+          },
+          {
+            source: "order-module",
+          },
+        );
 
     try {
       await this.inventoryService.reserveForOrder(orderId, actor.userId, pricedOrder.items);
@@ -365,6 +373,10 @@ class OrderService {
         orderId,
         { reason: "order_checkout" },
       );
+
+      // Persist coupon finalization token in metadata so we can finalize only
+      // after payment is captured (avoids consuming coupons for abandoned payments).
+      const couponToFinalize = pricedOrder.couponToConsume || null;
 
       const order = await this.orderRepository.createOrder(
         {
@@ -432,8 +444,8 @@ class OrderService {
           },
           items: pricedOrder.items,
           buyerId: actor.userId,
-          status: payableAmount > 0 ? ORDER_STATUS.PENDING_PAYMENT : ORDER_STATUS.CONFIRMED,
-          paymentStatus: payableAmount > 0 ? PAYMENT_STATUS.INITIATED : PAYMENT_STATUS.CAPTURED,
+          status: orderStatus,
+          paymentStatus: orderPaymentStatus,
           deliveryStatus: null,
           createdBy: actor.userId,
           actorRole: actor.role,
@@ -445,20 +457,39 @@ class OrderService {
         userId: actor.userId,
         role: actor.role || "buyer",
       });
-      // Create one forward shipment per seller as soon as the order exists.
-      // Confirmation later reuses the same shipment through repository
-      // idempotency rather than inserting a duplicate.
-      await this.ensureShipmentsForOrder(order.id, actor, "order_created");
+      // For pending-payment orders we DO NOT create shipments or publish
+      // notifications yet. Those side-effects will run only when payment is
+      // captured to avoid exposing orders for abandoned payments.
+      if (payableAmount <= 0) {
+        // Confirmation later reuses the same shipment through repository
+        // idempotency rather than inserting a duplicate.
+        await this.ensureShipmentsForOrder(order.id, actor, "order_created");
+      }
 
-      await this.referralService.recordInfluencerReferralOrder({
-        orderId: order.id,
-        customerId: actor.userId,
-        orderStatus: order.status,
-        paymentStatus: order.payment_status || order.paymentStatus,
-        referralContext: pricedOrder.referralContext,
-      });
+      // Record referral and finalize coupons only after payment capture for
+      // payable orders. For zero-payable orders finalize immediately.
+      if (payableAmount <= 0) {
+        await this.referralService.recordInfluencerReferralOrder({
+          orderId: order.id,
+          customerId: actor.userId,
+          orderStatus: order.status,
+          paymentStatus: order.payment_status || order.paymentStatus,
+          referralContext: pricedOrder.referralContext,
+        });
 
-      await this.pricingService.finalizeCouponUsage(pricedOrder.couponToConsume);
+        await this.pricingService.finalizeCouponUsage(pricedOrder.couponToConsume);
+      } else {
+        // Persist couponToFinalize in order metadata so we can finalize after capture.
+        try {
+          await this.orderRepository.updateStatus(order.id, order.status, {
+            actorId: actor.userId,
+            actorRole: actor.role,
+            orderMetadata: { couponToFinalize },
+          });
+        } catch (err) {
+          // non-fatal: move on; coupon finalization can be retried later
+        }
+      }
       if (payableAmount <= 0) {
         await this.walletService.capture(actor.userId, orderId);
         await this.inventoryService.commitForOrder(orderId);

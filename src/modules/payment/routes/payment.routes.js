@@ -26,6 +26,10 @@ paymentRoutes.post(
   "/webhooks/razorpay",
   catchErrors(paymentController.webhook),
 );
+paymentRoutes.post(
+  "/webhooks/cashfree",
+  catchErrors(paymentController.webhookCashfree),
+);
 paymentRoutes.get("/options", checkInput(paymentOptionsSchema), catchErrors(paymentController.options));
 paymentRoutes.get("/me", authenticate, catchErrors(paymentController.listMine));
 paymentRoutes.get(

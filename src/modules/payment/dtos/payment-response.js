@@ -1,3 +1,33 @@
+function buildCashfreeCheckoutFromMetadata(payment = {}) {
+  const metadata = payment.metadata || {};
+  const response = metadata.response || {};
+  const paymentSessionId =
+    response.payment_session_id ||
+    response.paymentSessionId ||
+    metadata.payment_session_id ||
+    metadata.paymentSessionId ||
+    null;
+
+  if (String(payment.provider || "").toLowerCase() !== "cashfree" || !paymentSessionId) {
+    return null;
+  }
+
+  return {
+    provider: "cashfree",
+    paymentSessionId,
+    orderToken: response.order_token || response.cftoken || null,
+    orderId:
+      payment.providerOrderId ||
+      payment.provider_order_id ||
+      response.order_id ||
+      response.orderId ||
+      null,
+    amount: Number(payment.amount),
+    currency: payment.currency || response.order_currency || "INR",
+    mode: response.order_meta?.mode || metadata.mode || "sandbox",
+  };
+}
+
 function mapPaymentResponse(payment) {
   return {
     id: payment.id,
@@ -14,7 +44,7 @@ function mapPaymentResponse(payment) {
     metadata: payment.metadata || {},
     verifiedAt: payment.verifiedAt || payment.verified_at || null,
     failedReason: payment.failedReason || payment.failed_reason || null,
-    checkout: payment.checkout || null,
+    checkout: payment.checkout || buildCashfreeCheckoutFromMetadata(payment),
     createdAt: payment.createdAt || payment.created_at || null,
   };
 }

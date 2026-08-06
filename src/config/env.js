@@ -110,6 +110,15 @@ const razorpayXMode = razorpayXLiveRequested && razorpayXConfigured
     ? "mock"
     : "disabled";
 
+const cashfreeMissingKeys = findMissingConfig([
+  { key: "CASHFREE_APP_ID", value: process.env.CASHFREE_APP_ID },
+  { key: "CASHFREE_SECRET_KEY", value: process.env.CASHFREE_SECRET_KEY },
+]);
+const cashfreeConfigured = cashfreeMissingKeys.length === 0;
+const cashfreeEnvRaw = String(process.env.CASHFREE_ENV || "sandbox").trim();
+const cashfreeMode = (cashfreeEnvRaw || "sandbox").toLowerCase();
+
+
 const elasticsearchConfigured = hasEnvValue(process.env.ELASTICSEARCH_NODE);
 const elasticsearchEnabled = readBooleanFlag(
   ["ENABLE_ELASTICSEARCH", "USE_ELASTICSEARCH"],
@@ -172,6 +181,9 @@ const env = {
   appName: process.env.APP_NAME || "ecommerce",
   apiPrefix: process.env.API_PREFIX || "/api/v1",
   publicBaseUrl: hasEnvValue(publicBaseUrl) ? cleanEnvValue(publicBaseUrl).replace(/\/+$/, "") : "",
+  customerAppBaseUrl: hasEnvValue(process.env.CUSTOMER_APP_BASE_URL)
+    ? cleanEnvValue(process.env.CUSTOMER_APP_BASE_URL).replace(/\/+$/, "")
+    : "",
   cors: {
     origin: parseOriginList(process.env.CORS_ORIGIN || process.env.CORS_ORIGINS),
   },
@@ -224,6 +236,16 @@ const env = {
     mode: razorpayXMode,
     liveRequested: razorpayXLiveRequested,
     missingKeys: razorpayXMissingKeys,
+  },
+  cashfree: {
+    appId: process.env.CASHFREE_APP_ID || "",
+    secretKey: process.env.CASHFREE_SECRET_KEY || "",
+    env: process.env.CASHFREE_ENV || "sandbox",
+    webhookSecret: process.env.CASHFREE_WEBHOOK_SECRET || "",
+    configured: cashfreeConfigured,
+    live: cashfreeMode === "production" || cashfreeMode === "live",
+    mode: cashfreeMode,
+    missingKeys: cashfreeMissingKeys,
   },
   delivery: {
     webhookSecret: process.env.DELIVERY_WEBHOOK_SECRET || "",
@@ -309,6 +331,8 @@ const env = {
     },
   },
   enableCron: String(process.env.ENABLE_CRON || "true") === "true",
+  // How long to wait (in minutes) before cancelling orders stuck in PENDING_PAYMENT
+  pendingPaymentExpiryMinutes: parsePositiveInteger(process.env.PENDING_PAYMENT_EXPIRY_MINUTES || process.env.PENDING_PAYMENT_TIMEOUT_MINUTES, 30),
   production: isProductionMode,
 };
 

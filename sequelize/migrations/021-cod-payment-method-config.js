@@ -21,37 +21,48 @@ module.exports = {
       defaultValue: 0,
     });
 
-    await queryInterface.sequelize.query(
-      `
-      CREATE TABLE IF NOT EXISTS payment_method_configs (
-        method VARCHAR(64) PRIMARY KEY,
-        enabled BOOLEAN NOT NULL DEFAULT true,
-        charge_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
-        min_order_amount NUMERIC(12, 2),
-        max_order_amount NUMERIC(12, 2),
-        currency VARCHAR(8) NOT NULL DEFAULT 'INR',
-        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-      INSERT INTO payment_method_configs (method, enabled, charge_amount, currency, metadata)
-      VALUES ('cod', true, 0, 'INR', '{}'::jsonb)
-      ON CONFLICT (method) DO NOTHING;
-      `,
-      { transaction },
-    );
+    // Check if table exists
+    const hasTable = await queryInterface.sequelize
+      .query(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'payment_method_configs');",
+        { transaction },
+      )
+      .then((result) => result[0]?.[0]?.exists || false);
 
-    await queryInterface.sequelize.query(
-      `CREATE INDEX IF NOT EXISTS idx_orders_payment_provider_created
-       ON orders (payment_provider, created_at);`,
-      { transaction },
-    );
+    if (!hasTable) {
+      await queryInterface.createTable(
+        "payment_method_configs",
+        {
+          method: { type: Sequelize.STRING(64), primaryKey: true, allowNull: false },
+          enabled: { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: true },
+          charge_amount: { type: Sequelize.DECIMAL(12, 2), allowNull: false, defaultValue: 0 },
+          min_order_amount: { type: Sequelize.DECIMAL(12, 2), allowNull: true },
+          max_order_amount: { type: Sequelize.DECIMAL(12, 2), allowNull: true },
+          currency: { type: Sequelize.STRING(8), allowNull: false, defaultValue: "INR" },
+          metadata: { type: Sequelize.JSONB, allowNull: false, defaultValue: {} },
+          created_at: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.fn("NOW") },
+          updated_at: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.fn("NOW") },
+        },
+        { transaction },
+      );
+
+      // Insert default COD config
+      await queryInterface.sequelize.query(
+        `INSERT INTO payment_method_configs (method, enabled, charge_amount, currency, metadata)
+         VALUES ('cod', true, 0, 'INR', '{}')
+         ON CONFLICT (method) DO NOTHING;`,
+        { transaction },
+      );
+
+      // Add indexes
+      await queryInterface.addIndex("orders", ["payment_provider", "created_at"], {
+        name: "idx_orders_payment_provider_created",
+        transaction,
+      });
+    }
   },
 
   async down({ queryInterface, transaction }) {
-    await queryInterface.sequelize.query(
-      "DROP TABLE IF EXISTS payment_method_configs;",
-      { transaction },
-    );
+    await queryInterface.dropTable("payment_method_configs", { transaction }).catch(() => {});
   },
 };
