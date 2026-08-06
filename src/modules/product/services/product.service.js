@@ -2361,16 +2361,85 @@ class ProductService {
     return filter;
   }
 
-  // ─── Get single ───────────────────────────────────────────────────────────
+// ─── Get single ───────────────────────────────────────────────────────────
 
-  async getProduct(productId) {
-    const product = await this.productRepository.findOne(
-      applyPublicProductFilter({ _id: productId }),
-    );
-    if (!product) throw new AppError("Product not found", 404);
-    const [enriched] = await this.enrichProductsWithActiveDeals([product]);
-    return enriched || product;
+async getProduct(productId) {
+  const product = await this.productRepository.findOne(
+    applyPublicProductFilter({ _id: productId }),
+  );
+
+  if (!product) {
+    throw new AppError("Product not found", 404);
   }
+
+  const sellerId = String(product.sellerId || "");
+
+  const [enrichedProducts, seller] = await Promise.all([
+    this.enrichProductsWithActiveDeals([product]),
+
+    mongoose.Types.ObjectId.isValid(sellerId)
+      ? UserModel.findById(sellerId)
+          .select({
+            "profile.firstName": 1,
+            "profile.lastName": 1,
+            "profile.avatarUrl": 1,
+
+            "sellerProfile.businessName": 1,
+            "sellerProfile.displayName": 1,
+            "sellerProfile.legalBusinessName": 1,
+            "sellerProfile.description": 1,
+            "sellerProfile.supportEmail": 1,
+            "sellerProfile.supportPhone": 1,
+            "sellerProfile.businessWebsite": 1,
+            "sellerProfile.businessAddress": 1,
+          })
+          .lean()
+      : null,
+  ]);
+
+  const enrichedProduct = enrichedProducts[0] || product;
+
+  const sellerName = seller
+    ? seller.sellerProfile?.displayName ||
+      seller.sellerProfile?.legalBusinessName ||
+      seller.sellerProfile?.businessName ||
+      [seller.profile?.firstName, seller.profile?.lastName]
+        .filter(Boolean)
+        .join(" ") ||
+      null
+    : null;
+
+  return {
+    ...this.toPlainObject(enrichedProduct),
+
+    sellerName,
+
+    seller: seller
+      ? {
+          id: String(seller._id),
+          name: sellerName,
+          description: seller.sellerProfile?.description || null,
+          avatarUrl: seller.profile?.avatarUrl || null,
+          supportEmail: seller.sellerProfile?.supportEmail || null,
+          supportPhone: seller.sellerProfile?.supportPhone || null,
+          website: seller.sellerProfile?.businessWebsite || null,
+
+          address: seller.sellerProfile?.businessAddress
+            ? {
+                line1: seller.sellerProfile.businessAddress.line1 || null,
+                line2: seller.sellerProfile.businessAddress.line2 || null,
+                city: seller.sellerProfile.businessAddress.city || null,
+                state: seller.sellerProfile.businessAddress.state || null,
+                country:
+                  seller.sellerProfile.businessAddress.country || null,
+                postalCode:
+                  seller.sellerProfile.businessAddress.postalCode || null,
+              }
+            : null,
+        }
+      : null,
+  };
+}
 
   async getProductForManagement(productId, actor = {}) {
     const product = await this.productRepository.findById(productId);

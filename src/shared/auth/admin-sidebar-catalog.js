@@ -28,6 +28,7 @@ const SIDEBAR_MODULES = [
   { moduleName: "Payments & Finance", moduleKey: "payments-finance", moduleSlug: "payments-finance", icon: "MdPayment", moduleType: "group", order: 80, parentModule: null, requiredModule: "payments" },
   { moduleName: "Payments", moduleKey: "payments", moduleSlug: "payments", icon: "MdPayment", routePath: "/app/payments", moduleType: "page", order: 81, parentModule: "payments-finance", requiredModule: "payments" },
   { moduleName: "COD Collections", moduleKey: "cod-collections", moduleSlug: "cod-collections", icon: "MdPayments", routePath: "/app/cod-collections", moduleType: "page", order: 81.5, parentModule: "payments-finance", requiredModule: "payments" },
+  { moduleName: "Chargebacks", moduleKey: "chargebacks", moduleSlug: "chargebacks", icon: "MdGppMaybe", routePath: "/app/chargebacks", moduleType: "page", order: 82, parentModule: "payments-finance", requiredModule: "chargebacks" },
   { moduleName: "Fraud Cases", moduleKey: "fraud-cases", moduleSlug: "fraud-cases", icon: "MdGppBad", routePath: "/app/fraud-cases", moduleType: "page", order: 83, parentModule: "payments-finance", requiredModule: "fraud" },
   { moduleName: "Admin Wallet", moduleKey: "wallet-management", moduleSlug: "wallet-management", icon: "MdAccountBalanceWallet", routePath: "/app/wallet-management", moduleType: "page", order: 84, parentModule: "payments-finance", requiredModule: "wallets" },
 
@@ -53,6 +54,8 @@ const SIDEBAR_MODULES = [
   { moduleName: "Seller Finance & Payouts", moduleKey: "seller-finance-payouts", moduleSlug: "seller-finance-payouts", icon: "MdAccountBalanceWallet", moduleType: "group", order: 99.3, parentModule: null, requiredModule: "sellers/commissions" },
   { moduleName: "Seller Finance", moduleKey: "seller-finance", moduleSlug: "seller-finance", icon: "MdAccountBalanceWallet", routePath: "/app/seller-finance", moduleType: "page", order: 99.4, parentModule: "seller-finance-payouts", requiredModule: "sellers/commissions" },
   { moduleName: "Promotion Funding Ledger", moduleKey: "promotion-funding-ledger", moduleSlug: "promotion-funding-ledger", icon: "MdReceiptLong", routePath: "/app/promotion-funding-ledger", moduleType: "page", order: 99.45, parentModule: "seller-finance-payouts", requiredModule: "sellers/commissions" },
+  { moduleName: "Seller Wallet", moduleKey: "admin-seller-wallet", moduleSlug: "admin-seller-wallet", icon: "MdAccountBalanceWallet", routePath: "/app/seller-wallet", moduleType: "page", order: 99.47, parentModule: "seller-finance-payouts", requiredModule: "sellers/commissions" },
+  { moduleName: "Seller COD Collections", moduleKey: "admin-seller-cod-collections", moduleSlug: "admin-seller-cod-collections", icon: "MdPayments", routePath: "/app/seller-cod-collections", moduleType: "page", order: 99.48, parentModule: "seller-finance-payouts", requiredModule: "sellers/commissions" },
   { moduleName: "Seller Payouts", moduleKey: "seller-payouts", moduleSlug: "seller-payouts", icon: "MdPayments", routePath: "/app/seller-payouts", moduleType: "page", order: 99.5, parentModule: "seller-finance-payouts", requiredModule: "sellers/commissions" },
   { moduleName: "Payout Ops Queue", moduleKey: "payout-ops-queue", moduleSlug: "payout-ops-queue", icon: "MdOutbox", routePath: "/app/payout-ops-queue", moduleType: "page", order: 99.6, parentModule: "seller-finance-payouts", requiredModule: "sellers/commissions" },
   { moduleName: "Negative Balances", moduleKey: "negative-balances", moduleSlug: "negative-balances", icon: "MdMoneyOff", routePath: "/app/negative-balances", moduleType: "page", order: 99.7, parentModule: "seller-finance-payouts", requiredModule: "sellers/commissions" },
@@ -67,7 +70,7 @@ const SIDEBAR_MODULES = [
   { moduleName: "Sellers", moduleKey: "seller", moduleSlug: "seller", icon: "MdStorefront", routePath: "/app/seller", moduleType: "page", order: 102, parentModule: "users-access", requiredModule: "sellers" },
   { moduleName: "Admin Users", moduleKey: "admin-users", moduleSlug: "admin-users", icon: "MdAdminPanelSettings", routePath: "/app/admin-users", moduleType: "page", order: 103, parentModule: "users-access", requiredModule: "admin_users" },
   { moduleName: "Seller Users", moduleKey: "seller-users", moduleSlug: "seller-users", icon: "MdGroup", routePath: "/app/seller-users", moduleType: "page", order: 104, parentModule: "users-access", requiredModule: "sellers" },
-  { moduleName: "Seller Organizations", moduleKey: "seller-organizations", moduleSlug: "seller-organizations", icon: "MdBusiness", routePath: "/app/seller-organizations", moduleType: "page", order: 104.5, parentModule: "users-access", requiredModule: "sellers" },
+  // seller-organizations is accessible internally from Seller detail pages and hidden from sidebar navigation
   { moduleName: "Roles & Permissions", moduleKey: "roles-permissions", moduleSlug: "roles-permissions", icon: "MdSecurity", routePath: "/app/roles-permissions", moduleType: "page", order: 107, parentModule: "users-access", requiredModule: "rbac" },
   { moduleName: "Module Management", moduleKey: "module-management", moduleSlug: "module-management", icon: "MdViewModule", routePath: "/app/module-management", moduleType: "page", order: 108, parentModule: "users-access", requiredModule: "rbac" },
   { moduleName: "Activity Logs", moduleKey: "activity-logs", moduleSlug: "activity-logs", icon: "MdHistory", routePath: "/app/activity-logs", moduleType: "page", order: 109, parentModule: "users-access", requiredModule: "rbac" },
@@ -252,6 +255,9 @@ const ROUTE_METADATA_BY_KEY = {
   "shipping-profiles": { supportedRoutes: ["/app/shipping-profiles"] },
   "seller-shipping-profiles": { supportedRoutes: ["/app/shipping-profiles"] },
   "wallet-management": { supportedRoutes: ["/app/wallet-transactions"] },
+  chargebacks: { supportedRoutes: [] },
+  "admin-seller-wallet": { supportedRoutes: [] },
+  "admin-seller-cod-collections": { supportedRoutes: [] },
   categories: { supportedRoutes: ["/app/category-attributes"] },
 };
 
