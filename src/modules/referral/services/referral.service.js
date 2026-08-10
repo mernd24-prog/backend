@@ -189,7 +189,41 @@ class ReferralService {
     }
     const existingAccount = await this.referralRepository.findInfluencerAccountByEmail(email);
     if (existingAccount) {
-      throw new AppError("Influencer account already exists for this email", 409);
+      const existingProfile = await this.referralRepository.getInfluencerProfileByAccountId(
+        this.getRecordId(existingAccount),
+      );
+      if (existingProfile) {
+        throw new AppError("Influencer account already exists for this email", 409);
+      }
+
+      // Recover an account left behind when profile creation previously failed.
+      const recoveryPassword =
+        payload.password || `Influencer@${randomBytes(4).toString("hex")}1`;
+      const account = await this.referralRepository.updateInfluencerAccount(
+        this.getRecordId(existingAccount),
+        {
+          $set: {
+            phone: payload.phone || existingAccount.phone || null,
+            passwordHash: await hashText(recoveryPassword),
+            profile: {
+              ...(this.toPlainObject(existingAccount).profile || {}),
+              firstName:
+                payload.firstName || payload.profile?.firstName ||
+                existingAccount.profile?.firstName || "Influencer",
+              lastName:
+                payload.lastName || payload.profile?.lastName ||
+                existingAccount.profile?.lastName || "",
+            },
+          },
+        },
+      );
+      return {
+        account,
+        user: null,
+        temporaryPassword: payload.password ? null : recoveryPassword,
+        legacyUser: false,
+        recovered: true,
+      };
     }
 
     const temporaryPassword =
@@ -276,8 +310,9 @@ class ReferralService {
       createdBy: actor?.userId || null,
     });
     const created = await this.referralRepository.createInfluencerProfile({
-      accountId: account ? this.getRecordId(account) : null,
-      userId: user ? this.getRecordId(user) : null,
+      ...(account
+        ? { accountId: this.getRecordId(account) }
+        : { userId: this.getRecordId(user) }),
       influencerType: "parent",
       level: 1,
       path: [],
@@ -328,8 +363,9 @@ class ReferralService {
       : [parentIdString];
 
     const created = await this.referralRepository.createInfluencerProfile({
-      accountId: account ? this.getRecordId(account) : null,
-      userId: user ? this.getRecordId(user) : null,
+      ...(account
+        ? { accountId: this.getRecordId(account) }
+        : { userId: this.getRecordId(user) }),
       influencerType: "child",
       parentInfluencerId: parentIdString,
       rootInfluencerId,
@@ -357,6 +393,20 @@ class ReferralService {
       ...(await this.enrichInfluencer(profile)),
       temporaryPassword,
     };
+  }
+
+  async createMyChildInfluencer(actor = {}, payload = {}) {
+    const parent = await this.getInfluencerProfileByActorId(actor.userId);
+    if (!parent) throw new AppError("Influencer profile not found", 404);
+    if (parent.influencerType !== "parent" || parent.canCreateChildren !== true) {
+      throw new AppError("You do not have permission to create brand associates", 403);
+    }
+    return this.createChildInfluencer(this.getRecordId(parent), {
+      ...payload,
+      status: "active",
+      canCreateChildren: false,
+      onboardingStatus: "approved",
+    }, actor);
   }
 
   async updateInfluencerStatus(influencerId, payload = {}) {
@@ -489,7 +539,136 @@ class ReferralService {
     return Number(Math.min(Math.max(cappedPool, 0), amount).toFixed(2));
   }
 
-  async resolveInfluencerCodeForCheckout(codeValue, eligibleAmount, customerId = null) {
+  validateDistributionShares(shares = {}) {
+    const total = Number(shares.customer || 0) + Number(shares.codeOwner || 0) + Number(shares.parent || 0);
+    if (Math.abs(total - 100) > 0.001) {
+      throw new AppError("Customer, code owner, and parent distribution must total 100%", 400);
+    }
+  }
+
+  normalizeProductConfigPayload(payload = {}, actor = {}) {
+    const shares = {
+      customer: payload.customerSharePercent,
+      codeOwner: payload.codeOwnerSharePercent,
+      parent: payload.parentSharePercent,
+    };
+    const suppliedShares = Object.values(shares).some((value) => value !== undefined && value !== null);
+    if (suppliedShares) this.validateDistributionShares(shares);
+    if (payload.startsAt && payload.endsAt && new Date(payload.startsAt) >= new Date(payload.endsAt)) {
+      throw new AppError("Product distribution end date must be after its start date", 400);
+    }
+    return {
+      ...payload,
+      productId: String(payload.productId),
+      variantId: payload.variantId ? String(payload.variantId) : null,
+      maximumPoolAmount: Number(payload.maximumPoolAmount || 0),
+      active: payload.active !== false,
+      fundedBy: payload.fundedBy || "platform",
+      updatedBy: actor.userId || null,
+      metadata: payload.metadata || {},
+    };
+  }
+
+  async listProductDistributionConfigs(query = {}) {
+    const result = await this.referralRepository.listProductConfigs({
+      ...query,
+      active: query.active === undefined ? null : String(query.active) === "true",
+      page: Number(query.page || 1),
+      limit: Number(query.limit || 50),
+    });
+    return { ...result, page: Number(query.page || 1), limit: Number(query.limit || 50) };
+  }
+
+  async upsertProductDistributionConfig(payload = {}, actor = {}) {
+    const normalized = this.normalizeProductConfigPayload(payload, actor);
+    const existing = await this.referralRepository.listProductConfigs({
+      productId: normalized.productId,
+      page: 1,
+      limit: 500,
+    });
+    const exact = existing.items.find(
+      (item) => String(item.variantId || "") === String(normalized.variantId || ""),
+    );
+    return this.referralRepository.upsertProductConfig({
+      ...normalized,
+      createdBy: exact?.createdBy || actor.userId || null,
+    });
+  }
+
+  async deleteProductDistributionConfig(configId) {
+    const deleted = await this.referralRepository.deleteProductConfig(configId);
+    if (!deleted) throw new AppError("Referral product configuration not found", 404);
+    return deleted;
+  }
+
+  isProductConfigEffective(config = {}, now = new Date()) {
+    if (config.startsAt && new Date(config.startsAt) > now) return false;
+    if (config.endsAt && new Date(config.endsAt) < now) return false;
+    return true;
+  }
+
+  calculateProductPool(config = {}, item = {}, fallbackRule = {}) {
+    const quantity = Math.max(Number(item.quantity || 1), 1);
+    const lineAmount = Math.max(Number(item.lineTotal || 0), 0);
+    if (config && config.active === false) return 0;
+    if (!config) return this.calculateReferralPool(fallbackRule, lineAmount);
+    const raw = config.poolType === "percentage"
+      ? (lineAmount * Number(config.poolValue || 0)) / 100
+      : Number(config.poolValue || 0) * quantity;
+    const cap = Number(config.maximumPoolAmount || 0) * quantity;
+    return Number(Math.min(Math.max(cap > 0 ? Math.min(raw, cap) : raw, 0), lineAmount).toFixed(2));
+  }
+
+  async calculateProductDistribution(items = [], rule = {}) {
+    const configs = await this.referralRepository.listProductConfigsForItems(
+      items.map((item) => item.productId),
+    );
+    const now = new Date();
+    const snapshots = items.map((item) => {
+      const candidates = configs.filter((config) => String(config.productId) === String(item.productId));
+      const variantConfig = candidates.find(
+        (config) => config.variantId && String(config.variantId) === String(item.variantId || ""),
+      );
+      const productConfig = candidates.find((config) => !config.variantId);
+      const selected = variantConfig || productConfig || null;
+      const effective = selected && this.isProductConfigEffective(selected, now) ? selected : null;
+      const poolAmount = selected && !effective ? 0 : this.calculateProductPool(effective, item, rule);
+      const shares = {
+        customer: effective?.customerSharePercent ?? rule.customerSharePercent,
+        codeOwner: effective?.codeOwnerSharePercent ?? rule.childSharePercent,
+        parent: effective?.parentSharePercent ?? rule.parentSharePercent,
+      };
+      this.validateDistributionShares(shares);
+      return {
+        productId: String(item.productId),
+        variantId: item.variantId ? String(item.variantId) : null,
+        quantity: Number(item.quantity || 1),
+        eligibleAmount: Number(item.lineTotal || 0),
+        configId: effective ? this.getRecordId(effective) : null,
+        source: effective ? (variantConfig ? "variant" : "product") : selected ? "disabled_or_outside_window" : "global",
+        poolType: effective?.poolType || rule.distributionType,
+        poolValue: Number(effective?.poolValue ?? (rule.distributionType === "fixed_amount" ? rule.referralPoolAmount : rule.referralPoolPercent) ?? 0),
+        poolAmount,
+        fundedBy: effective?.fundedBy || "platform",
+        customerSharePercent: Number(shares.customer || 0),
+        codeOwnerSharePercent: Number(shares.codeOwner || 0),
+        parentSharePercent: Number(shares.parent || 0),
+        customerAmount: Number((poolAmount * Number(shares.customer || 0) / 100).toFixed(2)),
+        codeOwnerAmount: Number((poolAmount * Number(shares.codeOwner || 0) / 100).toFixed(2)),
+        parentAmount: Number((poolAmount * Number(shares.parent || 0) / 100).toFixed(2)),
+      };
+    });
+    const sum = (key) => Number(snapshots.reduce((total, item) => total + Number(item[key] || 0), 0).toFixed(2));
+    return {
+      items: snapshots,
+      referralPoolAmount: sum("poolAmount"),
+      customerDiscountAmount: sum("customerAmount"),
+      codeOwnerAmount: sum("codeOwnerAmount"),
+      parentAmount: sum("parentAmount"),
+    };
+  }
+
+  async resolveInfluencerCodeForCheckout(codeValue, eligibleAmount, customerId = null, items = []) {
     const code = await this.referralRepository.getReferralCodeByCode(
       this.normalizeCode(codeValue),
     );
@@ -529,10 +708,13 @@ class ReferralService {
       throw new AppError("Order does not meet the influencer code minimum amount", 400);
     }
 
-    const referralPoolAmount = this.calculateReferralPool(rule, eligibleAmount);
-    const customerDiscountAmount = Number(
-      ((referralPoolAmount * Number(rule.customerSharePercent || 0)) / 100).toFixed(2),
-    );
+    const distribution = await this.calculateProductDistribution(items, rule);
+    const referralPoolAmount = items.length
+      ? distribution.referralPoolAmount
+      : this.calculateReferralPool(rule, eligibleAmount);
+    const customerDiscountAmount = items.length
+      ? distribution.customerDiscountAmount
+      : Number(((referralPoolAmount * Number(rule.customerSharePercent || 0)) / 100).toFixed(2));
     return {
       codeId: this.getRecordId(code),
       code: code.code,
@@ -544,6 +726,9 @@ class ReferralService {
       eligibleAmount: Number(Number(eligibleAmount || 0).toFixed(2)),
       referralPoolAmount,
       customerDiscountAmount,
+      codeOwnerAmount: items.length ? distribution.codeOwnerAmount : null,
+      parentAmount: items.length ? distribution.parentAmount : null,
+      itemDistributions: distribution.items,
       rule: this.toPlainObject(rule),
     };
   }
@@ -571,6 +756,15 @@ class ReferralService {
       paymentStatus: payload.paymentStatus || "initiated",
       metadata: {
         referralPoolAmount: Number(context.referralPoolAmount || 0),
+        undistributedParentAmount: context.parentInfluencerId
+          ? 0
+          : Number(context.parentAmount || 0),
+        missingParentPolicy: context.parentInfluencerId
+          ? "allocated_to_parent"
+          : "retain_by_funding_source",
+        itemDistributions: Array.isArray(context.itemDistributions)
+          ? context.itemDistributions
+          : [],
         commissionRuleId: this.getRecordId(rule),
         ruleSnapshot: rule,
       },
@@ -584,17 +778,20 @@ class ReferralService {
         influencerId: context.influencerId,
         commissionType: "code_owner_base",
         sharePercent: Number(rule.childSharePercent || 0),
+        shareAmount: context.codeOwnerAmount,
       },
       {
         influencerId: context.parentInfluencerId,
         commissionType: "direct_parent",
         sharePercent: Number(rule.parentSharePercent || 0),
+        shareAmount: context.parentAmount,
       },
     ].filter((allocation) => allocation.influencerId && allocation.sharePercent > 0);
 
     for (const allocation of allocations) {
-      const shareAmount =
-        (Number(context.referralPoolAmount || 0) * allocation.sharePercent) / 100;
+      const shareAmount = allocation.shareAmount === null || allocation.shareAmount === undefined
+        ? (Number(context.referralPoolAmount || 0) * allocation.sharePercent) / 100
+        : Number(allocation.shareAmount || 0);
       const coins = Number((shareAmount / coinValue).toFixed(2));
       if (coins <= 0) continue;
       await this.referralRepository.createCommissionLedger({
@@ -676,6 +873,26 @@ class ReferralService {
       ...(paymentStatus ? { paymentStatus } : {}),
       ...(completed ? { completedAt: new Date() } : {}),
     });
+  }
+
+  async releaseMaturedInfluencerCoins(influencerId) {
+    const matured = await this.referralRepository.listMaturedCommissionLedger(
+      influencerId,
+      new Date(),
+    );
+    let releasedCoins = 0;
+    for (const entry of matured) {
+      const claimed = await this.referralRepository.claimCommissionAsAvailable(
+        this.getRecordId(entry),
+      );
+      if (!claimed) continue;
+      const amount = Number(claimed.amount || 0);
+      await this.referralRepository.updateWallet(influencerId, {
+        $inc: { pendingBalance: -amount, availableBalance: amount },
+      });
+      releasedCoins += amount;
+    }
+    return this.roundCoins(releasedCoins);
   }
 
   async listReferralOrders(query = {}) {
@@ -1360,6 +1577,30 @@ class ReferralService {
     if (!profile) throw new AppError("This account is not registered as an influencer", 403);
     const enriched = await this.enrichInfluencer(profile);
     const status = String(profile.status || "pending");
+    const commonModules = [
+      { key: "dashboard", label: "Dashboard", route: "/app/dashboard" },
+      { key: "codes", label: "My Codes", route: "/app/codes" },
+      { key: "orders", label: "Referral Orders", route: "/app/orders" },
+      { key: "earnings", label: "Earnings", route: "/app/earnings" },
+      { key: "wallet", label: "Wallet", route: "/app/wallet" },
+      { key: "withdrawals", label: "Withdrawals", route: "/app/withdrawals" },
+      { key: "bonuses", label: "Bonus Progress", route: "/app/bonuses" },
+      { key: "analytics", label: "Analytics", route: "/app/analytics" },
+      { key: "profile", label: "Profile", route: "/app/profile" },
+    ];
+    const parentModules = [
+      { key: "network", label: "Brand Associates", route: "/app/network" },
+      { key: "child-analytics", label: "Associate Analytics", route: "/app/child-analytics" },
+    ];
+    const allowedModules = status === "active"
+      ? [
+          ...commonModules,
+          ...(profile.influencerType === "parent" && profile.canCreateChildren
+            ? parentModules
+            : []),
+        ]
+      : [{ key: "profile", label: "Profile", route: "/app/profile" }];
+
     return {
       isInfluencer: true,
       influencerId: this.getRecordId(profile),
@@ -1370,7 +1611,9 @@ class ReferralService {
       kycStatus: profile.kycStatus || "pending",
       payoutProfileStatus: profile.payoutProfileStatus || "pending",
       influencerType: profile.influencerType,
+      canCreateChildren: Boolean(profile.canCreateChildren),
       parentInfluencerId: profile.parentInfluencerId || null,
+      allowedModules,
       primaryCode: enriched.primaryCode
         ? this.formatMobileReferralCode(enriched.primaryCode, {})
         : null,
@@ -1383,14 +1626,27 @@ class ReferralService {
         ledger: "/influencer/referral/ledger",
         wallet: "/influencer/referral/wallet",
         bonusProgress: "/influencer/referral/bonus-progress",
+        analytics: "/influencer/referral/analytics",
         network: "/influencer/referral/network",
+        createBrandAssociate: "/influencer/referral/network/children",
         withdrawals: "/influencer/referral/withdrawals",
       },
     };
   }
 
   async getMyInfluencerSession(actor = {}) {
-    return this.getInfluencerSessionByUserId(actor.userId);
+    const session = await this.getInfluencerSessionByUserId(actor.userId);
+    return {
+      ...session,
+      authentication: {
+        authenticated: true,
+        role: actor.role,
+        email: actor.email,
+        scope: actor.authScope,
+        issuedAt: actor.issuedAt,
+        expiresAt: actor.expiresAt,
+      },
+    };
   }
 
   maskUser(user = {}) {
@@ -1409,13 +1665,12 @@ class ReferralService {
       .filter(Boolean)
       .join(" ");
     return {
-      id: enriched.id || this.getRecordId(enriched),
       influencerType: enriched.influencerType,
-      parentInfluencerId: enriched.parentInfluencerId || null,
       level: enriched.level || 1,
       status: enriched.status,
       canCreateChildren: Boolean(enriched.canCreateChildren),
       displayName: displayName || "Influencer",
+      joinedOn: enriched.createdAt || null,
       primaryCode: enriched.primaryCode
         ? {
             code: enriched.primaryCode.code,
@@ -1608,6 +1863,7 @@ class ReferralService {
   async getInfluencerDashboard(actor = {}, query = {}) {
     const profile = await this.getMyInfluencerProfileOrThrow(actor);
     const influencerId = this.getRecordId(profile);
+    await this.releaseMaturedInfluencerCoins(influencerId);
     const code = query.code ? this.normalizeCode(query.code) : null;
     const minimumWithdrawalCoins = await this.getMinimumWithdrawalCoins();
     const excludedTypes = this.getEarningExcludedTypes();
@@ -1620,6 +1876,7 @@ class ReferralService {
       pendingPayouts,
       chart,
       bonusProgress,
+      orderStatus,
     ] =
       await Promise.all([
         this.referralRepository.ensureWallet(influencerId),
@@ -1656,7 +1913,17 @@ class ReferralService {
           excludeTypes: excludedTypes,
         }),
         this.getBonusProgressReport({ influencerId, page: 1, limit: 20 }),
+        this.referralRepository.aggregateOrderStatusByInfluencer({
+          influencerId,
+          code,
+          fromDate: query.fromDate,
+          toDate: query.toDate,
+        }),
       ]);
+    const [recentOrders, codePerformance] = await Promise.all([
+      this.listMyReferralOrders(actor, { ...query, page: 1, limit: 5 }),
+      this.listMyInfluencerCodes(actor, { ...query, page: 1, limit: 10 }),
+    ]);
     const walletSummary = this.formatWallet(
       wallet,
       pendingPayouts.total,
@@ -1680,8 +1947,11 @@ class ReferralService {
       wallet: walletSummary,
       charts: {
         dailyEarnings: chart,
+        orderStatus,
       },
       bonusTargets: bonusProgress.items,
+      recentOrders: recentOrders.items,
+      codePerformance: codePerformance.items,
     };
   }
 
@@ -1718,33 +1988,53 @@ class ReferralService {
       status: coinStatuses.has(status) ? null : status,
       coinStatus,
       participantInfluencerId: influencerId,
+      relationshipScope: query.scope || "all",
       code: query.code ? this.normalizeCode(query.code) : null,
       page: Number(query.page || 1),
       limit: Number(query.limit || 50),
     });
     const customerIds = result.items.map((order) => order.customerId).filter(Boolean);
     const orderIds = result.items.map((order) => order.orderId).filter(Boolean);
-    const [users, ledgerByOrder] = await Promise.all([
+    const ownerIds = Array.from(new Set(result.items.map((order) => String(order.codeOwnerInfluencerId || "")).filter(Boolean)));
+    const [users, ledgerByOrder, participantEarnings, ownerProfiles] = await Promise.all([
       this.referralRepository.listUsersByIds(customerIds),
       this.referralRepository.aggregateLedgerByOrderForInfluencer({
         influencerId,
         orderIds,
       }),
+      this.referralRepository.aggregateParticipantEarningsByOrder(orderIds),
+      Promise.all(ownerIds.map(async (ownerId) => {
+        const owner = await this.referralRepository.getInfluencerProfileById(ownerId);
+        return owner ? this.enrichInfluencer(owner) : null;
+      })),
     ]);
     const usersById = new Map(
       users.map((user) => [this.getRecordId(user), this.toPlainObject(user)]),
     );
+    const ownerById = new Map(ownerProfiles.filter(Boolean).map((owner) => [String(owner.id || this.getRecordId(owner)), owner]));
     const items = result.items.map((order) => {
       const ledgerSummary = ledgerByOrder.get(String(order.orderId)) || {};
       const statusForCoins = this.getOrderCoinStatus(order, ledgerSummary);
+      const ownerId = String(order.codeOwnerInfluencerId || "");
+      const owner = ownerById.get(ownerId) || {};
+      const ownerUser = owner.user || {};
+      const ownerName = [ownerUser.profile?.firstName, ownerUser.profile?.lastName]
+        .filter(Boolean).join(" ") || ownerUser.email || "Influencer";
+      const codeOwnerEarning = participantEarnings.get(`${order.orderId}:${ownerId}:code_owner_base`) || 0;
+      const parentEarning = participantEarnings.get(`${order.orderId}:${influencerId}:direct_parent`) || 0;
+      const relationship = ownerId === influencerId ? "own_order" : "child_order";
       return {
-        id: this.getRecordId(order),
         orderId: order.orderId,
         code: order.code,
+        influencerName: ownerName,
+        relationship,
         customer: this.maskUser(usersById.get(String(order.customerId)) || {}),
         orderAmount: this.roundCoins(order.eligibleAmount),
         customerDiscount: this.roundCoins(order.discountAmount),
-        coinsEarned: this.roundCoins(ledgerSummary.coinsEarned),
+        codeOwnerEarning: this.roundCoins(codeOwnerEarning),
+        childEarning: relationship === "child_order" ? this.roundCoins(codeOwnerEarning) : 0,
+        parentEarning: this.roundCoins(parentEarning),
+        yourEarning: this.roundCoins(ledgerSummary.coinsEarned),
         reversedCoins: this.roundCoins(ledgerSummary.reversedCoins),
         status: statusForCoins,
         referralOrderStatus: order.status,
@@ -1755,7 +2045,17 @@ class ReferralService {
         expectedReleaseDate: ledgerSummary.expectedReleaseDate || null,
       };
     });
-    return { ...result, items };
+    return {
+      ...result,
+      items,
+      pageSummary: {
+        displayedOrders: items.length,
+        orderAmount: this.roundCoins(items.reduce((sum, item) => sum + item.orderAmount, 0)),
+        childEarnings: this.roundCoins(items.reduce((sum, item) => sum + item.childEarning, 0)),
+        parentEarnings: this.roundCoins(items.reduce((sum, item) => sum + item.parentEarning, 0)),
+        yourEarnings: this.roundCoins(items.reduce((sum, item) => sum + item.yourEarning, 0)),
+      },
+    };
   }
 
   async listMyCoinLedger(actor = {}, query = {}) {
@@ -1780,6 +2080,7 @@ class ReferralService {
   async getMyInfluencerWallet(actor = {}) {
     const profile = await this.getMyInfluencerProfileOrThrow(actor);
     const influencerId = this.getRecordId(profile);
+    await this.releaseMaturedInfluencerCoins(influencerId);
     const [wallet, minimumWithdrawalCoins, pendingPayouts] = await Promise.all([
       this.referralRepository.ensureWallet(influencerId),
       this.getMinimumWithdrawalCoins(),
@@ -1808,6 +2109,7 @@ class ReferralService {
   async createMyWithdrawal(actor = {}, payload = {}) {
     const profile = await this.getMyInfluencerProfileOrThrow(actor);
     const influencerId = this.getRecordId(profile);
+    await this.releaseMaturedInfluencerCoins(influencerId);
     const amount = Number(payload.amount || 0);
     const minimumWithdrawalCoins = await this.getMinimumWithdrawalCoins();
     if (amount <= 0) throw new AppError("Withdrawal amount must be greater than zero", 400);
@@ -1839,6 +2141,9 @@ class ReferralService {
 
   async getMyInfluencerNetwork(actor = {}, query = {}) {
     const profile = await this.getMyInfluencerProfileOrThrow(actor);
+    if (profile.influencerType !== "parent" || profile.canCreateChildren !== true) {
+      throw new AppError("Child network is available only to eligible parent influencers", 403);
+    }
     const influencerId = this.getRecordId(profile);
     const code = query.code ? this.normalizeCode(query.code) : null;
     const [children, allChildIds, parent] = await Promise.all([
@@ -1946,6 +2251,7 @@ class ReferralService {
         email: user.email || null,
         mobile: user.phone || null,
         accountStatus: user.accountStatus || null,
+        profile: userProfile,
       },
       kyc: {
         status: enriched.kycStatus || "pending",
@@ -1957,10 +2263,67 @@ class ReferralService {
           enriched.metadata?.bankAccountId || enriched.metadata?.upiId,
         ),
       },
+      details: enriched.metadata?.details || {},
       primaryCode: enriched.primaryCode
         ? this.formatMobileReferralCode(enriched.primaryCode, {})
         : null,
       wallet: this.formatWallet(enriched.wallet, 0, await this.getMinimumWithdrawalCoins()),
+    };
+  }
+
+  async updateMyInfluencerProfile(actor = {}, payload = {}) {
+    const profile = await this.getMyInfluencerProfileOrThrow(actor);
+    const accountId = profile.accountId || actor.userId;
+    const account = await this.referralRepository.getInfluencerAccountById(accountId);
+    if (!account) throw new AppError("Influencer account not found", 404);
+
+    const accountProfile = {
+      ...(this.toPlainObject(account).profile || {}),
+      ...(payload.firstName !== undefined ? { firstName: payload.firstName } : {}),
+      ...(payload.lastName !== undefined ? { lastName: payload.lastName } : {}),
+      ...(payload.avatarUrl !== undefined ? { avatarUrl: payload.avatarUrl } : {}),
+    };
+    await this.referralRepository.updateInfluencerAccount(accountId, {
+      $set: {
+        profile: accountProfile,
+        ...(payload.phone !== undefined ? { phone: payload.phone } : {}),
+      },
+    });
+
+    const currentMetadata = this.toPlainObject(profile).metadata || {};
+    const details = currentMetadata.details || {};
+    const nextDetails = {
+      ...details,
+      ...(payload.dateOfBirth !== undefined ? { dateOfBirth: payload.dateOfBirth } : {}),
+      ...(payload.gender !== undefined ? { gender: payload.gender } : {}),
+      ...(payload.address ? { address: { ...(details.address || {}), ...payload.address } } : {}),
+      ...(payload.documents ? { documents: { ...(details.documents || {}), ...payload.documents } } : {}),
+      ...(payload.payout ? { payout: { ...(details.payout || {}), ...payload.payout } } : {}),
+    };
+    await this.referralRepository.updateInfluencerProfile(this.getRecordId(profile), {
+      metadata: { ...currentMetadata, details: nextDetails },
+      ...(payload.payout ? { payoutProfileStatus: "submitted" } : {}),
+      ...(payload.documents ? { kycStatus: "submitted" } : {}),
+    });
+    return this.getMyInfluencerProfile(actor);
+  }
+
+  async getMyInfluencerAnalytics(actor = {}, query = {}) {
+    const profile = await this.getMyInfluencerProfileOrThrow(actor);
+    const dashboard = await this.getInfluencerDashboard(actor, query);
+    let network = null;
+    if (profile.influencerType === "parent" && profile.canCreateChildren) {
+      network = await this.getMyInfluencerNetwork(actor, { ...query, page: 1, limit: 10 });
+    }
+    return {
+      summary: dashboard.summaryCards,
+      dailyEarnings: dashboard.charts?.dailyEarnings || [],
+      orderStatus: dashboard.charts?.orderStatus || [],
+      codePerformance: dashboard.codePerformance || [],
+      recentOrders: dashboard.recentOrders || [],
+      bonusTargets: dashboard.bonusTargets || [],
+      networkSummary: network?.summary || null,
+      topChildren: network?.children || [],
     };
   }
 

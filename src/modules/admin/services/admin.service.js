@@ -119,7 +119,28 @@ class AdminService {
     if (first === "auth") return "auth";
     if (first === "admin") {
       if (second === "access") return "rbac";
-      if (second === "referral") return third === "fraud" ? "fraud" : "referral";
+      if (second === "referral") {
+        const referralModuleMap = {
+          influencers: "influencer-management",
+          "product-configs": "referral-product-distribution",
+          codes: "referral-codes",
+          rules: "referral-rules",
+          "bonus-rules": "referral-bonus-rules",
+          "bonus-achievements": "referral-bonus-history",
+          orders: "referral-orders",
+          commissions: "referral-ledger",
+          payouts: "referral-payouts",
+          fraud: "referral-fraud",
+        };
+        if (third === "reports") {
+          return fourth === "bonus-progress"
+            ? "referral-bonus-progress"
+            : fourth === "hierarchy"
+              ? "referral-hierarchy"
+              : "referral-overview";
+        }
+        return referralModuleMap[third] || "referral";
+      }
       if (second === "cms") return "cms_pages";
       if (second === "dashboard") return "admin";
       if (second === "vendors") return "sellers";

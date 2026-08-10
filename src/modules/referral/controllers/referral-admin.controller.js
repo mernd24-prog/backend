@@ -18,6 +18,26 @@ class ReferralAdminController {
     );
   };
 
+  listProductConfigs = async (req, res) => {
+    const result = await this.referralService.listProductDistributionConfigs(req.query);
+    res.json(okResponse(result.items, { total: result.total, page: result.page, limit: result.limit }));
+  };
+
+  upsertProductConfig = async (req, res) => {
+    const config = await this.referralService.upsertProductDistributionConfig(
+      req.body,
+      getCurrentUser(req),
+    );
+    res.json(okResponse(config));
+  };
+
+  deleteProductConfig = async (req, res) => {
+    const config = await this.referralService.deleteProductDistributionConfig(
+      req.params.configId,
+    );
+    res.json(okResponse(config));
+  };
+
   createParentInfluencer = async (req, res) => {
     const actor = getCurrentUser(req);
     const influencer = await this.referralService.createParentInfluencer(

@@ -15,6 +15,14 @@ class ReferralMobileController {
     res.json(okResponse(result));
   };
 
+  analytics = async (req, res) => {
+    const result = await this.referralService.getMyInfluencerAnalytics(
+      getCurrentUser(req),
+      req.query,
+    );
+    res.json(okResponse(result));
+  };
+
   myCodes = async (req, res) => {
     const result = await this.referralService.listMyInfluencerCodes(
       getCurrentUser(req),
@@ -35,6 +43,7 @@ class ReferralMobileController {
     res.json(
       okResponse(result.items, {
         pagination: paginationMeta(result.page, result.limit, result.total),
+        summary: result.pageSummary,
       }),
     );
   };
@@ -90,13 +99,30 @@ class ReferralMobileController {
         },
         {
           pagination: paginationMeta(result.page, result.limit, result.total),
+          summary: result.summary,
         },
       ),
     );
   };
 
+  createNetworkChild = async (req, res) => {
+    const result = await this.referralService.createMyChildInfluencer(
+      getCurrentUser(req),
+      req.body,
+    );
+    res.status(201).json(okResponse(result));
+  };
+
   profile = async (req, res) => {
     const result = await this.referralService.getMyInfluencerProfile(getCurrentUser(req));
+    res.json(okResponse(result));
+  };
+
+  updateProfile = async (req, res) => {
+    const result = await this.referralService.updateMyInfluencerProfile(
+      getCurrentUser(req),
+      req.body,
+    );
     res.json(okResponse(result));
   };
 

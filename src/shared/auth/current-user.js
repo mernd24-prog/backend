@@ -12,6 +12,9 @@ function getActor(auth = {}) {
     organizationId: auth.selectedOrganizationId || null,
     allowedModules: Array.isArray(auth.allowedModules) ? auth.allowedModules : [],
     permissions: Array.isArray(auth.permissions) ? auth.permissions : [],
+    authScope: auth.authScope || null,
+    issuedAt: auth.iat ? new Date(Number(auth.iat) * 1000) : null,
+    expiresAt: auth.exp ? new Date(Number(auth.exp) * 1000) : null,
   };
 }
 

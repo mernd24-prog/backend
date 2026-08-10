@@ -9,6 +9,7 @@ const {
   InfluencerWalletModel,
   InfluencerPayoutRequestModel,
   ReferralCommissionRuleModel,
+  ReferralProductConfigModel,
   ReferralFraudReviewModel,
   InfluencerBonusRuleModel,
   InfluencerBonusAchievementModel,
@@ -31,6 +32,48 @@ class ReferralRepository {
 
   async findByRefereeUserId(refereeUserId) {
     return ReferralModel.findOne({ refereeUserId });
+  }
+
+  async listProductConfigs({ q = "", productId = null, active = null, page = 1, limit = 50 } = {}) {
+    const filter = {};
+    if (productId) filter.productId = String(productId);
+    if (active !== null && active !== undefined) filter.active = active;
+    if (q) {
+      filter.$or = [
+        { productId: { $regex: q, $options: "i" } },
+        { variantId: { $regex: q, $options: "i" } },
+        { "metadata.productTitle": { $regex: q, $options: "i" } },
+        { "metadata.variantTitle": { $regex: q, $options: "i" } },
+      ];
+    }
+    const skip = (Number(page) - 1) * Number(limit);
+    const [items, total] = await Promise.all([
+      ReferralProductConfigModel.find(filter).sort({ updatedAt: -1 }).skip(skip).limit(Number(limit)),
+      ReferralProductConfigModel.countDocuments(filter),
+    ]);
+    return { items, total };
+  }
+
+  async getProductConfigById(configId) {
+    return ReferralProductConfigModel.findById(configId);
+  }
+
+  async listProductConfigsForItems(productIds = []) {
+    const ids = Array.from(new Set(productIds.map(String).filter(Boolean)));
+    if (!ids.length) return [];
+    return ReferralProductConfigModel.find({ productId: { $in: ids } });
+  }
+
+  async upsertProductConfig(payload) {
+    return ReferralProductConfigModel.findOneAndUpdate(
+      { productId: String(payload.productId), variantId: payload.variantId ? String(payload.variantId) : null },
+      { $set: payload },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true },
+    );
+  }
+
+  async deleteProductConfig(configId) {
+    return ReferralProductConfigModel.findByIdAndDelete(configId);
   }
 
   async createUser(payload) {
@@ -362,6 +405,29 @@ class ReferralRepository {
     );
   }
 
+  async listMaturedCommissionLedger(influencerId, now = new Date()) {
+    const ledgers = await ReferralCommissionLedgerModel.find({
+      influencerId: String(influencerId),
+      status: { $in: ["pending", "locked"] },
+      releaseAt: { $lte: now },
+    }).limit(500);
+    if (!ledgers.length) return [];
+    const completedOrders = await ReferralOrderModel.find({
+      _id: { $in: ledgers.map((entry) => entry.referralOrderId) },
+      status: "completed",
+    }).select("_id");
+    const completedIds = new Set(completedOrders.map((order) => String(order._id)));
+    return ledgers.filter((entry) => completedIds.has(String(entry.referralOrderId)));
+  }
+
+  async claimCommissionAsAvailable(entryId) {
+    return ReferralCommissionLedgerModel.findOneAndUpdate(
+      { _id: entryId, status: { $in: ["pending", "locked"] } },
+      { $set: { status: "available" } },
+      { new: true },
+    );
+  }
+
   async updateReferralCodesByInfluencer(influencerId, payload) {
     return ReferralCodeModel.updateMany(
       { influencerId: String(influencerId) },
@@ -423,6 +489,7 @@ class ReferralRepository {
     code = null,
     influencerId = null,
     participantInfluencerId = null,
+    relationshipScope = "all",
     customerId = null,
     fromDate = null,
     toDate = null,
@@ -441,7 +508,13 @@ class ReferralRepository {
         coinStatus,
         code,
       });
-      if (coinStatus) {
+      if (relationshipScope === "own") {
+        filter.codeOwnerInfluencerId = participantId;
+        if (coinStatus) filter.orderId = { $in: ledgerOrderIds };
+      } else if (relationshipScope === "children") {
+        filter.directParentInfluencerId = participantId;
+        if (coinStatus) filter.orderId = { $in: ledgerOrderIds };
+      } else if (coinStatus) {
         filter.orderId = { $in: ledgerOrderIds };
       } else {
         andFilters.push({
@@ -651,6 +724,34 @@ class ReferralRepository {
     ]);
 
     return new Map(rows.map((row) => [String(row._id), row]));
+  }
+
+  async aggregateParticipantEarningsByOrder(orderIds = []) {
+    const ids = Array.from(new Set(orderIds.map(String).filter(Boolean)));
+    if (!ids.length) return new Map();
+    const rows = await ReferralCommissionLedgerModel.aggregate([
+      {
+        $match: {
+          orderId: { $in: ids },
+          commissionType: { $in: ["code_owner_base", "direct_parent"] },
+          status: { $nin: ["reversed", "expired"] },
+        },
+      },
+      {
+        $group: {
+          _id: {
+            orderId: "$orderId",
+            influencerId: "$influencerId",
+            commissionType: "$commissionType",
+          },
+          coins: { $sum: "$amount" },
+        },
+      },
+    ]);
+    return new Map(rows.map((row) => [
+      `${row._id.orderId}:${row._id.influencerId}:${row._id.commissionType}`,
+      Number(row.coins || 0),
+    ]));
   }
 
   async listMobileCoinLedger({
@@ -1231,6 +1332,22 @@ class ReferralRepository {
       },
     ]);
     return result || { orderCount: 0, eligibleAmount: 0, discountAmount: 0 };
+  }
+
+  async aggregateOrderStatusByInfluencer({ influencerId, code = null, fromDate = null, toDate = null } = {}) {
+    const filter = { codeOwnerInfluencerId: String(influencerId) };
+    if (code) filter.code = String(code).toUpperCase();
+    if (fromDate || toDate) {
+      filter.createdAt = {};
+      if (fromDate) filter.createdAt.$gte = new Date(fromDate);
+      if (toDate) filter.createdAt.$lte = new Date(toDate);
+    }
+    return ReferralOrderModel.aggregate([
+      { $match: filter },
+      { $group: { _id: "$status", value: { $sum: 1 }, amount: { $sum: "$eligibleAmount" } } },
+      { $project: { _id: 0, status: { $ifNull: ["$_id", "pending"] }, value: 1, amount: 1 } },
+      { $sort: { value: -1 } },
+    ]);
   }
 
   async aggregateLedgerTotals(filter = {}) {

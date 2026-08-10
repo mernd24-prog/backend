@@ -427,6 +427,7 @@ class OrderService {
                   influencerId: pricedOrder.referralContext.influencerId,
                   referralPoolAmount: pricedOrder.referralContext.referralPoolAmount,
                   customerDiscountAmount: pricedOrder.referralContext.customerDiscountAmount,
+                  itemDistributions: pricedOrder.referralContext.itemDistributions,
                 }
               : undefined,
           },
@@ -576,6 +577,7 @@ class OrderService {
               influencerId: pricedOrder.referralContext.influencerId,
               referralPoolAmount: pricedOrder.referralContext.referralPoolAmount,
               customerDiscountAmount: pricedOrder.referralContext.customerDiscountAmount,
+              itemDistributions: pricedOrder.referralContext.itemDistributions,
             }
           : null,
       },

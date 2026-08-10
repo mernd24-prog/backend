@@ -56,8 +56,10 @@ const InfluencerAccountModel = mongoose.model("InfluencerAccount", influencerAcc
 
 const influencerProfileSchema = new mongoose.Schema(
   {
-    accountId: { type: String, default: null, unique: true, sparse: true, index: true },
-    userId: { type: String, default: null, unique: true, sparse: true, index: true },
+    // Omit unused identity fields entirely. A sparse unique index still indexes
+    // an explicit null, which would allow only one standalone/legacy profile.
+    accountId: { type: String, default: undefined, unique: true, sparse: true, index: true },
+    userId: { type: String, default: undefined, unique: true, sparse: true, index: true },
     influencerType: {
       type: String,
       enum: ["parent", "child"],
@@ -283,6 +285,40 @@ const referralCommissionRuleSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+const referralProductConfigSchema = new mongoose.Schema(
+  {
+    productId: { type: String, required: true, index: true },
+    variantId: { type: String, default: null, index: true },
+    active: { type: Boolean, default: true, index: true },
+    poolType: {
+      type: String,
+      enum: ["fixed_amount", "percentage"],
+      default: "fixed_amount",
+    },
+    poolValue: { type: Number, required: true, min: 0 },
+    maximumPoolAmount: { type: Number, default: 0, min: 0 },
+    customerSharePercent: { type: Number, default: null, min: 0, max: 100 },
+    codeOwnerSharePercent: { type: Number, default: null, min: 0, max: 100 },
+    parentSharePercent: { type: Number, default: null, min: 0, max: 100 },
+    fundedBy: {
+      type: String,
+      enum: ["platform", "seller", "shared"],
+      default: "platform",
+    },
+    startsAt: { type: Date, default: null },
+    endsAt: { type: Date, default: null },
+    createdBy: { type: String, default: null },
+    updatedBy: { type: String, default: null },
+    metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
+  },
+  { timestamps: true },
+);
+
+referralProductConfigSchema.index(
+  { productId: 1, variantId: 1 },
+  { unique: true },
+);
+
 const referralFraudReviewSchema = new mongoose.Schema(
   {
     influencerId: { type: String, default: null, index: true },
@@ -443,6 +479,10 @@ const ReferralCommissionRuleModel = mongoose.model(
   "ReferralCommissionRule",
   referralCommissionRuleSchema,
 );
+const ReferralProductConfigModel = mongoose.model(
+  "ReferralProductConfig",
+  referralProductConfigSchema,
+);
 const ReferralFraudReviewModel = mongoose.model(
   "ReferralFraudReview",
   referralFraudReviewSchema,
@@ -467,6 +507,7 @@ module.exports = {
   InfluencerWalletModel,
   InfluencerPayoutRequestModel,
   ReferralCommissionRuleModel,
+  ReferralProductConfigModel,
   ReferralFraudReviewModel,
   InfluencerBonusRuleModel,
   InfluencerBonusAchievementModel,

@@ -450,6 +450,29 @@ function getRequestModule(req) {
       return "cms_pages";
     }
 
+    if (second === "referral") {
+      const referralModuleMap = {
+        influencers: "influencer-management",
+        "product-configs": "referral-product-distribution",
+        codes: "referral-codes",
+        rules: "referral-rules",
+        "bonus-rules": "referral-bonus-rules",
+        "bonus-achievements": "referral-bonus-history",
+        orders: "referral-orders",
+        commissions: "referral-ledger",
+        payouts: "referral-payouts",
+        fraud: "referral-fraud",
+      };
+      if (third === "reports") {
+        return fourth === "bonus-progress"
+          ? "referral-bonus-progress"
+          : fourth === "hierarchy"
+            ? "referral-hierarchy"
+            : "referral-overview";
+      }
+      return referralModuleMap[third] || "referral";
+    }
+
     const adminModuleMap = {
       access: "rbac",
       cms: "cms_pages",

@@ -87,6 +87,7 @@ const ordersQuerySchema = Joi.object({
     status: Joi.string().valid(...referralOrderStatuses, ...coinOrderStatuses),
     coinStatus: Joi.string().valid(...coinOrderStatuses),
     code: Joi.string().trim().uppercase(),
+    scope: Joi.string().valid("all", "own", "children"),
   }).required(),
   params: emptyParams,
 });
@@ -138,6 +139,18 @@ const networkQuerySchema = Joi.object({
   params: emptyParams,
 });
 
+const createNetworkChildSchema = Joi.object({
+  body: Joi.object({
+    email: Joi.string().trim().lowercase().email().required(),
+    phone: Joi.string().trim().pattern(/^\+?[0-9]{7,15}$/).allow("", null),
+    firstName: Joi.string().trim().min(2).max(80).required(),
+    lastName: Joi.string().trim().max(80).allow("", null),
+    code: Joi.string().trim().uppercase().min(3).max(30),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: emptyParams,
+});
+
 const bonusProgressQuerySchema = Joi.object({
   body: emptyBody,
   query: Joi.object({
@@ -145,6 +158,49 @@ const bonusProgressQuerySchema = Joi.object({
     ruleId: Joi.string(),
     referenceDate: Joi.date().iso(),
   }).required(),
+  params: emptyParams,
+});
+
+const analyticsQuerySchema = Joi.object({
+  body: emptyBody,
+  query: Joi.object({
+    ...dateFilterQuery,
+    code: Joi.string().trim().uppercase(),
+  }).required(),
+  params: emptyParams,
+});
+
+const updateProfileSchema = Joi.object({
+  body: Joi.object({
+    firstName: Joi.string().trim().min(2).max(80),
+    lastName: Joi.string().trim().allow("").max(80),
+    phone: Joi.string().trim().pattern(/^\+?[0-9]{7,15}$/),
+    avatarUrl: Joi.string().trim().uri().allow("", null),
+    dateOfBirth: Joi.date().iso().max("now").allow(null),
+    gender: Joi.string().valid("male", "female", "other", "prefer_not_to_say").allow(null),
+    address: Joi.object({
+      line1: Joi.string().trim().max(200).allow(""),
+      line2: Joi.string().trim().max(200).allow(""),
+      country: Joi.string().trim().max(80).allow(""),
+      state: Joi.string().trim().max(80).allow(""),
+      city: Joi.string().trim().max(80).allow(""),
+      postalCode: Joi.string().trim().max(20).allow(""),
+    }),
+    documents: Joi.object({
+      panCardUrl: Joi.string().trim().uri().allow("", null),
+      aadhaarCardUrl: Joi.string().trim().uri().allow("", null),
+      cancelledChequeUrl: Joi.string().trim().uri().allow("", null),
+    }),
+    payout: Joi.object({
+      method: Joi.string().valid("bank", "upi").allow(null),
+      accountHolderName: Joi.string().trim().max(120).allow(""),
+      bankName: Joi.string().trim().max(120).allow(""),
+      accountNumber: Joi.string().trim().max(34).allow(""),
+      ifscCode: Joi.string().trim().uppercase().max(20).allow(""),
+      upiId: Joi.string().trim().max(120).allow(""),
+    }),
+  }).min(1).required(),
+  query: Joi.object({}).required(),
   params: emptyParams,
 });
 
@@ -162,6 +218,9 @@ module.exports = {
   withdrawalsQuerySchema,
   createWithdrawalSchema,
   networkQuerySchema,
+  createNetworkChildSchema,
   bonusProgressQuerySchema,
+  analyticsQuerySchema,
+  updateProfileSchema,
   emptySchema,
 };

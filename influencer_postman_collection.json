@@ -1,0 +1,71 @@
+{
+  "info": {
+    "name": "Ecommerce Influencer Parent & Child API",
+    "description": "Complete Influencer API collection. Import influencer_postman_environment.json, set parent/child credentials, then run the appropriate login request. Tokens are saved automatically. Parent-only requests use parentAccessToken; shared requests are provided for both roles.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "00 - Authentication",
+      "item": [
+        {
+          "name": "Parent Login (run first)",
+          "event": [{ "listen": "test", "script": { "exec": ["const json = pm.response.json();", "const data = json.data || {};", "const tokens = data.tokens || data;", "if (tokens.accessToken) pm.environment.set('parentAccessToken', tokens.accessToken);", "if (tokens.refreshToken) pm.environment.set('parentRefreshToken', tokens.refreshToken);"] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{parentEmail}}\",\n  \"password\": \"{{parentPassword}}\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/auth/influencer/login" }
+        },
+        {
+          "name": "Child Login (run first)",
+          "event": [{ "listen": "test", "script": { "exec": ["const json = pm.response.json();", "const data = json.data || {};", "const tokens = data.tokens || data;", "if (tokens.accessToken) pm.environment.set('childAccessToken', tokens.accessToken);", "if (tokens.refreshToken) pm.environment.set('childRefreshToken', tokens.refreshToken);"] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{childEmail}}\",\n  \"password\": \"{{childPassword}}\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/auth/influencer/login" }
+        },
+        {
+          "name": "Refresh Parent Token",
+          "event": [{ "listen": "test", "script": { "exec": ["const json = pm.response.json();", "const data = json.data || {};", "const tokens = data.tokens || data;", "if (tokens.accessToken) pm.environment.set('parentAccessToken', tokens.accessToken);", "if (tokens.refreshToken) pm.environment.set('parentRefreshToken', tokens.refreshToken);"] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{parentRefreshToken}}\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/auth/refresh" }
+        },
+        {
+          "name": "Refresh Child Token",
+          "event": [{ "listen": "test", "script": { "exec": ["const json = pm.response.json();", "const data = json.data || {};", "const tokens = data.tokens || data;", "if (tokens.accessToken) pm.environment.set('childAccessToken', tokens.accessToken);", "if (tokens.refreshToken) pm.environment.set('childRefreshToken', tokens.refreshToken);"] } }],
+          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{childRefreshToken}}\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/auth/refresh" }
+        }
+      ]
+    },
+    {
+      "name": "01 - Parent APIs",
+      "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{parentAccessToken}}", "type": "string" }] },
+      "item": [
+        { "name": "Session and Allowed Modules", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/session" } },
+        { "name": "Dashboard Summary", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/dashboard/summary?fromDate=2026-08-01&toDate=2026-08-31" } },
+        { "name": "Analytics with Child Network", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/analytics?fromDate=2026-08-01&toDate=2026-08-31" } },
+        { "name": "My Codes", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/codes?page=1&limit=20&status=active" } },
+        { "name": "Referral Orders", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/orders?page=1&limit=20" } },
+        { "name": "Earnings Ledger", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/ledger?page=1&limit=20" } },
+        { "name": "Wallet", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/wallet" } },
+        { "name": "Withdrawal Requests", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals?page=1&limit=20" } },
+        { "name": "Create UPI Withdrawal", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"amount\": 500,\n  \"payoutMethod\": \"upi\",\n  \"upiId\": \"creator@upi\",\n  \"metadata\": { \"note\": \"Postman request\" }\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals" } },
+        { "name": "Bonus Progress", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/bonus-progress?page=1&limit=20" } },
+        { "name": "My Children Network (Parent Only)", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/network?page=1&limit=20&status=active" } },
+        { "name": "My Profile", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/profile" } },
+        { "name": "Update My Profile", "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"firstName\": \"Asha\",\n  \"lastName\": \"Sharma\",\n  \"phone\": \"+919876543210\",\n  \"dateOfBirth\": \"1995-05-18\",\n  \"gender\": \"female\",\n  \"address\": {\n    \"line1\": \"12 Market Road\",\n    \"country\": \"India\",\n    \"state\": \"Delhi\",\n    \"city\": \"New Delhi\",\n    \"postalCode\": \"110001\"\n  },\n  \"payout\": {\n    \"method\": \"upi\",\n    \"accountHolderName\": \"Asha Sharma\",\n    \"upiId\": \"asha@upi\"\n  }\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/influencer/referral/profile" } }
+      ]
+    },
+    {
+      "name": "02 - Child APIs",
+      "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{childAccessToken}}", "type": "string" }] },
+      "item": [
+        { "name": "Session and Allowed Modules", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/session" } },
+        { "name": "Dashboard Summary", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/dashboard/summary" } },
+        { "name": "Personal Analytics", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/analytics" } },
+        { "name": "My Codes", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/codes?page=1&limit=20" } },
+        { "name": "Referral Orders", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/orders?page=1&limit=20" } },
+        { "name": "Earnings Ledger", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/ledger?page=1&limit=20" } },
+        { "name": "Wallet", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/wallet" } },
+        { "name": "Withdrawal Requests", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals?page=1&limit=20" } },
+        { "name": "Create Bank Withdrawal", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"amount\": 500,\n  \"payoutMethod\": \"bank\",\n  \"bankAccountId\": \"primary-bank\",\n  \"metadata\": { \"note\": \"Postman request\" }\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals" } },
+        { "name": "Bonus Progress", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/bonus-progress?page=1&limit=20" } },
+        { "name": "My Profile", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/profile" } },
+        { "name": "Update My Profile", "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"firstName\": \"Child\",\n  \"lastName\": \"Influencer\",\n  \"phone\": \"+919876543211\",\n  \"address\": {\n    \"country\": \"India\",\n    \"state\": \"Maharashtra\",\n    \"city\": \"Mumbai\",\n    \"postalCode\": \"400001\"\n  }\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/influencer/referral/profile" } }
+      ]
+    }
+  ]
+}

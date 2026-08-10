@@ -60,6 +60,8 @@ const distributionTypes = ["fixed_amount", "percentage"];
 const coinUsageModes = ["wallet", "discount", "both"];
 const withdrawalApprovalModes = ["manual", "auto"];
 const withdrawalMethods = ["upi", "bank", "manual"];
+const productPoolTypes = ["fixed_amount", "percentage"];
+const productFundingSources = ["platform", "seller", "shared"];
 
 const newInfluencerBody = {
   userId: Joi.string(),
@@ -113,6 +115,44 @@ const listInfluencersSchema = Joi.object({
     canCreateChildren: Joi.boolean(),
   }).required(),
   params: Joi.object({}).required(),
+});
+
+const listProductConfigsSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    ...pagingQuery,
+    productId: Joi.string(),
+    active: Joi.boolean(),
+  }).required(),
+  params: Joi.object({}).required(),
+});
+
+const productConfigBody = {
+  productId: Joi.string().required(),
+  variantId: Joi.string().allow("", null),
+  active: Joi.boolean(),
+  poolType: Joi.string().valid(...productPoolTypes).required(),
+  poolValue: Joi.number().min(0).required(),
+  maximumPoolAmount: Joi.number().min(0),
+  customerSharePercent: Joi.number().min(0).max(100).allow(null),
+  codeOwnerSharePercent: Joi.number().min(0).max(100).allow(null),
+  parentSharePercent: Joi.number().min(0).max(100).allow(null),
+  fundedBy: Joi.string().valid(...productFundingSources),
+  startsAt: Joi.date().iso().allow(null),
+  endsAt: Joi.date().iso().allow(null),
+  metadata: Joi.object().default({}),
+};
+
+const upsertProductConfigSchema = Joi.object({
+  body: Joi.object(productConfigBody).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
+const productConfigIdSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({ configId: Joi.string().required() }).required(),
 });
 
 const updateInfluencerStatusSchema = Joi.object({
@@ -376,6 +416,9 @@ const listFraudReviewsSchema = Joi.object({
 
 module.exports = {
   listInfluencersSchema,
+  listProductConfigsSchema,
+  upsertProductConfigSchema,
+  productConfigIdSchema,
   createParentInfluencerSchema,
   createChildInfluencerSchema,
   updateInfluencerStatusSchema,

@@ -6,6 +6,9 @@ const { catchErrors } = require("../../../shared/middleware/catch-errors");
 const { checkInput } = require("../../../shared/middleware/check-input");
 const {
   listInfluencersSchema,
+  listProductConfigsSchema,
+  upsertProductConfigSchema,
+  productConfigIdSchema,
   createParentInfluencerSchema,
   createChildInfluencerSchema,
   updateInfluencerStatusSchema,
@@ -31,6 +34,22 @@ const {
 
 const referralAdminRoutes = express.Router();
 const referralAdminController = new ReferralAdminController();
+
+referralAdminRoutes.get(
+  "/product-configs",
+  checkInput(listProductConfigsSchema),
+  catchErrors(referralAdminController.listProductConfigs),
+);
+referralAdminRoutes.put(
+  "/product-configs",
+  checkInput(upsertProductConfigSchema),
+  catchErrors(referralAdminController.upsertProductConfig),
+);
+referralAdminRoutes.delete(
+  "/product-configs/:configId",
+  checkInput(productConfigIdSchema),
+  catchErrors(referralAdminController.deleteProductConfig),
+);
 
 referralAdminRoutes.get(
   "/influencers",

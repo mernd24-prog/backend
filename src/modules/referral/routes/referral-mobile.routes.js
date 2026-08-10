@@ -13,7 +13,10 @@ const {
   withdrawalsQuerySchema,
   createWithdrawalSchema,
   networkQuerySchema,
+  createNetworkChildSchema,
   bonusProgressQuerySchema,
+  analyticsQuerySchema,
+  updateProfileSchema,
   emptySchema,
 } = require("../validation/referral-mobile.validation");
 
@@ -31,6 +34,11 @@ referralMobileRoutes.get(
   "/dashboard/summary",
   checkInput(dashboardQuerySchema),
   catchErrors(referralMobileController.dashboardSummary),
+);
+referralMobileRoutes.get(
+  "/analytics",
+  checkInput(analyticsQuerySchema),
+  catchErrors(referralMobileController.analytics),
 );
 referralMobileRoutes.get(
   "/codes",
@@ -67,10 +75,20 @@ referralMobileRoutes.get(
   checkInput(networkQuerySchema),
   catchErrors(referralMobileController.network),
 );
+referralMobileRoutes.post(
+  "/network/children",
+  checkInput(createNetworkChildSchema),
+  catchErrors(referralMobileController.createNetworkChild),
+);
 referralMobileRoutes.get(
   "/profile",
   checkInput(emptySchema),
   catchErrors(referralMobileController.profile),
+);
+referralMobileRoutes.patch(
+  "/profile",
+  checkInput(updateProfileSchema),
+  catchErrors(referralMobileController.updateProfile),
 );
 referralMobileRoutes.get(
   "/bonus-progress",

@@ -188,7 +188,12 @@ class PricingService {
     );
 
     const subtotalAmount = pricedItems.reduce((sum, item) => sum + item.lineTotal, 0);
-    const discount = await this.calculateDiscount(couponCode, subtotalAmount, userId);
+    const discount = await this.calculateDiscount(
+      couponCode,
+      subtotalAmount,
+      userId,
+      pricedItems,
+    );
     const commerceSettings = await commerceSettingsService.getSettings();
     const sellerFundingPercent = Number(discount.sellerFundingPercent || 0);
     const taxBreakup = await this.calculateTaxBreakup(
@@ -1006,7 +1011,7 @@ const incomeTaxTdsAmount = Number(
     return taxData;
   }
 
-  async calculateDiscount(couponCode, subtotalAmount, userId = null) {
+  async calculateDiscount(couponCode, subtotalAmount, userId = null, items = []) {
     if (!couponCode) {
       return {
         discountAmount: 0,
@@ -1025,6 +1030,7 @@ const incomeTaxTdsAmount = Number(
         couponCode,
         subtotalAmount,
         userId,
+        items,
       );
       if (!referralContext) throw new AppError("Invalid coupon or influencer code", 400);
       return {
