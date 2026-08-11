@@ -9,6 +9,9 @@ const { knex } = require("../postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
 const os = require("os");
 
+let registered = false;
+let timers = [];
+
 async function runLockedJob(name, callback) {
   const runId = uuidv4();
   const startedAt = new Date();
@@ -40,7 +43,7 @@ async function runLockedJob(name, callback) {
 
 function runPeriodicJob(name, callback, intervalMs) {
   let running = false;
-  setInterval(async () => {
+  const timer = setInterval(async () => {
     if (running) {
       logger.warn({ job: name }, "Cron job skipped because previous run is still active");
       return;
@@ -60,12 +63,15 @@ function runPeriodicJob(name, callback, intervalMs) {
       running = false;
     }
   }, intervalMs);
+  timers.push(timer);
+  return timer;
 }
 
 function registerCronJobs() {
-  if (!env.enableCron) {
+  if (!env.enableCron || registered) {
     return;
   }
+  registered = true;
 
   const productService = new ProductService();
   const cancellationService = new CancellationService();
@@ -92,4 +98,10 @@ function registerCronJobs() {
   runPeriodicJob("outbox-flush", async () => outboxProcessor.flushPending(), 15 * 1000);
 }
 
-module.exports = { registerCronJobs };
+function stopCronJobs() {
+  timers.forEach((timer) => clearInterval(timer));
+  timers = [];
+  registered = false;
+}
+
+module.exports = { registerCronJobs, stopCronJobs };

@@ -42,6 +42,27 @@ class CartService {
     const hasItems = Object.prototype.hasOwnProperty.call(payload, "items");
     const hasWishlist = Object.prototype.hasOwnProperty.call(payload, "wishlist");
     const existingCart = await this.cartRepository.getByUserId(userId);
+    if (hasItems && existingCart?.items?.length) {
+      const refreshedExisting = await this.refreshCartAvailability(existingCart);
+      const outOfStockItems = (refreshedExisting.items || []).filter(
+        (item) => item.stockStatus === "out_of_stock",
+      );
+      if (outOfStockItems.length) {
+        const existingKeys = new Set((existingCart.items || []).map((item) => this.itemKey({
+          ...item,
+          productId: this.productId(item.productId),
+        })));
+        const addsAnotherProduct = (payload.items || []).some((item) =>
+          !existingKeys.has(this.itemKey({ ...item, productId: this.productId(item.productId) })),
+        );
+        if (addsAnotherProduct) {
+          throw new AppError(
+            "Remove the out-of-stock product from your cart before adding another product",
+            409,
+          );
+        }
+      }
+    }
     const nextItems = await this.mergeItems(
       hasItems ? payload.items || [] : existingCart?.items || [],
     );
@@ -246,7 +267,7 @@ class CartService {
     if (!ids.length) return [];
     ids.forEach((id) => this.assertProductId(id));
     const products = await ProductModel.find({ _id: { $in: ids } })
-      .select("status visibility publishedAt scheduledAt")
+      .select("status approvalStatus visibility publishedAt scheduledAt")
       .lean();
     const publicIds = new Set(
       products
@@ -262,7 +283,7 @@ class CartService {
     productIds.forEach((productId) => this.assertProductId(productId));
     const products = productIds.length
       ? await ProductModel.find({ _id: { $in: productIds } })
-        .select("sellerId title sku slug status visibility publishedAt scheduledAt price salePrice mrp currency stock reservedStock inventorySettings images imageUrls thumbnail thumbnailUrl image variants")
+        .select("sellerId title sku slug status approvalStatus visibility publishedAt scheduledAt price salePrice mrp currency stock reservedStock inventorySettings images imageUrls thumbnail thumbnailUrl image variants")
         .lean()
       : [];
     const productsById = new Map(products.map((product) => [String(product._id), product]));

@@ -9,6 +9,12 @@ const PRODUCT_STATUS = {
   SCHEDULED: "scheduled",
 };
 
+const PRODUCT_APPROVAL_STATUS = {
+  PENDING: "pending",
+  APPROVED: "approved",
+  REJECTED: "rejected",
+};
+
 const PRODUCT_TYPE = {
   SIMPLE: "simple",
   VARIABLE: "variable",
@@ -86,6 +92,7 @@ const ORDER_STATUS = {
   DELIVERED: "delivered",
   FAILED_DELIVERY: "failed_delivery",
   RETURN_REQUESTED: "return_requested",
+  RETURN_APPROVED: "return_approved",
   PARTIALLY_RETURNED: "partially_returned",
   RETURNED: "returned",
   REFUNDED: "refunded",
@@ -150,6 +157,7 @@ const WALLET_TRANSACTION_STATUS = {
 
 module.exports = {
   PRODUCT_STATUS,
+  PRODUCT_APPROVAL_STATUS,
   PRODUCT_TYPE,
   PRODUCT_VISIBILITY,
   PRODUCT_REVISION_STATUS,

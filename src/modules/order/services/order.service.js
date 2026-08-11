@@ -21,6 +21,8 @@ const { ROLES } = require("../../../shared/constants/roles");
 const { UserModel } = require("../../user/models/user.model");
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
 const { documentRendererService } = require("../../../shared/services/document-renderer.service");
+const { ReturnModel } = require("../../returns/models/return.model");
+const { withTransientDatabaseRetry } = require("../../../shared/errors/database-error");
 
 class OrderService {
   constructor({
@@ -618,7 +620,20 @@ class OrderService {
 
   async listMyOrders(actor, filters = {}) {
     const orders = await this.orderRepository.listOrdersByBuyer(actor.userId, filters);
-    return orders.map((order) => this.filterOrderForBuyer(order));
+    const returns = orders.length
+      ? await ReturnModel.find({ orderId: { $in: orders.map((order) => String(order.id)) } }).lean()
+      : [];
+    const returnsByOrder = returns.reduce((map, returnRequest) => {
+      const key = String(returnRequest.orderId || "");
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(returnRequest);
+      return map;
+    }, new Map());
+    return orders.map((order) => this.filterOrderForBuyer(
+      order,
+      null,
+      returnsByOrder.get(String(order.id)) || [],
+    ));
   }
 
   async listSellerOrders(actor, filters = {}) {
@@ -632,10 +647,16 @@ class OrderService {
       const products = await ProductModel.find({ sellerId, createdBy: actor.userId }).select("_id");
       const productIds = products.map((product) => String(product._id));
       if (!productIds.length) return [];
-      orders = await this.orderRepository.listOrdersBySeller(sellerId, productIds, scopedFilters);
+      orders = await withTransientDatabaseRetry(
+        () => this.orderRepository.listOrdersBySeller(sellerId, productIds, scopedFilters),
+        { attempts: 3, delayMs: 150 },
+      );
       return orders.map((order) => this.filterOrderForSeller(order, sellerId, scopedFilters.organizationId));
     }
-    orders = await this.orderRepository.listOrdersBySeller(sellerId, null, scopedFilters);
+    orders = await withTransientDatabaseRetry(
+      () => this.orderRepository.listOrdersBySeller(sellerId, null, scopedFilters),
+      { attempts: 3, delayMs: 150 },
+    );
     return orders.map((order) => this.filterOrderForSeller(order, sellerId, scopedFilters.organizationId));
   }
 
@@ -643,7 +664,10 @@ class OrderService {
     if (!["admin", "sub-admin", "super-admin"].includes(actor.role) && !actor.isSuperAdmin) {
       throw new AppError("Only admin users can list all orders", 403);
     }
-    return this.orderRepository.listOrdersForAdmin(filters);
+    return withTransientDatabaseRetry(
+      () => this.orderRepository.listOrdersForAdmin(filters),
+      { attempts: 3, delayMs: 150 },
+    );
   }
 
   async getOrder(orderId, actor) {
@@ -668,8 +692,15 @@ class OrderService {
     }
 
     const activeCommerceSettings = isOwner ? await commerceSettingsService.getSettings().catch(() => null) : null;
+    const buyerReturns = isOwner
+      ? await ReturnModel.find({ orderId: String(order.id) }).lean()
+      : [];
     const scopedOrder = isOwner
-      ? this.filterOrderForBuyer(order, activeCommerceSettings?.returns?.refundPolicy || null)
+      ? this.filterOrderForBuyer(
+        order,
+        activeCommerceSettings?.returns?.refundPolicy || null,
+        buyerReturns,
+      )
       : !isOwner && isSeller
         ? this.filterOrderForSeller(order, sellerId, actor.organizationId)
         : order;
@@ -1055,7 +1086,7 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
     });
   }
 
-  filterOrderForBuyer(order = {}, fallbackRefundPolicy = null) {
+  filterOrderForBuyer(order = {}, fallbackRefundPolicy = null, returnRequests = []) {
     const relations = order.relations || {};
     const sanitizeTrackingEvent = (event = {}) => {
       const { raw_payload, rawPayload, actor_id, actorId, ...visible } = event;
@@ -1087,6 +1118,65 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
         trackingEvents: (shipment.trackingEvents || []).map(sanitizeTrackingEvent),
       };
     };
+    const orderTimeline = Array.isArray(order.timeline) ? order.timeline : [];
+    const cancellationMatchesItem = (cancellation = {}, itemId) =>
+      (Array.isArray(cancellation.items) ? cancellation.items : []).some((entry) =>
+        String(entry.orderItemId || entry.order_item_id || entry.id || "") === String(itemId),
+      );
+    const returnMatchesItem = (returnRequest = {}, item = {}) =>
+      (Array.isArray(returnRequest.items) ? returnRequest.items : []).some((entry) => {
+        const entryItemId = entry.orderItemId || entry.order_item_id;
+        if (entryItemId) return String(entryItemId) === String(item.id);
+        return String(entry.productId || entry.product_id || "") === String(item.product_id || "") &&
+          String(entry.variantSku || entry.variant_sku || entry.variantId || entry.variant_id || "") ===
+            String(item.variant_sku || item.variant_id || "");
+      });
+    const resolveReturnDisplayStatus = (returnRequest = {}) => {
+      const returnStatus = String(returnRequest.status || "").toLowerCase();
+      const refundStatus = String(returnRequest.refund?.status || "").toLowerCase();
+      if (refundStatus === "completed" || returnStatus === "refunded") return "refunded";
+      if (returnStatus === "partially_refunded") return "partially_refunded";
+      if (["pending", "provider_pending", "manual_review"].includes(refundStatus) || returnStatus === "refund_pending") {
+        return "refund_pending";
+      }
+      if (refundStatus === "failed" || returnStatus === "refund_failed") return "refund_failed";
+      if (returnStatus === "requested") return "return_requested";
+      if (returnStatus === "approved") return "return_approved";
+      return returnStatus || null;
+    };
+    const sanitizeReturn = (returnRequest = {}) => ({
+      id: String(returnRequest._id || returnRequest.id || ""),
+      _id: String(returnRequest._id || returnRequest.id || ""),
+      orderId: returnRequest.orderId,
+      returnNumber: returnRequest.returnNumber || null,
+      status: returnRequest.status,
+      resolution: returnRequest.resolution,
+      refund: returnRequest.refund ? {
+        status: returnRequest.refund.status || null,
+        refundedAmount: Number(returnRequest.refund.refundedAmount || 0),
+      } : null,
+      items: (returnRequest.items || []).map((entry) => ({
+        orderItemId: entry.orderItemId || null,
+        productId: entry.productId || null,
+        variantId: entry.variantId || null,
+        variantSku: entry.variantSku || null,
+        quantity: Number(entry.quantity || 0),
+        requestedQuantity: Number(entry.requestedQuantity || entry.quantity || 0),
+        approvedQuantity: Number(entry.approvedQuantity || 0),
+        receivedQuantity: Number(entry.receivedQuantity || 0),
+      })),
+    });
+    const shipmentMatchesItem = (shipment = {}, item = {}) => {
+      const shipmentMetadata = this.normalizeJson(shipment.metadata, {});
+      const shipmentItemIds = Array.isArray(shipmentMetadata.orderItemIds)
+        ? shipmentMetadata.orderItemIds.map(String)
+        : [];
+      if (shipmentItemIds.length) return shipmentItemIds.includes(String(item.id));
+      return (
+        String(shipment.seller_id || "") === String(item.seller_id || "") &&
+        String(shipment.organization_id || "default") === String(item.organization_id || "default")
+      );
+    };
     const items = (order.items || []).map((item) => {
       const {
         pricing_snapshot,
@@ -1097,8 +1187,67 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
       } = item;
       const sellerSnapshot = this.normalizeJson(seller_snapshot, {});
       const organizationSnapshot = this.normalizeJson(organization_snapshot, {});
+      const itemShipments = (relations.shipments || []).filter((shipment) =>
+        shipmentMatchesItem(shipment, item),
+      );
+      const itemCancellations = (relations.cancellations || []).filter((cancellation) =>
+        cancellationMatchesItem(cancellation, item.id),
+      );
+      const itemReturn = returnRequests.find((returnRequest) => returnMatchesItem(returnRequest, item));
+      const itemReturnStatus = itemReturn ? resolveReturnDisplayStatus(itemReturn) : null;
+      const itemTimeline = [
+        ...orderTimeline.map((entry) => ({ ...entry, source: entry.source || "order" })),
+        ...itemShipments.flatMap((shipment) =>
+          (shipment.trackingEvents || []).map((entry) => ({
+            ...sanitizeTrackingEvent(entry),
+            source: entry.source || "shipment",
+            shipment_id: shipment.id,
+          })),
+        ),
+        ...itemCancellations.map((cancellation) => ({
+          id: `cancellation:${cancellation.id}:${item.id}`,
+          status: item.cancellation_status || "cancelled",
+          to_status: item.cancellation_status || "cancelled",
+          note: cancellation.reason || "Item cancellation processed",
+          source: "cancellation",
+          cancellation_id: cancellation.id,
+          created_at: cancellation.completed_at || cancellation.updated_at || cancellation.created_at,
+        })),
+      ].sort((left, right) =>
+        new Date(left.event_time || left.created_at || left.at || 0) -
+        new Date(right.event_time || right.created_at || right.at || 0),
+      );
+      const orderedQuantity = Number(item.quantity || 0);
+      const cancelledQuantity = Number(item.cancelled_quantity || 0);
+      const cancellationAdjustedReturnableQuantity = Math.max(
+        orderedQuantity - cancelledQuantity,
+        0,
+      );
+      const storedReturnable =
+        item.returnable ??
+        item.return_policy_snapshot?.returnable ??
+        item.product_snapshot?.returnPolicy?.returnable ??
+        true;
       return {
         ...visible,
+        returnable: Boolean(storedReturnable) && cancellationAdjustedReturnableQuantity > 0,
+        returnable_quantity: cancellationAdjustedReturnableQuantity,
+        return_status: itemReturnStatus,
+        returnStatus: itemReturnStatus,
+        return_lifecycle: itemReturn ? {
+          id: String(itemReturn._id || itemReturn.id || ""),
+          status: itemReturn.status || null,
+          refundStatus: itemReturn.refund?.status || null,
+          refundAmount: Number(itemReturn.refund?.refundedAmount || itemReturn.refundAmount || 0),
+        } : null,
+        effective_status:
+          item.cancellation_status ||
+          itemReturnStatus ||
+          item.return_status ||
+          item.delivery_status ||
+          itemShipments[0]?.status ||
+          order.status,
+        timeline: itemTimeline,
         seller: {
           name: sellerSnapshot.displayName || sellerSnapshot.businessName || organizationSnapshot.storeDisplayName || "Seller",
         },
@@ -1160,6 +1309,7 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
           payoutEligibleAt: group.payoutEligibleAt,
         })),
         cancellations: relations.cancellations || [],
+        returns: returnRequests.map(sanitizeReturn),
       },
     };
   }

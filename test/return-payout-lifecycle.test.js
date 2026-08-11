@@ -80,6 +80,71 @@ test("partial return holds only the affected order item", () => {
   assert.equal(returned.reason, "item_on_hold");
 });
 
+test("item cancellation keeps a shared shipment active while another item remains", async () => {
+  const trackingEvents = [];
+  const cancellationService = new CancellationService({
+    deliveryRepository: {
+      addTrackingEvent: async (...args) => trackingEvents.push(args),
+    },
+  });
+  const order = {
+    items: [
+      { id: "item-a", seller_id: "seller-1", quantity: 1, cancelled_quantity: 0 },
+      { id: "item-b", seller_id: "seller-1", quantity: 1, cancelled_quantity: 0 },
+    ],
+    relations: {
+      shipments: [{
+        id: "shipment-1",
+        seller_id: "seller-1",
+        status: "initiated",
+        direction: "forward",
+        metadata: { orderItemIds: ["item-a", "item-b"] },
+      }],
+    },
+  };
+  const cancellation = {
+    id: "cancel-1",
+    reason: "Changed mind",
+    items: [{ orderItemId: "item-a", sellerId: "seller-1", quantity: 1 }],
+  };
+
+  await cancellationService.assertShipmentsCancellable(order, cancellation.items);
+  const result = await cancellationService.cancelShipments(order, cancellation, { userId: "buyer-1" });
+
+  assert.equal(result, "not_required");
+  assert.equal(trackingEvents.length, 0);
+});
+
+test("item cancellation refunds shipping only when the seller group is fully cancelled", () => {
+  const service = new CancellationService();
+  const order = {
+    metadata: {
+      deliveryCharge: {
+        sellers: [
+          { sellerId: "seller-1", organizationId: "org-1", chargeAmount: 49 },
+          { sellerId: "seller-2", organizationId: "org-2", chargeAmount: 75 },
+        ],
+      },
+    },
+    items: [
+      { id: "item-a", seller_id: "seller-1", organization_id: "org-1", quantity: 1, cancelled_quantity: 0 },
+      { id: "item-b", seller_id: "seller-1", organization_id: "org-1", quantity: 1, cancelled_quantity: 0 },
+      { id: "item-c", seller_id: "seller-2", organization_id: "org-2", quantity: 1, cancelled_quantity: 0 },
+    ],
+  };
+
+  assert.equal(service.getCompletedSellerGroupShippingAmount(order, [
+    { orderItemId: "item-a", sellerId: "seller-1", quantity: 1 },
+  ]), 0);
+  assert.equal(service.getCompletedSellerGroupShippingAmount(order, [
+    { orderItemId: "item-a", sellerId: "seller-1", quantity: 1 },
+    { orderItemId: "item-b", sellerId: "seller-1", quantity: 1 },
+  ]), 49);
+  assert.equal(service.getCompletedSellerGroupShippingAmount(order, [
+    { orderItemId: "item-c", sellerId: "seller-2", quantity: 1 },
+  ]), 75);
+});
+
 test("COD commissions wait for collection capture before payout release", () => {
   const releaseData = new Map([["order-cod", {
     order: {

@@ -48,6 +48,7 @@ test("seller may accept a refund return but cannot change its eligible refund am
   };
   service.getReturnOrThrow = async () => request;
   service.assertCanManage = async () => {};
+  service.syncParentOrderAfterReturnApproval = async () => {};
   service.publishReturnEvent = async () => {};
 
   const accepted = await service.approveReturn("return-1", 1, seller, {
@@ -56,6 +57,34 @@ test("seller may accept a refund return but cannot change its eligible refund am
 
   assert.equal(accepted.status, "approved");
   assert.equal(accepted.refund.approvedAmount, 63990.59);
+});
+
+test("return approval synchronizes the parent order lifecycle and timeline", async () => {
+  const approvalService = new ReturnServiceClass();
+  let statusUpdate;
+  approvalService.orderRepository.findById = async () => ({
+    id: "order-1",
+    status: "return_requested",
+    payment_status: "captured",
+    delivery_status: "delivered",
+    metadata: { returnLifecycle: { status: "return_requested", returnIds: ["return-1"] } },
+  });
+  approvalService.orderRepository.updateStatus = async (orderId, status, metadata) => {
+    statusUpdate = { orderId, status, metadata };
+    return statusUpdate;
+  };
+
+  await approvalService.syncParentOrderAfterReturnApproval({
+    _id: "return-1",
+    orderId: "order-1",
+    approvedAt: new Date("2026-08-11T10:00:00.000Z"),
+    refundAmount: 100,
+    refund: { approvedAmount: 100 },
+  }, seller);
+
+  assert.equal(statusUpdate.status, "return_approved");
+  assert.equal(statusUpdate.metadata.reason, "return_approved");
+  assert.equal(statusUpdate.metadata.orderMetadata.returnLifecycle.status, "return_approved");
 });
 
 const makeQcFailedReturn = () => ({

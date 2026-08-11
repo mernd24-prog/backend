@@ -7,6 +7,8 @@ const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { ReferralRepository } = require("../repositories/referral.repository");
 const { WalletService } = require("../../wallet/services/wallet.service");
+const { ReturnModel } = require("../../returns/models/return.model");
+const { knex } = require("../../../infrastructure/postgres/postgres-client");
 
 class ReferralService {
   constructor({
@@ -825,7 +827,7 @@ class ReferralService {
     if (!referralOrder) return null;
 
     const cancelled = ["cancelled", "payment_failed", "returned"].includes(orderStatus);
-    const completed = ["delivered", "fulfilled"].includes(orderStatus);
+    const completed = orderStatus === "fulfilled";
     const nextReferralStatus = cancelled
       ? (orderStatus === "returned" ? "refunded" : "cancelled")
       : completed ? "completed" : referralOrder.status;
@@ -853,7 +855,8 @@ class ReferralService {
       } else if (
         completed &&
         ["pending", "locked"].includes(ledger.status) &&
-        (!ledger.releaseAt || new Date(ledger.releaseAt) <= new Date())
+        (!ledger.releaseAt || new Date(ledger.releaseAt) <= new Date()) &&
+        await this.isReferralOrderEligibleForRelease(orderId)
       ) {
         await this.referralRepository.updateWallet(ledger.influencerId, {
           $inc: {
@@ -882,6 +885,7 @@ class ReferralService {
     );
     let releasedCoins = 0;
     for (const entry of matured) {
+      if (!await this.isReferralOrderEligibleForRelease(entry.orderId)) continue;
       const claimed = await this.referralRepository.claimCommissionAsAvailable(
         this.getRecordId(entry),
       );
@@ -893,6 +897,31 @@ class ReferralService {
       releasedCoins += amount;
     }
     return this.roundCoins(releasedCoins);
+  }
+
+  async isReferralOrderEligibleForRelease(orderId, now = new Date()) {
+    if (!orderId) return false;
+    const order = await knex("orders")
+      .where("id", String(orderId))
+      .select("id", "status", "payment_status", "return_eligible_until", "fulfillment_eligible_at")
+      .first();
+    if (!order || String(order.status).toLowerCase() !== "fulfilled") return false;
+    // A partially refunded order is not fully settled. Keeping its commission
+    // locked prevents the full order commission from being released when only
+    // part of the merchandise remains eligible.
+    if (!["captured", "paid"].includes(String(order.payment_status || "").toLowerCase())) {
+      return false;
+    }
+    const eligibleAt = order.return_eligible_until || order.fulfillment_eligible_at;
+    if (eligibleAt && new Date(eligibleAt) > now) return false;
+
+    const openReturn = await ReturnModel.exists({
+      orderId: String(orderId),
+      status: {
+        $nin: ["rejected", "refunded", "replaced", "closed", "qc_failure_upheld"],
+      },
+    });
+    return !openReturn;
   }
 
   async listReferralOrders(query = {}) {
@@ -937,60 +966,90 @@ class ReferralService {
     };
   }
 
-  async approvePayout(payoutId, payload = {}) {
+  async approvePayout(payoutId, payload = {}, actor = {}) {
     const payout = await this.referralRepository.getPayoutRequestById(payoutId);
     if (!payout) throw new AppError("Payout request not found", 404);
     if (payout.status !== "pending") {
       throw new AppError("Only pending payouts can be approved", 400);
     }
 
-    const wallet = await this.referralRepository.getWallet(payout.influencerId);
-    if (Number(wallet?.availableBalance || 0) < Number(payout.amount || 0)) {
-      throw new AppError("Insufficient available influencer wallet balance", 400);
+    if (payout.reservationStatus !== "reserved") {
+      throw new AppError("Payout funds are not reserved", 409);
     }
 
     return this.referralRepository.updatePayoutRequest(payoutId, {
       status: "approved",
       approvedAt: new Date(),
+      approvedBy: actor.userId || null,
       adminNote: payload.adminNote || payout.adminNote || null,
     });
   }
 
-  async rejectPayout(payoutId, payload = {}) {
+  async rejectPayout(payoutId, payload = {}, actor = {}) {
     const payout = await this.referralRepository.getPayoutRequestById(payoutId);
     if (!payout) throw new AppError("Payout request not found", 404);
-    if (payout.status === "paid") {
-      throw new AppError("Paid payouts cannot be rejected", 400);
+    if (["paid", "rejected", "cancelled"].includes(payout.status)) {
+      throw new AppError("This payout can no longer be rejected", 400);
+    }
+
+    if (payout.reservationStatus === "reserved") {
+      const claimed = await this.referralRepository.transitionPayoutReservation(
+        payoutId,
+        "reserved",
+        "released",
+      );
+      if (!claimed) throw new AppError("Payout reservation was already processed", 409);
+      const wallet = await this.referralRepository.releaseReservedWalletBalance(
+        payout.influencerId,
+        payout.amount,
+      );
+      if (!wallet) {
+        await this.referralRepository.transitionPayoutReservation(payoutId, "released", "reserved");
+        throw new AppError("Reserved wallet balance is inconsistent", 409);
+      }
     }
 
     return this.referralRepository.updatePayoutRequest(payoutId, {
       status: "rejected",
+      rejectedAt: new Date(),
+      rejectedBy: actor.userId || null,
       adminNote: payload.adminNote || payload.reason || null,
     });
   }
 
-  async markPayoutPaid(payoutId, payload = {}) {
+  async markPayoutPaid(payoutId, payload = {}, actor = {}) {
     const payout = await this.referralRepository.getPayoutRequestById(payoutId);
     if (!payout) throw new AppError("Payout request not found", 404);
     if (!["approved", "processing"].includes(payout.status)) {
       throw new AppError("Only approved or processing payouts can be marked paid", 400);
     }
 
-    const wallet = await this.referralRepository.getWallet(payout.influencerId);
-    if (Number(wallet?.availableBalance || 0) < Number(payout.amount || 0)) {
-      throw new AppError("Insufficient available influencer wallet balance", 400);
+    const transactionReference = String(payload.transactionReference || "").trim();
+    if (!transactionReference) {
+      throw new AppError("Bank/UPI transaction reference is required", 400);
     }
-
-    await this.referralRepository.updateWallet(payout.influencerId, {
-      $inc: {
-        availableBalance: -Number(payout.amount),
-        paidBalance: Number(payout.amount),
-      },
-    });
+    const claimed = await this.referralRepository.transitionPayoutReservation(
+      payoutId,
+      "reserved",
+      "settled",
+    );
+    if (!claimed) throw new AppError("Payout reservation was already processed", 409);
+    const wallet = await this.referralRepository.settleReservedWalletBalance(
+      payout.influencerId,
+      payout.amount,
+    );
+    if (!wallet) {
+      await this.referralRepository.transitionPayoutReservation(payoutId, "settled", "reserved");
+      throw new AppError("Reserved wallet balance is inconsistent", 409);
+    }
 
     return this.referralRepository.updatePayoutRequest(payoutId, {
       status: "paid",
       paidAt: payload.paidAt || new Date(),
+      paidBy: actor.userId || null,
+      paidAmount: Number(payout.amount),
+      transactionReference,
+      paymentProofUrl: payload.paymentProofUrl || payout.paymentProofUrl || null,
       adminNote: payload.adminNote || payout.adminNote || null,
     });
   }
@@ -1795,7 +1854,15 @@ class ReferralService {
       upiId: plain.upiId || null,
       requestedAt: plain.requestedAt || plain.createdAt || null,
       approvedAt: plain.approvedAt || null,
+      approvedBy: plain.approvedBy || null,
+      rejectedAt: plain.rejectedAt || null,
+      rejectedBy: plain.rejectedBy || null,
       paidAt: plain.paidAt || null,
+      paidBy: plain.paidBy || null,
+      reservationStatus: plain.reservationStatus || null,
+      paidAmount: this.roundCoins(plain.paidAmount),
+      transactionReference: plain.transactionReference || null,
+      paymentProofUrl: plain.paymentProofUrl || null,
       adminNote: plain.adminNote || null,
       metadata: plain.metadata || {},
       createdAt: plain.createdAt || null,
@@ -1807,17 +1874,17 @@ class ReferralService {
     const plain = this.toPlainObject(wallet);
     const lockedCoins = this.roundCoins(plain.pendingBalance);
     const availableCoins = this.roundCoins(plain.availableBalance);
+    const reservedCoins = this.roundCoins(plain.reservedBalance || pendingWithdrawalAmount);
     const withdrawnCoins = this.roundCoins(plain.paidBalance);
     const reversedCoins = this.roundCoins(plain.reversedBalance);
     const expiredCoins = this.roundCoins(plain.expiredBalance);
-    const pendingAmount = this.roundCoins(pendingWithdrawalAmount);
-    const availableForWithdrawal = this.roundCoins(
-      Math.max(0, availableCoins - pendingAmount),
-    );
+    const pendingAmount = reservedCoins;
+    const availableForWithdrawal = availableCoins;
     return {
       influencerId: plain.influencerId || null,
       lockedCoins,
       availableCoins,
+      reservedCoins,
       withdrawnCoins,
       reversedCoins,
       expiredCoins,
@@ -2116,27 +2183,29 @@ class ReferralService {
     if (amount < minimumWithdrawalCoins) {
       throw new AppError("Withdrawal amount is below the minimum requirement", 400);
     }
-    const [wallet, pendingPayouts] = await Promise.all([
-      this.referralRepository.ensureWallet(influencerId),
-      this.referralRepository.aggregatePayoutTotalsByInfluencer({
-        influencerId,
-        statuses: this.getPendingWithdrawalStatuses(),
-      }),
-    ]);
-    const availableForWithdrawal =
-      Number(wallet.availableBalance || 0) - Number(pendingPayouts.total || 0);
-    if (availableForWithdrawal < amount) {
-      throw new AppError("Insufficient available influencer wallet balance", 400);
-    }
-    const payout = await this.referralRepository.createPayoutRequest({
+    await this.referralRepository.ensureWallet(influencerId);
+    const reservedWallet = await this.referralRepository.reserveAvailableWalletBalance(
       influencerId,
       amount,
-      payoutMethod: payload.payoutMethod || "manual",
-      bankAccountId: payload.bankAccountId || null,
-      upiId: payload.upiId || null,
-      metadata: payload.metadata || {},
-    });
-    return this.formatWithdrawal(payout);
+    );
+    if (!reservedWallet) {
+      throw new AppError("Insufficient available influencer wallet balance", 400);
+    }
+    try {
+      const payout = await this.referralRepository.createPayoutRequest({
+        influencerId,
+        amount,
+        payoutMethod: payload.payoutMethod || "manual",
+        bankAccountId: payload.bankAccountId || null,
+        upiId: payload.upiId || null,
+        reservationStatus: "reserved",
+        metadata: payload.metadata || {},
+      });
+      return this.formatWithdrawal(payout);
+    } catch (error) {
+      await this.referralRepository.releaseReservedWalletBalance(influencerId, amount);
+      throw error;
+    }
   }
 
   async getMyInfluencerNetwork(actor = {}, query = {}) {
@@ -2386,6 +2455,7 @@ class ReferralService {
         lockedBalance: Number(walletTotals.pendingBalance || 0),
         pendingBalance: Number(walletTotals.pendingBalance || 0),
         availableBalance: Number(walletTotals.availableBalance || 0),
+        reservedBalance: Number(walletTotals.reservedBalance || 0),
         withdrawnBalance: Number(walletTotals.paidBalance || 0),
         paidBalance: Number(walletTotals.paidBalance || 0),
         reversedBalance: Number(walletTotals.reversedBalance || 0),

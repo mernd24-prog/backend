@@ -5,6 +5,10 @@ const { knex } = require("./knex-client");
 
 const postgresPool = new Pool({
   connectionString: env.postgresUrl,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10000,
+  connectionTimeoutMillis: 10000,
+  idleTimeoutMillis: 30000,
 });
 
 async function connectPostgres() {

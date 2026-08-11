@@ -1,6 +1,7 @@
 const Joi = require("joi");
 const {
   PRODUCT_STATUS,
+  PRODUCT_APPROVAL_STATUS,
   PRODUCT_TYPE,
   PRODUCT_VISIBILITY,
   PRODUCT_REVISION_STATUS,
@@ -320,6 +321,7 @@ const listProductSchema = Joi.object({
     category: Joi.string(),
     category_id: Joi.string(),
     status: Joi.string(),
+    approvalStatus: Joi.string().valid(...Object.values(PRODUCT_APPROVAL_STATUS)),
     stockStatus: Joi.string().valid("in_stock", "low_stock", "out_of_stock", "all", ""),
     productType: Joi.string().valid(...Object.values(PRODUCT_TYPE)),
     hasVariants: Joi.boolean(),

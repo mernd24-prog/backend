@@ -43,6 +43,7 @@ const payoutStatuses = [
   "processing",
   "paid",
   "failed",
+  "cancelled",
 ];
 const bonusPeriods = ["monthly", "quarterly", "yearly", "custom"];
 const bonusTargetTypes = ["order_value", "order_count", "customer_count", "active_children"];
@@ -265,6 +266,8 @@ const payoutActionSchema = Joi.object({
     adminNote: Joi.string().allow("", null),
     reason: Joi.string().allow("", null),
     paidAt: Joi.date().iso(),
+    transactionReference: Joi.string().trim().max(180).allow("", null),
+    paymentProofUrl: Joi.string().trim().uri().allow("", null),
   }).default({}),
   query: Joi.object({}).required(),
   params: Joi.object({

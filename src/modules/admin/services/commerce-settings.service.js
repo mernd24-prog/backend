@@ -52,6 +52,7 @@ const DEFAULT_SETTINGS = {
     refundPolicy: {
       shipping: {
         fullCancellation: true,
+        itemCancellation: true,
         sellerCancellation: true,
         rtoDeliveryFailed: true,
         customerReturn: false,
@@ -59,6 +60,7 @@ const DEFAULT_SETTINGS = {
       },
       platformFee: {
         fullCancellation: true,
+        itemCancellation: false,
         sellerCancellation: true,
         rtoDeliveryFailed: false,
         customerReturn: false,
@@ -209,6 +211,7 @@ const pickAllowed = (value, allowed, fallback) =>
 
 const normalizeRefundComponentPolicy = (source = {}, fallback = {}) => ({
   fullCancellation: bool(source.fullCancellation, fallback.fullCancellation),
+  itemCancellation: bool(source.itemCancellation, fallback.itemCancellation),
   sellerCancellation: bool(source.sellerCancellation, fallback.sellerCancellation),
   rtoDeliveryFailed: bool(source.rtoDeliveryFailed, fallback.rtoDeliveryFailed),
   customerReturn: bool(source.customerReturn, fallback.customerReturn),
@@ -217,7 +220,8 @@ const normalizeRefundComponentPolicy = (source = {}, fallback = {}) => ({
 
 class CommerceSettingsService {
   async ensureTable() {
-    await knex.schema.createTableIfNotExists("admin_settings", (table) => {
+    if (await knex.schema.hasTable("admin_settings")) return;
+    await knex.schema.createTable("admin_settings", (table) => {
       table.string("setting_key", 96).primary();
       table.jsonb("setting_value").notNullable().defaultTo({});
       table.string("updated_by", 64).nullable();

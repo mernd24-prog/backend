@@ -1,5 +1,6 @@
 const { failResponse } = require("../http/reply");
 const { ERROR_CODES } = require("../errors/app-error");
+const { classifyPostgresError } = require("../errors/database-error");
 
 // Maps MongoDB/Mongoose/Sequelize error names → user-friendly messages
 const MONGOOSE_DUPLICATE_CODE = 11000;
@@ -125,6 +126,7 @@ function errorHandler(error, req, res, next) {
   const mongoResult    = handleMongooseError(error);
   const sequelizeResult= handleSequelizeError(error);
   const joiResult      = handleJoiError(error);
+  const postgresResult = classifyPostgresError(error);
   const appFieldDetails= buildFieldErrorsFromDetails(details);
 
   if (mongoResult) {
@@ -136,6 +138,11 @@ function errorHandler(error, req, res, next) {
   } else if (joiResult) {
     ({ statusCode, message, code } = joiResult);
     details = joiResult.details || null;
+  } else if (postgresResult) {
+    ({ statusCode, message, code } = postgresResult);
+    if (postgresResult.retryAfterSeconds) {
+      res.set("Retry-After", String(postgresResult.retryAfterSeconds));
+    }
   } else if (appFieldDetails) {
     code = code || ERROR_CODES.VALIDATION_ERROR;
     message = appFieldDetails[0]?.message || message;
@@ -151,10 +158,16 @@ function errorHandler(error, req, res, next) {
 
   // Generic 500 — hide implementation details
   if (statusCode >= 500) {
-    req.log?.error({ err: error }, "Unhandled request error");
-    message = "An unexpected error occurred. Please try again later.";
+    req.log?.error(
+      { err: error, statusCode, errorCode: code || "INTERNAL_ERROR" },
+      `${req.method} ${req.originalUrl || req.url} -> ${statusCode} ${code || "INTERNAL_ERROR"}: ${message}`,
+    );
+    if (!postgresResult) message = "An unexpected error occurred. Please try again later.";
   } else {
-    req.log?.warn({ err: error }, "Request error");
+    req.log?.warn(
+      { statusCode, errorCode: code || "REQUEST_ERROR" },
+      `${req.method} ${req.originalUrl || req.url} -> ${statusCode} ${code || "REQUEST_ERROR"}: ${message}`,
+    );
   }
 
   res.status(statusCode).json(failResponse(message, details, code));

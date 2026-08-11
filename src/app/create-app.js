@@ -19,7 +19,57 @@ const { registerRealtimeSubscribers } = require("../infrastructure/realtime/regi
 const { registerDomainHandlers } = require("../infrastructure/events/register-domain-handlers");
 const { createMetricsMiddleware } = require("../infrastructure/observability/metrics");
 
-async function createApp() {
+function registerBackgroundServices() {
+  registerWorkers();
+  registerCronJobs();
+  registerRealtimeSubscribers();
+  registerDomainHandlers();
+}
+
+function requestLoggerOptions() {
+  return {
+    logger,
+    // Request failures are logged once by the central error handler. Disabling
+    // pino-http completion logs removes successful requests and duplicate 5xx logs.
+    autoLogging: false,
+    serializers: {
+      req(req) {
+        return {
+          id: req.id,
+          method: req.method,
+          url: req.url,
+          remoteAddress: req.remoteAddress,
+          organizationId: req.headers?.["x-organization-id"] || undefined,
+        };
+      },
+      res(res) {
+        return { statusCode: res.statusCode };
+      },
+      err(error) {
+        return pinoHttp.stdSerializers.err(error);
+      },
+    },
+    customLogLevel(req, res, error) {
+      if (error || res.statusCode >= 500) return "error";
+      if (res.statusCode >= 400) return "warn";
+      return "info";
+    },
+    customSuccessMessage(req, res, responseTime) {
+      const organization = req.headers?.["x-organization-id"];
+      const context = [
+        req.id !== undefined ? `#${req.id}` : null,
+        req.ip ? `ip=${req.ip}` : null,
+        organization ? `org=${organization}` : null,
+      ].filter(Boolean).join(" ");
+      return `${req.method} ${req.url} -> ${res.statusCode} (${Math.round(responseTime)}ms)${context ? ` [${context}]` : ""}`;
+    },
+    customErrorMessage(req, res, error) {
+      return `${req.method} ${req.url} -> ${res.statusCode || 500}: ${error?.message || "request failed"}${req.id !== undefined ? ` [#${req.id}]` : ""}`;
+    },
+  };
+}
+
+async function createApp({ startBackgroundServices = true } = {}) {
   await Promise.all([connectMongo(), connectPostgres()]);
 
   const app = express();
@@ -28,7 +78,7 @@ async function createApp() {
   app.disable("etag");
   app.set("trust proxy", 1);
 
-  app.use(pinoHttp({ logger }));
+  app.use(pinoHttp(requestLoggerOptions()));
   app.use(helmet());
   app.use((req, res, next) => {
     if (req.path.startsWith("/api/")) {
@@ -90,10 +140,7 @@ async function createApp() {
   app.use(createMetricsMiddleware());
 
   registerRoutes(app);
-  registerWorkers();
-  registerCronJobs();
-  registerRealtimeSubscribers();
-  registerDomainHandlers();
+  if (startBackgroundServices) registerBackgroundServices();
 
   app.use(notFoundHandler);
   app.use(errorHandler);
@@ -101,4 +148,4 @@ async function createApp() {
   return app;
 }
 
-module.exports = { createApp };
+module.exports = { createApp, registerBackgroundServices, requestLoggerOptions };

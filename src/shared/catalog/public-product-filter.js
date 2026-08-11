@@ -1,5 +1,6 @@
 const {
   PRODUCT_STATUS,
+  PRODUCT_APPROVAL_STATUS,
   PRODUCT_VISIBILITY,
 } = require("../domain/commerce-constants");
 
@@ -31,6 +32,7 @@ function publicDatePredicates(now = new Date()) {
 function buildPublicProductFilter(now = new Date()) {
   return {
     status: PRODUCT_STATUS.ACTIVE,
+    approvalStatus: PRODUCT_APPROVAL_STATUS.APPROVED,
     visibility: PRODUCT_VISIBILITY.PUBLIC,
     $and: publicDatePredicates(now),
   };
@@ -41,6 +43,7 @@ function applyPublicProductFilter(filter = {}, now = new Date()) {
   return {
     ...filter,
     status: publicFilter.status,
+    approvalStatus: publicFilter.approvalStatus,
     visibility: publicFilter.visibility,
     $and: [
       ...(Array.isArray(filter.$and) ? filter.$and : []),
@@ -58,6 +61,7 @@ function isPublicProduct(product, now = new Date()) {
 
   return (
     source.status === PRODUCT_STATUS.ACTIVE &&
+    source.approvalStatus === PRODUCT_APPROVAL_STATUS.APPROVED &&
     (source.visibility || PRODUCT_VISIBILITY.PUBLIC) === PRODUCT_VISIBILITY.PUBLIC &&
     (!publishedAt || publishedAt <= now) &&
     (!scheduledAt || scheduledAt <= now)
@@ -79,6 +83,7 @@ function missingOrPastDateFilter(field, now = new Date()) {
 function buildPublicSearchFilters(now = new Date()) {
   return [
     { term: { status: PRODUCT_STATUS.ACTIVE } },
+    { term: { approvalStatus: PRODUCT_APPROVAL_STATUS.APPROVED } },
     { term: { visibility: PRODUCT_VISIBILITY.PUBLIC } },
     missingOrPastDateFilter("publishedAt", now),
     missingOrPastDateFilter("scheduledAt", now),

@@ -152,7 +152,13 @@ class ProductRepository {
               { $objectToArray: { $ifNull: ["$attributes", {}] } },
               {
                 $reduce: {
-                  input: { $ifNull: ["$variants", []] },
+                  input: {
+                    $filter: {
+                      input: { $ifNull: ["$variants", []] },
+                      as: "variant",
+                      cond: { $eq: [{ $ifNull: ["$$variant.status", "active"] }, "active"] },
+                    },
+                  },
                   initialValue: [],
                   in: { $concatArrays: ["$$value", { $objectToArray: { $ifNull: ["$$this.attributes", {}] } }] },
                 },
@@ -264,7 +270,23 @@ class ProductRepository {
             { $set: { _facetAttributeValues: { $cond: [{ $isArray: "$_facetAttributeEntries.v" }, "$_facetAttributeEntries.v", ["$_facetAttributeEntries.v"]] } } },
             { $unwind: "$_facetAttributeValues" },
             { $match: { _facetAttributeValues: { $nin: [null, ""] } } },
-            { $group: { _id: { key: "$_facetAttributeEntries.k", value: { $toString: "$_facetAttributeValues" } }, count: { $sum: 1 }, definition: { $first: "$_facetAttributeDefinition" } } },
+            {
+              $group: {
+                _id: {
+                  productId: "$_id",
+                  key: "$_facetAttributeEntries.k",
+                  value: { $toString: "$_facetAttributeValues" },
+                },
+                definition: { $first: "$_facetAttributeDefinition" },
+              },
+            },
+            {
+              $group: {
+                _id: { key: "$_id.key", value: "$_id.value" },
+                count: { $sum: 1 },
+                definition: { $first: "$definition" },
+              },
+            },
             { $group: { _id: "$_id.key", values: { $push: { value: "$_id.value", label: "$_id.value", count: "$count" } }, count: { $sum: "$count" }, definition: { $first: "$definition" } } },
             { $project: { _id: 0, key: "$_id", label: { $ifNull: ["$definition.label", "$_id"] }, type: "$definition.type", searchable: { $ifNull: ["$definition.isSearchable", false] }, variant: { $ifNull: ["$definition.isVariantAttribute", false] }, count: 1, values: 1 } },
             { $sort: { key: 1 } },

@@ -1,6 +1,7 @@
 const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
 const {
   PRODUCT_STATUS,
+  PRODUCT_APPROVAL_STATUS,
   PRODUCT_TYPE,
   PRODUCT_VISIBILITY,
   PRODUCT_REVISION_WORKFLOW_STATUS,
@@ -400,6 +401,12 @@ const productSchema = new mongoose.Schema(
       type: String,
       enum: Object.values(PRODUCT_STATUS),
       default: PRODUCT_STATUS.DRAFT,
+      index: true,
+    },
+    approvalStatus: {
+      type: String,
+      enum: Object.values(PRODUCT_APPROVAL_STATUS),
+      default: PRODUCT_APPROVAL_STATUS.PENDING,
       index: true,
     },
     moderation: {

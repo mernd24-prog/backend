@@ -54,6 +54,7 @@ const withdrawalStatuses = [
   "processing",
   "paid",
   "failed",
+  "cancelled",
 ];
 
 const emptyBody = Joi.object({}).required();

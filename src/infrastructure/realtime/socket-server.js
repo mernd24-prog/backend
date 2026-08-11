@@ -56,6 +56,13 @@ function getSocketServer() {
   return io;
 }
 
+async function closeSocketServer() {
+  const current = io;
+  io = null;
+  if (!current) return;
+  await new Promise((resolve) => current.close(() => resolve()));
+}
+
 function emitToUser(userId, eventName, payload) {
   io?.to(`user:${userId}`).emit(eventName, payload);
 }
@@ -70,6 +77,7 @@ function emitToOrder(orderId, eventName, payload) {
 
 module.exports = {
   attachSocketServer,
+  closeSocketServer,
   getSocketServer,
   emitToUser,
   emitToRole,

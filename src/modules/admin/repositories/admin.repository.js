@@ -593,7 +593,13 @@ class AdminRepository {
   } = {}) {
     const filter = status === "change_pending"
       ? { revisionStatus: "change_pending" }
-      : { status };
+      : status === "pending_approval" || status === "pending"
+        ? { approvalStatus: "pending" }
+        : status === "rejected"
+          ? { approvalStatus: "rejected" }
+          : status === "approved"
+            ? { approvalStatus: "approved" }
+            : { status };
     if (category) {
       filter.category = category;
     }

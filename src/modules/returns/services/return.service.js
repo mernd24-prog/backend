@@ -395,6 +395,42 @@ class ReturnServiceClass {
     return updatedOrder;
   }
 
+  async syncParentOrderAfterReturnApproval(returnRequest, actor = {}) {
+    const order = await this.orderRepository.findById(returnRequest.orderId);
+    if (!order) return null;
+    const metadata = this.parseJson(order.metadata, {});
+    const now = new Date().toISOString();
+    const returnId = this.getReturnId(returnRequest);
+    const existingIds = Array.isArray(metadata.returnLifecycle?.returnIds)
+      ? metadata.returnLifecycle.returnIds
+      : [];
+    const returnIds = Array.from(new Set([...existingIds, returnId].filter(Boolean)));
+
+    return this.orderRepository.updateStatus(order.id, ORDER_STATUS.RETURN_APPROVED, {
+      actorId: actor.userId || null,
+      actorRole: actor.role || null,
+      reason: "return_approved",
+      note: "Seller approved the return request",
+      paymentStatus: order.payment_status,
+      deliveryStatus: order.delivery_status,
+      metadata: {
+        returnId,
+        returnStatus: ORDER_STATUS.RETURN_APPROVED,
+        approvedAmount: returnRequest.refund?.approvedAmount || returnRequest.refundAmount || 0,
+      },
+      orderMetadata: {
+        returnLifecycle: {
+          ...(metadata.returnLifecycle || {}),
+          status: ORDER_STATUS.RETURN_APPROVED,
+          returnIds,
+          lastReturnId: returnId || metadata.returnLifecycle?.lastReturnId || null,
+          approvedAt: returnRequest.approvedAt || now,
+          updatedAt: now,
+        },
+      },
+    });
+  }
+
   async getReturnOrThrow(returnId) {
     const returnRequest = await ReturnModel.findById(returnId);
     if (!returnRequest) throw new AppError("Return not found", 404);
@@ -612,9 +648,15 @@ class ReturnServiceClass {
     const policySnapshot = await this.resolveReturnPolicy(order, matchedOrderItems);
     const commerceSettings = await commerceSettingsService.getSettings();
     const existingReturns = await ReturnModel.find({ orderId, status: { $ne: "rejected" } }).lean();
+    const requestedOrderItemIds = new Set();
 
     const normalizedItems = items.map((item, index) => {
       const orderItem = matchedOrderItems[index];
+      const orderItemId = String(orderItem.id || "");
+      if (requestedOrderItemIds.has(orderItemId)) {
+        throw new AppError("The same order item cannot be included more than once", 409, null, "DUPLICATE_RETURN_ITEM");
+      }
+      requestedOrderItemIds.add(orderItemId);
       const quantity = Number(item.quantity || 0);
       if (!Number.isInteger(quantity) || quantity <= 0) {
         throw new AppError("Return quantity must be a positive whole number", 400);
@@ -631,9 +673,19 @@ class ReturnServiceClass {
         });
         return sum + Number(matched?.approvedQuantity || matched?.requestedQuantity || matched?.quantity || 0);
       }, 0);
-      const availableQty = Number(orderItem.quantity || 0) - alreadyReturned;
+      const cancelledQuantity = Number(orderItem.cancelled_quantity || 0);
+      const availableQty = Number(orderItem.quantity || 0) - cancelledQuantity - alreadyReturned;
       if (quantity > availableQty) {
-        throw new AppError(`Only ${Math.max(availableQty, 0)} unit(s) can be returned for this item because ${alreadyReturned} unit(s) are already in return/refund queue.`, 400);
+        const reasons = [
+          cancelledQuantity > 0 ? `${cancelledQuantity} unit(s) already cancelled` : null,
+          alreadyReturned > 0 ? `${alreadyReturned} unit(s) already in return/refund queue` : null,
+        ].filter(Boolean).join(" and ");
+        throw new AppError(
+          `Only ${Math.max(availableQty, 0)} unit(s) can be returned for this item${reasons ? ` because ${reasons}` : ""}.`,
+          409,
+          null,
+          "ITEM_ALREADY_PROCESSED",
+        );
       }
 
       const unitPrice = Number(orderItem.unit_price || item.unitPrice || 0);
@@ -958,6 +1010,7 @@ class ReturnServiceClass {
       },
     });
     await returnRequest.save();
+    await this.syncParentOrderAfterReturnApproval(returnRequest, actor);
     await this.publishReturnEvent(DOMAIN_EVENTS.RETURN_APPROVED_V1, returnRequest, actor);
     return returnRequest;
   }
@@ -1721,15 +1774,7 @@ class ReturnServiceClass {
       throw new AppError("Only platform finance/admin users can process refunds", 403);
     }
     if (returnRequest.refund?.status === "completed" || returnRequest.refundedAt) {
-      // Idempotent retry: never refund the customer twice, but repair legacy
-      // seller rows that were over-deducted or left held by an older flow.
-      await this.recordSellerRefundAdjustment(
-        returnRequest,
-        Number(returnRequest.refund?.refundedAmount || returnRequest.refundAmount || 0),
-        actor,
-      );
-      await this.releaseReturnItemPayoutHolds(returnRequest, actor, "completed_refund_ledger_reconciled");
-      return returnRequest;
+      throw new AppError("This return has already been refunded", 409, null, "REFUND_ALREADY_COMPLETED");
     }
     if (!["qc_passed", "qc_completed", "refund_failed"].includes(returnRequest.status)) {
       throw new AppError("Refund can be processed only after accepted QC", 409);
@@ -1912,6 +1957,9 @@ class ReturnServiceClass {
     this.assertAdmin(actor, "synchronize a return refund");
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
+    if (returnRequest.refund?.status === "completed" || returnRequest.refundedAt) {
+      throw new AppError("This return has already been refunded", 409, null, "REFUND_ALREADY_COMPLETED");
+    }
     const providerRefundId = returnRequest.refund?.providerRefundId || returnRequest.providerRefundId;
     if (!providerRefundId) throw new AppError("Provider refund ID is missing", 409);
     const providerResult = await this.razorpayProvider.fetchRefund(providerRefundId);

@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const { ReturnModel } = require("../../returns/models/return.model");
 const { v4: uuidv4 } = require("uuid");
 const { AppError } = require("../../../shared/errors/app-error");
 const { ORDER_STATUS, PAYMENT_PROVIDER, PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
@@ -97,7 +98,7 @@ class CancellationService {
     throw new AppError("You are not allowed to cancel these order items", 403);
   }
 
-  normalizeItems(order, requestedItems = []) {
+  normalizeItems(order, requestedItems = [], returnReservedByItem = new Map()) {
     const source = requestedItems.length
       ? requestedItems
       : (order.items || []).map((item) => ({ orderItemId: item.id, quantity: Number(item.quantity || 0) - Number(item.cancelled_quantity || 0) }));
@@ -113,10 +114,27 @@ class CancellationService {
       if (!orderItem) throw new AppError("One or more cancellation items are not part of the order", 400);
       if (seen.has(String(orderItem.id))) throw new AppError("Duplicate cancellation item", 400);
       seen.add(String(orderItem.id));
-      const remaining = Number(orderItem.quantity || 0) - Number(orderItem.cancelled_quantity || 0);
-      const quantity = Number(requested.quantity || remaining);
-      if (!Number.isInteger(quantity) || quantity <= 0 || quantity > remaining) {
-        throw new AppError(`Invalid cancellation quantity for ${orderItem.product_title || orderItem.product_id}`, 400);
+      const returnReserved = Number(returnReservedByItem.get(String(orderItem.id)) || 0);
+      const remaining = Math.max(
+        Number(orderItem.quantity || 0) - Number(orderItem.cancelled_quantity || 0) - returnReserved,
+        0,
+      );
+      const quantity = Number(requested.quantity ?? remaining);
+      const itemLabel = orderItem.product_title || orderItem.product_id;
+      if (remaining <= 0) {
+        const message = returnReserved > 0
+          ? `${itemLabel} is already in a return/refund request and cannot be cancelled`
+          : `${itemLabel} is already fully cancelled`;
+        throw new AppError(message, 409, null, "ITEM_ALREADY_PROCESSED");
+      }
+      if (!Number.isInteger(quantity) || quantity <= 0) {
+        throw new AppError(`Cancellation quantity for ${itemLabel} must be a positive whole number`, 400);
+      }
+      if (quantity > remaining) {
+        throw new AppError(
+          `Only ${remaining} unit${remaining === 1 ? " is" : "s are"} still cancellable for ${itemLabel}`,
+          409,
+        );
       }
       const itemAmount = prorateMoney(orderItem.line_total, quantity, orderItem.quantity);
       const discountAmount = prorateMoney(orderItem.discount_amount, quantity, orderItem.quantity);
@@ -142,6 +160,28 @@ class CancellationService {
     });
   }
 
+  async getReturnReservedQuantities(orderId) {
+    const returns = await ReturnModel.find({
+      orderId,
+      status: { $nin: ["rejected", "qc_failure_upheld"] },
+    }).lean();
+    const quantities = new Map();
+    returns.forEach((returnRequest) => {
+      const status = String(returnRequest.status || "").toLowerCase();
+      const refundStatus = String(returnRequest.refund?.status || "").toLowerCase();
+      if (status === "closed" && !["completed", "not_required"].includes(refundStatus)) return;
+      (returnRequest.items || []).forEach((item) => {
+        if (!item.orderItemId) return;
+        const key = String(item.orderItemId);
+        const quantity = Number(
+          item.receivedQuantity || item.approvedQuantity || item.requestedQuantity || item.quantity || 0,
+        );
+        quantities.set(key, (quantities.get(key) || 0) + Math.max(quantity, 0));
+      });
+    });
+    return quantities;
+  }
+
   isFullCancellation(order, items) {
     const cancelledByItem = new Map(items.map((item) => [String(item.orderItemId), Number(item.quantity || 0)]));
     return (order.items || []).every((item) => {
@@ -156,13 +196,11 @@ class CancellationService {
     const proportion = Number(order.subtotal_amount || 0) > 0
       ? Math.min(itemBase / Number(order.subtotal_amount), 1)
       : 0;
-    const refundAmount = fullCancellation
-      ? this.round(Number(order.total_amount || itemRefundAmount))
-      : this.round(
-        itemRefundAmount +
-        Number(order.cod_charge_amount || 0) * proportion +
-        Number(additionalRefundAmount || 0),
-      );
+    const refundAmount = this.round(
+      itemRefundAmount +
+      Number(order.cod_charge_amount || 0) * proportion +
+      Number(additionalRefundAmount || 0),
+    );
     const walletRefundAmount = this.round(Math.min(
       fullCancellation
         ? Number(order.wallet_discount_amount || 0)
@@ -190,6 +228,21 @@ class CancellationService {
     const rtoSettlement = payload.source === "shipment_rto";
     if (rtoSettlement && !this.isAdmin(actor)) {
       throw new AppError("Only the system or an admin can finalize an RTO settlement", 403);
+    }
+    // Resolve retries before validating quantities. The original request may
+    // already have increased cancelled_quantity, making its payload look stale.
+    if (payload.idempotencyKey) {
+      const existing = await this.cancellationRepository.findByIdempotencyKey(payload.idempotencyKey);
+      if (existing) {
+        const sameOrder = String(existing.order_id) === String(orderId);
+        const sameRequester = String(existing.requested_by || "") === String(actor.userId || "");
+        if (!sameOrder || (!sameRequester && !this.isAdmin(actor))) {
+          throw new AppError("Cancellation request key is already in use", 409);
+        }
+        return rtoSettlement && existing.status !== "completed"
+          ? this.processCancellation(existing.id, actor)
+          : existing;
+      }
     }
     // A multi-seller parent order can already be `shipped` because another
     // seller handed over their package. Seller cancellation eligibility must
@@ -229,19 +282,40 @@ class CancellationService {
         throw new AppError("There are no active items from this seller to cancel", 409);
       }
     }
-    const items = this.normalizeItems(order, requestedItems);
+    const returnReservedByItem = await this.getReturnReservedQuantities(orderId);
+    const items = this.normalizeItems(order, requestedItems, returnReservedByItem);
     await this.assertCanCancel(order, items, actor);
     const fullCancellation = this.isFullCancellation(order, items);
     const payment = await this.orderRepository.findRefundablePaymentByOrderId(orderId);
-    const shippingRefundAmount = rtoSettlement && !fullCancellation
-      ? this.getSellerShippingAmount(order, payload.sellerId, payload.organizationId)
+    const commerceSettings = await commerceSettingsService.getSettings();
+    const componentPolicies = commerceSettings.returns?.refundPolicy || {};
+    const scenario = rtoSettlement
+      ? "rtoDeliveryFailed"
+      : this.isSeller(actor)
+        ? "sellerCancellation"
+        : fullCancellation
+          ? "fullCancellation"
+          : "itemCancellation";
+    const shippingRefundEnabled = componentPolicies.shipping?.[scenario] === true;
+    const platformFeeRefundEnabled = componentPolicies.platformFee?.[scenario] === true;
+    const shippingRefundAmount = shippingRefundEnabled
+      ? fullCancellation
+        ? this.round(order.shipping_fee_amount || order.summary?.shippingFeeAmount || 0)
+        : this.getCompletedSellerGroupShippingAmount(order, items)
+      : 0;
+    const itemBase = items.reduce((sum, item) => sum + Number(item.itemAmount || 0), 0);
+    const proportion = Number(order.subtotal_amount || 0) > 0
+      ? Math.min(itemBase / Number(order.subtotal_amount), 1)
+      : 0;
+    const platformFeeRefundAmount = platformFeeRefundEnabled
+      ? this.round(this.getCustomerPlatformFeeAmount(order) * proportion)
       : 0;
     const refund = this.calculateRefund(
       order,
       items,
       payment,
       fullCancellation,
-      shippingRefundAmount,
+      shippingRefundAmount + platformFeeRefundAmount,
     );
     const idempotencyKey = this.makeIdempotencyKey(orderId, items, payload, actor);
     const existing = await this.cancellationRepository.findByIdempotencyKey(idempotencyKey);
@@ -283,6 +357,9 @@ class CancellationService {
         rtoSettlement,
         shipmentId: payload.shipmentId || null,
         shippingRefundAmount,
+        platformFeeRefundAmount,
+        refundPolicyScenario: scenario,
+        refundPolicySnapshot: componentPolicies,
         requestedAt: new Date().toISOString(),
       },
     });
@@ -348,6 +425,42 @@ class CancellationService {
     return this.round(match?.chargeAmount || 0);
   }
 
+  getCustomerPlatformFeeAmount(order = {}) {
+    const metadata = this.parseJson(order.metadata, {});
+    return this.round(
+      order.summary?.customerPlatformFeeAmount ??
+      metadata.pricingSummary?.customerPlatformFeeAmount ??
+      metadata.pricingSummary?.customerPlatformFee ??
+      0,
+    );
+  }
+
+  getCompletedSellerGroupShippingAmount(order = {}, cancellationItems = []) {
+    const cancelledByItem = new Map(
+      cancellationItems.map((item) => [String(item.orderItemId), Number(item.quantity || 0)]),
+    );
+    const completedGroups = new Set();
+    for (const item of cancellationItems) {
+      const orderItem = (order.items || []).find((entry) => String(entry.id) === String(item.orderItemId));
+      if (!orderItem) continue;
+      const sellerId = String(orderItem.seller_id || item.sellerId || "");
+      const organizationId = String(orderItem.organization_id || "default");
+      const groupItems = (order.items || []).filter((entry) =>
+        String(entry.seller_id || "") === sellerId &&
+        String(entry.organization_id || "default") === organizationId,
+      );
+      const groupCompletes = groupItems.length > 0 && groupItems.every((entry) => {
+        const remaining = Number(entry.quantity || 0) - Number(entry.cancelled_quantity || 0);
+        return Number(cancelledByItem.get(String(entry.id)) || 0) === remaining;
+      });
+      if (groupCompletes) completedGroups.add(`${sellerId}:${organizationId}`);
+    }
+    return this.round([...completedGroups].reduce((sum, key) => {
+      const separator = key.lastIndexOf(":");
+      return sum + this.getSellerShippingAmount(order, key.slice(0, separator), key.slice(separator + 1));
+    }, 0));
+  }
+
   assertRtoShipment(order = {}, payload = {}) {
     const shipment = (order.relations?.shipments || []).find((entry) =>
       String(entry.id || "") === String(payload.shipmentId || ""),
@@ -371,23 +484,33 @@ class CancellationService {
     }
     const blocked = shipments.find((shipment) => !CANCELLABLE_SHIPMENT_STATUSES.has(shipment.status));
     if (blocked) throw new AppError("Cancellation is blocked because a shipment was handed to the courier", 409);
-    for (const shipment of shipments.filter((entry) => entry.status !== "cancelled")) {
-      const sellerId = String(shipment.seller_id);
-      const selectedByItem = new Map(
-        items
-          .filter((item) => String(item.sellerId) === sellerId)
-          .map((item) => [String(item.orderItemId), Number(item.quantity || 0)]),
-      );
-      const cancelsSellerPackage = (order.items || [])
-        .filter((item) => String(item.seller_id) === sellerId)
-        .every((item) => {
-          const remaining = Number(item.quantity || 0) - Number(item.cancelled_quantity || 0);
-          return Number(selectedByItem.get(String(item.id)) || 0) === remaining;
-        });
-      if (!cancelsSellerPackage) {
-        throw new AppError("A packed seller shipment can only be cancelled as a complete shipment group", 409);
-      }
+  }
+
+  shipmentOrderItems(order = {}, shipment = {}) {
+    const metadata = this.parseJson(shipment.metadata, {});
+    const shipmentItemIds = new Set(
+      (Array.isArray(metadata.orderItemIds) ? metadata.orderItemIds : []).map(String),
+    );
+    if (shipmentItemIds.size) {
+      return (order.items || []).filter((item) => shipmentItemIds.has(String(item.id)));
     }
+    return (order.items || []).filter(
+      (item) => String(item.seller_id) === String(shipment.seller_id),
+    );
+  }
+
+  cancellationCompletesShipment(order = {}, shipment = {}, cancellationItems = []) {
+    const selected = new Map(
+      cancellationItems.map((item) => [String(item.orderItemId), Number(item.quantity || 0)]),
+    );
+    const shipmentItems = this.shipmentOrderItems(order, shipment);
+    return shipmentItems.length > 0 && shipmentItems.every((item) => {
+      const activeQuantity = Math.max(
+        Number(item.quantity || 0) - Number(item.cancelled_quantity || 0),
+        0,
+      );
+      return activeQuantity <= Number(selected.get(String(item.id)) || 0);
+    });
   }
 
   async cancelShipments(order, cancellation, actor) {
@@ -395,7 +518,10 @@ class CancellationService {
     const shipments = (order.relations?.shipments || []).filter((shipment) =>
       sellerIds.has(String(shipment.seller_id)) && shipment.direction !== "reverse" && shipment.status !== "cancelled",
     );
-    for (const shipment of shipments) {
+    const completedShipments = shipments.filter((shipment) =>
+      this.cancellationCompletesShipment(order, shipment, cancellation.items || []),
+    );
+    for (const shipment of completedShipments) {
       await this.deliveryRepository.addTrackingEvent(shipment.id, {
         status: "cancelled",
         note: cancellation.reason,
@@ -405,7 +531,7 @@ class CancellationService {
         rawPayload: { cancellationId: cancellation.id },
       });
     }
-    return shipments.length ? "cancelled" : "not_required";
+    return completedShipments.length ? "cancelled" : "not_required";
   }
 
   async processCancellation(cancellationId, actor = {}) {
@@ -600,6 +726,10 @@ class CancellationService {
       scope: cancellation.scope,
       cancellationScope: cancellation.scope,
       sellerSupplyCancellation: Boolean(cancellation.metadata?.sellerSupplyCancellation),
+      refundBreakup: {
+        shippingRefund: Number(cancellation.metadata?.shippingRefundAmount || 0),
+        platformFeeRefund: Number(cancellation.metadata?.platformFeeRefundAmount || 0),
+      },
       items: cancellation.items || [],
     }, Number(cancellation.refund_amount || 0), actor);
   }
@@ -631,6 +761,9 @@ class CancellationService {
     if (!this.isAdmin(actor)) throw new AppError("Only admin users can confirm manual refunds", 403);
     const cancellation = await this.cancellationRepository.findById(cancellationId);
     if (!cancellation) throw new AppError("Cancellation not found", 404);
+    if (cancellation.refund_status === "completed") {
+      throw new AppError("This cancellation has already been refunded", 409, null, "REFUND_ALREADY_COMPLETED");
+    }
     if (cancellation.refund_status !== "manual_review") throw new AppError("Cancellation is not awaiting a manual refund", 409);
     const order = await this.orderRepository.findByIdWithItems(cancellation.order_id);
     if (!order) throw new AppError("Order not found", 404);

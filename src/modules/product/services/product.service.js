@@ -11,6 +11,7 @@ const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
 const { InventoryService } = require("../../inventory/services/inventory.service");
 const {
   PRODUCT_STATUS,
+  PRODUCT_APPROVAL_STATUS,
   PRODUCT_TYPE,
   PRODUCT_VISIBILITY,
   PRODUCT_REVISION_STATUS,
@@ -661,6 +662,7 @@ class ProductService {
           )
         : {},
       status: product.status,
+      approvalStatus: product.approvalStatus,
       visibility: product.visibility || PRODUCT_VISIBILITY.PUBLIC,
       publishedAt: product.publishedAt || product.createdAt,
       scheduledAt: product.scheduledAt || null,
@@ -1170,17 +1172,9 @@ class ProductService {
     await this.validateProductReferences(payload, actor);
     this._validateProductType(productType, payload);
 
-    /*
-     * Previous approval workflow — kept for quick rollback.
-     *
-     * const status = isSeller
-     *   ? payload.status === PRODUCT_STATUS.DRAFT
-     *     ? PRODUCT_STATUS.DRAFT
-     *     : PRODUCT_STATUS.PENDING_APPROVAL
-     *   : payload.status || PRODUCT_STATUS.DRAFT;
-     */
-    const status = PRODUCT_STATUS.ACTIVE;
-    const autoApprovedAt = new Date();
+    const status = payload.status === PRODUCT_STATUS.ACTIVE
+      ? PRODUCT_STATUS.ACTIVE
+      : PRODUCT_STATUS.DRAFT;
 
     const hasVariants = payload.hasVariants === true || (payload.variants || []).length > 0;
 
@@ -1189,6 +1183,7 @@ class ProductService {
       categoryId: payload.categoryId || payload.category,
       productType,
       status,
+      approvalStatus: PRODUCT_APPROVAL_STATUS.PENDING,
       sellerId,
       organizationId: organizationContext.organizationId,
       organizationSnapshot: organizationContext.organizationSnapshot,
@@ -1196,21 +1191,18 @@ class ProductService {
       warehouseId: payload.warehouseId || null,
       hasVariants,
       slug: slugify(`${payload.title}-${Date.now()}`, { lower: true, strict: true }),
-      publishedAt: autoApprovedAt,
-      approvedAt: autoApprovedAt,
-      approvedBy: actor.userId,
       moderation: {
-        submittedAt: autoApprovedAt,
-        reviewedAt: autoApprovedAt,
-        reviewedBy: actor.userId,
-        notes: "Temporarily auto-approved on product creation.",
+        submittedAt: status === PRODUCT_STATUS.ACTIVE ? new Date() : null,
+        notes: status === PRODUCT_STATUS.DRAFT
+          ? "Product details are saved as draft."
+          : "Product submitted for approval.",
         checklist: {
-          titleVerified: true,
-          categoryVerified: true,
-          complianceVerified: true,
-          mediaVerified: true,
-          pricingVerified: true,
-          inventoryVerified: true,
+          titleVerified: false,
+          categoryVerified: false,
+          complianceVerified: false,
+          mediaVerified: false,
+          pricingVerified: false,
+          inventoryVerified: false,
         },
       },
       createdBy: actor.userId,
@@ -1225,7 +1217,10 @@ class ProductService {
       ],
     });
 
-    if (product.status === PRODUCT_STATUS.ACTIVE) {
+    if (
+      product.status === PRODUCT_STATUS.ACTIVE &&
+      product.approvalStatus === PRODUCT_APPROVAL_STATUS.APPROVED
+    ) {
       await this._indexProduct(product);
     }
     this._invalidateProductCache();
@@ -1362,7 +1357,10 @@ class ProductService {
 
     const updatedProduct = await this.productRepository.update(productId, updatePayload);
 
-    if (updatedProduct.status === PRODUCT_STATUS.ACTIVE) {
+    if (
+      updatedProduct.status === PRODUCT_STATUS.ACTIVE &&
+      updatedProduct.approvalStatus === PRODUCT_APPROVAL_STATUS.APPROVED
+    ) {
       await this._indexProduct(updatedProduct);
     } else {
       await this._deleteFromIndex(productId);
@@ -1867,6 +1865,10 @@ class ProductService {
     const ratings = this.parseProductRatingFilter(query.min_rating ?? query.minRating ?? query.rating);
     if (ratings.length) filter.rating = { $gte: Math.min(...ratings) };
 
+    if (query.approvalStatus) {
+      filter.approvalStatus = query.approvalStatus;
+    }
+
     this.applyAttributeFilters(filter, query);
 
     const minPrice = query.min_price ?? query.minPrice;
@@ -2220,6 +2222,7 @@ class ProductService {
       "rating",
       "minRating",
       "min_rating",
+      "approvalStatus",
     ]);
 
     Object.entries(query).forEach(([key, value]) => {
@@ -2609,9 +2612,16 @@ async getProduct(productId) {
       return this.reviewProductRevision(productId, pendingRevision._id, payload, actor);
     }
 
-    const nextStatus = payload.status;
-    const isApproval = nextStatus === PRODUCT_STATUS.ACTIVE;
-    const isRejection = nextStatus === PRODUCT_STATUS.REJECTED;
+    const isApproval = payload.status === PRODUCT_STATUS.ACTIVE;
+    const isRejection = payload.status === PRODUCT_STATUS.REJECTED;
+    const nextStatus = isApproval
+      ? PRODUCT_STATUS.ACTIVE
+      : PRODUCT_STATUS.INACTIVE;
+    const nextApprovalStatus = isApproval
+      ? PRODUCT_APPROVAL_STATUS.APPROVED
+      : isRejection
+        ? PRODUCT_APPROVAL_STATUS.REJECTED
+        : existingProduct.approvalStatus || PRODUCT_APPROVAL_STATUS.APPROVED;
 
     if (isRejection && !payload.rejectionReason) {
       throw new AppError("Rejection reason is required", 400);
@@ -2619,6 +2629,7 @@ async getProduct(productId) {
 
     const updatedProduct = await this.productRepository.reviewProduct(productId, {
       status: nextStatus,
+      approvalStatus: nextApprovalStatus,
       approvedBy: isApproval ? actor.userId : null,
       approvedAt: isApproval ? new Date() : null,
       publishedAt: isApproval ? new Date() : existingProduct.publishedAt,
@@ -2642,7 +2653,10 @@ async getProduct(productId) {
       }),
     });
 
-    if (nextStatus === PRODUCT_STATUS.ACTIVE) {
+    if (
+      nextStatus === PRODUCT_STATUS.ACTIVE &&
+      nextApprovalStatus === PRODUCT_APPROVAL_STATUS.APPROVED
+    ) {
       await this._indexProduct(updatedProduct);
     } else {
       await this._deleteFromIndex(productId);
@@ -3105,6 +3119,14 @@ async getProduct(productId) {
       throw new AppError("Rejection reason is required", 400);
     }
 
+    if (
+      nextStatus === PRODUCT_STATUS.ACTIVE &&
+      existingProduct.approvalStatus !== PRODUCT_APPROVAL_STATUS.APPROVED &&
+      isSellerRole(actor)
+    ) {
+      throw new AppError("Product must be approved before it can be activated", 409);
+    }
+
     const isAdminReactivation =
       !isSellerRole(actor) &&
       existingProduct.status === PRODUCT_STATUS.INACTIVE &&
@@ -3152,7 +3174,10 @@ async getProduct(productId) {
       }),
     });
 
-    if (updatedProduct.status === PRODUCT_STATUS.ACTIVE) {
+    if (
+      updatedProduct.status === PRODUCT_STATUS.ACTIVE &&
+      updatedProduct.approvalStatus === PRODUCT_APPROVAL_STATUS.APPROVED
+    ) {
       await this._indexProduct(updatedProduct);
     } else {
       await this._deleteFromIndex(productId);

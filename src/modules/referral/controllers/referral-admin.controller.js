@@ -135,6 +135,7 @@ class ReferralAdminController {
     const payout = await this.referralService.approvePayout(
       req.params.payoutId,
       req.body,
+      getCurrentUser(req),
     );
     res.json(okResponse(payout));
   };
@@ -143,6 +144,7 @@ class ReferralAdminController {
     const payout = await this.referralService.rejectPayout(
       req.params.payoutId,
       req.body,
+      getCurrentUser(req),
     );
     res.json(okResponse(payout));
   };
@@ -151,6 +153,7 @@ class ReferralAdminController {
     const payout = await this.referralService.markPayoutPaid(
       req.params.payoutId,
       req.body,
+      getCurrentUser(req),
     );
     res.json(okResponse(payout));
   };

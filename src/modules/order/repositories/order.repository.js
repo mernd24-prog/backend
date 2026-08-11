@@ -4,6 +4,7 @@ const { OutboxRepository } = require("../../../infrastructure/postgres/outbox.re
 const { PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const { DELIVERY_STATUS } = require("../../delivery/models/delivery.model");
 const { UserModel } = require("../../user/models/user.model");
+const { withTransientDatabaseRetry } = require("../../../shared/errors/database-error");
 const {
   calculateInclusiveShippingTax,
   resolveShippingPolicy,
@@ -165,8 +166,10 @@ class OrderRepository {
   }
 
   async listOrdersByBuyer(buyerId, filters = {}) {
-    const orders = await this.listOrders({ ...filters, buyerId });
-    return this.attachOrderRelations(orders);
+    return withTransientDatabaseRetry(async () => {
+      const orders = await this.listOrders({ ...filters, buyerId });
+      return this.attachOrderRelations(orders);
+    }, { attempts: 3, delayMs: 150 });
   }
 
   async listOrdersBySeller(sellerId, productIds = null, filters = {}) {
@@ -247,16 +250,15 @@ class OrderRepository {
   }
 
   async findByIdWithItems(orderId) {
-    const order = await this.findById(orderId);
-    if (!order) {
-      return null;
-    }
-
-    const [hydrated] = await this.attachOrderRelations([order], {
-      includeTimeline: true,
-      includeNotes: true,
-    });
-    return hydrated || null;
+    return withTransientDatabaseRetry(async () => {
+      const order = await this.findById(orderId);
+      if (!order) return null;
+      const [hydrated] = await this.attachOrderRelations([order], {
+        includeTimeline: true,
+        includeNotes: true,
+      });
+      return hydrated || null;
+    }, { attempts: 3, delayMs: 150 });
   }
 
   async findItemsByOrderId(orderId) {

@@ -48,7 +48,25 @@ function registerWorkers() {
       },
     ),
   ];
+  workers.forEach((worker) => {
+    worker.on("error", (error) => {
+      logger.error({ err: error, queue: worker.name }, "BullMQ worker error");
+    });
+    worker.on("failed", (job, error) => {
+      logger.error(
+        { err: error, queue: worker.name, jobId: job?.id, jobName: job?.name },
+        "BullMQ job failed",
+      );
+    });
+  });
   logger.info({ mailQueue: env.smtp.queue }, "BullMQ workers registered");
 }
 
-module.exports = { registerWorkers, workers };
+async function closeWorkers() {
+  const activeWorkers = [...workers];
+  workers = [];
+  registered = false;
+  await Promise.allSettled(activeWorkers.map((worker) => worker.close()));
+}
+
+module.exports = { registerWorkers, closeWorkers };

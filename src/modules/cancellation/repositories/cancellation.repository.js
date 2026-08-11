@@ -1,5 +1,6 @@
 const { knex } = require("../../../infrastructure/postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
+const { withTransientDatabaseRetry } = require("../../../shared/errors/database-error");
 
 class CancellationRepository {
   jsonb(value, fallback = {}) {
@@ -38,11 +39,15 @@ class CancellationRepository {
   }
 
   async findById(id) {
-    return knex("order_cancellations").where("id", id).first();
+    return withTransientDatabaseRetry(
+      () => knex("order_cancellations").where("id", id).first(),
+    );
   }
 
   async findByIdempotencyKey(idempotencyKey) {
-    return knex("order_cancellations").where("idempotency_key", idempotencyKey).first();
+    return withTransientDatabaseRetry(
+      () => knex("order_cancellations").where("idempotency_key", idempotencyKey).first(),
+    );
   }
 
   async findByProviderRefundId(providerRefundId) {

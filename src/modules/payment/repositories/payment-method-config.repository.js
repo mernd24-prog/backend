@@ -4,7 +4,8 @@ const COD_METHOD = "cod";
 
 class PaymentMethodConfigRepository {
   async ensureTable() {
-    await knex.schema.createTableIfNotExists("payment_method_configs", (table) => {
+    if (await knex.schema.hasTable("payment_method_configs")) return;
+    await knex.schema.createTable("payment_method_configs", (table) => {
       table.string("method", 64).primary();
       table.boolean("enabled").notNullable().defaultTo(true);
       table.decimal("charge_amount", 12, 2).notNullable().defaultTo(0);

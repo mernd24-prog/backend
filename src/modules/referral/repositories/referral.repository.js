@@ -455,6 +455,54 @@ class ReferralRepository {
     );
   }
 
+  async reserveAvailableWalletBalance(influencerId, amount) {
+    return InfluencerWalletModel.findOneAndUpdate(
+      {
+        influencerId: String(influencerId),
+        availableBalance: { $gte: Number(amount) },
+      },
+      {
+        $inc: {
+          availableBalance: -Number(amount),
+          reservedBalance: Number(amount),
+        },
+      },
+      { new: true },
+    );
+  }
+
+  async releaseReservedWalletBalance(influencerId, amount) {
+    return InfluencerWalletModel.findOneAndUpdate(
+      {
+        influencerId: String(influencerId),
+        reservedBalance: { $gte: Number(amount) },
+      },
+      {
+        $inc: {
+          reservedBalance: -Number(amount),
+          availableBalance: Number(amount),
+        },
+      },
+      { new: true },
+    );
+  }
+
+  async settleReservedWalletBalance(influencerId, amount) {
+    return InfluencerWalletModel.findOneAndUpdate(
+      {
+        influencerId: String(influencerId),
+        reservedBalance: { $gte: Number(amount) },
+      },
+      {
+        $inc: {
+          reservedBalance: -Number(amount),
+          paidBalance: Number(amount),
+        },
+      },
+      { new: true },
+    );
+  }
+
   async getLedgerOrderIdsForInfluencer({
     influencerId,
     coinStatus = null,
@@ -963,6 +1011,14 @@ class ReferralRepository {
     );
   }
 
+  async transitionPayoutReservation(payoutId, fromStatus, toStatus) {
+    return InfluencerPayoutRequestModel.findOneAndUpdate(
+      { _id: payoutId, reservationStatus: fromStatus },
+      { $set: { reservationStatus: toStatus } },
+      { new: true },
+    );
+  }
+
   async getActiveCommissionRule() {
     return ReferralCommissionRuleModel.findOne({ active: true }).sort({
       effectiveFrom: -1,
@@ -1371,6 +1427,7 @@ class ReferralRepository {
           _id: null,
           pendingBalance: { $sum: "$pendingBalance" },
           availableBalance: { $sum: "$availableBalance" },
+          reservedBalance: { $sum: "$reservedBalance" },
           paidBalance: { $sum: "$paidBalance" },
           reversedBalance: { $sum: "$reversedBalance" },
         },
@@ -1380,6 +1437,7 @@ class ReferralRepository {
       result || {
         pendingBalance: 0,
         availableBalance: 0,
+        reservedBalance: 0,
         paidBalance: 0,
         reversedBalance: 0,
       }
