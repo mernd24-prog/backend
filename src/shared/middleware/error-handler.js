@@ -156,7 +156,8 @@ function errorHandler(error, req, res, next) {
     code       = "FILE_TOO_LARGE";
   }
 
-  // Generic 500 — hide implementation details
+  // Generic 500 — hide unknown implementation details, but keep intentional
+  // AppError messages because they are already user-facing.
   if (statusCode >= 500) {
     req.log?.error(
       { err: error, statusCode, errorCode: code || "INTERNAL_ERROR" },

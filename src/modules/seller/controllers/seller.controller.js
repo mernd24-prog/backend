@@ -27,6 +27,36 @@ class SellerController {
     res.status(201).json(okResponse({ documents }));
   };
 
+  sendAadhaarOtp = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.sellerService.sendAadhaarOtp(req.body, actor);
+    res.json(okResponse(result, { message: result.message || "Aadhaar OTP sent successfully" }));
+  };
+
+  precheckAadhaar = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.sellerService.precheckAadhaar(req.body, actor);
+    res.json(okResponse(result, { message: result.message || "Aadhaar precheck completed" }));
+  };
+
+  verifyAadhaarOtp = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.sellerService.verifyAadhaarOtp(req.body, actor);
+    res.json(okResponse(result, { message: "Aadhaar verified successfully" }));
+  };
+
+  verifyPan = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.sellerService.verifyPan(req.body, actor);
+    res.json(okResponse(result, { message: result.message || "PAN verified successfully" }));
+  };
+
+  precheckPan = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.sellerService.precheckPan(req.body, actor);
+    res.json(okResponse(result, { message: result.message || "PAN precheck completed" }));
+  };
+
   reviewKyc = async (req, res) => {
     const actor = getCurrentUser(req);
     const kyc = await this.sellerService.reviewKyc(req.params.sellerId, req.body, { ...actor, _req: req });

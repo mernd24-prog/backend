@@ -5,6 +5,7 @@ const { eventPublisher } = require("../../../infrastructure/events/event-publish
 const { KYC_STATUS } = require("../../../shared/domain/commerce-constants");
 const { AppError } = require("../../../shared/errors/app-error");
 const { auditService } = require("../../../shared/logger/audit.service");
+const { logger } = require("../../../shared/logger/logger");
 const { hashText } = require("../../../shared/tools/hash");
 const { ROLES } = require("../../../shared/constants/roles");
 const { DEFAULT_SELLER_MODULES, cleanModuleName } = require("../../../shared/auth/module-access");
@@ -16,6 +17,7 @@ const { RbacService } = require("../../rbac/services/rbac.service");
 const {
   storageService: defaultStorageService,
 } = require("../../../shared/storage/storage-service");
+const { SellerKycVerificationService } = require("./seller-kyc-verification.service");
 const {
   SELLER_ONBOARDING_STATUS,
   makeSellerOnboardingState,
@@ -26,6 +28,18 @@ const {
 } = require("../../../shared/domain/seller-onboarding");
 const { sellerOrganizationService } = require("./seller-organization.service");
 const { UserModel } = require("../../user/models/user.model");
+const { env } = require("../../../config/env");
+
+const APITXT_PROVIDER_DAILY_TTL_SECONDS = 24 * 60 * 60;
+const APITXT_AADHAAR_SEND_FAILURE_TTL_SECONDS = 10 * 60;
+const AADHAAR_OTP_SEND_FAILED_MESSAGE =
+  "Aadhaar OTP could not be sent for this number. Please check Aadhaar/mobile linkage or try again later.";
+
+const maskAadhaar = (aadhaarNumber = "") => {
+  const normalized = String(aadhaarNumber || "").replace(/\D/g, "");
+  if (normalized.length <= 4) return "************";
+  return `${"*".repeat(Math.max(normalized.length - 4, 0))}${normalized.slice(-4)}`;
+};
 
 const composeProfileName = (firstName = "", lastName = "") => {
   const first = String(firstName || "").trim();
@@ -50,10 +64,12 @@ class SellerService {
     sellerRepository = new SellerRepository(),
     rbacService = new RbacService(),
     storageService = defaultStorageService,
+    kycVerificationService = new SellerKycVerificationService(),
   } = {}) {
     this.sellerRepository = sellerRepository;
     this.rbacService = rbacService;
     this.storageService = storageService;
+    this.kycVerificationService = kycVerificationService;
   }
 
   getSellerId(actor) {
@@ -68,6 +84,239 @@ class SellerService {
       return value.toObject({ depopulate: true });
     }
     return { ...value };
+  }
+
+  parseJsonObject(value = {}) {
+    if (!value) return {};
+    if (typeof value === "object") return value;
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  buildAadhaarProviderSnapshot(existingKyc = {}, phase, response = {}, extra = {}) {
+    const previous = this.parseJsonObject(existingKyc?.aadhaar_verification_response);
+    const history = Array.isArray(previous.history) ? previous.history : [];
+    const nextEntry = {
+      phase,
+      provider: response?.provider || "apitxt",
+      referenceId:
+        response?.reference_id ||
+        response?.referenceId ||
+        response?.providerReferenceId ||
+        extra.referenceId ||
+        null,
+      verified: response?.verified === true,
+      message: response?.message || response?.response?.message || null,
+      response,
+      recordedAt: new Date().toISOString(),
+    };
+
+    return {
+      ...previous,
+      provider: "apitxt",
+      latestPhase: phase,
+      latestReferenceId: nextEntry.referenceId,
+      latestVerified: nextEntry.verified,
+      latestMessage: nextEntry.message,
+      latestResponse: response,
+      history: [...history, nextEntry].slice(-10),
+    };
+  }
+
+  buildPanProviderSnapshot(existingKyc = {}, phase, response = {}) {
+    const previous = this.parseJsonObject(existingKyc?.pan_verification_response);
+    const history = Array.isArray(previous.history) ? previous.history : [];
+    const nextEntry = {
+      phase,
+      provider: response?.provider || "apitxt",
+      verified: response?.verified === true,
+      message: response?.message || null,
+      response,
+      recordedAt: new Date().toISOString(),
+    };
+
+    return {
+      ...previous,
+      provider: "apitxt",
+      latestPhase: phase,
+      latestVerified: nextEntry.verified,
+      latestMessage: nextEntry.message,
+      latestResponse: response,
+      history: [...history, nextEntry].slice(-10),
+    };
+  }
+
+  isPanAlreadyVerified(existingKyc = {}, panNumber = "") {
+    return (
+      existingKyc?.pan_verified === true &&
+      sellerOrganizationService.normalizeCode(existingKyc.pan_number) ===
+        sellerOrganizationService.normalizeCode(panNumber)
+    );
+  }
+
+  getAadhaarPrefill(verificationResponse = {}) {
+    const prefill =
+      verificationResponse?.prefill ||
+      verificationResponse?.aadhaarProfile ||
+      {};
+    const fullName = String(prefill.fullName || prefill.legalName || "").trim();
+    const dateOfBirth = String(prefill.dateOfBirth || "").trim();
+
+    if (!fullName && !dateOfBirth) return null;
+
+    return {
+      ...(fullName ? { fullName, legalName: fullName } : {}),
+      ...(dateOfBirth ? { dateOfBirth } : {}),
+    };
+  }
+
+  isAadhaarAlreadyVerified(existingKyc = {}, { aadhaarNumber = "", referenceId = "" } = {}) {
+    if (existingKyc?.aadhaar_verified !== true) return false;
+
+    const storedAadhaar = sellerOrganizationService.normalizeDigits(existingKyc.aadhaar_number);
+    const nextAadhaar = sellerOrganizationService.normalizeDigits(aadhaarNumber);
+    const storedReferenceId = String(existingKyc.aadhaar_reference_id || "").trim();
+    const nextReferenceId = String(referenceId || "").trim();
+
+    if (nextAadhaar) return storedAadhaar === nextAadhaar;
+
+    return !nextReferenceId || storedReferenceId === nextReferenceId;
+  }
+
+  async applyAadhaarPrefillToProfile(sellerId, prefill = null, existingKyc = null, actor = {}) {
+    if (!prefill?.fullName && !prefill?.dateOfBirth) return null;
+
+    const seller = await this.sellerRepository.findSellerById(sellerId);
+    if (!seller) return null;
+
+    const currentProfile = this.toPlainObject(seller.sellerProfile || {});
+    const nextProfile = this.mergeSellerProfile(currentProfile, {
+      ...(!currentProfile.legalBusinessName && prefill.legalName
+        ? { legalBusinessName: prefill.legalName }
+        : {}),
+      ...(!currentProfile.businessName && prefill.legalName
+        ? { businessName: prefill.legalName }
+        : {}),
+      ...(!currentProfile.primaryContactName && prefill.fullName
+        ? { primaryContactName: prefill.fullName }
+        : {}),
+      ...(!currentProfile.dateOfBirth && prefill.dateOfBirth
+        ? { dateOfBirth: prefill.dateOfBirth }
+        : {}),
+    });
+
+    const nextProfileWithOnboarding = this.withOnboardingState(nextProfile, existingKyc, seller);
+    const updatedSeller = await this.sellerRepository.updateSellerProfile(sellerId, nextProfileWithOnboarding);
+
+    return updatedSeller?.sellerProfile || nextProfileWithOnboarding;
+  }
+
+  async assertAadhaarAvailableForSeller(sellerId, aadhaarNumber) {
+    const normalizedAadhaar = sellerOrganizationService.normalizeDigits(aadhaarNumber);
+    if (!normalizedAadhaar) return;
+
+    logger.info(
+      {
+        sellerId,
+        aadhaarNumber: maskAadhaar(normalizedAadhaar),
+      },
+      "Aadhaar local duplicate precheck started",
+    );
+
+    try {
+      await sellerOrganizationService.assertNoVerifiedAadhaarConflict(
+        normalizedAadhaar,
+        {
+          sellerId,
+          ignoreMissingSellerConflicts: true,
+          fieldMap: {
+            aadhaarNumber: "aadhaarNumber",
+          },
+        },
+      );
+    } catch (error) {
+      logger.warn(
+        {
+          sellerId,
+          aadhaarNumber: maskAadhaar(normalizedAadhaar),
+          code: error.code || null,
+          statusCode: error.statusCode || null,
+          fields: Array.isArray(error.details)
+            ? error.details.map((field) => field.field || field.path?.join(".")).filter(Boolean)
+            : [],
+        },
+        "Aadhaar local duplicate precheck blocked verification",
+      );
+      throw error;
+    }
+
+    logger.info(
+      {
+        sellerId,
+        aadhaarNumber: maskAadhaar(normalizedAadhaar),
+      },
+      "Aadhaar local duplicate precheck passed",
+    );
+  }
+
+  async assertApitxtDailyCallAllowed({ sellerId, action, identity }) {
+    const { redis } = require("../../../infrastructure/redis/redis-client");
+    const normalizedIdentity = String(identity || sellerId || "unknown")
+      .replace(/[^A-Za-z0-9:_-]/g, "")
+      .slice(0, 96);
+    const key = `apitxt:provider:daily:${action}:${sellerId}:${normalizedIdentity}`;
+    const nextCount = await redis.incr(key);
+    if (nextCount === 1) {
+      await redis.expire(key, APITXT_PROVIDER_DAILY_TTL_SECONDS);
+    }
+    if (nextCount > env.apitxt.providerDailyLimit) {
+      throw new AppError(
+        "Daily verification API limit reached for this seller. Try again tomorrow or disable live verification for testing.",
+        429,
+      );
+    }
+  }
+
+  getApitxtFailureCooldownKey({ sellerId, action, identity }) {
+    const normalizedIdentity = String(identity || sellerId || "unknown")
+      .replace(/[^A-Za-z0-9:_-]/g, "")
+      .slice(0, 96);
+    return `apitxt:provider:cooldown:${action}:${sellerId}:${normalizedIdentity}`;
+  }
+
+  async assertApitxtFailureCooldownClear({ sellerId, action, identity, message, field }) {
+    const { redis } = require("../../../infrastructure/redis/redis-client");
+    const key = this.getApitxtFailureCooldownKey({ sellerId, action, identity });
+    const isCoolingDown = await redis.get(key);
+    if (!isCoolingDown) return;
+
+    throw AppError.validation(message, [
+      {
+        field,
+        message,
+      },
+    ]);
+  }
+
+  async rememberApitxtFailureCooldown({ sellerId, action, identity }) {
+    try {
+      const { redis } = require("../../../infrastructure/redis/redis-client");
+      const key = this.getApitxtFailureCooldownKey({ sellerId, action, identity });
+      await redis.set(key, "1", "EX", APITXT_AADHAAR_SEND_FAILURE_TTL_SECONDS);
+    } catch (error) {
+      logger.warn(
+        {
+          err: error,
+          sellerId,
+          action,
+        },
+        "Unable to store APITXT failure cooldown",
+      );
+    }
   }
 
   mergeSellerProfile(existingProfile = {}, payload = {}) {
@@ -245,6 +494,9 @@ class SellerService {
     await sellerOrganizationService.assertNoIdentityConflicts(updatePayload, {
       sellerId,
       organizationId: organization.id,
+      aadhaarVerifiedOnly: true,
+      panVerifiedOnly: true,
+      ignoreMissingSellerConflicts: true,
       fieldMap: {
         gstin: "gstNumber",
         pan: "panNumber",
@@ -274,22 +526,77 @@ class SellerService {
       {
         gstin: normalizedPayload.gstNumber,
         pan: normalizedPayload.panNumber,
-        aadhaarNumber: normalizedPayload.aadhaarNumber,
       },
       {
         sellerId,
+        panVerifiedOnly: true,
+        ignoreMissingSellerConflicts: true,
         fieldMap: {
           gstin: "gstNumber",
           pan: "panNumber",
         },
       },
     );
+    await this.assertAadhaarAvailableForSeller(sellerId, normalizedPayload.aadhaarNumber);
+    const existingKyc = await this.sellerRepository.findKycBySellerId(sellerId);
+    if (
+      this.kycVerificationService.enabled &&
+      this.kycVerificationService.verifyAadhaar &&
+      normalizedPayload.aadhaarNumber &&
+      !(
+        existingKyc?.aadhaar_verified === true &&
+        String(existingKyc.aadhaar_number || "") === normalizedPayload.aadhaarNumber
+      )
+    ) {
+      throw AppError.validation(
+        "Aadhaar OTP verification is required before continuing.",
+        [
+          {
+            field: "aadhaarNumber",
+            message: "Verify Aadhaar OTP before continuing.",
+          },
+        ],
+      );
+    }
+    const panAlreadyVerified = this.isPanAlreadyVerified(existingKyc, normalizedPayload.panNumber);
+
+    if (
+      this.kycVerificationService.enabled &&
+      this.kycVerificationService.verifyPan &&
+      !panAlreadyVerified
+    ) {
+      throw AppError.validation(
+        "PAN verification is required before continuing.",
+        [
+          {
+            field: "panNumber",
+            message: "Verify PAN before continuing.",
+          },
+        ],
+      );
+    }
+
+    const verificationResult = panAlreadyVerified
+      ? {
+          skipped: false,
+          provider: "apitxt",
+          panVerified: true,
+          panResult: this.parseJsonObject(existingKyc?.pan_verification_response),
+          cached: true,
+        }
+      : await this.kycVerificationService.verifyForOnboarding(normalizedPayload, {
+          sellerId,
+          actor,
+        });
     const documents = await this.uploadKycDocuments(payload.documents || {}, actor);
     const record = await this.sellerRepository.upsertKyc({
       ...normalizedPayload,
       documents,
       sellerId,
       verificationStatus: KYC_STATUS.SUBMITTED,
+      panVerified: verificationResult?.panVerified === true,
+      panVerifiedAt: verificationResult?.panVerified ? new Date() : null,
+      panVerificationResponse: verificationResult?.panResult || null,
     });
 
     const seller = await this.sellerRepository.findSellerById(sellerId);
@@ -341,6 +648,433 @@ class SellerService {
     return record;
   }
 
+  async sendAadhaarOtp(payload = {}, actor) {
+    const sellerId = this.getSellerId(actor);
+    const aadhaarNumber = sellerOrganizationService.normalizeDigits(payload.aadhaarNumber);
+
+    if (!aadhaarNumber) {
+      throw AppError.validation("Aadhaar number is required", [
+        { field: "aadhaarNumber", message: "Aadhaar number is required" },
+      ]);
+    }
+
+    const existingKyc = await this.sellerRepository.findKycBySellerId(sellerId);
+    if (
+      existingKyc?.aadhaar_verified === true &&
+      String(existingKyc.aadhaar_number || "") === aadhaarNumber
+    ) {
+      return {
+        skipped: true,
+        cached: true,
+        reason: "aadhaar_already_verified",
+        aadhaarVerified: true,
+        reference_id: existingKyc.aadhaar_reference_id || null,
+        aadhaarVerifiedAt: existingKyc.aadhaar_verified_at || null,
+        response: this.parseJsonObject(existingKyc.aadhaar_verification_response),
+        message: "Aadhaar is already verified.",
+      };
+    }
+
+    await this.assertAadhaarAvailableForSeller(sellerId, aadhaarNumber);
+
+    if (this.kycVerificationService.enabled && this.kycVerificationService.verifyAadhaar) {
+      await this.assertApitxtFailureCooldownClear({
+        sellerId,
+        action: "aadhaar_send_otp",
+        identity: aadhaarNumber,
+        field: "aadhaarNumber",
+        message: AADHAAR_OTP_SEND_FAILED_MESSAGE,
+      });
+      await this.assertApitxtDailyCallAllowed({
+        sellerId,
+        action: "aadhaar_send_otp",
+        identity: aadhaarNumber,
+      });
+    }
+
+    let response = null;
+    try {
+      response = await this.kycVerificationService.sendAadhaarOtp(aadhaarNumber, {
+        sellerId,
+        actor,
+      });
+    } catch (error) {
+      if (this.kycVerificationService.enabled && this.kycVerificationService.verifyAadhaar) {
+        await this.rememberApitxtFailureCooldown({
+          sellerId,
+          action: "aadhaar_send_otp",
+          identity: aadhaarNumber,
+        });
+      }
+      throw error;
+    }
+
+    const referenceId = String(
+      response?.reference_id ||
+        response?.referenceId ||
+        response?.response?.reference_id ||
+        response?.response?.referenceId ||
+        "",
+    ).trim();
+    await this.sellerRepository.upsertAadhaarVerification(sellerId, {
+      aadhaarNumber,
+      aadhaarVerified: false,
+      aadhaarReferenceId: referenceId || existingKyc?.aadhaar_reference_id || null,
+      aadhaarVerifiedAt: null,
+      aadhaarVerificationResponse: this.buildAadhaarProviderSnapshot(
+        existingKyc,
+        "send_otp",
+        response,
+        { referenceId },
+      ),
+    });
+
+    return response;
+  }
+
+  async precheckAadhaar(payload = {}, actor) {
+    const sellerId = this.getSellerId(actor);
+    const aadhaarNumber = sellerOrganizationService.normalizeDigits(payload.aadhaarNumber);
+    const referenceId = String(payload.reference_id || payload.referenceId || "").trim();
+
+    if (!aadhaarNumber) {
+      throw AppError.validation("Aadhaar number is required", [
+        { field: "aadhaarNumber", message: "Aadhaar number is required" },
+      ]);
+    }
+
+    const existingKyc = await this.sellerRepository.findKycBySellerId(sellerId);
+    if (this.isAadhaarAlreadyVerified(existingKyc, { aadhaarNumber, referenceId })) {
+      const cachedResponse = this.parseJsonObject(existingKyc.aadhaar_verification_response);
+      const latestResponse =
+        cachedResponse.latestResponse ||
+        cachedResponse.latestVerificationResponse ||
+        cachedResponse;
+      const prefill = this.getAadhaarPrefill(latestResponse);
+
+      return {
+        canProceed: false,
+        skipped: true,
+        cached: true,
+        reason: "aadhaar_already_verified",
+        aadhaarVerified: true,
+        aadhaarReferenceId: existingKyc.aadhaar_reference_id || referenceId || null,
+        aadhaarVerifiedAt: existingKyc.aadhaar_verified_at || null,
+        ...(prefill ? { prefill, aadhaarProfile: prefill } : {}),
+        verificationResponse: latestResponse,
+        message: "Aadhaar is already verified.",
+      };
+    }
+
+    await this.assertAadhaarAvailableForSeller(sellerId, aadhaarNumber);
+
+    return {
+      canProceed: true,
+      aadhaarVerified: false,
+      message: "Aadhaar is available for verification.",
+    };
+  }
+
+  async assertPanAvailableForSeller(sellerId, panNumber) {
+    const normalizedPan = sellerOrganizationService.normalizeCode(panNumber);
+    if (!normalizedPan) return;
+
+    logger.info(
+      {
+        sellerId,
+        panNumber: `${normalizedPan.slice(0, 2)}*****${normalizedPan.slice(-2)}`,
+      },
+      "PAN local duplicate precheck started",
+    );
+
+    try {
+      await sellerOrganizationService.assertNoIdentityConflicts(
+        { pan: normalizedPan },
+        {
+          sellerId,
+          panVerifiedOnly: true,
+          ignoreMissingSellerConflicts: true,
+          fieldMap: {
+            pan: "panNumber",
+          },
+        },
+      );
+    } catch (error) {
+      logger.warn(
+        {
+          sellerId,
+          panNumber: `${normalizedPan.slice(0, 2)}*****${normalizedPan.slice(-2)}`,
+          code: error.code || null,
+          statusCode: error.statusCode || null,
+          fields: Array.isArray(error.details)
+            ? error.details.map((field) => field.field || field.path?.join(".")).filter(Boolean)
+            : [],
+        },
+        "PAN local duplicate precheck blocked verification",
+      );
+      throw error;
+    }
+
+    logger.info(
+      {
+        sellerId,
+        panNumber: `${normalizedPan.slice(0, 2)}*****${normalizedPan.slice(-2)}`,
+      },
+      "PAN local duplicate precheck passed",
+    );
+  }
+
+  async precheckPan(payload = {}, actor) {
+    const sellerId = this.getSellerId(actor);
+    const panNumber = sellerOrganizationService.normalizeCode(payload.panNumber);
+
+    if (!panNumber) {
+      throw AppError.validation("PAN number is required", [
+        { field: "panNumber", message: "PAN number is required" },
+      ]);
+    }
+
+    const existingKyc = await this.sellerRepository.findKycBySellerId(sellerId);
+    if (this.isPanAlreadyVerified(existingKyc, panNumber)) {
+      return {
+        canProceed: false,
+        skipped: true,
+        cached: true,
+        reason: "pan_already_verified",
+        panVerified: true,
+        panVerifiedAt: existingKyc.pan_verified_at || null,
+        response: this.parseJsonObject(existingKyc.pan_verification_response),
+        message: "PAN is already verified.",
+      };
+    }
+
+    await this.assertPanAvailableForSeller(sellerId, panNumber);
+
+    return {
+      canProceed: true,
+      panVerified: false,
+      message: "PAN is available for verification.",
+    };
+  }
+
+  async verifyAadhaarOtp(payload = {}, actor) {
+    const sellerId = this.getSellerId(actor);
+    const referenceId = String(payload.reference_id || payload.referenceId || "").trim();
+    const otp = String(payload.otp || "").trim();
+    const aadhaarNumber = sellerOrganizationService.normalizeDigits(payload.aadhaarNumber);
+
+    if (!referenceId) {
+      throw AppError.validation("Aadhaar OTP reference is required", [
+        { field: "reference_id", message: "Aadhaar OTP reference is required" },
+      ]);
+    }
+    if (!otp) {
+      throw AppError.validation("OTP is required", [
+        { field: "otp", message: "OTP is required" },
+      ]);
+    }
+
+    let verificationResponse = null;
+    try {
+      const existingKyc = await this.sellerRepository.findKycBySellerId(sellerId);
+      if (this.isAadhaarAlreadyVerified(existingKyc, { aadhaarNumber, referenceId })) {
+        const cachedResponse = this.parseJsonObject(existingKyc.aadhaar_verification_response);
+        const prefill = this.getAadhaarPrefill(
+          cachedResponse.latestResponse ||
+            cachedResponse.latestVerificationResponse ||
+            cachedResponse,
+        );
+
+        return {
+          skipped: true,
+          cached: true,
+          reason: "aadhaar_already_verified",
+          aadhaarVerified: true,
+          aadhaarReferenceId: existingKyc.aadhaar_reference_id || referenceId,
+          aadhaarVerifiedAt: existingKyc.aadhaar_verified_at || null,
+          ...(prefill ? { prefill, aadhaarProfile: prefill } : {}),
+          verificationResponse:
+            cachedResponse.latestResponse ||
+            cachedResponse.latestVerificationResponse ||
+            cachedResponse,
+          message: "Aadhaar is already verified.",
+        };
+      }
+
+      await this.assertAadhaarAvailableForSeller(
+        sellerId,
+        aadhaarNumber || existingKyc?.aadhaar_number,
+      );
+
+      if (this.kycVerificationService.enabled && this.kycVerificationService.verifyAadhaar) {
+        await this.assertApitxtDailyCallAllowed({
+          sellerId,
+          action: "aadhaar_verify_otp",
+          identity: referenceId,
+        });
+      }
+      verificationResponse = await this.kycVerificationService.verifyAadhaarOtp({
+        reference_id: referenceId,
+        otp,
+      });
+
+      const verifiedAt = verificationResponse?.verified ? new Date() : null;
+      await this.sellerRepository.upsertAadhaarVerification(sellerId, {
+        aadhaarNumber,
+        aadhaarVerified: verificationResponse?.verified === true,
+        aadhaarReferenceId: referenceId,
+        aadhaarVerifiedAt: verifiedAt,
+        aadhaarVerificationResponse: this.buildAadhaarProviderSnapshot(
+          existingKyc,
+          "verify_otp",
+          verificationResponse,
+          { referenceId },
+        ),
+      });
+
+      this.kycVerificationService.assertVerified(
+        verificationResponse,
+        "otp",
+        "Invalid Aadhaar OTP. Please check the OTP and try again.",
+      );
+
+      const prefill = this.getAadhaarPrefill(verificationResponse);
+      const profile = await this.applyAadhaarPrefillToProfile(
+        sellerId,
+        prefill,
+        await this.sellerRepository.findKycBySellerId(sellerId),
+        actor,
+      );
+
+      return {
+        aadhaarVerified: true,
+        aadhaarReferenceId: referenceId,
+        aadhaarVerifiedAt: verifiedAt,
+        ...(prefill ? { prefill, aadhaarProfile: prefill } : {}),
+        ...(profile ? { profile } : {}),
+        verificationResponse,
+      };
+    } catch (error) {
+      if (
+        !verificationResponse &&
+        error instanceof AppError &&
+        error.code === "DUPLICATE_ENTRY"
+      ) {
+        throw error;
+      }
+
+      if (!verificationResponse) {
+        verificationResponse = {
+          verified: false,
+          message: error.message,
+          code: error.code || error.providerCode || null,
+          raw: error.response || error.details || null,
+        };
+      }
+
+      await this.sellerRepository.upsertAadhaarVerification(sellerId, {
+        aadhaarNumber,
+        aadhaarVerified: false,
+        aadhaarReferenceId: referenceId,
+        aadhaarVerifiedAt: null,
+        aadhaarVerificationResponse: this.buildAadhaarProviderSnapshot(
+          await this.sellerRepository.findKycBySellerId(sellerId),
+          "verify_otp_failed",
+          verificationResponse,
+          { referenceId },
+        ),
+      });
+
+      throw error;
+    }
+  }
+
+  async verifyPan(payload = {}, actor) {
+    const sellerId = this.getSellerId(actor);
+    const panNumber = sellerOrganizationService.normalizeCode(payload.panNumber);
+    const legalName = String(payload.legalName || payload.name || "").trim();
+    const dateOfBirth = String(payload.dateOfBirth || payload.dob || "").trim();
+
+    if (!panNumber) {
+      throw AppError.validation("PAN number is required", [
+        { field: "panNumber", message: "PAN number is required" },
+      ]);
+    }
+
+    if (!legalName) {
+      throw AppError.validation("Legal name is required for PAN verification", [
+        { field: "legalName", message: "Legal name is required for PAN verification" },
+      ]);
+    }
+
+    if (!dateOfBirth) {
+      throw AppError.validation("Date of birth is required for PAN verification", [
+        { field: "dateOfBirth", message: "Date of birth is required for PAN verification" },
+      ]);
+    }
+
+    const existingKyc = await this.sellerRepository.findKycBySellerId(sellerId);
+    if (this.isPanAlreadyVerified(existingKyc, panNumber)) {
+      return {
+        skipped: true,
+        cached: true,
+        reason: "pan_already_verified",
+        panVerified: true,
+        panVerifiedAt: existingKyc.pan_verified_at || null,
+        response: this.parseJsonObject(existingKyc.pan_verification_response),
+        message: "PAN is already verified.",
+      };
+    }
+
+    await this.assertPanAvailableForSeller(sellerId, panNumber);
+
+    if (this.kycVerificationService.enabled && this.kycVerificationService.verifyPan) {
+      await this.assertApitxtDailyCallAllowed({
+        sellerId,
+        action: "pan_verify",
+        identity: panNumber,
+      });
+    }
+
+    const verificationResponse = await this.kycVerificationService.verifyPanDetails({
+      panNumber,
+      legalName,
+      dateOfBirth,
+    });
+
+    const panVerified = verificationResponse?.verified === true;
+    const verifiedAt = panVerified ? new Date() : null;
+    await this.sellerRepository.upsertPanVerification(sellerId, {
+      panNumber,
+      panVerified,
+      panVerifiedAt: verifiedAt,
+      panVerificationResponse: this.buildPanProviderSnapshot(
+        existingKyc,
+        "verify_pan",
+        verificationResponse,
+      ),
+    });
+
+    if (!panVerified) {
+      throw AppError.validation(
+        verificationResponse?.message || "PAN verification failed. Please check PAN details.",
+        [
+          {
+            field: "panNumber",
+            message: verificationResponse?.message || "PAN verification failed. Please check PAN details.",
+          },
+        ],
+      );
+    }
+
+    return {
+      panVerified: true,
+      panVerifiedAt: verifiedAt,
+      verificationResponse,
+      message: "PAN verified successfully.",
+    };
+  }
+
   async uploadKycDocuments(documents = {}, actor) {
     const sellerId = this.getSellerId(actor);
     return this.storageService.uploadKycDocuments(documents, {
@@ -362,6 +1096,9 @@ class SellerService {
     await sellerOrganizationService.assertNoIdentityConflicts(nextProfile, {
       sellerId,
       organizationId: existingOrg?.id || null,
+      aadhaarVerifiedOnly: true,
+      panVerifiedOnly: true,
+      ignoreMissingSellerConflicts: true,
       fieldMap: {
         gstin: "gstNumber",
         pan: "panNumber",
@@ -736,6 +1473,9 @@ class SellerService {
     await sellerOrganizationService.assertNoIdentityConflicts(nextProfile, {
       sellerId,
       organizationId: existingOrgMoreInfo?.id || null,
+      aadhaarVerifiedOnly: true,
+      panVerifiedOnly: true,
+      ignoreMissingSellerConflicts: true,
       fieldMap: {
         gstin: "gstNumber",
         pan: "panNumber",

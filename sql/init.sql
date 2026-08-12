@@ -80,8 +80,15 @@ CREATE TABLE IF NOT EXISTS seller_kyc (
   pan_number VARCHAR(16) NOT NULL,
   gst_number VARCHAR(32),
   aadhaar_number VARCHAR(16),
+  aadhaar_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  aadhaar_reference_id VARCHAR(128),
+  aadhaar_verified_at TIMESTAMPTZ,
+  aadhaar_verification_response JSONB,
   legal_name VARCHAR(120) NOT NULL,
   business_type VARCHAR(64),
+  pan_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  pan_verified_at TIMESTAMPTZ,
+  pan_verification_response JSONB,
   verification_status VARCHAR(64) NOT NULL,
   documents JSONB NOT NULL DEFAULT '{}'::jsonb,
   reviewed_by VARCHAR(64),
@@ -92,6 +99,9 @@ CREATE TABLE IF NOT EXISTS seller_kyc (
 );
 
 CREATE INDEX IF NOT EXISTS idx_seller_kyc_status ON seller_kyc (verification_status);
+
+ALTER TABLE seller_kyc ALTER COLUMN pan_number DROP NOT NULL;
+ALTER TABLE seller_kyc ALTER COLUMN legal_name DROP NOT NULL;
 
 CREATE TABLE IF NOT EXISTS user_kyc (
   id UUID PRIMARY KEY,
@@ -160,6 +170,13 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_provider VARCHAR(64);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS cod_charge_amount NUMERIC(12, 2) NOT NULL DEFAULT 0;
 
 ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS aadhaar_number VARCHAR(16);
+ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS aadhaar_verified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS aadhaar_reference_id VARCHAR(128);
+ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS aadhaar_verified_at TIMESTAMPTZ;
+ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS aadhaar_verification_response JSONB;
+ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS pan_verified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS pan_verified_at TIMESTAMPTZ;
+ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS pan_verification_response JSONB;
 ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS business_type VARCHAR(64);
 ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS verification_status VARCHAR(64);
 ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS documents JSONB NOT NULL DEFAULT '{}'::jsonb;

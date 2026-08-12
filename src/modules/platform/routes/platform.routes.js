@@ -34,6 +34,7 @@ const {
   sellerBrandSubmissionSchema,
   sellerBrandResubmissionSchema,
   reviewBrandSubmissionSchema,
+  reviewBrandSubmissionsSchema,
   createBatchSchema,
   updateBatchSchema,
   listBatchesSchema,
@@ -219,6 +220,13 @@ platformRoutes.patch(
   allowSellerBrandSubmission,
   checkInput(sellerBrandResubmissionSchema),
   catchErrors(platformController.resubmitBrand),
+);
+platformRoutes.patch(
+  "/brands/approval",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(reviewBrandSubmissionsSchema),
+  catchErrors(platformController.reviewBrandSubmissions),
 );
 platformRoutes.patch(
   "/brands/:brandId/approval",

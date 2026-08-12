@@ -125,6 +125,8 @@ const {
   createBrandSchema,
   updateBrandSchema,
   listBrandsSchema,
+  reviewBrandSubmissionSchema,
+  reviewBrandSubmissionsSchema,
   brandIdSchema,
   createBadgeSchema,
   updateBadgeSchema,
@@ -224,6 +226,20 @@ adminRoutes.post(
   allowActions(ACTIONS.CATALOG_MANAGE),
   checkInput(createBrandSchema),
   catchErrors(platformController.createBrand),
+);
+adminRoutes.patch(
+  "/platform/brands/approval",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(reviewBrandSubmissionsSchema),
+  catchErrors(platformController.reviewBrandSubmissions),
+);
+adminRoutes.patch(
+  "/platform/brands/:brandId/approval",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(reviewBrandSubmissionSchema),
+  catchErrors(platformController.reviewBrandSubmission),
 );
 adminRoutes.patch(
   "/platform/brands/:brandId",
@@ -993,6 +1009,16 @@ adminRoutes.get(
   "/platform/brands",
   checkInput(listBrandsSchema),
   catchErrors(platformController.listBrands),
+);
+adminRoutes.patch(
+  "/platform/brands/approval",
+  checkInput(reviewBrandSubmissionsSchema),
+  catchErrors(platformController.reviewBrandSubmissions),
+);
+adminRoutes.patch(
+  "/platform/brands/:brandId/approval",
+  checkInput(reviewBrandSubmissionSchema),
+  catchErrors(platformController.reviewBrandSubmission),
 );
 adminRoutes.get(
   "/platform/brands/:brandId",

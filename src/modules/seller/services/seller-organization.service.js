@@ -2,6 +2,7 @@ const { AppError } = require("../../../shared/errors/app-error");
 const { SellerOrganizationRepository } = require("../repositories/seller-organization.repository");
 const { UserModel } = require("../../user/models/user.model");
 const { storageService: defaultStorageService } = require("../../../shared/storage/storage-service");
+const { logger } = require("../../../shared/logger/logger");
 const { postgresPool } = require("../../../infrastructure/postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
 const { makeEvent } = require("../../../contracts/events/event");
@@ -30,6 +31,12 @@ const IDENTITY_FIELD_LABELS = {
   pan: "PAN",
   aadhaarNumber: "Aadhaar number",
   registrationNumber: "Registration number",
+};
+
+const maskAadhaar = (aadhaarNumber = "") => {
+  const normalized = String(aadhaarNumber || "").replace(/\D/g, "");
+  if (normalized.length <= 4) return "************";
+  return `${"*".repeat(Math.max(normalized.length - 4, 0))}${normalized.slice(-4)}`;
 };
 
 class SellerOrganizationService {
@@ -111,20 +118,152 @@ class SellerOrganizationService {
     return Array.from(byField.values());
   }
 
+  async filterMissingSellerConflicts(conflicts = [], options = {}) {
+    if (!options.ignoreMissingSellerConflicts || !conflicts.length) return conflicts;
+
+    const sellerIds = Array.from(new Set(
+      conflicts
+        .map((conflict) => String(conflict.sellerId || "").trim())
+        .filter(Boolean),
+    ));
+    if (!sellerIds.length) return conflicts;
+
+    const sellers = await UserModel.find({ _id: { $in: sellerIds } })
+      .select("_id")
+      .lean();
+    const existingSellerIds = new Set(sellers.map((seller) => String(seller._id)));
+    const filtered = conflicts.filter((conflict) => {
+      const conflictSellerId = String(conflict.sellerId || "").trim();
+      return !conflictSellerId || existingSellerIds.has(conflictSellerId);
+    });
+
+    if (filtered.length !== conflicts.length) {
+      logger.warn(
+        {
+          droppedConflictCount: conflicts.length - filtered.length,
+          droppedConflicts: conflicts
+            .filter((conflict) => {
+              const conflictSellerId = String(conflict.sellerId || "").trim();
+              return conflictSellerId && !existingSellerIds.has(conflictSellerId);
+            })
+            .map((conflict) => ({
+              source: conflict.source,
+              field: conflict.field,
+              sellerId: conflict.sellerId,
+              organizationId: conflict.organizationId || null,
+            })),
+        },
+        "Ignoring identity conflicts for missing seller accounts",
+      );
+    }
+
+    return filtered;
+  }
+
   async assertNoIdentityConflicts(payload = {}, options = {}) {
     const identityValues = this.normalizeIdentityValues(payload);
-    if (!Object.values(identityValues).some(Boolean)) return;
+    const aadhaarForVerifiedCheck = options.aadhaarVerifiedOnly
+      ? identityValues.aadhaarNumber
+      : null;
+    const panForVerifiedCheck = options.panVerifiedOnly
+      ? identityValues.pan
+      : null;
+    const broadIdentityValues = {
+      ...identityValues,
+      ...(options.aadhaarVerifiedOnly ? { aadhaarNumber: null } : {}),
+      ...(options.panVerifiedOnly ? { pan: null } : {}),
+    };
+    if (
+      !Object.values(broadIdentityValues).some(Boolean) &&
+      !aadhaarForVerifiedCheck &&
+      !panForVerifiedCheck
+    ) return;
 
-    const conflicts = await this.organizationRepository.findIdentityConflicts(
-      identityValues,
+    const conflictOptions = {
+      excludeSellerId: options.sellerId || null,
+      excludeOrganizationId: options.organizationId || null,
+    };
+    const conflicts = [];
+    if (Object.values(broadIdentityValues).some(Boolean)) {
+      conflicts.push(
+        ...(await this.organizationRepository.findIdentityConflicts(
+          broadIdentityValues,
+          conflictOptions,
+        )),
+      );
+    }
+    if (aadhaarForVerifiedCheck) {
+      conflicts.push(
+        ...(await this.organizationRepository.findVerifiedAadhaarConflicts(
+          aadhaarForVerifiedCheck,
+          conflictOptions,
+        )),
+      );
+    }
+    if (panForVerifiedCheck) {
+      conflicts.push(
+        ...(await this.organizationRepository.findVerifiedPanConflicts(
+          panForVerifiedCheck,
+          conflictOptions,
+        )),
+      );
+    }
+    const effectiveConflicts = await this.filterMissingSellerConflicts(conflicts, options);
+    if (!effectiveConflicts.length) return;
+
+    const fields = this.makeDuplicateFieldErrors(effectiveConflicts, options.fieldMap || {});
+    throw new AppError(
+      fields.length === 1
+        ? fields[0].message
+        : "One or more KYC or organization identity details are already in use.",
+      409,
+      fields,
+      "DUPLICATE_ENTRY",
+    );
+  }
+
+  async assertNoVerifiedAadhaarConflict(aadhaarNumber, options = {}) {
+    const normalizedAadhaar = this.normalizeDigits(aadhaarNumber);
+    if (!normalizedAadhaar) return;
+
+    const conflicts = await this.organizationRepository.findVerifiedAadhaarConflicts(
+      normalizedAadhaar,
       {
         excludeSellerId: options.sellerId || null,
         excludeOrganizationId: options.organizationId || null,
       },
     );
-    if (!conflicts.length) return;
+    const effectiveConflicts = await this.filterMissingSellerConflicts(conflicts, options);
+    if (!effectiveConflicts.length) {
+      logger.info(
+        {
+          sellerId: options.sellerId || null,
+          aadhaarNumber: maskAadhaar(normalizedAadhaar),
+        },
+        "Verified Aadhaar conflict query returned no conflicts",
+      );
+      return;
+    }
 
-    const fields = this.makeDuplicateFieldErrors(conflicts, options.fieldMap || {});
+    logger.warn(
+      {
+        sellerId: options.sellerId || null,
+        aadhaarNumber: maskAadhaar(normalizedAadhaar),
+        conflictCount: effectiveConflicts.length,
+        conflicts: effectiveConflicts.map((conflict) => ({
+          source: conflict.source,
+          field: conflict.field,
+          sellerId: conflict.sellerId,
+          organizationId: conflict.organizationId || null,
+        })),
+      },
+      "Verified Aadhaar conflict query found conflicts",
+    );
+
+    const fields = this.makeDuplicateFieldErrors(
+      effectiveConflicts,
+      options.fieldMap || {},
+    );
     throw new AppError(
       fields.length === 1
         ? fields[0].message
@@ -1025,7 +1164,12 @@ class SellerOrganizationService {
       createdBy: actor.userId || actor.sub || sellerId,
       updatedBy: actor.userId || actor.sub || sellerId,
     };
-    await this.assertNoIdentityConflicts(organizationPayload, { sellerId });
+    await this.assertNoIdentityConflicts(organizationPayload, {
+      sellerId,
+      aadhaarVerifiedOnly: true,
+      panVerifiedOnly: true,
+      ignoreMissingSellerConflicts: true,
+    });
     const organization = await this.organizationRepository.create({
       ...organizationPayload,
       ...this.buildLifecyclePatch(
@@ -1065,7 +1209,12 @@ class SellerOrganizationService {
     }
     const normalized = this.normalizeOrganizationPayload(payload, actor, { create: true });
     const organizationId = uuidv4();
-    await this.assertNoIdentityConflicts(normalized, { sellerId });
+    await this.assertNoIdentityConflicts(normalized, {
+      sellerId,
+      aadhaarVerifiedOnly: true,
+      panVerifiedOnly: true,
+      ignoreMissingSellerConflicts: true,
+    });
     normalized.documents = await this.uploadOrganizationDocuments(
       organizationId,
       normalized.documents || {},
@@ -1116,6 +1265,9 @@ class SellerOrganizationService {
     await this.assertNoIdentityConflicts(identityCandidate, {
       sellerId,
       organizationId,
+      aadhaarVerifiedOnly: true,
+      panVerifiedOnly: true,
+      ignoreMissingSellerConflicts: true,
     });
     if (payload.documents !== undefined || payload.kycDocuments !== undefined) {
       normalized.documents = await this.uploadOrganizationDocuments(
@@ -1307,6 +1459,7 @@ class SellerOrganizationService {
       await this.assertNoIdentityConflicts(identityCandidate, {
         sellerId,
         organizationId,
+        ignoreMissingSellerConflicts: review === true,
       });
     }
     if (payload.documents !== undefined || payload.kycDocuments !== undefined) {
