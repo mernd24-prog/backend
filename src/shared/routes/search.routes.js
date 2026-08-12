@@ -119,7 +119,7 @@ router.get("/autocomplete", async (req, res, next) => {
       });
     }
 
-    const limit = Math.min(20, value.limit || 10);
+    const limit = Math.min(8, value.limit || 6);
 
     const suggestions =
       await AdvancedSearchService.getAutocompleteSuggestions(

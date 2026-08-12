@@ -193,8 +193,28 @@ const env = {
   mongoUri: process.env.MONGO_URI || "mongodb://localhost:27017/ecommerce",
   postgresUrl:
     process.env.POSTGRES_URL || "postgresql://postgres:postgres@localhost:5432/ecommerce",
+  postgres: {
+    poolMax: parsePositiveInteger(process.env.POSTGRES_POOL_MAX, 5),
+    connectionTimeoutMillis: parsePositiveInteger(process.env.POSTGRES_CONNECTION_TIMEOUT_MS, 30000),
+    idleTimeoutMillis: parsePositiveInteger(process.env.POSTGRES_IDLE_TIMEOUT_MS, 30000),
+  },
+  knex: {
+    poolMin: Number.isFinite(Number(process.env.KNEX_POOL_MIN)) && Number(process.env.KNEX_POOL_MIN) >= 0
+      ? Math.floor(Number(process.env.KNEX_POOL_MIN))
+      : 0,
+    poolMax: parsePositiveInteger(process.env.KNEX_POOL_MAX, 5),
+    acquireTimeoutMillis: parsePositiveInteger(process.env.KNEX_ACQUIRE_TIMEOUT_MS, 30000),
+    createTimeoutMillis: parsePositiveInteger(process.env.KNEX_CREATE_TIMEOUT_MS, 30000),
+    idleTimeoutMillis: parsePositiveInteger(process.env.KNEX_IDLE_TIMEOUT_MS, 30000),
+  },
   sequelize: {
     logging: String(process.env.SEQUELIZE_LOGGING || "false") === "true",
+    poolMin: Number.isFinite(Number(process.env.SEQUELIZE_POOL_MIN)) && Number(process.env.SEQUELIZE_POOL_MIN) >= 0
+      ? Math.floor(Number(process.env.SEQUELIZE_POOL_MIN))
+      : 0,
+    poolMax: parsePositiveInteger(process.env.SEQUELIZE_POOL_MAX, 5),
+    acquireMillis: parsePositiveInteger(process.env.SEQUELIZE_ACQUIRE_MS, 30000),
+    idleMillis: parsePositiveInteger(process.env.SEQUELIZE_IDLE_MS, 10000),
   },
   redisUrl: process.env.REDIS_URL || "redis://localhost:6379",
   elasticsearchNode: process.env.ELASTICSEARCH_NODE || "http://localhost:9200",

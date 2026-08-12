@@ -14,6 +14,13 @@ const {
   isPublicProduct,
 } = require("../catalog/public-product-filter");
 
+const AUTOCOMPLETE_CACHE_TTL_MS = 2 * 60 * 1000;
+const AUTOCOMPLETE_CACHE_MAX_ITEMS = 200;
+const AUTOCOMPLETE_CORPUS_CACHE_TTL_MS = 5 * 60 * 1000;
+const autocompleteCache = new Map();
+const autocompleteInFlight = new Map();
+let autocompleteCorpusCache = null;
+
 function escapeRegex(value = "") {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -60,6 +67,111 @@ function buildElasticExactFilter(fields = [], value) {
       minimum_should_match: 1,
     },
   };
+}
+
+function getAutocompleteCache(key) {
+  const cached = autocompleteCache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.cachedAt > AUTOCOMPLETE_CACHE_TTL_MS) {
+    autocompleteCache.delete(key);
+    return null;
+  }
+  return cached.value;
+}
+
+function setAutocompleteCache(key, value) {
+  autocompleteCache.set(key, { value, cachedAt: Date.now() });
+  if (autocompleteCache.size > AUTOCOMPLETE_CACHE_MAX_ITEMS) {
+    autocompleteCache.delete(autocompleteCache.keys().next().value);
+  }
+}
+
+function normalizeAutocompleteText(value = "") {
+  return String(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function editDistance(a = "", b = "") {
+  if (!a || !b) return Math.max(a.length, b.length);
+  if (Math.abs(a.length - b.length) > 2) return 3;
+
+  const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    let last = previous[0];
+    previous[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const current = previous[j];
+      previous[j] = a[i - 1] === b[j - 1]
+        ? last
+        : Math.min(last, previous[j - 1], previous[j]) + 1;
+      last = current;
+    }
+  }
+  return previous[b.length];
+}
+
+function tokenMatchScore(query, text = "", scores = {}) {
+  const normalized = normalizeAutocompleteText(text);
+  if (!query || !normalized) return 0;
+
+  const tokens = normalized.split(/\s+/).filter(Boolean);
+  let bestScore = 0;
+
+  tokens.forEach((token) => {
+    if (token === query) {
+      bestScore = Math.max(bestScore, scores.exact || 100);
+      return;
+    }
+    if (token.startsWith(query) || token.replace(/s$/, "").startsWith(query)) {
+      bestScore = Math.max(bestScore, scores.prefix || 90);
+      return;
+    }
+    if (query.length >= 4 && token.includes(query)) {
+      bestScore = Math.max(bestScore, scores.contains || 50);
+      return;
+    }
+    if (query.length >= 3 && query[0] === token[0]) {
+      const prefix = token.slice(0, query.length);
+      const allowedDistance = query.length >= 5 ? 2 : 1;
+      if (editDistance(query, prefix) <= allowedDistance) {
+        bestScore = Math.max(bestScore, scores.fuzzy || 60);
+      }
+    }
+  });
+
+  return bestScore;
+}
+
+function scoreAutocompleteSuggestion(term, product = {}) {
+  const query = normalizeAutocompleteText(term);
+  const title = normalizeAutocompleteText(product.title);
+  const brand = normalizeAutocompleteText(product.brand);
+  const category = normalizeAutocompleteText(product.category || product.categoryId);
+  if (!query || !title) return 0;
+
+  const categoryScore = tokenMatchScore(query, category, {
+    exact: 130,
+    prefix: 120,
+    contains: 105,
+    fuzzy: 90,
+  });
+  const brandScore = tokenMatchScore(query, brand, {
+    exact: 125,
+    prefix: 115,
+    contains: 95,
+    fuzzy: 88,
+  });
+  const titleScore = tokenMatchScore(query, title, {
+    exact: 100,
+    prefix: 92,
+    contains: 45,
+    fuzzy: 70,
+  });
+
+  if (title.startsWith(query)) return Math.max(110, categoryScore, brandScore, titleScore);
+  return Math.max(categoryScore, brandScore, titleScore);
 }
 
 class AdvancedSearchService {
@@ -486,6 +598,15 @@ class AdvancedSearchService {
       this.buildMongoFacets(filter),
     ]);
 
+    if (!total && String(query || "").trim().length >= 3) {
+      return this.searchMongoFuzzyFallback({
+        query,
+        filters,
+        page,
+        limit,
+      });
+    }
+
     return {
       results: items.map((item) => ({
         id: String(item._id || item.id),
@@ -499,61 +620,153 @@ class AdvancedSearchService {
     };
   }
 
+  async searchMongoFuzzyFallback({
+    query = "",
+    filters = {},
+    page = 1,
+    limit = 20,
+  }) {
+    const corpus = await this.getAutocompleteCorpus();
+    const scored = corpus
+      .map((product) => ({
+        id: String(product._id || product.id || ""),
+        score: scoreAutocompleteSuggestion(query, product),
+      }))
+      .filter((entry) => entry.id && entry.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    const seen = new Set();
+    const orderedIds = scored
+      .filter((entry) => {
+        if (seen.has(entry.id)) return false;
+        seen.add(entry.id);
+        return true;
+      })
+      .map((entry) => entry.id);
+
+    if (!orderedIds.length) {
+      return {
+        results: [],
+        total: 0,
+        page,
+        limit,
+        facets: await this.buildMongoFacets(this.buildMongoSearchFilter("", filters)),
+        source: "mongo_fuzzy",
+      };
+    }
+
+    const filter = this.buildMongoSearchFilter("", filters);
+    filter._id = { $in: orderedIds };
+    const skip = (page - 1) * limit;
+    const pageIds = orderedIds.slice(skip, skip + limit);
+
+    const [items, total, facets] = await Promise.all([
+      ProductModel.find({ ...filter, _id: { $in: pageIds } }).lean(),
+      ProductModel.countDocuments(filter),
+      this.buildMongoFacets(filter),
+    ]);
+
+    const order = new Map(pageIds.map((id, index) => [String(id), index]));
+    const results = items
+      .sort((a, b) => (order.get(String(a._id)) ?? 0) - (order.get(String(b._id)) ?? 0))
+      .map((item) => ({
+        id: String(item._id || item.id),
+        ...item,
+      }));
+
+    return {
+      results,
+      total,
+      page,
+      limit,
+      facets,
+      source: "mongo_fuzzy",
+    };
+  }
+
   // ==============================
   // AUTOCOMPLETE
   // ==============================
+  async getAutocompleteCorpus() {
+    if (
+      autocompleteCorpusCache &&
+      Date.now() - autocompleteCorpusCache.cachedAt < AUTOCOMPLETE_CORPUS_CACHE_TTL_MS
+    ) {
+      return autocompleteCorpusCache.items;
+    }
+
+    const items = await ProductModel.find(applyPublicProductFilter())
+      .sort({ "analytics.purchases": -1, "analytics.views": -1, createdAt: -1 })
+      .limit(800)
+      .select("title brand category categoryId images commonImages")
+      .lean()
+      .maxTimeMS(1200)
+      .catch(() => []);
+
+    autocompleteCorpusCache = { items, cachedAt: Date.now() };
+    return items;
+  }
+
   async getAutocompleteSuggestions(query, limit = 10) {
-    if (!query) return [];
+    const term = String(query || "").trim();
+    const maxLimit = Math.min(Math.max(Number(limit) || 6, 1), 8);
+    if (term.length < 2) return [];
+    const cacheKey = `${term.toLowerCase()}:${maxLimit}:mongo-fuzzy`;
+    const cached = getAutocompleteCache(cacheKey);
+    if (cached) return cached;
 
-    if (!isElasticsearchEnabled()) {
-      const regex = new RegExp(escapeRegex(query), "i");
-      const products = await ProductModel.find(
+    const pending = autocompleteInFlight.get(cacheKey);
+    if (pending) return pending;
+
+    const lookup = (async () => {
+      const regex = new RegExp(`^${escapeRegex(term)}`, "i");
+      const prefixProducts = await ProductModel.find(
         applyPublicProductFilter({ title: regex }),
       )
-        .sort({ "analytics.purchases": -1, createdAt: -1 })
-        .limit(Math.min(limit, 20))
-        .select("title")
-        .lean();
-      return products.map((product) => product.title).filter(Boolean);
-    }
+        .sort({ title: 1, "analytics.purchases": -1, createdAt: -1 })
+        .limit(maxLimit)
+        .select("title brand category categoryId images commonImages")
+        .lean()
+        .maxTimeMS(800)
+        .catch(() => []);
 
-    try {
-      const response = await elasticsearchClient.search({
-        index: "products",
-        body: {
-          query: {
-            bool: {
-              must: [
-                {
-                  match_phrase_prefix: {
-                    title: {
-                      query,
-                      boost: 2,
-                    },
-                  },
-                },
-              ],
-              filter: buildPublicSearchFilters(),
-            },
-          },
-          size: Math.min(limit, 20),
-          _source: ["title"],
-        },
-      });
+      const corpus = prefixProducts.length >= maxLimit
+        ? prefixProducts
+        : await this.getAutocompleteCorpus();
 
-      return response.hits.hits.map((hit) => hit._source.title);
-    } catch (error) {
-      logger.warn({ err: error, query }, "Autocomplete Elasticsearch failed, falling back to Mongo");
-      const regex = new RegExp(escapeRegex(query), "i");
-      const products = await ProductModel.find(
-        applyPublicProductFilter({ title: regex }),
-      )
-        .sort({ "analytics.purchases": -1, createdAt: -1 })
-        .limit(Math.min(limit, 20))
-        .select("title")
-        .lean();
-      return products.map((product) => product.title).filter(Boolean);
-    }
+      const scored = [...prefixProducts, ...corpus]
+        .map((product) => ({
+          product,
+          score: scoreAutocompleteSuggestion(term, product),
+        }))
+        .filter((entry) => entry.score > 0)
+        .sort((a, b) => b.score - a.score);
+
+      const seen = new Set();
+      const suggestions = scored
+        .filter(({ product }) => {
+          const title = String(product.title || "").trim();
+          const key = title.toLowerCase();
+          if (!title || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .slice(0, maxLimit)
+        .map(({ product }) => ({
+          title: product.title,
+          brandName: product.brand || "",
+          categoryName: product.category || product.categoryId || "",
+          image: product.images?.[0] || product.commonImages?.[0] || "",
+        }));
+
+      setAutocompleteCache(cacheKey, suggestions);
+      return suggestions;
+    })().finally(() => {
+      autocompleteInFlight.delete(cacheKey);
+    });
+
+    autocompleteInFlight.set(cacheKey, lookup);
+    return lookup;
   }
 
   // ==============================
