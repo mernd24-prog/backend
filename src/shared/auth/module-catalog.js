@@ -454,7 +454,7 @@ const MODULE_CATALOG = [
     tab: "Marketing",
     slug: "referral",
     name: "Referral Commerce",
-    description: "Influencers, referral codes, commission rules, and payouts",
+    description: "Referral Partners, referral codes, coin rules, and payouts",
     icon: "share-2",
     order: 17,
     forPlatform: true,
@@ -464,8 +464,8 @@ const MODULE_CATALOG = [
   {
     tab: "Marketing",
     slug: "influencer-management",
-    name: "Influencer Management",
-    description: "Influencer profiles, promotion links, and payout status",
+    name: "Referral Partner Management",
+    description: "Growth Partner and Brand Associate profiles, codes, and payout status",
     icon: "users",
     order: 17.1,
     forPlatform: true,
@@ -475,7 +475,7 @@ const MODULE_CATALOG = [
   ...[
     ["referral-overview", "Referral Overview", "/admin/referral/reports/summary"],
     ["referral-product-distribution", "Referral Product Distribution", "/admin/referral/product-configs"],
-    ["referral-codes", "Influencer Code Management", "/admin/referral/codes"],
+    ["referral-codes", "Referral Code Management", "/admin/referral/codes"],
     ["referral-rules", "Referral Rules & Coins", "/admin/referral/rules"],
     ["referral-bonus-rules", "Referral Bonus Rules", "/admin/referral/bonus-rules"],
     ["referral-bonus-progress", "Referral Bonus Progress", "/admin/referral/reports/bonus-progress"],
@@ -483,7 +483,7 @@ const MODULE_CATALOG = [
     ["referral-orders", "Referral Order Management", "/admin/referral/orders"],
     ["referral-ledger", "Referral Wallet Ledger", "/admin/referral/commissions"],
     ["referral-payouts", "Referral Payout Management", "/admin/referral/payouts"],
-    ["referral-hierarchy", "Influencer Hierarchy", "/admin/referral/reports/hierarchy"],
+    ["referral-hierarchy", "Referral Partner Hierarchy", "/admin/referral/reports/hierarchy"],
     ["referral-fraud", "Referral Fraud Review", "/admin/referral/fraud"],
   ].map(([slug, name, apiPath], index) => ({
     tab: "Marketing",

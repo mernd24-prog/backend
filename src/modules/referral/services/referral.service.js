@@ -1028,6 +1028,10 @@ class ReferralService {
     if (!transactionReference) {
       throw new AppError("Bank/UPI transaction reference is required", 400);
     }
+    const paymentProofUrl = String(payload.paymentProofUrl || "").trim();
+    if (!paymentProofUrl) {
+      throw new AppError("Payment proof is required", 400);
+    }
     const claimed = await this.referralRepository.transitionPayoutReservation(
       payoutId,
       "reserved",
@@ -1047,9 +1051,12 @@ class ReferralService {
       status: "paid",
       paidAt: payload.paidAt || new Date(),
       paidBy: actor.userId || null,
-      paidAmount: Number(payout.amount),
+      paidAmount: Number(
+        payout.currencyAmount ??
+        Number(payout.coinAmount ?? payout.amount) * Number(payout.coinValue || 1),
+      ),
       transactionReference,
-      paymentProofUrl: payload.paymentProofUrl || payout.paymentProofUrl || null,
+      paymentProofUrl,
       adminNote: payload.adminNote || payout.adminNote || null,
     });
   }
@@ -1638,18 +1645,16 @@ class ReferralService {
     const status = String(profile.status || "pending");
     const commonModules = [
       { key: "dashboard", label: "Dashboard", route: "/app/dashboard" },
-      { key: "codes", label: "My Codes", route: "/app/codes" },
+      { key: "codes", label: "Referral Codes", route: "/app/codes" },
       { key: "orders", label: "Referral Orders", route: "/app/orders" },
       { key: "earnings", label: "Earnings", route: "/app/earnings" },
-      { key: "wallet", label: "Wallet", route: "/app/wallet" },
-      { key: "withdrawals", label: "Withdrawals", route: "/app/withdrawals" },
+      { key: "wallet", label: "Wallet & Payouts", route: "/app/wallet" },
       { key: "bonuses", label: "Bonus Progress", route: "/app/bonuses" },
-      { key: "analytics", label: "Analytics", route: "/app/analytics" },
+      { key: "analytics", label: "Referral Analytics", route: "/app/analytics" },
       { key: "profile", label: "Profile", route: "/app/profile" },
     ];
     const parentModules = [
       { key: "network", label: "Brand Associates", route: "/app/network" },
-      { key: "child-analytics", label: "Associate Analytics", route: "/app/child-analytics" },
     ];
     const allowedModules = status === "active"
       ? [
@@ -1845,13 +1850,25 @@ class ReferralService {
 
   formatWithdrawal(payout = {}) {
     const plain = this.toPlainObject(payout);
+    const coinAmount = this.roundCoins(plain.coinAmount ?? plain.amount);
+    const coinValue = Number(plain.coinValue || 1);
+    const currencyAmount = this.roundCoins(
+      plain.currencyAmount ?? coinAmount * coinValue,
+    );
     return {
       id: this.getRecordId(plain),
-      amount: this.roundCoins(plain.amount),
+      amount: coinAmount,
+      coinAmount,
+      coinValue,
+      currencyAmount,
+      currency: plain.currency || "INR",
       status: plain.status,
       payoutMethod: plain.payoutMethod,
+      destinationSource: plain.destinationSource || "legacy",
+      destinationSnapshot: plain.destinationSnapshot || {},
       bankAccountId: plain.bankAccountId || null,
       upiId: plain.upiId || null,
+      payoutQrUrl: plain.payoutQrUrl || null,
       requestedAt: plain.requestedAt || plain.createdAt || null,
       approvedAt: plain.approvedAt || null,
       approvedBy: plain.approvedBy || null,
@@ -1890,6 +1907,9 @@ class ReferralService {
       expiredCoins,
       pendingWithdrawalAmount: pendingAmount,
       availableForWithdrawal,
+      totalCoins: this.roundCoins(
+        lockedCoins + availableCoins + reservedCoins + withdrawnCoins,
+      ),
       minimumWithdrawalRequirement: this.roundCoins(minimumWithdrawalCoins),
       canWithdraw: availableForWithdrawal >= Number(minimumWithdrawalCoins || 0),
       withdrawalShortfall: this.roundCoins(
@@ -2148,15 +2168,30 @@ class ReferralService {
     const profile = await this.getMyInfluencerProfileOrThrow(actor);
     const influencerId = this.getRecordId(profile);
     await this.releaseMaturedInfluencerCoins(influencerId);
-    const [wallet, minimumWithdrawalCoins, pendingPayouts] = await Promise.all([
+    const [wallet, rule, pendingPayouts] = await Promise.all([
       this.referralRepository.ensureWallet(influencerId),
-      this.getMinimumWithdrawalCoins(),
+      this.referralRepository.getActiveCommissionRule(),
       this.referralRepository.aggregatePayoutTotalsByInfluencer({
         influencerId,
         statuses: this.getPendingWithdrawalStatuses(),
       }),
     ]);
-    return this.formatWallet(wallet, pendingPayouts.total, minimumWithdrawalCoins);
+    return {
+      ...this.formatWallet(
+        wallet,
+        pendingPayouts.total,
+        Number(rule?.minimumWithdrawalCoins || 0),
+      ),
+      coinValue: Number(rule?.coinValue || 1),
+      currency: "INR",
+      allowedPayoutMethods:
+        Array.isArray(rule?.withdrawalMethods) && rule.withdrawalMethods.length
+          ? rule.withdrawalMethods
+          : ["upi", "bank", "manual"],
+      maximumWithdrawalCoins: Number(rule?.maximumWithdrawalCoins || 0),
+      dailyWithdrawalLimitCoins: Number(rule?.dailyWithdrawalLimitCoins || 0),
+      monthlyWithdrawalLimitCoins: Number(rule?.monthlyWithdrawalLimitCoins || 0),
+    };
   }
 
   async listMyWithdrawals(actor = {}, query = {}) {
@@ -2178,10 +2213,101 @@ class ReferralService {
     const influencerId = this.getRecordId(profile);
     await this.releaseMaturedInfluencerCoins(influencerId);
     const amount = Number(payload.amount || 0);
-    const minimumWithdrawalCoins = await this.getMinimumWithdrawalCoins();
+    const rule = await this.referralRepository.getActiveCommissionRule();
+    const minimumWithdrawalCoins = Number(rule?.minimumWithdrawalCoins || 0);
+    const maximumWithdrawalCoins = Number(rule?.maximumWithdrawalCoins || 0);
+    const dailyWithdrawalLimitCoins = Number(rule?.dailyWithdrawalLimitCoins || 0);
+    const monthlyWithdrawalLimitCoins = Number(rule?.monthlyWithdrawalLimitCoins || 0);
+    const payoutMethod = payload.payoutMethod || "manual";
+    const destinationSource = payload.destinationSource || "legacy";
+    const profilePayout = this.toPlainObject(profile)?.metadata?.details?.payout || {};
+    const coinValue = Math.max(Number(rule?.coinValue || 1), 0.000001);
+    const currencyAmount = Number((amount * coinValue).toFixed(2));
+    const allowedMethods = Array.isArray(rule?.withdrawalMethods) && rule.withdrawalMethods.length
+      ? rule.withdrawalMethods
+      : ["upi", "bank", "manual"];
     if (amount <= 0) throw new AppError("Withdrawal amount must be greater than zero", 400);
     if (amount < minimumWithdrawalCoins) {
       throw new AppError("Withdrawal amount is below the minimum requirement", 400);
+    }
+    if (maximumWithdrawalCoins > 0 && amount > maximumWithdrawalCoins) {
+      throw new AppError("Withdrawal amount exceeds the maximum allowed per request", 400);
+    }
+    if (!allowedMethods.includes(payoutMethod) && !(payoutMethod === "upi_qr" && allowedMethods.includes("upi"))) {
+      throw new AppError("Selected payout method is not enabled", 400);
+    }
+    if (rule?.withdrawalKycRequired && profile.kycStatus !== "verified") {
+      throw new AppError("Verified KYC is required before requesting a withdrawal", 403);
+    }
+    let destinationSnapshot = {};
+    let bankAccountId = payload.bankAccountId || null;
+    let upiId = String(payload.upiId || "").trim() || null;
+    const payoutQrUrl = payload.payoutQrUrl || null;
+    if (payoutMethod === "bank") {
+      if (destinationSource === "saved_profile") {
+        if (!profilePayout.accountNumber || !profilePayout.ifscCode) {
+          throw new AppError("Complete saved bank details are required", 400);
+        }
+        bankAccountId = String(profilePayout.accountNumber);
+        destinationSnapshot = {
+          method: "bank",
+          source: "saved_profile",
+          accountHolderName: profilePayout.accountHolderName || null,
+          bankName: profilePayout.bankName || null,
+          accountNumber: String(profilePayout.accountNumber),
+          accountNumberLast4: String(profilePayout.accountNumber).slice(-4),
+          ifscCode: profilePayout.ifscCode,
+        };
+      } else if (!String(bankAccountId || "").trim()) {
+        throw new AppError("Bank account reference is required for a bank withdrawal", 400);
+      }
+    }
+    if (payoutMethod === "upi") {
+      if (destinationSource === "saved_profile") upiId = String(profilePayout.upiId || "").trim() || null;
+      if (!upiId) throw new AppError("UPI ID is required for a UPI withdrawal", 400);
+      destinationSnapshot = {
+        method: "upi",
+        source: destinationSource,
+        accountHolderName: profilePayout.accountHolderName || null,
+        upiId,
+      };
+    }
+    if (payoutMethod === "upi_qr") {
+      if (!payoutQrUrl) throw new AppError("UPI QR image is required", 400);
+      if (!upiId) throw new AppError("UPI ID is required with the QR image", 400);
+      destinationSnapshot = {
+        method: "upi_qr",
+        source: "one_time",
+        accountHolderName: profilePayout.accountHolderName || null,
+        upiId,
+        payoutQrUrl,
+      };
+    }
+    if (!Object.keys(destinationSnapshot).length) {
+      destinationSnapshot = { method: payoutMethod, source: destinationSource, bankAccountId, upiId };
+    }
+
+    const now = new Date();
+    const dayStart = this.startOfUtcDay(now);
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const countedStatuses = ["pending", "approved", "processing", "paid"];
+    const [dailyTotal, monthlyTotal] = await Promise.all([
+      this.referralRepository.aggregatePayoutTotalsByInfluencer({
+        influencerId,
+        statuses: countedStatuses,
+        fromDate: dayStart,
+      }),
+      this.referralRepository.aggregatePayoutTotalsByInfluencer({
+        influencerId,
+        statuses: countedStatuses,
+        fromDate: monthStart,
+      }),
+    ]);
+    if (dailyWithdrawalLimitCoins > 0 && Number(dailyTotal.total || 0) + amount > dailyWithdrawalLimitCoins) {
+      throw new AppError("Daily withdrawal limit exceeded", 400);
+    }
+    if (monthlyWithdrawalLimitCoins > 0 && Number(monthlyTotal.total || 0) + amount > monthlyWithdrawalLimitCoins) {
+      throw new AppError("Monthly withdrawal limit exceeded", 400);
     }
     await this.referralRepository.ensureWallet(influencerId);
     const reservedWallet = await this.referralRepository.reserveAvailableWalletBalance(
@@ -2195,9 +2321,16 @@ class ReferralService {
       const payout = await this.referralRepository.createPayoutRequest({
         influencerId,
         amount,
-        payoutMethod: payload.payoutMethod || "manual",
-        bankAccountId: payload.bankAccountId || null,
-        upiId: payload.upiId || null,
+        coinAmount: amount,
+        coinValue,
+        currencyAmount,
+        currency: "INR",
+        payoutMethod,
+        destinationSource,
+        destinationSnapshot,
+        bankAccountId,
+        upiId,
+        payoutQrUrl,
         reservationStatus: "reserved",
         metadata: payload.metadata || {},
       });
@@ -2329,7 +2462,8 @@ class ReferralService {
       payoutProfile: {
         status: enriched.payoutProfileStatus || "pending",
         bankOrUpiConfigured: Boolean(
-          enriched.metadata?.bankAccountId || enriched.metadata?.upiId,
+          enriched.metadata?.details?.payout?.accountNumber ||
+          enriched.metadata?.details?.payout?.upiId,
         ),
       },
       details: enriched.metadata?.details || {},

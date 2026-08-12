@@ -24,6 +24,7 @@ test("maximum referral pool caps percentage rules and zero disables the cap", ()
 
 test("checkout resolves an active influencer code into the customer discount share", async () => {
   const repository = {
+    listProductConfigsForItems: async () => [],
     getReferralCodeByCode: async () => ({
       _id: "code-1",
       code: "CREATOR10",

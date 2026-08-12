@@ -120,9 +120,11 @@ const withdrawalsQuerySchema = Joi.object({
 const createWithdrawalSchema = Joi.object({
   body: Joi.object({
     amount: Joi.number().positive().required(),
-    payoutMethod: Joi.string().valid("bank", "upi", "manual").default("manual"),
+    payoutMethod: Joi.string().valid("bank", "upi", "upi_qr", "manual").default("manual"),
+    destinationSource: Joi.string().valid("saved_profile", "one_time", "legacy").default("legacy"),
     bankAccountId: Joi.string().allow("", null),
-    upiId: Joi.string().allow("", null),
+    upiId: Joi.string().trim().max(120).allow("", null),
+    payoutQrUrl: Joi.string().trim().uri().allow("", null),
     metadata: Joi.object().default({}),
   }).required(),
   query: Joi.object({}).required(),

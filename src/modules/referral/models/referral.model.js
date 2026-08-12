@@ -215,6 +215,11 @@ const influencerWalletSchema = new mongoose.Schema(
 const influencerPayoutRequestSchema = new mongoose.Schema(
   {
     influencerId: { type: String, required: true, index: true },
+    coinAmount: { type: Number, default: null, min: 0 },
+    coinValue: { type: Number, default: 1, min: 0 },
+    currencyAmount: { type: Number, default: null, min: 0 },
+    currency: { type: String, default: "INR", uppercase: true, trim: true },
+    // Legacy field retained for compatibility; it represents requested coins.
     amount: { type: Number, required: true, min: 0 },
     status: {
       type: String,
@@ -224,11 +229,18 @@ const influencerPayoutRequestSchema = new mongoose.Schema(
     },
     payoutMethod: {
       type: String,
-      enum: ["bank", "upi", "manual"],
+      enum: ["bank", "upi", "upi_qr", "manual"],
       default: "manual",
     },
+    destinationSource: {
+      type: String,
+      enum: ["saved_profile", "one_time", "legacy"],
+      default: "legacy",
+    },
+    destinationSnapshot: { type: mongoose.Schema.Types.Mixed, default: {} },
     bankAccountId: { type: String, default: null },
     upiId: { type: String, default: null },
+    payoutQrUrl: { type: String, default: null },
     adminNote: { type: String, default: null },
     requestedAt: { type: Date, default: Date.now },
     approvedAt: { type: Date, default: null },
