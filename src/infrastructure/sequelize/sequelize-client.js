@@ -23,10 +23,10 @@ const sequelize = new Sequelize(env.postgresUrl, {
     freezeTableName: true,
   },
   pool: {
-    max: 15,
-    min: 2,
-    idle: 10000,
-    acquire: 30000,
+    max: env.sequelize.poolMax,
+    min: env.sequelize.poolMin,
+    idle: env.sequelize.idleMillis,
+    acquire: env.sequelize.acquireMillis,
   },
 });
 
@@ -36,4 +36,3 @@ async function connectSequelize() {
 }
 
 module.exports = { sequelize, connectSequelize, Sequelize };
-

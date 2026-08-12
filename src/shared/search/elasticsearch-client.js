@@ -38,6 +38,8 @@ function createDisabledElasticsearchClient() {
 const elasticsearchClient = env.elasticsearch.enabled
   ? new Client({
       node: env.elasticsearchNode,
+      maxRetries: 0,
+      requestTimeout: 750,
     })
   : createDisabledElasticsearchClient();
 
