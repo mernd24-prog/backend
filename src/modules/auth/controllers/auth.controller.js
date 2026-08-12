@@ -9,12 +9,12 @@ class AuthController {
 
   register = async (req, res) => {
     const result = await this.authService.register(req.body, getRequestInfo(req));
-    res.status(201).json(okResponse(result));
+    res.status(201).json(okResponse(result, { message: result?.message }));
   };
 
   registerWithOtp = async (req, res) => {
     const result = await this.authService.registerWithOtp(req.body, getRequestInfo(req));
-    res.status(201).json(okResponse(result));
+    res.status(201).json(okResponse(result, { message: result?.message }));
   };
  
   buyerOtpAuth = async (req, res) => {
@@ -34,7 +34,7 @@ class AuthController {
 
   verifyRegistration = async (req, res) => {
     const result = await this.authService.verifyRegistration(req.body, getRequestInfo(req));
-    res.status(201).json(okResponse(result));
+    res.status(201).json(okResponse(result, { message: result?.message }));
   };
 
   login = async (req, res) => {
@@ -59,7 +59,7 @@ class AuthController {
 
   sendOtp = async (req, res) => {
     const result = await this.authService.sendOtp(req.body, getRequestInfo(req));
-    res.json(okResponse(result));
+    res.json(okResponse(result, { message: result?.message }));
   };
 
   verifyOtp = async (req, res) => {

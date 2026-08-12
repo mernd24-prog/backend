@@ -230,6 +230,15 @@ class PlatformController {
     res.json(okResponse(item, { message: `Brand ${req.body.action === "approve" ? "approved" : "rejected"}.` }));
   };
 
+  reviewBrandSubmissions = async (req, res) => {
+    const result = await this.platformService.reviewBrandSubmissions(req.body, req);
+    res.json(
+      okResponse(result, {
+        message: `${result.updatedCount} brand${result.updatedCount === 1 ? "" : "s"} ${req.body.action === "approve" ? "approved" : "rejected"}.`,
+      }),
+    );
+  };
+
   deleteBrand = async (req, res) => {
     const item = await this.platformService.deleteBrand(req.params.brandId, req);
     res.json(okResponse(item, { message: "Brand deleted successfully." }));

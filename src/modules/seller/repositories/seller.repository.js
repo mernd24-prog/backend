@@ -38,6 +38,11 @@ class SellerRepository {
         business_type: payload.businessType || null,
         verification_status: payload.verificationStatus,
         documents: JSON.stringify(payload.documents || {}),
+        pan_verified: payload.panVerified === true,
+        pan_verified_at: payload.panVerifiedAt || null,
+        pan_verification_response: payload.panVerificationResponse
+          ? JSON.stringify(payload.panVerificationResponse)
+          : null,
         rejection_reason: payload.rejectionReason || null,
         submitted_at: knex.fn.now(),
       })
@@ -50,8 +55,99 @@ class SellerRepository {
         business_type: payload.businessType || null,
         verification_status: payload.verificationStatus,
         documents: JSON.stringify(payload.documents || {}),
+        pan_verified: payload.panVerified === true,
+        pan_verified_at: payload.panVerifiedAt || null,
+        pan_verification_response: payload.panVerificationResponse
+          ? JSON.stringify(payload.panVerificationResponse)
+          : null,
         rejection_reason: payload.rejectionReason || null,
         submitted_at: knex.fn.now(),
+      })
+      .returning("*");
+
+    return record;
+  }
+
+  async updateAadhaarVerification(sellerId, payload = {}) {
+    const [record] = await knex("seller_kyc")
+      .where("seller_id", sellerId)
+      .update({
+        ...(payload.aadhaarNumber !== undefined
+          ? { aadhaar_number: payload.aadhaarNumber || null }
+          : {}),
+        aadhaar_verified: payload.aadhaarVerified === true,
+        aadhaar_reference_id: payload.aadhaarReferenceId || null,
+        aadhaar_verified_at: payload.aadhaarVerifiedAt || null,
+        aadhaar_verification_response: payload.aadhaarVerificationResponse
+          ? JSON.stringify(payload.aadhaarVerificationResponse)
+          : null,
+      })
+      .returning("*");
+
+    return record || null;
+  }
+
+  async upsertAadhaarVerification(sellerId, payload = {}) {
+    const existing = await this.findKycBySellerId(sellerId);
+    if (existing) {
+      return this.updateAadhaarVerification(sellerId, payload);
+    }
+
+    const id = uuidv4();
+    const [record] = await knex("seller_kyc")
+      .insert({
+        id,
+        seller_id: sellerId,
+        aadhaar_number: payload.aadhaarNumber || null,
+        verification_status: "draft",
+        documents: JSON.stringify({}),
+        aadhaar_verified: payload.aadhaarVerified === true,
+        aadhaar_reference_id: payload.aadhaarReferenceId || null,
+        aadhaar_verified_at: payload.aadhaarVerifiedAt || null,
+        aadhaar_verification_response: payload.aadhaarVerificationResponse
+          ? JSON.stringify(payload.aadhaarVerificationResponse)
+          : null,
+      })
+      .returning("*");
+
+    return record;
+  }
+
+  async updatePanVerification(sellerId, payload = {}) {
+    const [record] = await knex("seller_kyc")
+      .where("seller_id", sellerId)
+      .update({
+        pan_number: payload.panNumber || null,
+        pan_verified: payload.panVerified === true,
+        pan_verified_at: payload.panVerifiedAt || null,
+        pan_verification_response: payload.panVerificationResponse
+          ? JSON.stringify(payload.panVerificationResponse)
+          : null,
+      })
+      .returning("*");
+
+    return record || null;
+  }
+
+  async upsertPanVerification(sellerId, payload = {}) {
+    const existing = await this.findKycBySellerId(sellerId);
+    if (existing) {
+      return this.updatePanVerification(sellerId, payload);
+    }
+
+    const id = uuidv4();
+    const [record] = await knex("seller_kyc")
+      .insert({
+        id,
+        seller_id: sellerId,
+        pan_number: payload.panNumber || null,
+        verification_status: "draft",
+        documents: JSON.stringify({}),
+        pan_verified: payload.panVerified === true,
+        pan_verified_at: payload.panVerifiedAt || null,
+        pan_verification_response: payload.panVerificationResponse
+          ? JSON.stringify(payload.panVerificationResponse)
+          : null,
       })
       .returning("*");
 

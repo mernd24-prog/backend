@@ -6,6 +6,11 @@ const { allowActions, allowRoles, allowPermissions } = require("../../../shared/
 const { checkInput } = require("../../../shared/middleware/check-input");
 const {
   submitKycSchema,
+  precheckAadhaarSchema,
+  sendAadhaarOtpSchema,
+  verifyAadhaarOtpSchema,
+  verifyPanSchema,
+  precheckPanSchema,
   uploadSellerKycDocumentsSchema,
   reviewSellerKycSchema,
   updateSellerProfileSchema,
@@ -51,6 +56,36 @@ sellerRoutes.post(
   authenticatePendingSeller,
   checkInput(submitKycSchema),
   catchErrors(sellerController.submitKyc),
+);
+sellerRoutes.post(
+  "/kyc/aadhaar/precheck",
+  authenticatePendingSeller,
+  checkInput(precheckAadhaarSchema),
+  catchErrors(sellerController.precheckAadhaar),
+);
+sellerRoutes.post(
+  "/kyc/aadhaar/send-otp",
+  authenticatePendingSeller,
+  checkInput(sendAadhaarOtpSchema),
+  catchErrors(sellerController.sendAadhaarOtp),
+);
+sellerRoutes.post(
+  "/kyc/aadhaar/verify-otp",
+  authenticatePendingSeller,
+  checkInput(verifyAadhaarOtpSchema),
+  catchErrors(sellerController.verifyAadhaarOtp),
+);
+sellerRoutes.post(
+  "/kyc/pan/verify",
+  authenticatePendingSeller,
+  checkInput(verifyPanSchema),
+  catchErrors(sellerController.verifyPan),
+);
+sellerRoutes.post(
+  "/kyc/pan/precheck",
+  authenticatePendingSeller,
+  checkInput(precheckPanSchema),
+  catchErrors(sellerController.precheckPan),
 );
 sellerRoutes.patch(
   "/onboarding/profile",
@@ -227,6 +262,20 @@ sellerRoutes.post(
   allowActions(ACTIONS.SELLER_KYC_SUBMIT),
   checkInput(submitKycSchema),
   catchErrors(sellerController.submitKyc),
+);
+sellerRoutes.post(
+  "/me/kyc/pan/verify",
+  authenticate,
+  allowActions(ACTIONS.SELLER_KYC_SUBMIT),
+  checkInput(verifyPanSchema),
+  catchErrors(sellerController.verifyPan),
+);
+sellerRoutes.post(
+  "/me/kyc/pan/precheck",
+  authenticate,
+  allowActions(ACTIONS.SELLER_KYC_SUBMIT),
+  checkInput(precheckPanSchema),
+  catchErrors(sellerController.precheckPan),
 );
 sellerRoutes.post(
   "/me/kyc/documents",

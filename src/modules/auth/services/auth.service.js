@@ -23,6 +23,7 @@ const { redis } = require("../../../infrastructure/redis/redis-client");
 const { sendMail } = require("../../../infrastructure/mail/mailer");
 const otpEmailTemplate = require("../../../../templates/otp-email.ejs");
 const { env } = require("../../../config/env");
+const { logger } = require("../../../shared/logger/logger");
 const {
   createHash,
   timingSafeEqual,
@@ -107,6 +108,62 @@ class AuthService {
     return String(email || "").trim().toLowerCase();
   }
 
+  normalizeSignupPhone(phone) {
+    let digits = String(phone || "").replace(/\D/g, "");
+
+    if (digits.length === 11 && digits.startsWith("0")) {
+      digits = digits.slice(1);
+    }
+
+    if (digits.length === 12 && digits.startsWith("91")) {
+      digits = digits.slice(2);
+    }
+
+    return /^[6-9]\d{9}$/.test(digits) ? `+91${digits}` : String(phone || "").trim();
+  }
+
+  getSignupRoleLabel(role) {
+    return role === ROLES.SELLER ? "Seller" : "Customer";
+  }
+
+  getRegistrationSuccessMessage(role) {
+    return role === ROLES.SELLER
+      ? "Seller account created successfully. Please complete seller onboarding."
+      : "Customer account created successfully.";
+  }
+
+  getRegistrationOtpMessage(role) {
+    return `${this.getSignupRoleLabel(role)} registration OTP sent successfully.`;
+  }
+
+  async assertSignupIdentityAvailable(payload = {}, requestContext = {}) {
+    const roleLabel = this.getSignupRoleLabel(payload.role);
+    const email = this.normalizeOtpEmail(payload.email);
+    const phone = this.normalizeSignupPhone(payload.phone);
+
+    const existingByEmail = await this.authRepository.findUserByEmail(email);
+    if (existingByEmail) {
+      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
+        email,
+        provider: "password",
+        ...requestContext,
+        metadata: { reason: "duplicate_email", role: payload.role },
+      });
+      throw new AppError(`${roleLabel} email already exists. Please login or use another email.`, 409);
+    }
+
+    const existingByPhone = await this.authRepository.findUserByPhone(phone);
+    if (existingByPhone) {
+      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
+        email,
+        provider: "password",
+        ...requestContext,
+        metadata: { reason: "duplicate_phone", role: payload.role },
+      });
+      throw new AppError(`${roleLabel} phone number already exists. Please login or use another phone number.`, 409);
+    }
+  }
+
   makeOtpKey(email, purpose) {
     return `otp:${this.normalizeOtpEmail(email)}:${purpose}`;
   }
@@ -165,6 +222,11 @@ class AuthService {
       panNumber: kyc.pan_number,
       gstNumber: kyc.gst_number,
       aadhaarNumber: kyc.aadhaar_number,
+      panVerified: kyc.pan_verified === true,
+      panVerifiedAt: kyc.pan_verified_at || null,
+      aadhaarVerified: kyc.aadhaar_verified === true,
+      aadhaarReferenceId: kyc.aadhaar_reference_id || null,
+      aadhaarVerifiedAt: kyc.aadhaar_verified_at || null,
       rejectionReason: kyc.rejection_reason || null,
       submittedAt: kyc.submitted_at || null,
       reviewedAt: kyc.reviewed_at || null,
@@ -339,22 +401,14 @@ class AuthService {
   async register(payload, requestContext = {}) {
     this.validateSelfSignupRole(payload.role);
     await this.referralService.getReferrerByCode(payload.referralCode);
-    const existingUser = await this.authRepository.findUserByEmail(payload.email);
-    if (existingUser) {
-      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
-        email: payload.email,
-        provider: "password",
-        ...requestContext,
-        metadata: { reason: "duplicate_account" },
-      });
-      throw new AppError("User already exists", 409);
-    }
+    await this.assertSignupIdentityAvailable(payload, requestContext);
 
     const passwordHash = await hashText(payload.password);
     const isSeller = payload.role === ROLES.SELLER;
     const user = await this.authRepository.createUser({
       email: payload.email,
       phone: payload.phone,
+      phoneNormalized: this.normalizeSignupPhone(payload.phone),
       passwordHash,
       role: payload.role,
       profile: payload.profile,
@@ -371,19 +425,24 @@ class AuthService {
     await this.referralService.rewardReferral(payload.referralCode, user);
 
     if (isSeller) {
-      return this.makeOnboardingResponse(user);
+      const result = await this.makeOnboardingResponse(user);
+      return {
+        ...result,
+        message: this.getRegistrationSuccessMessage(payload.role),
+      };
     }
 
-    return this.issueTokens(user, requestContext, "password");
+    const result = await this.issueTokens(user, requestContext, "password");
+    return {
+      ...result,
+      message: this.getRegistrationSuccessMessage(payload.role),
+    };
   }
 
   async registerWithOtp(payload, requestContext = {}) {
     this.validateSelfSignupRole(payload.role);
     await this.referralService.getReferrerByCode(payload.referralCode);
-    const existingUser = await this.authRepository.findUserByEmail(payload.email);
-    if (existingUser) {
-      throw new AppError("User already exists", 409);
-    }
+    await this.assertSignupIdentityAvailable(payload, requestContext);
 
     // Store registration data in Redis temporarily
     const registrationData = {
@@ -397,7 +456,17 @@ class AuthService {
     const regKey = `registration:${payload.email}`;
     await redis.setex(regKey, 600, JSON.stringify(registrationData)); // 10 minutes
 
-    return this.sendOtp({ email: payload.email, purpose: "registration" }, requestContext);
+    return this.sendOtp(
+      {
+        email: payload.email,
+        mobile: payload.phone,
+        purpose: "registration",
+      },
+      requestContext,
+    ).then((result) => ({
+      ...result,
+      message: this.getRegistrationOtpMessage(payload.role),
+    }));
   }
 
   async verifyRegistration(payload, requestContext = {}) {
@@ -414,6 +483,7 @@ class AuthService {
     }
 
     const registrationData = JSON.parse(registrationDataStr);
+    await this.assertSignupIdentityAvailable(registrationData, requestContext);
     await redis.del(regKey);
 
     // Create user
@@ -422,6 +492,7 @@ class AuthService {
     const user = await this.authRepository.createUser({
       email: registrationData.email,
       phone: registrationData.phone,
+      phoneNormalized: this.normalizeSignupPhone(registrationData.phone),
       passwordHash,
       role: registrationData.role,
       profile: registrationData.profile,
@@ -438,10 +509,18 @@ class AuthService {
     await this.referralService.rewardReferral(registrationData.referralCode, user);
 
     if (isSeller) {
-      return this.makeOnboardingResponse(user);
+      const result = await this.makeOnboardingResponse(user);
+      return {
+        ...result,
+        message: this.getRegistrationSuccessMessage(registrationData.role),
+      };
     }
 
-    return this.issueTokens(user, requestContext, "password");
+    const result = await this.issueTokens(user, requestContext, "password");
+    return {
+      ...result,
+      message: this.getRegistrationSuccessMessage(registrationData.role),
+    };
   }
 
   async getAuthStatus(userId) {
@@ -1102,7 +1181,8 @@ class AuthService {
     }
 
     const isStaticOtp =
-      env.auth.otpMode === "static";
+      env.auth.otpMode === "static" ||
+      (identity.channel === "mobile" && !env.apitxt.smsOtpEnabled);
 
     const otp = String(
       isStaticOtp
@@ -1151,6 +1231,15 @@ class AuthService {
     let delivery = null;
 
     try {
+      logger.info(
+        {
+          purpose: BUYER_OTP_PURPOSE,
+          channel: identity.channel,
+          staticOtp: isStaticOtp,
+        },
+        "Buyer OTP delivery selected",
+      );
+
       /*
        * Email OTP
        */
@@ -1207,6 +1296,15 @@ class AuthService {
         redis.del(keys.attemptsKey),
       ]);
 
+      logger.error(
+        {
+          err: error,
+          purpose: BUYER_OTP_PURPOSE,
+          channel: identity.channel,
+        },
+        "Buyer OTP delivery failed; local OTP state removed",
+      );
+
       throw new AppError(
         "Unable to send OTP. Please try again.",
         502,
@@ -1237,6 +1335,21 @@ class AuthService {
         ),
       )
       .catch(() => null);
+
+    logger.info(
+      {
+        purpose: BUYER_OTP_PURPOSE,
+        channel: identity.channel,
+        deliveryMode: isStaticOtp
+          ? "static"
+          : identity.channel === "email"
+            ? "email"
+            : "sms",
+        requestId: delivery?.requestId || null,
+        testMode: delivery?.testMode === true,
+      },
+      "Buyer OTP delivery completed",
+    );
 
     return {
       message: isStaticOtp
@@ -1562,11 +1675,18 @@ class AuthService {
     };
   }
   async sendOtp(payload, requestContext = {}) {
-    const { email, purpose = "registration" } = payload;
+    const { email, mobile, purpose = "registration" } = payload;
 
     const existingUser = await this.authRepository.findUserByEmail(email);
     if (purpose === "registration" && existingUser) {
-      throw new AppError("User already exists", 409);
+      throw new AppError("Customer email already exists. Please login or use another email.", 409);
+    }
+    const mobileNumber = String(mobile || existingUser?.phone || "").trim();
+    if (purpose === "registration" && mobileNumber) {
+      const existingByPhone = await this.authRepository.findUserByPhone(mobileNumber);
+      if (existingByPhone) {
+        throw new AppError("Customer phone number already exists. Please login or use another phone number.", 409);
+      }
     }
     if (purpose === "forgot_password" && !existingUser) {
       throw new AppError("User not found", 404);
@@ -1589,31 +1709,67 @@ class AuthService {
       );
     }
 
-    const isStaticOtp = env.auth.otpMode === "static";
+    const isStaticOtp = env.auth.otpMode === "static" || (mobileNumber && !env.apitxt.smsOtpEnabled);
     const otp = isStaticOtp ? env.auth.staticOtp : createOtp();
     const otpKey = this.makeOtpKey(email, purpose);
 
     // Store OTP in Redis with 10 minute expiration
     await redis.setex(otpKey, 600, otp);
 
-    // Send OTP email
+    let delivery = null;
+    let deliveryMode = isStaticOtp ? "static" : "third_party_email";
 
-    const html = otpEmailTemplate({
-      firstName: existingUser?.profile?.firstName || "User",
-      otp,
-      purpose: this.getOtpPurposeLabel(purpose),
-    });
-    const delivery = await sendMail({
-      to: email,
-      subject: `OTP for ${this.getOtpPurposeLabel(purpose)}`,
-      html,
-    });
+    logger.info(
+      {
+        purpose,
+        staticOtp: isStaticOtp,
+        hasMobile: Boolean(mobileNumber),
+      },
+      "Auth OTP generated and stored locally",
+    );
+
+    if (!isStaticOtp && mobileNumber) {
+      logger.info(
+        {
+          purpose,
+          deliveryMode: "third_party_sms",
+        },
+        "Auth OTP delivery selected",
+      );
+
+      delivery = await sendSmsOtp({
+        mobile: mobileNumber,
+        otp,
+        purpose,
+      });
+      deliveryMode = delivery?.skipped ? "static_sms" : "third_party_sms";
+    } else {
+      logger.info(
+        {
+          purpose,
+          deliveryMode: isStaticOtp ? "static" : "third_party_email",
+        },
+        "Auth OTP delivery selected",
+      );
+
+      const html = otpEmailTemplate({
+        firstName: existingUser?.profile?.firstName || "User",
+        otp,
+        purpose: this.getOtpPurposeLabel(purpose),
+      });
+      delivery = await sendMail({
+        to: email,
+        subject: `OTP for ${this.getOtpPurposeLabel(purpose)}`,
+        html,
+      });
+    }
 
     await eventPublisher.publish(
       makeEvent(
         DOMAIN_EVENTS.OTP_SENT_V1,
         {
           email,
+          phone: mobileNumber || null,
           purpose,
         },
         {
@@ -1622,11 +1778,22 @@ class AuthService {
       ),
     );
 
+    logger.info(
+      {
+        purpose,
+        deliveryMode,
+        requestId: delivery?.requestId || null,
+        testMode: delivery?.testMode === true,
+      },
+      "Auth OTP delivery completed",
+    );
+
     return {
       message: isStaticOtp ? "Static OTP ready" : "OTP sent successfully",
-      deliveryMode: isStaticOtp ? "static" : "third_party_email",
+      deliveryMode,
       ...(isStaticOtp && env.auth.exposeStaticOtp ? { otp } : {}),
-      ...(isStaticOtp ? { emailDelivery: delivery.response } : {}),
+      ...(delivery?.requestId ? { requestId: delivery.requestId } : {}),
+      ...(delivery?.testMode ? { testMode: true } : {}),
     };
   }
 

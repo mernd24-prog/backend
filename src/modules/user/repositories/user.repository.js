@@ -3,9 +3,34 @@ const { UserModel } = require("../models/user.model");
 const escapeRegExp = (value) =>
   String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+const normalizePhoneIdentifier = (phone = "") => {
+  let digits = String(phone || "").replace(/\D/g, "");
+
+  if (digits.length === 11 && digits.startsWith("0")) {
+    digits = digits.slice(1);
+  }
+
+  if (digits.length === 12 && digits.startsWith("91")) {
+    digits = digits.slice(2);
+  }
+
+  if (/^[6-9]\d{9}$/.test(digits)) {
+    return `+91${digits}`;
+  }
+
+  return digits || undefined;
+};
+
 class UserRepository {
   async create(payload) {
-    return UserModel.create(payload);
+    const phoneNormalized =
+      payload.phoneNormalized ||
+      normalizePhoneIdentifier(payload.phone);
+
+    return UserModel.create({
+      ...payload,
+      ...(phoneNormalized ? { phoneNormalized } : {}),
+    });
   }
 
   async findByEmail(email) {
@@ -24,6 +49,9 @@ class UserRepository {
     const normalized =
       String(phone || "").trim();
 
+    const phoneIdentifier =
+      normalizePhoneIdentifier(normalized);
+
     const digits =
       normalized.replace(/\D/g, "");
 
@@ -35,6 +63,21 @@ class UserRepository {
 
     return UserModel.findOne({
       $or: [
+        ...(phoneIdentifier
+          ? [
+            {
+              phoneNormalized: phoneIdentifier,
+            },
+            {
+              authProviders: {
+                $elemMatch: {
+                  provider: "mobile_otp",
+                  providerUserId: phoneIdentifier,
+                },
+              },
+            },
+          ]
+          : []),
         {
           phoneNormalized: normalized,
         },

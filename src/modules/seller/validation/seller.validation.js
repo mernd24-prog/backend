@@ -257,6 +257,52 @@ const submitKycSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
+const sendAadhaarOtpSchema = Joi.object({
+  body: Joi.object({
+    aadhaarNumber: Joi.string().pattern(aadhaarPattern).required(),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
+const precheckAadhaarSchema = Joi.object({
+  body: Joi.object({
+    aadhaarNumber: Joi.string().pattern(aadhaarPattern).required(),
+    reference_id: Joi.string().allow("", null),
+    referenceId: Joi.string().allow("", null),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
+const verifyAadhaarOtpSchema = Joi.object({
+  body: Joi.object({
+    reference_id: Joi.string().required(),
+    otp: Joi.string().pattern(/^[0-9]{4,8}$/).required(),
+    aadhaarNumber: Joi.string().pattern(aadhaarPattern).allow("", null),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
+const verifyPanSchema = Joi.object({
+  body: Joi.object({
+    panNumber: Joi.string().pattern(panPattern).required(),
+    legalName: Joi.string().pattern(personNamePattern).min(2).max(120).required(),
+    dateOfBirth: Joi.date().iso().allow("", null),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
+const precheckPanSchema = Joi.object({
+  body: Joi.object({
+    panNumber: Joi.string().pattern(panPattern).required(),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
 const uploadSellerKycDocumentsSchema = Joi.object({
   body: Joi.object({
     documents: makeKycDocumentsSchema(sellerKycDocumentKeys).min(1).required(),
@@ -578,6 +624,11 @@ const sellerSubAdminParamSchema = Joi.object({
 
 module.exports = {
   submitKycSchema,
+  precheckAadhaarSchema,
+  sendAadhaarOtpSchema,
+  verifyAadhaarOtpSchema,
+  verifyPanSchema,
+  precheckPanSchema,
   uploadSellerKycDocumentsSchema,
   reviewSellerKycSchema,
   updateSellerProfileSchema,

@@ -597,17 +597,48 @@ const sellerBrandResubmissionSchema = sellerBrandSubmissionSchema.keys({
   params: Joi.object({ brandId: Joi.string().required() }).required(),
 });
 
+const brandReviewBody = {
+  action: Joi.string().valid("approve", "reject").required(),
+  rejectionReason: Joi.when("action", {
+    is: "reject",
+    then: Joi.string().trim().min(2).max(1000).required(),
+    otherwise: Joi.string().trim().allow("", null).optional(),
+  }),
+};
+
 const reviewBrandSubmissionSchema = Joi.object({
-  body: Joi.object({
-    action: Joi.string().valid("approve", "reject").required(),
-    rejectionReason: Joi.when("action", {
-      is: "reject",
-      then: Joi.string().trim().min(2).max(1000).required(),
-      otherwise: Joi.string().trim().allow("", null).optional(),
-    }),
-  }).required(),
+  body: Joi.object(brandReviewBody).required(),
   query: Joi.object({}).required(),
   params: Joi.object({ brandId: Joi.string().required() }).required(),
+});
+
+const brandIdsInput = Joi.alternatives().try(
+  Joi.string().trim(),
+  Joi.array().items(Joi.string().trim()).min(1).unique(),
+);
+
+const reviewBrandSubmissionsSchema = Joi.object({
+  body: Joi.object({
+    ...brandReviewBody,
+    brandId: Joi.string().trim(),
+    id: Joi.string().trim(),
+    _id: brandIdsInput,
+    brandIds: brandIdsInput,
+    ids: brandIdsInput,
+    selectedData: Joi.array()
+      .items(
+        Joi.object({
+          _id: Joi.string().trim(),
+          id: Joi.string().trim(),
+          brandId: Joi.string().trim(),
+        }).unknown(true),
+      )
+      .min(1),
+  })
+    .or("brandId", "id", "_id", "brandIds", "ids", "selectedData")
+    .required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
 });
 
 const brandIdSchema = Joi.object({
@@ -837,6 +868,7 @@ module.exports = {
   sellerBrandSubmissionSchema,
   sellerBrandResubmissionSchema,
   reviewBrandSubmissionSchema,
+  reviewBrandSubmissionsSchema,
   brandIdSchema,
   createBatchSchema,
   updateBatchSchema,

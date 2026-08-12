@@ -156,11 +156,26 @@ const socialAuthMode = socialAuthLiveRequested
     ? "static"
     : "disabled";
 
-const liveOtpRequested = readBooleanFlag(["ENABLE_LIVE_OTP", "USE_LIVE_OTP"], isProductionMode);
-const staticOtpEnabled = readBooleanFlag(["ENABLE_STATIC_OTP", "USE_STATIC_OTP"], !liveOtpRequested);
-const otpMode = liveOtpRequested
-  ? (emailMode === "live" ? "live" : "disabled")
-  : (staticOtpEnabled ? "static" : "disabled");
+const normalizeOtpMode = (value) => {
+  const mode = String(value || "").trim().toLowerCase();
+  if (["static", "local", "test", "mock"].includes(mode)) return "static";
+  if (["live", "provider", "sms"].includes(mode)) return "live";
+  if (["disabled", "off", "false", "none"].includes(mode)) return "disabled";
+  return "";
+};
+
+const configuredOtpMode = normalizeOtpMode(process.env.AUTH_OTP_MODE);
+const liveOtpRequested = configuredOtpMode
+  ? configuredOtpMode === "live"
+  : readBooleanFlag(["ENABLE_LIVE_OTP", "USE_LIVE_OTP"], isProductionMode);
+const staticOtpEnabled = configuredOtpMode
+  ? configuredOtpMode === "static"
+  : readBooleanFlag(["ENABLE_STATIC_OTP", "USE_STATIC_OTP"], !liveOtpRequested);
+const otpMode = configuredOtpMode || (
+  liveOtpRequested
+    ? (emailMode === "live" ? "live" : "disabled")
+    : (staticOtpEnabled ? "static" : "disabled")
+);
 const publicBaseUrl = process.env.PUBLIC_API_BASE_URL ||
   process.env.BACKEND_PUBLIC_URL ||
   process.env.API_BASE_URL ||
@@ -225,6 +240,26 @@ const env = {
     liveRequested: razorpayXLiveRequested,
     missingKeys: razorpayXMissingKeys,
   },
+  apitxt: {
+    baseUrl: process.env.APITXT_BASE_URL || "",
+    apiKey: process.env.APITXT_API_KEY || "",
+    authKey: process.env.APITXT_AUTH_KEY || process.env.APITXT_API_KEY || "",
+    panVerifyUrl: process.env.APITXT_PAN_VERIFY_URL || "",
+    smsOtpUrl: process.env.APITXT_SMS_OTP_URL || process.env.APITXT_OTP_URL || "https://apitxt.com/api/sendOTP",
+    smsOtpEnabled: readBooleanFlag(["APITXT_SMS_OTP_ENABLED", "ENABLE_APITXT_SMS_OTP"], false),
+    smsOtpDailyLimit: parsePositiveInteger(process.env.APITXT_SMS_OTP_DAILY_LIMIT, 1),
+    smsOtpChannel: process.env.APITXT_SMS_OTP_CHANNEL || process.env.APITXT_CHANNEL || "",
+    smsOtpTemplateId: process.env.APITXT_SMS_OTP_TEMPLATE_ID || process.env.APITXT_TEMPLATE_ID || "",
+    smsOtpTemplateName: process.env.APITXT_SMS_OTP_TEMPLATE_NAME || process.env.APITXT_TEMPLATE_NAME || "",
+    smsOtpCountry: process.env.APITXT_SMS_OTP_COUNTRY || process.env.APITXT_COUNTRY || "91",
+    smsOtpProjectRefId: process.env.APITXT_SMS_OTP_PROJECT_REF_ID || process.env.APITXT_PROJECT_REF_ID || "",
+    providerDailyLimit: parsePositiveInteger(process.env.APITXT_PROVIDER_DAILY_LIMIT, 1),
+    timeoutMs: parsePositiveInteger(process.env.APITXT_TIMEOUT_MS, 5000),
+    retries: parsePositiveInteger(process.env.APITXT_RETRIES, 2),
+    enabled: readBooleanFlag(["ENABLE_APITXT", "USE_APITXT"], false),
+    verifyAadhaar: readBooleanFlag(["APITXT_VERIFY_AADHAAR"], false),
+    verifyPan: readBooleanFlag(["APITXT_VERIFY_PAN"], true),
+  },
   delivery: {
     webhookSecret: process.env.DELIVERY_WEBHOOK_SECRET || "",
     requireWebhookSignature: readBooleanFlag(
@@ -272,11 +307,11 @@ const env = {
   },
   defaultFromEmail,
   auth: {
-    staticOtp: String(process.env.STATIC_OTP || process.env.DEV_OTP || "123456").trim(),
+    staticOtp: String(process.env.AUTH_STATIC_OTP || process.env.STATIC_OTP || process.env.DEV_OTP || "123456").trim(),
     otpMode,
     liveOtpRequested,
     staticOtpEnabled,
-    exposeStaticOtp: readBooleanFlag(["EXPOSE_STATIC_OTP", "SHOW_STATIC_OTP"], !isProductionMode),
+    exposeStaticOtp: readBooleanFlag(["AUTH_EXPOSE_STATIC_OTP", "EXPOSE_STATIC_OTP", "SHOW_STATIC_OTP"], !isProductionMode),
   },
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME || "",

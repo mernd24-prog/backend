@@ -471,6 +471,124 @@ class SellerOrganizationRepository {
     return conflicts;
   }
 
+  async findVerifiedAadhaarConflicts(aadhaarNumber, options = {}) {
+    const normalizedAadhaar = String(aadhaarNumber || "").trim();
+    if (!normalizedAadhaar) return [];
+
+    const excludeSellerId = options.excludeSellerId || null;
+    const excludeOrganizationId = options.excludeOrganizationId || null;
+    const conflicts = [];
+
+    const organizationRows = await knex("seller_organizations")
+      .select(
+        "id",
+        "seller_id",
+        "legal_business_name",
+        "store_display_name",
+        "aadhaar_number",
+        "kyc_status",
+        "approval_status",
+      )
+      .where("aadhaar_number", normalizedAadhaar)
+      .where((builder) => {
+        builder
+          .where("kyc_status", "verified")
+          .orWhereIn("approval_status", ["approved", "active"]);
+      });
+
+    organizationRows.forEach((row) => {
+      if (!this.isDifferentOrganization(row.id, excludeOrganizationId)) return;
+      if (!this.isDifferentSeller(row.seller_id, excludeSellerId)) return;
+
+      conflicts.push({
+        source: "seller_organizations",
+        field: "aadhaarNumber",
+        value: normalizedAadhaar,
+        sellerId: row.seller_id,
+        organizationId: row.id,
+        label: row.store_display_name || row.legal_business_name || row.id,
+      });
+    });
+
+    const kycRows = await knex("seller_kyc")
+      .select("seller_id", "legal_name", "aadhaar_number", "aadhaar_verified")
+      .where("aadhaar_number", normalizedAadhaar)
+      .where("aadhaar_verified", true);
+
+    kycRows.forEach((row) => {
+      if (!this.isDifferentSeller(row.seller_id, excludeSellerId)) return;
+
+      conflicts.push({
+        source: "seller_kyc",
+        field: "aadhaarNumber",
+        value: normalizedAadhaar,
+        sellerId: row.seller_id,
+        label: row.legal_name || row.seller_id,
+      });
+    });
+
+    return conflicts;
+  }
+
+  async findVerifiedPanConflicts(panNumber, options = {}) {
+    const normalizedPan = this.normalizeCode(panNumber);
+    if (!normalizedPan) return [];
+
+    const excludeSellerId = options.excludeSellerId || null;
+    const excludeOrganizationId = options.excludeOrganizationId || null;
+    const conflicts = [];
+
+    const organizationRows = await knex("seller_organizations")
+      .select(
+        "id",
+        "seller_id",
+        "legal_business_name",
+        "store_display_name",
+        "pan",
+        "kyc_status",
+        "approval_status",
+      )
+      .whereRaw("UPPER(pan) = ?", [normalizedPan])
+      .where((builder) => {
+        builder
+          .where("kyc_status", "verified")
+          .orWhereIn("approval_status", ["approved", "active"]);
+      });
+
+    organizationRows.forEach((row) => {
+      if (!this.isDifferentOrganization(row.id, excludeOrganizationId)) return;
+      if (!this.isDifferentSeller(row.seller_id, excludeSellerId)) return;
+
+      conflicts.push({
+        source: "seller_organizations",
+        field: "pan",
+        value: normalizedPan,
+        sellerId: row.seller_id,
+        organizationId: row.id,
+        label: row.store_display_name || row.legal_business_name || row.id,
+      });
+    });
+
+    const kycRows = await knex("seller_kyc")
+      .select("seller_id", "legal_name", "pan_number", "pan_verified")
+      .whereRaw("UPPER(pan_number) = ?", [normalizedPan])
+      .where("pan_verified", true);
+
+    kycRows.forEach((row) => {
+      if (!this.isDifferentSeller(row.seller_id, excludeSellerId)) return;
+
+      conflicts.push({
+        source: "seller_kyc",
+        field: "pan",
+        value: normalizedPan,
+        sellerId: row.seller_id,
+        label: row.legal_name || row.seller_id,
+      });
+    });
+
+    return conflicts;
+  }
+
   async findOnlyBySeller(sellerId) {
     const rows = await knex("seller_organizations")
       .where("seller_id", sellerId)

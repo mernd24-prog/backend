@@ -1209,6 +1209,51 @@ class PlatformService {
     return updated;
   }
 
+  normalizeBrandReviewIds(payload = {}) {
+    const rawValues = [
+      payload.brandIds,
+      payload.ids,
+      payload.brandId,
+      payload.id,
+      payload._id,
+      ...(Array.isArray(payload.selectedData)
+        ? payload.selectedData.map((item) => item?._id || item?.id || item?.brandId)
+        : []),
+    ];
+
+    const ids = rawValues
+      .flatMap((value) => (Array.isArray(value) ? value : [value]))
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+
+    return [...new Set(ids)];
+  }
+
+  async reviewBrandSubmissions(payload = {}, req) {
+    const brandIds = this.normalizeBrandReviewIds(payload);
+    if (!brandIds.length) throw new AppError("Select at least one brand to review", 400);
+
+    const updated = [];
+    for (const brandId of brandIds) {
+      updated.push(
+        await this.reviewBrandSubmission(
+          brandId,
+          {
+            action: payload.action,
+            rejectionReason: payload.rejectionReason,
+          },
+          req,
+        ),
+      );
+    }
+
+    return {
+      updatedCount: updated.length,
+      brandIds,
+      items: updated,
+    };
+  }
+
   async ensureBrandNameAvailable(name, excludeBrandId = null) {
     const existing = await this.platformRepository.findBrandByName(name, excludeBrandId);
     if (existing) throw new AppError("A brand with this name already exists", 409);

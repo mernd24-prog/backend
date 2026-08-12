@@ -7,6 +7,7 @@ const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { ROLES } = require("../../../shared/constants/roles");
 const { makeSellerOnboardingState } = require("../../../shared/domain/seller-onboarding");
+const { SellerRepository } = require("../../seller/repositories/seller.repository");
 const { sellerOrganizationService } = require("../../seller/services/seller-organization.service");
 const {
   storageService: defaultStorageService,
@@ -16,10 +17,12 @@ class UserService {
   constructor({
     userRepository = new UserRepository(),
     userKycRepository = new UserKycRepository(),
+    sellerRepository = new SellerRepository(),
     storageService = defaultStorageService,
   } = {}) {
     this.userRepository = userRepository;
     this.userKycRepository = userKycRepository;
+    this.sellerRepository = sellerRepository;
     this.storageService = storageService;
   }
 
@@ -56,7 +59,10 @@ class UserService {
 
     const userObject = this.toPlainObject(user);
     const sellerId = String(userObject._id || userObject.id || "");
-    const organizations = await sellerOrganizationService.organizationRepository.listBySeller(sellerId);
+    const [organizations, kyc] = await Promise.all([
+      sellerOrganizationService.organizationRepository.listBySeller(sellerId),
+      this.sellerRepository.findKycBySellerId(sellerId),
+    ]);
     const organizationSummary = sellerOrganizationService.buildOrganizationCollectionSummary(organizations);
     const selectedOrganizationId =
       organizationSummary.selectedOrganizationId ||
@@ -73,13 +79,40 @@ class UserService {
     const onboardingState = makeSellerOnboardingState({
       sellerProfile: organizationBackedProfile,
       user: userObject,
-      kyc: null,
+      kyc,
     });
 
     return {
       ...userObject,
+      kyc: kyc
+        ? {
+            verificationStatus: kyc.verification_status,
+            legalName: kyc.legal_name,
+            businessType: kyc.business_type,
+            panNumber: kyc.pan_number,
+            gstNumber: kyc.gst_number,
+            aadhaarNumber: kyc.aadhaar_number,
+            panVerified: kyc.pan_verified === true,
+            panVerifiedAt: kyc.pan_verified_at || null,
+            aadhaarVerified: kyc.aadhaar_verified === true,
+            aadhaarReferenceId: kyc.aadhaar_reference_id || null,
+            aadhaarVerifiedAt: kyc.aadhaar_verified_at || null,
+            rejectionReason: kyc.rejection_reason || null,
+            submittedAt: kyc.submitted_at || null,
+            reviewedAt: kyc.reviewed_at || null,
+            documents: sellerOrganizationService.organizationRepository.parseJson(
+              kyc.documents,
+              {},
+            ),
+          }
+        : null,
       sellerProfile: {
         ...organizationBackedProfile,
+        panVerified: kyc?.pan_verified === true,
+        panVerifiedAt: kyc?.pan_verified_at || null,
+        aadhaarVerified: kyc?.aadhaar_verified === true,
+        aadhaarReferenceId: kyc?.aadhaar_reference_id || null,
+        aadhaarVerifiedAt: kyc?.aadhaar_verified_at || null,
         onboardingChecklist: onboardingState.checklist,
         onboardingStatus: onboardingState.onboardingStatus,
         organizationSummary,
