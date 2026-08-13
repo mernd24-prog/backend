@@ -221,7 +221,10 @@ function makeSellerOnboardingChecklist({
     ...DEFAULT_SELLER_CHECKLIST,
     profileCompleted: hasCompleteSellerProfile(profile, { user, kyc }),
     kycSubmitted,
-    gstVerified: kyc?.verification_status === KYC_STATUS.VERIFIED || storedKycStatus === KYC_STATUS.VERIFIED,
+    gstVerified:
+      profile.gstVerified === true ||
+      kyc?.verification_status === KYC_STATUS.VERIFIED ||
+      storedKycStatus === KYC_STATUS.VERIFIED,
     bankLinked:
       profile.bankVerificationStatus !== "rejected" &&
       hasCompleteSellerBankDetails(profile.bankDetails),

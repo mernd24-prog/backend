@@ -559,6 +559,31 @@ class SellerService {
       );
     }
     const panAlreadyVerified = this.isPanAlreadyVerified(existingKyc, normalizedPayload.panNumber);
+    const shouldVerifyGst =
+      this.kycVerificationService.enabled &&
+      this.kycVerificationService.verifyGst &&
+      Boolean(normalizedPayload.gstNumber);
+
+    logger.info(
+      {
+        sellerId,
+        apitxtEnabled: this.kycVerificationService.enabled,
+        verifyPan: this.kycVerificationService.verifyPan,
+        verifyGst: this.kycVerificationService.verifyGst,
+        hasGstNumber: Boolean(normalizedPayload.gstNumber),
+        panAlreadyVerified,
+        shouldVerifyGst,
+      },
+      "Seller KYC submit verification flags resolved",
+    );
+    console.log("[SellerKYC][GST] flags", {
+      sellerId,
+      apitxtEnabled: this.kycVerificationService.enabled,
+      verifyGst: this.kycVerificationService.verifyGst,
+      hasGstNumber: Boolean(normalizedPayload.gstNumber),
+      panAlreadyVerified,
+      shouldVerifyGst,
+    });
 
     if (
       this.kycVerificationService.enabled &&
@@ -576,18 +601,63 @@ class SellerService {
       );
     }
 
-    const verificationResult = panAlreadyVerified
-      ? {
-          skipped: false,
-          provider: "apitxt",
-          panVerified: true,
-          panResult: this.parseJsonObject(existingKyc?.pan_verification_response),
-          cached: true,
-        }
-      : await this.kycVerificationService.verifyForOnboarding(normalizedPayload, {
+    let verificationResult = null;
+    if (panAlreadyVerified) {
+      const gstResult = shouldVerifyGst
+        ? await this.kycVerificationService.verifyGstDetails({
+            gstNumber: normalizedPayload.gstNumber,
+          })
+        : null;
+
+      logger.info(
+        {
           sellerId,
-          actor,
-        });
+          branch: "pan_cached",
+          shouldVerifyGst,
+          gstVerified: gstResult?.verified === true,
+          gstMessage: gstResult?.message || null,
+        },
+        "Seller KYC submit verification result resolved",
+      );
+      console.log("[SellerKYC][GST] result", {
+        sellerId,
+        branch: "pan_cached",
+        shouldVerifyGst,
+        gstVerified: gstResult?.verified === true,
+        gstMessage: gstResult?.message || null,
+      });
+
+      verificationResult = {
+        skipped: false,
+        provider: "apitxt",
+        panVerified: true,
+        panResult: this.parseJsonObject(existingKyc?.pan_verification_response),
+        cached: true,
+        gstVerified: gstResult?.verified === true,
+        gstResult,
+      };
+    } else {
+      verificationResult = await this.kycVerificationService.verifyForOnboarding(normalizedPayload, {
+        sellerId,
+        actor,
+      });
+      logger.info(
+        {
+          sellerId,
+          branch: "full_onboarding",
+          panVerified: verificationResult?.panVerified === true,
+          gstVerified: verificationResult?.gstVerified === true,
+          gstMessage: verificationResult?.gstResult?.message || null,
+        },
+        "Seller KYC submit verification result resolved",
+      );
+      console.log("[SellerKYC][GST] result", {
+        sellerId,
+        branch: "full_onboarding",
+        gstVerified: verificationResult?.gstVerified === true,
+        gstMessage: verificationResult?.gstResult?.message || null,
+      });
+    }
     const documents = await this.uploadKycDocuments(payload.documents || {}, actor);
     const record = await this.sellerRepository.upsertKyc({
       ...normalizedPayload,
@@ -606,6 +676,15 @@ class SellerService {
         {
           bankDetails: normalizedPayload.bankDetails || {},
           ...(normalizedPayload.dateOfBirth ? { dateOfBirth: normalizedPayload.dateOfBirth } : {}),
+          ...(verificationResult?.gstVerified
+            ? {
+                gstVerified: true,
+                gstVerifiedAt: new Date().toISOString(),
+                gstVerificationResponse: verificationResult.gstResult || null,
+                kycStatus: KYC_STATUS.VERIFIED,
+                verificationStatus: KYC_STATUS.VERIFIED,
+              }
+            : {}),
         },
       );
       await this.sellerRepository.updateSellerProfile(

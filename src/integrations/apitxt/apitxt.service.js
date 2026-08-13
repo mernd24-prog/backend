@@ -3,6 +3,12 @@ const { ApitxtError } = require("./apitxt.errors");
 const { mapVerificationResponse } = require("./apitxt.mapper");
 const { logger } = require("../../shared/logger/logger");
 
+const maskGstin = (gstin = "") => {
+  const normalized = String(gstin || "").trim().toUpperCase();
+  if (normalized.length <= 5) return "***************";
+  return `${normalized.slice(0, 2)}**********${normalized.slice(-3)}`;
+};
+
 function formatPanDob(value) {
   if (!value) return "";
 
@@ -381,19 +387,79 @@ class ApitxtService {
 
 
   async verifyGst(gstin) {
+    const normalizedGstin = String(gstin || "").trim().toUpperCase();
 
-    const response = await this.client.post(
-      APITXT_ENDPOINTS.VERIFY_GST,
-      {
-        gstin
-      }
+    if (!this.authKey) {
+      throw new ApitxtError(
+        "APITXT auth key is not configured.",
+        {
+          statusCode: 503,
+          retryable: false
+        }
+      );
+    }
+
+    if (!normalizedGstin) {
+      throw new ApitxtError(
+        "GSTIN is required for APITXT GST verification.",
+        {
+          statusCode: 422,
+          retryable: false
+        }
+      );
+    }
+
+    const endpoint = APITXT_ENDPOINTS.VERIFY_GST.replace(
+      ":gstin",
+      encodeURIComponent(normalizedGstin),
     );
 
+    console.log("[APITXT][GST] request", {
+      endpoint,
+      gstin: maskGstin(normalizedGstin),
+      hasAuthKey: Boolean(this.authKey),
+    });
 
-    return mapVerificationResponse(
+    logger.info(
+      {
+        provider: "apitxt",
+        endpoint,
+        gstin: maskGstin(normalizedGstin),
+        hasAuthKey: Boolean(this.authKey),
+      },
+      "APITXT GST verification request prepared",
+    );
+
+    const response = await this.client.get(endpoint, {
+      authkey: this.authKey,
+    });
+
+    const mapped = mapVerificationResponse(
       "gstNumber",
       response
     );
+
+    console.log("[APITXT][GST] response", {
+      gstin: maskGstin(normalizedGstin),
+      status: response?.status || response?.data?.status || response?.result?.status || null,
+      message: response?.message || response?.data?.message || response?.result?.message || null,
+      verified: mapped.verified,
+      providerReferenceId: mapped.providerReferenceId || null,
+    });
+
+    logger.info(
+      {
+        provider: "apitxt",
+        gstin: maskGstin(normalizedGstin),
+        status: response?.status || response?.data?.status || response?.result?.status || null,
+        message: response?.message || response?.data?.message || response?.result?.message || null,
+        verified: mapped.verified,
+        providerReferenceId: mapped.providerReferenceId || null,
+      },
+      "APITXT GST verification response mapped",
+    );
+
+    return mapped;
   }
 
 

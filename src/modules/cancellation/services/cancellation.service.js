@@ -370,7 +370,7 @@ class CancellationService {
     const rows = await knex("shipments as s")
       .leftJoin("order_cancellations as c", function joinRtoCancellation() {
         this.on("c.order_id", "=", "s.order_id")
-          .andOnRaw("c.metadata ->> 'shipmentId' = s.id::text");
+          .andOn(knex.raw("c.metadata ->> 'shipmentId' = s.id::text"));
       })
       .where("s.status", "rto")
       .where((builder) =>
