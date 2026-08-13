@@ -375,7 +375,11 @@ class SellerOrganizationRepository {
 
     organizationRows.forEach((row) => {
       if (!this.isDifferentOrganization(row.id, excludeOrganizationId)) return;
-      if (criteria.gstin && this.normalizeCode(row.gstin) === criteria.gstin) {
+      if (
+        criteria.gstin &&
+        this.normalizeCode(row.gstin) === criteria.gstin &&
+        this.isDifferentSeller(row.seller_id, excludeSellerId)
+      ) {
         conflicts.push({
           source: "seller_organizations",
           field: "gstin",
