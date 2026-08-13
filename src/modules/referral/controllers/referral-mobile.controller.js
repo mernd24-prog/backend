@@ -105,6 +105,15 @@ class ReferralMobileController {
     );
   };
 
+  networkChildDetail = async (req, res) => {
+    const result = await this.referralService.getMyChildInfluencerDetail(
+      getCurrentUser(req),
+      req.params.childId,
+      req.query,
+    );
+    res.json(okResponse(result));
+  };
+
   createNetworkChild = async (req, res) => {
     const result = await this.referralService.createMyChildInfluencer(
       getCurrentUser(req),

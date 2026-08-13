@@ -14,6 +14,7 @@ const {
   createWithdrawalSchema,
   networkQuerySchema,
   createNetworkChildSchema,
+  networkChildDetailSchema,
   bonusProgressQuerySchema,
   analyticsQuerySchema,
   updateProfileSchema,
@@ -74,6 +75,11 @@ referralMobileRoutes.get(
   "/network",
   checkInput(networkQuerySchema),
   catchErrors(referralMobileController.network),
+);
+referralMobileRoutes.get(
+  "/network/children/:childId",
+  checkInput(networkChildDetailSchema),
+  catchErrors(referralMobileController.networkChildDetail),
 );
 referralMobileRoutes.post(
   "/network/children",

@@ -164,6 +164,12 @@ const createNetworkChildSchema = Joi.object({
   params: emptyParams,
 });
 
+const networkChildDetailSchema = Joi.object({
+  body: emptyBody,
+  query: Joi.object({ ...dateFilterQuery }).required(),
+  params: Joi.object({ childId: Joi.string().trim().required() }).required(),
+});
+
 const bonusProgressQuerySchema = Joi.object({
   body: emptyBody,
   query: Joi.object({
@@ -232,6 +238,7 @@ module.exports = {
   createWithdrawalSchema,
   networkQuerySchema,
   createNetworkChildSchema,
+  networkChildDetailSchema,
   bonusProgressQuerySchema,
   analyticsQuerySchema,
   updateProfileSchema,

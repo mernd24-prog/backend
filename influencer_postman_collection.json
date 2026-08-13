@@ -477,7 +477,30 @@
         },
         {
           "name": "My Child Network (Parent only)",
-          "description": "Parent-only direct child list with sales and earnings summaries. Filters: pending|active|suspended|rejected.",
+          "description": "Parent-only direct child list with sales, orders, customers and earnings summaries. Saves the first associate ID for the detail request. Filters: pending|active|suspended|rejected.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.equal(200));",
+                  "const json = pm.response.json();",
+                  "const children = json.data?.children || [];",
+                  "if (children[0]?.id) pm.environment.set('childInfluencerId', children[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/network?page={{page}}&limit={{limit}}&fromDate={{fromDate}}&toDate={{toDate}}&status=active&code={{referralCode}}",
+            "description": "Parent-only direct child list with sales, orders, customers and earnings summaries. Saves the first associate ID for the detail request. Filters: pending|active|suspended|rejected."
+          }
+        },
+        {
+          "name": "Associate Complete Tracking Detail (Parent only)",
+          "description": "Parent-authorized detail for one direct associate. Returns identity/contact and account states, referral performance, customer/order totals, wallet balances, 10 recent orders, 10 recent coin activities, and bonus progress. A parent cannot inspect another parent's associate.",
           "event": [
             {
               "listen": "test",
@@ -492,8 +515,8 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": "{{baseUrl}}/api/v1/influencer/referral/network?page={{page}}&limit={{limit}}&fromDate={{fromDate}}&toDate={{toDate}}&status=active&code={{referralCode}}",
-            "description": "Parent-only direct child list with sales and earnings summaries. Filters: pending|active|suspended|rejected."
+            "url": "{{baseUrl}}/api/v1/influencer/referral/network/children/{{childInfluencerId}}?fromDate={{fromDate}}&toDate={{toDate}}",
+            "description": "Parent-authorized detail for one direct associate. Returns identity/contact and account states, referral performance, customer/order totals, wallet balances, 10 recent orders, 10 recent coin activities, and bonus progress. A parent cannot inspect another parent's associate."
           }
         }
       ]

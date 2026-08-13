@@ -1729,11 +1729,14 @@ class ReferralService {
       .filter(Boolean)
       .join(" ");
     return {
+      id: enriched.id || this.getRecordId(enriched),
       influencerType: enriched.influencerType,
       level: enriched.level || 1,
       status: enriched.status,
       canCreateChildren: Boolean(enriched.canCreateChildren),
       displayName: displayName || "Influencer",
+      email: enriched.user?.email || null,
+      phone: enriched.user?.phone || null,
       joinedOn: enriched.createdAt || null,
       primaryCode: enriched.primaryCode
         ? {
@@ -2429,6 +2432,55 @@ class ReferralService {
       total: children.total,
       page: Number(query.page || 1),
       limit: Number(query.limit || 50),
+    };
+  }
+
+  async getMyChildInfluencerDetail(actor = {}, childId, query = {}) {
+    const parent = await this.getMyInfluencerProfileOrThrow(actor);
+    if (parent.influencerType !== "parent" || parent.canCreateChildren !== true) {
+      throw new AppError("Associate details are available only to eligible parent influencers", 403);
+    }
+    const child = await this.referralRepository.getInfluencerProfileById(childId);
+    if (!child || String(child.parentInfluencerId || "") !== this.getRecordId(parent)) {
+      throw new AppError("Associate not found in your network", 404);
+    }
+    const influencerId = this.getRecordId(child);
+    const enriched = await this.enrichInfluencer(child);
+    const code = enriched.primaryCode?.code || null;
+    const [performance, ledgerTotals, orders, ledger, bonusProgress] = await Promise.all([
+      this.referralRepository.aggregateReferralPerformance({ influencerIds: [influencerId], code, fromDate: query.fromDate, toDate: query.toDate }),
+      this.referralRepository.aggregateLedgerTotalsByInfluencer({ influencerId, code, fromDate: query.fromDate, toDate: query.toDate, excludeTypes: this.getEarningExcludedTypes() }),
+      this.referralRepository.listReferralOrders({ influencerId, code, fromDate: query.fromDate, toDate: query.toDate, page: 1, limit: 10 }),
+      this.referralRepository.listMobileCoinLedger({ influencerId, code, fromDate: query.fromDate, toDate: query.toDate, page: 1, limit: 10 }),
+      this.getBonusProgressReport({ influencerId, page: 1, limit: 20 }),
+    ]);
+    return {
+      associate: {
+        ...this.publicInfluencerNode(enriched),
+        kycStatus: enriched.kycStatus || "pending",
+        payoutProfileStatus: enriched.payoutProfileStatus || "pending",
+        onboardingStatus: enriched.onboardingStatus || "approved",
+      },
+      dateRange: { fromDate: query.fromDate || null, toDate: query.toDate || null },
+      performance: {
+        totalOrders: Number(performance.orderCount || 0),
+        totalSalesAmount: this.roundCoins(performance.orderValue),
+        customerCount: Number(performance.customerCount || 0),
+        totalCommissionCoins: this.roundCoins(ledgerTotals.total),
+      },
+      wallet: this.formatWallet(enriched.wallet, 0, await this.getMinimumWithdrawalCoins()),
+      recentOrders: orders.items.map((order) => ({
+        orderId: order.orderId,
+        code: order.code,
+        orderAmount: this.roundCoins(order.eligibleAmount),
+        customerDiscount: this.roundCoins(order.discountAmount),
+        status: order.status,
+        orderStatus: order.orderStatus || null,
+        paymentStatus: order.paymentStatus || null,
+        orderDate: order.createdAt || null,
+      })),
+      recentCoinActivity: ledger.items.map((entry) => this.formatMobileLedgerEntry(entry)),
+      bonusTargets: bonusProgress.items,
     };
   }
 
