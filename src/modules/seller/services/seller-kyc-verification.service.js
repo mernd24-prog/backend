@@ -12,6 +12,7 @@ class SellerKycVerificationService {
     enabled = env.apitxt.enabled,
     verifyAadhaar = env.apitxt.verifyAadhaar,
     verifyPan = env.apitxt.verifyPan,
+    verifyGst = env.apitxt.verifyGst,
     staticOtp = env.auth.staticOtp || "123456",
     logger: serviceLogger = logger,
   } = {}) {
@@ -26,6 +27,9 @@ class SellerKycVerificationService {
 
     this.verifyPan =
       verifyPan;
+
+    this.verifyGst =
+      verifyGst;
 
     this.staticOtp =
       String(staticOtp || "123456").trim();
@@ -87,6 +91,7 @@ class SellerKycVerificationService {
 
 
       let panResult = null;
+      let gstResult = null;
 
 
 
@@ -145,6 +150,72 @@ class SellerKycVerificationService {
 
       }
 
+      if(this.verifyGst && payload.gstNumber){
+
+        console.log(
+          "\nVerifying GST..."
+        );
+        console.log("[SellerKYC][GST] starting", {
+          sellerId: context.sellerId || null,
+          verifyGst: this.verifyGst,
+          hasGstNumber: Boolean(payload.gstNumber),
+        });
+        this.logger.info?.(
+          {
+            provider: "apitxt",
+            sellerId: context.sellerId || null,
+            verifyGst: this.verifyGst,
+            hasGstNumber: Boolean(payload.gstNumber),
+          },
+          "Seller onboarding GST verification starting",
+        );
+
+        gstResult =
+          await this.identityVerificationProvider.verifyGst(
+            payload.gstNumber
+          );
+
+        console.log(
+          "GST Response:"
+        );
+
+        console.dir(
+          gstResult,
+          {
+            depth:null
+          }
+        );
+
+        this.assertVerified(
+          gstResult,
+          "gstNumber",
+          "GST verification failed."
+        );
+
+        this.logger.info?.(
+          {
+            provider: "apitxt",
+            sellerId: context.sellerId || null,
+            gstVerified: gstResult?.verified === true,
+            message: gstResult?.message || null,
+          },
+          "Seller onboarding GST verification completed",
+        );
+        console.log("[SellerKYC][GST] completed", {
+          sellerId: context.sellerId || null,
+          gstVerified: gstResult?.verified === true,
+          message: gstResult?.message || null,
+        });
+
+      }
+      else {
+        console.log("[SellerKYC][GST] skipped", {
+          sellerId: context.sellerId || null,
+          verifyGst: this.verifyGst,
+          hasGstNumber: Boolean(payload.gstNumber),
+        });
+      }
+
 
 
       console.log(
@@ -172,6 +243,11 @@ class SellerKycVerificationService {
           Boolean(this.verifyPan),
 
         panResult,
+
+        gstVerified:
+          Boolean(this.verifyGst && payload.gstNumber),
+
+        gstResult,
 
       };
 
@@ -406,6 +482,57 @@ class SellerKycVerificationService {
       "panNumber",
       "PAN verification failed.",
     );
+
+    return result;
+  }
+
+  async verifyGstDetails({
+    gstNumber,
+    gstin,
+  } = {}) {
+    if (!this.enabled || !this.verifyGst) {
+      console.log("[SellerKYC][GST] skipped", {
+        enabled: this.enabled,
+        verifyGst: this.verifyGst,
+        hasGstNumber: Boolean(gstNumber || gstin),
+      });
+      return {
+        skipped: true,
+        testMode: true,
+        verificationMode: "TEST_MODE",
+        provider: "static",
+        field: "gstNumber",
+        verified: true,
+        message: "GST verification skipped in testing.",
+        raw: {
+          mode: "static_gst",
+          reason: !this.enabled
+            ? "apitxt_disabled"
+            : "gst_verification_disabled",
+        },
+      };
+    }
+
+    console.log("[SellerKYC][GST] starting", {
+      enabled: this.enabled,
+      verifyGst: this.verifyGst,
+      hasGstNumber: Boolean(gstNumber || gstin),
+    });
+
+    const result = await this.identityVerificationProvider.verifyGst(
+      gstNumber || gstin,
+    );
+
+    this.assertVerified(
+      result,
+      "gstNumber",
+      "GST verification failed.",
+    );
+
+    console.log("[SellerKYC][GST] completed", {
+      gstVerified: result?.verified === true,
+      message: result?.message || null,
+    });
 
     return result;
   }

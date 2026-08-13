@@ -282,6 +282,7 @@ const productBodyBase = {
   // Meta
   metadata: Joi.object().default({}),
   status: Joi.string().valid(...Object.values(PRODUCT_STATUS)),
+  approvalStatus: Joi.string().valid(...Object.values(PRODUCT_APPROVAL_STATUS)),
 };
 
 // ─── Exported schemas ────────────────────────────────────────────────────────
@@ -362,6 +363,7 @@ const listProductSchema = Joi.object({
     createdFrom: Joi.date().allow("", null),
     createdTo: Joi.date().allow("", null),
     includeAllStatuses: Joi.boolean(),
+    includeArchived: Joi.boolean(),
     sort: Joi.string().valid("price_asc", "price_desc", "newest", "oldest", "rating", "popular", ""),
     sortBy: Joi.string().valid(
       "price_asc",

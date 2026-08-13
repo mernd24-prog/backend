@@ -8,26 +8,56 @@ function isVerifiedResponse(response = {}) {
     response.data?.status ||
     "",
   ).toLowerCase();
+  const message = String(
+    response.message ||
+    response.result?.message ||
+    response.data?.message ||
+    "",
+  ).toLowerCase();
 
   return (
     response.verified === true ||
     response.success === true ||
     response.result?.verified === true ||
     response.data?.verified === true ||
-    ["verified", "valid", "success", "matched", "approved"].includes(status)
+    ["200", "verified", "valid", "success", "matched", "approved"].includes(status) ||
+    ["success", "verified", "valid", "matched", "approved"].includes(message)
   );
+}
+
+function isGstVerifiedResponse(response = {}) {
+  const explicitVerified =
+    response.verified ??
+    response.result?.verified ??
+    response.data?.verified;
+
+  if (explicitVerified !== undefined && explicitVerified !== null) {
+    return explicitVerified === true || String(explicitVerified).toLowerCase() === "true";
+  }
+
+  const gstStatus = String(
+    response.result?.status ||
+    response.data?.status ||
+    response.verificationStatus ||
+    "",
+  ).toLowerCase();
+
+  return ["verified", "valid", "active", "matched", "approved"].includes(gstStatus);
 }
 
 function getProviderReferenceId(response = {}) {
   return (
     response.reference_id ||
+    response.request_id ||
     response.requestId ||
     response.referenceId ||
     response.transactionId ||
     response.data?.reference_id ||
+    response.data?.request_id ||
     response.data?.requestId ||
     response.data?.referenceId ||
     response.result?.reference_id ||
+    response.result?.request_id ||
     response.result?.requestId ||
     null
   );
@@ -129,7 +159,10 @@ function sanitizeProviderResponse(response = {}) {
 }
 
 function mapVerificationResponse(field, response = {}) {
-  const verified = isVerifiedResponse(response);
+  const verified =
+    field === "gstNumber"
+      ? isGstVerifiedResponse(response)
+      : isVerifiedResponse(response);
   const aadhaarProfile = field === "aadhaarNumber" ? extractAadhaarProfile(response) : null;
 
   return {

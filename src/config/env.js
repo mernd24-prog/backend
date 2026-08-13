@@ -279,6 +279,7 @@ const env = {
     enabled: readBooleanFlag(["ENABLE_APITXT", "USE_APITXT"], false),
     verifyAadhaar: readBooleanFlag(["APITXT_VERIFY_AADHAAR"], false),
     verifyPan: readBooleanFlag(["APITXT_VERIFY_PAN"], true),
+    verifyGst: readBooleanFlag(["APITXT_VERIFY_GST"], false),
   },
   delivery: {
     webhookSecret: process.env.DELIVERY_WEBHOOK_SECRET || "",

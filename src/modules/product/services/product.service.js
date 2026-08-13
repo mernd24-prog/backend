@@ -97,6 +97,8 @@ const PRODUCT_LIST_PROJECTION = {
   "shipping.processingDays": 1,
   origin: 1,
   status: 1,
+  approvalStatus: 1,
+  approvedAt: 1,
   visibility: 1,
   productType: 1,
   rating: 1,
@@ -1315,6 +1317,51 @@ class ProductService {
       version: (existingProduct.version || 1) + 1,
     };
 
+    if (
+      updatePayload.approvalStatus &&
+      updatePayload.approvalStatus !== existingProduct.approvalStatus
+    ) {
+      const isApproval = updatePayload.approvalStatus === PRODUCT_APPROVAL_STATUS.APPROVED;
+      const isRejection = updatePayload.approvalStatus === PRODUCT_APPROVAL_STATUS.REJECTED;
+      const isSellerSelfApproval = isSellerRole(actor) && isApproval;
+
+      if (isSellerRole(actor) && !isSellerSelfApproval) {
+        throw new AppError("Seller can only approve their own product", 403);
+      }
+
+      if (!isSellerSelfApproval) {
+        this.assertCanReviewProductStatus(
+          actor,
+          isApproval
+            ? PRODUCT_STATUS.ACTIVE
+            : isRejection
+              ? PRODUCT_STATUS.REJECTED
+              : PRODUCT_STATUS.INACTIVE,
+        );
+      }
+
+      if (isApproval) {
+        updatePayload.status = PRODUCT_STATUS.ACTIVE;
+        updatePayload.approvedBy = actor.userId;
+        updatePayload.approvedAt = new Date();
+        updatePayload.publishedAt = existingProduct.publishedAt || new Date();
+        updatePayload.rejectionReason = null;
+      } else if (isRejection) {
+        updatePayload.status = PRODUCT_STATUS.INACTIVE;
+        updatePayload.approvedBy = null;
+        updatePayload.approvedAt = null;
+      }
+
+      updatePayload.moderation = {
+        ...(existingProduct.moderation?.toObject?.() || existingProduct.moderation || {}),
+        reviewedAt: new Date(),
+        reviewedBy: actor.userId,
+        rejectionReason: isRejection ? payload.rejectionReason || null : null,
+        notes: payload.notes || null,
+        checklist: existingProduct.moderation?.checklist || {},
+      };
+    }
+
     // if (
     //   isSellerRole(actor) &&
     //   existingProduct.status === PRODUCT_STATUS.ACTIVE
@@ -1899,6 +1946,13 @@ class ProductService {
     if (!publicOnly) {
       if (query.includeAllStatuses === true || query.includeAllStatuses === "true") {
         if (query.status) filter.status = query.status;
+        if (
+          !query.status &&
+          query.includeArchived !== true &&
+          query.includeArchived !== "true"
+        ) {
+          filter.status = { $ne: PRODUCT_STATUS.ARCHIVED };
+        }
       } else {
         filter.status = query.status || PRODUCT_STATUS.ACTIVE;
 
@@ -1937,11 +1991,19 @@ class ProductService {
     if (isScopedSellerRole(actor)) filter.createdBy = actor.userId;
     if (query.includeAllStatuses === true || query.includeAllStatuses === "true") {
       if (query.status) filter.status = query.status;
+      if (
+        !query.status &&
+        query.includeArchived !== true &&
+        query.includeArchived !== "true"
+      ) {
+        filter.status = { $ne: PRODUCT_STATUS.ARCHIVED };
+      }
     } else if (query.status) {
       filter.status = query.status;
     } else {
       filter.status = { $ne: PRODUCT_STATUS.ARCHIVED };
     }
+    if (query.approvalStatus) filter.approvalStatus = query.approvalStatus;
     if (query.category) {
       const categoryKeys = await this.platformRepository.getCategoryDescendantKeys(query.category);
       filter.category = categoryKeys.length ? { $in: categoryKeys } : query.category;

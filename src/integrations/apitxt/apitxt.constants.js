@@ -12,7 +12,7 @@ const APITXT_ENDPOINTS = {
 
   VERIFY_PAN: "/panVerify",
 
-  VERIFY_GST: "/gstVerify",
+  VERIFY_GST: "/gst/:gstin",
 
   VERIFY_BANK: "/bankVerify",
 
