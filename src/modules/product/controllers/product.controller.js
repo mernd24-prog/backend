@@ -4,30 +4,6 @@ const { ProductService } = require("../services/product.service");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
 const { auditService } = require("../../../shared/logger/audit.service");
 
-const DISCOVER_RESPONSE_CACHE_TTL_MS = 60 * 1000;
-const discoverResponseCache = new Map();
-const discoverResponseInFlight = new Map();
-
-function getDiscoverCache(key) {
-  const cached = discoverResponseCache.get(key);
-  if (!cached) return null;
-  if (cached.expiresAt < Date.now()) {
-    discoverResponseCache.delete(key);
-    return null;
-  }
-  return cached.value;
-}
-
-function setDiscoverCache(key, value) {
-  discoverResponseCache.set(key, {
-    value,
-    expiresAt: Date.now() + DISCOVER_RESPONSE_CACHE_TTL_MS,
-  });
-  if (discoverResponseCache.size > 200) {
-    discoverResponseCache.delete(discoverResponseCache.keys().next().value);
-  }
-}
-
 class ProductController {
   constructor({ productService = new ProductService() } = {}) {
     this.productService = productService;
@@ -68,35 +44,18 @@ class ProductController {
   };
 
   discover = async (req, res) => {
-    const cacheKey = `discover:${req.originalUrl || req.url}`;
-    const cached = getDiscoverCache(cacheKey);
-    if (cached) return res.json(cached);
-
-    let pending = discoverResponseInFlight.get(cacheKey);
-    if (!pending) {
-      pending = (async () => {
-        const { page, limit } = getPage(req.query);
-        const result = await this.productService.listProducts(req.query, {
-          publicOnly: true,
-          actor: null,
-        });
-        const response = okResponse({
-          products: result.items || [],
-          facets: result.facets || {},
-        }, {
-          pagination: paginationMeta(page, limit, result.total || 0),
-          meta: { facets: result.facets || {} },
-        });
-        setDiscoverCache(cacheKey, response);
-        return response;
-      })().finally(() => {
-        discoverResponseInFlight.delete(cacheKey);
-      });
-      discoverResponseInFlight.set(cacheKey, pending);
-    }
-
-    const response = await pending;
-    return res.json(response);
+    const { page, limit } = getPage(req.query);
+    const result = await this.productService.listProducts(req.query, {
+      publicOnly: true,
+      actor: null,
+    });
+    return res.json(okResponse({
+      products: result.items || [],
+      facets: result.facets || {},
+    }, {
+      pagination: paginationMeta(page, limit, result.total || 0),
+      meta: { facets: result.facets || {} },
+    }));
   };
 
   listMine = async (req, res) => {
@@ -215,6 +174,22 @@ class ProductController {
     res.json(okResponse(result));
   };
 
+  purge = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.productService.permanentlyDeleteProduct(
+      req.params.productId,
+      actor,
+    );
+    await auditService.remove(req, {
+      module: "products",
+      entityId: req.params.productId,
+      entityType: "Product",
+      newData: result,
+      reason: "permanently_deleted",
+    });
+    res.json(okResponse(result));
+  };
+
   archive = async (req, res) => {
     const actor = getCurrentUser(req);
     const result = await this.productService.archiveProduct(req.params.productId, req.body, actor);
@@ -258,9 +233,13 @@ class ProductController {
 
   bulkUpdate = async (req, res) => {
     const actor = getCurrentUser(req);
-    const { productIds, status, visibility } = req.body;
+    const { productIds, status, visibility, action } = req.body;
     let result;
-    if (status) {
+    if (action === "archive") {
+      result = await this.productService.bulkUpdateStatus(productIds, "archived", actor);
+    } else if (action === "permanent_delete") {
+      result = await this.productService.permanentlyDeleteProducts(productIds, actor);
+    } else if (status) {
       result = await this.productService.bulkUpdateStatus(productIds, status, actor);
     } else if (visibility) {
       result = await this.productService.bulkUpdateVisibility(productIds, visibility, actor);
@@ -270,7 +249,7 @@ class ProductController {
       action: "bulk_action",
       entityType: "Product",
       newData: result,
-      reason: status ? `bulk_status:${status}` : visibility ? `bulk_visibility:${visibility}` : "bulk_update",
+      reason: action ? `bulk_action:${action}` : status ? `bulk_status:${status}` : visibility ? `bulk_visibility:${visibility}` : "bulk_update",
     });
     res.json(okResponse(result));
   };

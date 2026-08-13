@@ -644,6 +644,11 @@ adminRoutes.delete(
   checkInput(productParamSchema),
   catchErrors(productController.delete),
 );
+adminRoutes.delete(
+  "/products/:productId/permanent",
+  checkInput(productParamSchema),
+  catchErrors(productController.purge),
+);
 adminRoutes.patch(
   "/products/:productId/status",
   checkInput(productStatusSchema),

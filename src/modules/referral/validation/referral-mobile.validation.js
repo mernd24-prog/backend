@@ -119,7 +119,17 @@ const withdrawalsQuerySchema = Joi.object({
 
 const createWithdrawalSchema = Joi.object({
   body: Joi.object({
-    amount: Joi.number().positive().required(),
+    amount: Joi.number().positive().custom((value, helpers) => {
+      const scaled = value * 100;
+      return Math.abs(scaled - Math.round(scaled)) < 1e-8
+        ? value
+        : helpers.error("number.precision");
+    }).required().messages({
+      "number.base": "Withdrawal amount must be a number",
+      "number.positive": "Withdrawal amount must be greater than zero",
+      "number.precision": "Withdrawal amount can have at most 2 decimal places",
+      "any.required": "Withdrawal amount is required",
+    }),
     payoutMethod: Joi.string().valid("bank", "upi", "upi_qr", "manual").default("manual"),
     destinationSource: Joi.string().valid("saved_profile", "one_time", "legacy").default("legacy"),
     bankAccountId: Joi.string().allow("", null),

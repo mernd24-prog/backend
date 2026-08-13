@@ -47,6 +47,34 @@ class ProductRepository {
     return ProductModel.findByIdAndDelete(productId);
   }
 
+  async hasOrderReferences(productId) {
+    const row = await knex("order_items")
+      .where("product_id", String(productId))
+      .count({ count: "*" })
+      .first();
+    return Number(row?.count || 0) > 0;
+  }
+
+  async findProductIdsWithOrderReferences(productIds = []) {
+    if (!productIds.length) return [];
+    const rows = await knex("order_items")
+      .whereIn("product_id", productIds.map(String))
+      .distinct("product_id");
+    return rows.map((row) => String(row.product_id));
+  }
+
+  async deleteRevisions(productId) {
+    return ProductRevisionModel.deleteMany({ productId: String(productId) });
+  }
+
+  async deleteMany(productIds = []) {
+    return ProductModel.deleteMany({ _id: { $in: productIds } });
+  }
+
+  async deleteManyRevisions(productIds = []) {
+    return ProductRevisionModel.deleteMany({ productId: { $in: productIds.map(String) } });
+  }
+
   // ─── Pagination & listing ─────────────────────────────────────────────────
 
   async paginate(filter, pagination, options = {}) {

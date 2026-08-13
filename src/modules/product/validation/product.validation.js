@@ -487,7 +487,8 @@ const bulkProductSchema = Joi.object({
     productIds: Joi.array().items(Joi.string()).min(1).max(100).required(),
     status: Joi.string().valid(...Object.values(PRODUCT_STATUS)),
     visibility: Joi.string().valid(...Object.values(PRODUCT_VISIBILITY)),
-  }).or("status", "visibility").required(),
+    action: Joi.string().valid("archive", "permanent_delete"),
+  }).or("status", "visibility", "action").required(),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),
 });

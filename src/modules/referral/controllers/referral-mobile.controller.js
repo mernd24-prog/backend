@@ -43,7 +43,7 @@ class ReferralMobileController {
     res.json(
       okResponse(result.items, {
         pagination: paginationMeta(result.page, result.limit, result.total),
-        summary: result.pageSummary,
+        meta: { summary: result.pageSummary },
       }),
     );
   };
@@ -99,7 +99,7 @@ class ReferralMobileController {
         },
         {
           pagination: paginationMeta(result.page, result.limit, result.total),
-          summary: result.summary,
+          meta: { summary: result.summary },
         },
       ),
     );

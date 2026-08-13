@@ -2630,6 +2630,7 @@ async getProduct(productId) {
     const updatedProduct = await this.productRepository.reviewProduct(productId, {
       status: nextStatus,
       approvalStatus: nextApprovalStatus,
+      ...(isApproval ? { visibility: PRODUCT_VISIBILITY.PUBLIC } : {}),
       approvedBy: isApproval ? actor.userId : null,
       approvedAt: isApproval ? new Date() : null,
       publishedAt: isApproval ? new Date() : existingProduct.publishedAt,
@@ -2681,6 +2682,16 @@ async getProduct(productId) {
         this.assertSellerCanSetStatus(product, status);
       }
     });
+
+    if (
+      status === PRODUCT_STATUS.ACTIVE &&
+      products.some((product) => product.approvalStatus !== PRODUCT_APPROVAL_STATUS.APPROVED)
+    ) {
+      throw new AppError(
+        "Only approved products can be activated. Approve pending products from the moderation queue first.",
+        409,
+      );
+    }
 
     const isBulkReactivation =
       status === PRODUCT_STATUS.ACTIVE &&
@@ -2980,6 +2991,65 @@ async getProduct(productId) {
 
   async deleteProduct(productId, actor) {
     return this.archiveProduct(productId, { reason: "product_deleted" }, actor);
+  }
+
+  async permanentlyDeleteProduct(productId, actor = {}) {
+    const existingProduct = await this.productRepository.findById(productId);
+    if (!existingProduct) throw new AppError("Product not found", 404);
+    if (isSellerRole(actor)) {
+      throw new AppError("Only Admin can permanently delete products", 403);
+    }
+    this.assertCanAccessManagementProduct(existingProduct, actor);
+    if (existingProduct.status !== PRODUCT_STATUS.ARCHIVED) {
+      throw new AppError("Archive the product before deleting it permanently", 409);
+    }
+    if (await this.productRepository.hasOrderReferences(productId)) {
+      throw new AppError(
+        "This product has order history and cannot be permanently deleted. Keep it archived for audit and customer records.",
+        409,
+      );
+    }
+
+    await this.productRepository.deleteRevisions(productId);
+    const deletedProduct = await this.productRepository.delete(productId);
+    await this._deleteFromIndex(productId);
+    this._invalidateProductCache();
+    return {
+      deleted: true,
+      productId: String(productId),
+      title: deletedProduct?.title || existingProduct.title || null,
+    };
+  }
+
+  async permanentlyDeleteProducts(productIds = [], actor = {}) {
+    const normalizedIds = [...new Set(productIds.map(String))];
+    const products = await this.productRepository.findByIds(normalizedIds);
+    if (products.length !== normalizedIds.length) {
+      throw new AppError("One or more products were not found", 404);
+    }
+    if (isSellerRole(actor)) {
+      throw new AppError("Only Admin can permanently delete products", 403);
+    }
+    products.forEach((product) => {
+      this.assertCanAccessManagementProduct(product, actor);
+      if (product.status !== PRODUCT_STATUS.ARCHIVED) {
+        throw new AppError("All selected products must be archived before permanent deletion", 409);
+      }
+    });
+
+    const referencedIds = await this.productRepository.findProductIdsWithOrderReferences(normalizedIds);
+    if (referencedIds.length) {
+      throw new AppError(
+        `${referencedIds.length} selected product(s) have order history and must remain archived`,
+        409,
+      );
+    }
+
+    await this.productRepository.deleteManyRevisions(normalizedIds);
+    const result = await this.productRepository.deleteMany(normalizedIds);
+    await Promise.allSettled(normalizedIds.map((id) => this._deleteFromIndex(id)));
+    this._invalidateProductCache();
+    return { deleted: Number(result?.deletedCount || 0), productIds: normalizedIds };
   }
 
   async archiveProduct(productId, payload = {}, actor = {}) {

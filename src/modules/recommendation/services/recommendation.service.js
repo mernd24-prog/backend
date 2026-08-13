@@ -1,9 +1,8 @@
 const { RecommendationModel } = require("../models/recommendation.model");
 const { ProductModel } = require("../../product/models/product.model");
 const {
-  PRODUCT_STATUS,
-  PRODUCT_VISIBILITY,
-} = require("../../../shared/domain/commerce-constants");
+  applyPublicProductFilter,
+} = require("../../../shared/catalog/public-product-filter");
 const {
   setCached,
   getCached,
@@ -27,10 +26,7 @@ class RecommendationService {
   }
 
   productFilter(category) {
-    const filter = {
-      status: PRODUCT_STATUS.ACTIVE,
-      visibility: PRODUCT_VISIBILITY.PUBLIC,
-    };
+    const filter = applyPublicProductFilter();
     if (category) {
       filter.category = { $regex: `^${this.escapeRegex(String(category).trim())}$`, $options: "i" };
     }
@@ -219,7 +215,15 @@ class RecommendationService {
     const cacheKey = `trending:${category || "all"}:${period}:${limit}`;
 
     let trending = await getCached(cacheKey);
-    if (trending) return trending;
+    if (trending) {
+      // Cached product snapshots may have been approved when cached and later
+      // rejected/deactivated. Re-read by id so customer responses always honor
+      // the current public approval state.
+      return this.findPublicProductsByIds(
+        trending.map((product) => product?._id || product?.id),
+        limit,
+      );
+    }
 
     trending = await this.getFallbackProducts({ category, period, limit });
 

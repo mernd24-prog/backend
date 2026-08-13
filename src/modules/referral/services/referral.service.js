@@ -1644,17 +1644,17 @@ class ReferralService {
     const enriched = await this.enrichInfluencer(profile);
     const status = String(profile.status || "pending");
     const commonModules = [
-      { key: "dashboard", label: "Dashboard", route: "/app/dashboard" },
-      { key: "codes", label: "Referral Codes", route: "/app/codes" },
-      { key: "orders", label: "Referral Orders", route: "/app/orders" },
-      { key: "earnings", label: "Earnings", route: "/app/earnings" },
-      { key: "wallet", label: "Wallet & Payouts", route: "/app/wallet" },
-      { key: "bonuses", label: "Bonus Progress", route: "/app/bonuses" },
-      { key: "analytics", label: "Referral Analytics", route: "/app/analytics" },
-      { key: "profile", label: "Profile", route: "/app/profile" },
+      { key: "dashboard", label: "Overview", route: "/app/dashboard" },
+      { key: "codes", label: "My Referral Codes", route: "/app/codes" },
+      { key: "orders", label: "Referred Orders", route: "/app/orders" },
+      { key: "earnings", label: "Coin Activity", route: "/app/earnings" },
+      { key: "wallet", label: "Wallet & Withdrawals", route: "/app/wallet" },
+      { key: "bonuses", label: "Bonus Targets", route: "/app/bonuses" },
+      { key: "analytics", label: "Performance", route: "/app/analytics" },
+      { key: "profile", label: "My Profile", route: "/app/profile" },
     ];
     const parentModules = [
-      { key: "network", label: "Brand Associates", route: "/app/network" },
+      { key: "network", label: "My Associates", route: "/app/network" },
     ];
     const allowedModules = status === "active"
       ? [
@@ -1663,7 +1663,7 @@ class ReferralService {
             ? parentModules
             : []),
         ]
-      : [{ key: "profile", label: "Profile", route: "/app/profile" }];
+      : [{ key: "profile", label: "My Profile", route: "/app/profile" }];
 
     return {
       isInfluencer: true,

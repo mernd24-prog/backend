@@ -6,6 +6,9 @@ const {
   buildPublicSearchFilters,
   isPublicProduct,
 } = require("../src/shared/catalog/public-product-filter");
+const {
+  AdvancedSearchService,
+} = require("../src/shared/services/advanced-search.service");
 
 test("storefront visibility requires active and approved product states", () => {
   const now = new Date("2026-08-11T12:00:00.000Z");
@@ -31,4 +34,16 @@ test("storefront visibility requires active and approved product states", () => 
     { term: { status: "active" } },
     { term: { approvalStatus: "approved" } },
   ]);
+});
+
+test("search documents preserve the approval state used by the public gate", () => {
+  const searchDocument = AdvancedSearchService.buildSearchDocument({
+    _id: "product-1",
+    title: "Pending product",
+    status: "active",
+    approvalStatus: "pending",
+    visibility: "public",
+  });
+  assert.equal(searchDocument.approvalStatus, "pending");
+  assert.equal(isPublicProduct(searchDocument), false);
 });

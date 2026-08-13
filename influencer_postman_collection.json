@@ -1,70 +1,1804 @@
 {
   "info": {
-    "name": "Ecommerce Influencer Parent & Child API",
-    "description": "Complete Influencer API collection. Import influencer_postman_environment.json, set parent/child credentials, then run the appropriate login request. Tokens are saved automatically. Parent-only requests use parentAccessToken; shared requests are provided for both roles.",
+    "name": "Ecommerce Influencer API — Complete Parent, Child, Wallet & Payout Flow",
+    "description": "Route-complete collection generated from referral-mobile.routes.js, referral-mobile.validation.js, auth.routes.js and file-uploader.routes.js.\n\nRun Parent/Child Login first. Protected folders inherit the correct bearer token.\n\nLedger status: pending, locked, available, payout_requested, paid, reversed, expired, plus payout request statuses.\n\ncommissionType: code_owner_base, code_owner_bonus, direct_parent, lifetime_override, performance_bonus, reversal, withdrawal, coin_expiry, manual_adjustment.\n\ntransactionType: credit_coins, debit_coins, locked_coins, released_coins, reversed_coins, withdrawal_coins, expired_coins.\n\nPayout state: available coins → requested/reserved → approved/awaiting transfer → Admin transfer + UTR + proof → paid coins.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "exec": [
+          "pm.request.headers.upsert({ key: 'Accept', value: 'application/json' });"
+        ]
+      }
+    }
+  ],
   "item": [
     {
-      "name": "00 - Authentication",
+      "name": "00 - Influencer Authentication",
+      "description": "Influencer accounts use /auth/influencer/login. Parent and child access/refresh tokens are captured automatically.",
       "item": [
         {
           "name": "Parent Login (run first)",
-          "event": [{ "listen": "test", "script": { "exec": ["const json = pm.response.json();", "const data = json.data || {};", "const tokens = data.tokens || data;", "if (tokens.accessToken) pm.environment.set('parentAccessToken', tokens.accessToken);", "if (tokens.refreshToken) pm.environment.set('parentRefreshToken', tokens.refreshToken);"] } }],
-          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{parentEmail}}\",\n  \"password\": \"{{parentPassword}}\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/auth/influencer/login" }
-        },
-        {
-          "name": "Child Login (run first)",
-          "event": [{ "listen": "test", "script": { "exec": ["const json = pm.response.json();", "const data = json.data || {};", "const tokens = data.tokens || data;", "if (tokens.accessToken) pm.environment.set('childAccessToken', tokens.accessToken);", "if (tokens.refreshToken) pm.environment.set('childRefreshToken', tokens.refreshToken);"] } }],
-          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{childEmail}}\",\n  \"password\": \"{{childPassword}}\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/auth/influencer/login" }
+          "description": "Logs in an active parent influencer and saves parentAccessToken and parentRefreshToken.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Login succeeded', () => pm.expect(pm.response.code).to.equal(200));",
+                  "const json = pm.response.json();",
+                  "const data = json.data || {};",
+                  "const tokens = data.tokens || data;",
+                  "if (tokens.accessToken) pm.environment.set('parentAccessToken', tokens.accessToken);",
+                  "if (tokens.refreshToken) pm.environment.set('parentRefreshToken', tokens.refreshToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{parentEmail}}\",\n  \"password\": \"{{parentPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/auth/influencer/login",
+            "description": "Logs in an active parent influencer and saves parentAccessToken and parentRefreshToken."
+          }
         },
         {
           "name": "Refresh Parent Token",
-          "event": [{ "listen": "test", "script": { "exec": ["const json = pm.response.json();", "const data = json.data || {};", "const tokens = data.tokens || data;", "if (tokens.accessToken) pm.environment.set('parentAccessToken', tokens.accessToken);", "if (tokens.refreshToken) pm.environment.set('parentRefreshToken', tokens.refreshToken);"] } }],
-          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{parentRefreshToken}}\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/auth/refresh" }
+          "description": "Rotates the parent influencer session tokens.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Login succeeded', () => pm.expect(pm.response.code).to.equal(200));",
+                  "const json = pm.response.json();",
+                  "const data = json.data || {};",
+                  "const tokens = data.tokens || data;",
+                  "if (tokens.accessToken) pm.environment.set('parentAccessToken', tokens.accessToken);",
+                  "if (tokens.refreshToken) pm.environment.set('parentRefreshToken', tokens.refreshToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{parentRefreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/auth/refresh",
+            "description": "Rotates the parent influencer session tokens."
+          }
+        },
+        {
+          "name": "Child Login (run first)",
+          "description": "Logs in an active child influencer and saves childAccessToken and childRefreshToken.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Login succeeded', () => pm.expect(pm.response.code).to.equal(200));",
+                  "const json = pm.response.json();",
+                  "const data = json.data || {};",
+                  "const tokens = data.tokens || data;",
+                  "if (tokens.accessToken) pm.environment.set('childAccessToken', tokens.accessToken);",
+                  "if (tokens.refreshToken) pm.environment.set('childRefreshToken', tokens.refreshToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{childEmail}}\",\n  \"password\": \"{{childPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/auth/influencer/login",
+            "description": "Logs in an active child influencer and saves childAccessToken and childRefreshToken."
+          }
         },
         {
           "name": "Refresh Child Token",
-          "event": [{ "listen": "test", "script": { "exec": ["const json = pm.response.json();", "const data = json.data || {};", "const tokens = data.tokens || data;", "if (tokens.accessToken) pm.environment.set('childAccessToken', tokens.accessToken);", "if (tokens.refreshToken) pm.environment.set('childRefreshToken', tokens.refreshToken);"] } }],
-          "request": { "auth": { "type": "noauth" }, "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{childRefreshToken}}\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/auth/refresh" }
+          "description": "Rotates the child influencer session tokens.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Login succeeded', () => pm.expect(pm.response.code).to.equal(200));",
+                  "const json = pm.response.json();",
+                  "const data = json.data || {};",
+                  "const tokens = data.tokens || data;",
+                  "if (tokens.accessToken) pm.environment.set('childAccessToken', tokens.accessToken);",
+                  "if (tokens.refreshToken) pm.environment.set('childRefreshToken', tokens.refreshToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{childRefreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/auth/refresh",
+            "description": "Rotates the child influencer session tokens."
+          }
         }
       ]
     },
     {
-      "name": "01 - Parent APIs",
-      "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{parentAccessToken}}", "type": "string" }] },
+      "name": "01 - Parent Read APIs",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{parentAccessToken}}",
+            "type": "string"
+          }
+        ]
+      },
       "item": [
-        { "name": "Session and Allowed Modules", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/session" } },
-        { "name": "Dashboard Summary", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/dashboard/summary?fromDate=2026-08-01&toDate=2026-08-31" } },
-        { "name": "Analytics with Child Network", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/analytics?fromDate=2026-08-01&toDate=2026-08-31" } },
-        { "name": "My Codes", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/codes?page=1&limit=20&status=active" } },
-        { "name": "Referral Orders", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/orders?page=1&limit=20" } },
-        { "name": "Earnings Ledger", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/ledger?page=1&limit=20" } },
-        { "name": "Wallet", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/wallet" } },
-        { "name": "Withdrawal Requests", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals?page=1&limit=20" } },
-        { "name": "Create UPI Withdrawal", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"amount\": 500,\n  \"payoutMethod\": \"upi\",\n  \"upiId\": \"creator@upi\",\n  \"metadata\": { \"note\": \"Postman request\" }\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals" } },
-        { "name": "Bonus Progress", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/bonus-progress?page=1&limit=20" } },
-        { "name": "My Children Network (Parent Only)", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/network?page=1&limit=20&status=active" } },
-        { "name": "My Profile", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/profile" } },
-        { "name": "Update My Profile", "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"firstName\": \"Asha\",\n  \"lastName\": \"Sharma\",\n  \"phone\": \"+919876543210\",\n  \"dateOfBirth\": \"1995-05-18\",\n  \"gender\": \"female\",\n  \"address\": {\n    \"line1\": \"12 Market Road\",\n    \"country\": \"India\",\n    \"state\": \"Delhi\",\n    \"city\": \"New Delhi\",\n    \"postalCode\": \"110001\"\n  },\n  \"payout\": {\n    \"method\": \"upi\",\n    \"accountHolderName\": \"Asha Sharma\",\n    \"upiId\": \"asha@upi\"\n  }\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/influencer/referral/profile" } }
+        {
+          "name": "Session and Allowed Modules",
+          "description": "Returns role, profile state, navigation modules, routes, and capabilities.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/session",
+            "description": "Returns role, profile state, navigation modules, routes, and capabilities."
+          }
+        },
+        {
+          "name": "Dashboard Summary",
+          "description": "Summary cards, charts, recent orders, wallet and network summary. code is optional.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/dashboard/summary?fromDate={{fromDate}}&toDate={{toDate}}&code={{referralCode}}",
+            "description": "Summary cards, charts, recent orders, wallet and network summary. code is optional."
+          }
+        },
+        {
+          "name": "Analytics with Network",
+          "description": "Earnings/order analytics. Parent response can include network analytics.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/analytics?fromDate={{fromDate}}&toDate={{toDate}}&code={{referralCode}}",
+            "description": "Earnings/order analytics. Parent response can include network analytics."
+          }
+        },
+        {
+          "name": "My Referral Codes",
+          "description": "Filters: status active|inactive|expired|suspended, code, fromDate, toDate.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/codes?page={{page}}&limit={{limit}}&fromDate={{fromDate}}&toDate={{toDate}}&status=active&code={{referralCode}}",
+            "description": "Filters: status active|inactive|expired|suspended, code, fromDate, toDate."
+          }
+        },
+        {
+          "name": "Referral Orders - All",
+          "description": "Filters: referral status pending|completed|cancelled|refunded|reversed; coinStatus locked|available|reversed; code; scope all|own|children.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/orders?page={{page}}&limit={{limit}}&fromDate={{fromDate}}&toDate={{toDate}}&scope=all",
+            "description": "Filters: referral status pending|completed|cancelled|refunded|reversed; coinStatus locked|available|reversed; code; scope all|own|children."
+          }
+        },
+        {
+          "name": "Referral Orders - Locked Coins",
+          "description": "Orders whose referral coins are still inside fulfillment/return-window lock.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/orders?page={{page}}&limit={{limit}}&coinStatus=locked",
+            "description": "Orders whose referral coins are still inside fulfillment/return-window lock."
+          }
+        },
+        {
+          "name": "Coin Ledger",
+          "description": "Optional filters: status, commissionType, transactionType, code, orderId. See collection documentation for allowed values.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/ledger?page={{page}}&limit={{limit}}&fromDate={{fromDate}}&toDate={{toDate}}",
+            "description": "Optional filters: status, commissionType, transactionType, code, orderId. See collection documentation for allowed values."
+          }
+        },
+        {
+          "name": "Coin Ledger - Payout Transactions",
+          "description": "Shows withdrawal ledger entries.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/ledger?page={{page}}&limit={{limit}}&transactionType=withdrawal_coins",
+            "description": "Shows withdrawal ledger entries."
+          }
+        },
+        {
+          "name": "Wallet",
+          "description": "Returns locked, available, reserved/in-payout, paid, reversed and expired coins plus payout rules and coin value.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/wallet",
+            "description": "Returns locked, available, reserved/in-payout, paid, reversed and expired coins plus payout rules and coin value."
+          }
+        },
+        {
+          "name": "Payout Requests",
+          "description": "Optional status: pending|approved|rejected|processing|paid|failed|cancelled. Paid responses include paidAt, UTR and Admin paymentProofUrl.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals?page={{page}}&limit={{limit}}&fromDate={{fromDate}}&toDate={{toDate}}",
+            "description": "Optional status: pending|approved|rejected|processing|paid|failed|cancelled. Paid responses include paidAt, UTR and Admin paymentProofUrl."
+          }
+        },
+        {
+          "name": "Paid Payouts with Admin Proof",
+          "description": "Use paymentProofUrl and transactionReference to display payment confirmation to the influencer.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals?page={{page}}&limit={{limit}}&status=paid",
+            "description": "Use paymentProofUrl and transactionReference to display payment confirmation to the influencer."
+          }
+        },
+        {
+          "name": "Bonus Progress",
+          "description": "ruleId and referenceDate are optional.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/bonus-progress?page={{page}}&limit={{limit}}&ruleId={{ruleId}}&referenceDate={{referenceDate}}",
+            "description": "ruleId and referenceDate are optional."
+          }
+        },
+        {
+          "name": "My Profile and Saved Payout Methods",
+          "description": "Returns personal/KYC details, saved bank and UPI profile, primary code and wallet.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/profile",
+            "description": "Returns personal/KYC details, saved bank and UPI profile, primary code and wallet."
+          }
+        },
+        {
+          "name": "My Child Network (Parent only)",
+          "description": "Parent-only direct child list with sales and earnings summaries. Filters: pending|active|suspended|rejected.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/network?page={{page}}&limit={{limit}}&fromDate={{fromDate}}&toDate={{toDate}}&status=active&code={{referralCode}}",
+            "description": "Parent-only direct child list with sales and earnings summaries. Filters: pending|active|suspended|rejected."
+          }
+        }
       ]
     },
     {
-      "name": "02 - Child APIs",
-      "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{childAccessToken}}", "type": "string" }] },
+      "name": "02 - Parent Profile and Network Writes",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{parentAccessToken}}",
+            "type": "string"
+          }
+        ]
+      },
       "item": [
-        { "name": "Session and Allowed Modules", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/session" } },
-        { "name": "Dashboard Summary", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/dashboard/summary" } },
-        { "name": "Personal Analytics", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/analytics" } },
-        { "name": "My Codes", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/codes?page=1&limit=20" } },
-        { "name": "Referral Orders", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/orders?page=1&limit=20" } },
-        { "name": "Earnings Ledger", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/ledger?page=1&limit=20" } },
-        { "name": "Wallet", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/wallet" } },
-        { "name": "Withdrawal Requests", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals?page=1&limit=20" } },
-        { "name": "Create Bank Withdrawal", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"amount\": 500,\n  \"payoutMethod\": \"bank\",\n  \"bankAccountId\": \"primary-bank\",\n  \"metadata\": { \"note\": \"Postman request\" }\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals" } },
-        { "name": "Bonus Progress", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/bonus-progress?page=1&limit=20" } },
-        { "name": "My Profile", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/influencer/referral/profile" } },
-        { "name": "Update My Profile", "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"firstName\": \"Child\",\n  \"lastName\": \"Influencer\",\n  \"phone\": \"+919876543211\",\n  \"address\": {\n    \"country\": \"India\",\n    \"state\": \"Maharashtra\",\n    \"city\": \"Mumbai\",\n    \"postalCode\": \"400001\"\n  }\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/api/v1/influencer/referral/profile" } }
+        {
+          "name": "Update Full Profile, KYC URLs and Saved Bank/UPI",
+          "description": "All fields are optional, but at least one is required. Upload files first and place returned URLs in environment variables.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Asha\",\n  \"lastName\": \"Sharma\",\n  \"phone\": \"+919876543210\",\n  \"avatarUrl\": \"{{profileImageUrl}}\",\n  \"dateOfBirth\": \"1995-05-18\",\n  \"gender\": \"female\",\n  \"address\": {\n    \"line1\": \"12 Market Road\",\n    \"line2\": \"\",\n    \"country\": \"India\",\n    \"state\": \"Delhi\",\n    \"city\": \"New Delhi\",\n    \"postalCode\": \"110001\"\n  },\n  \"documents\": {\n    \"panCardUrl\": \"{{panDocumentUrl}}\",\n    \"aadhaarCardUrl\": \"{{aadhaarDocumentUrl}}\",\n    \"cancelledChequeUrl\": \"{{chequeDocumentUrl}}\"\n  },\n  \"payout\": {\n    \"method\": \"bank\",\n    \"accountHolderName\": \"{{accountHolderName}}\",\n    \"bankName\": \"{{bankName}}\",\n    \"accountNumber\": \"{{bankAccountNumber}}\",\n    \"ifscCode\": \"{{ifscCode}}\",\n    \"upiId\": \"{{savedUpiId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/influencer/referral/profile",
+            "description": "All fields are optional, but at least one is required. Upload files first and place returned URLs in environment variables."
+          }
+        },
+        {
+          "name": "Update Saved UPI Only",
+          "description": "Updates the profile payout method. Existing payout requests keep their immutable destination snapshot.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payout\": {\n    \"method\": \"upi\",\n    \"accountHolderName\": \"{{accountHolderName}}\",\n    \"upiId\": \"{{savedUpiId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/influencer/referral/profile",
+            "description": "Updates the profile payout method. Existing payout requests keep their immutable destination snapshot."
+          }
+        },
+        {
+          "name": "Create Brand Associate / Child",
+          "description": "Parent-only. Creates an active child and returns temporaryPassword. Save it securely and change the environment child credentials if testing the new account.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Child created', () => pm.expect(pm.response.code).to.equal(201));",
+                  "const data = pm.response.json().data || {};",
+                  "if (data.temporaryPassword) pm.environment.set('newChildTemporaryPassword', data.temporaryPassword);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{newChildEmail}}\",\n  \"phone\": \"{{newChildPhone}}\",\n  \"firstName\": \"{{newChildFirstName}}\",\n  \"lastName\": \"{{newChildLastName}}\",\n  \"code\": \"{{newChildReferralCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/influencer/referral/network/children",
+            "description": "Parent-only. Creates an active child and returns temporaryPassword. Save it securely and change the environment child credentials if testing the new account."
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Parent Authenticated Uploads",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{parentAccessToken}}",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "Upload Profile Image",
+          "description": "Supported image types: JPG, PNG, WebP, GIF; maximum 10 MB. Copy data.url into profileImageUrl.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "{{profileImagePath}}"
+                },
+                {
+                  "key": "module",
+                  "type": "text",
+                  "value": "INFLUENCER_PROFILE"
+                },
+                {
+                  "key": "type",
+                  "type": "text",
+                  "value": "avatar"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/v1/file-uploader/upload",
+            "description": "Supported image types: JPG, PNG, WebP, GIF; maximum 10 MB. Copy data.url into profileImageUrl."
+          }
+        },
+        {
+          "name": "Upload UPI QR Image",
+          "description": "Upload the QR first, then copy data.url into payoutQrUrl before creating a UPI QR payout.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "{{upiQrImagePath}}"
+                },
+                {
+                  "key": "module",
+                  "type": "text",
+                  "value": "REFERRAL_PAYOUT_QR"
+                },
+                {
+                  "key": "type",
+                  "type": "text",
+                  "value": "payout-qr"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/v1/file-uploader/upload",
+            "description": "Upload the QR first, then copy data.url into payoutQrUrl before creating a UPI QR payout."
+          }
+        },
+        {
+          "name": "Upload KYC Document",
+          "description": "Supported document types: PDF, JPG, PNG, WebP. Copy data.url into the appropriate profile document URL.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "{{kycDocumentPath}}"
+                },
+                {
+                  "key": "module",
+                  "type": "text",
+                  "value": "INFLUENCER_KYC"
+                },
+                {
+                  "key": "type",
+                  "type": "text",
+                  "value": "pan-card"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/v1/file-uploader/upload-document",
+            "description": "Supported document types: PDF, JPG, PNG, WebP. Copy data.url into the appropriate profile document URL."
+          }
+        },
+        {
+          "name": "Upload Multiple Images",
+          "description": "Optional shared uploader. Accepts up to 10 images.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "{{profileImagePath}}"
+                },
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "{{upiQrImagePath}}"
+                },
+                {
+                  "key": "module",
+                  "type": "text",
+                  "value": "INFLUENCER"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/v1/file-uploader/upload-multi",
+            "description": "Optional shared uploader. Accepts up to 10 images."
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Parent Payout Request Use Cases",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{parentAccessToken}}",
+            "type": "string"
+          }
+        ]
+      },
+      "description": "Requests reserve Available Coins immediately. Approved means awaiting Admin transfer. Paid means Admin transferred money, entered UTR, and uploaded proof.",
+      "item": [
+        {
+          "name": "Request to Saved Profile Bank",
+          "description": "Requires complete bank details in My Profile.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"{{payoutCoins}}\",\n  \"payoutMethod\": \"bank\",\n  \"destinationSource\": \"saved_profile\",\n  \"metadata\": {\n    \"note\": \"Saved bank payout\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals",
+            "description": "Requires complete bank details in My Profile."
+          }
+        },
+        {
+          "name": "Request to Saved Profile UPI",
+          "description": "Uses the UPI ID saved in My Profile.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"{{payoutCoins}}\",\n  \"payoutMethod\": \"upi\",\n  \"destinationSource\": \"saved_profile\",\n  \"metadata\": {\n    \"note\": \"Saved UPI payout\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals",
+            "description": "Uses the UPI ID saved in My Profile."
+          }
+        },
+        {
+          "name": "Request to One-time UPI",
+          "description": "Snapshots this UPI destination only for this request.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"{{payoutCoins}}\",\n  \"payoutMethod\": \"upi\",\n  \"destinationSource\": \"one_time\",\n  \"upiId\": \"{{oneTimeUpiId}}\",\n  \"metadata\": {\n    \"note\": \"One-time UPI payout\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals",
+            "description": "Snapshots this UPI destination only for this request."
+          }
+        },
+        {
+          "name": "Request using UPI QR",
+          "description": "Upload QR first. Both QR URL and underlying UPI ID are mandatory for Admin verification.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"{{payoutCoins}}\",\n  \"payoutMethod\": \"upi_qr\",\n  \"destinationSource\": \"one_time\",\n  \"upiId\": \"{{oneTimeUpiId}}\",\n  \"payoutQrUrl\": \"{{payoutQrUrl}}\",\n  \"metadata\": {\n    \"note\": \"QR payout\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals",
+            "description": "Upload QR first. Both QR URL and underlying UPI ID are mandatory for Admin verification."
+          }
+        },
+        {
+          "name": "Legacy Manual Bank Reference",
+          "description": "Backward-compatible legacy request; prefer saved_profile for new clients.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"{{payoutCoins}}\",\n  \"payoutMethod\": \"bank\",\n  \"destinationSource\": \"legacy\",\n  \"bankAccountId\": \"{{bankAccountReference}}\",\n  \"metadata\": {\n    \"note\": \"Backward-compatible request\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals",
+            "description": "Backward-compatible legacy request; prefer saved_profile for new clients."
+          }
+        }
+      ]
+    },
+    {
+      "name": "01 - Child Read APIs",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{childAccessToken}}",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "Session and Allowed Modules",
+          "description": "Returns role, profile state, navigation modules, routes, and capabilities.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/session",
+            "description": "Returns role, profile state, navigation modules, routes, and capabilities."
+          }
+        },
+        {
+          "name": "Dashboard Summary",
+          "description": "Summary cards, charts, recent orders, wallet and network summary. code is optional.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/dashboard/summary?fromDate={{fromDate}}&toDate={{toDate}}&code={{referralCode}}",
+            "description": "Summary cards, charts, recent orders, wallet and network summary. code is optional."
+          }
+        },
+        {
+          "name": "Personal Analytics",
+          "description": "Earnings/order analytics. Parent response can include network analytics.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/analytics?fromDate={{fromDate}}&toDate={{toDate}}&code={{referralCode}}",
+            "description": "Earnings/order analytics. Parent response can include network analytics."
+          }
+        },
+        {
+          "name": "My Referral Codes",
+          "description": "Filters: status active|inactive|expired|suspended, code, fromDate, toDate.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/codes?page={{page}}&limit={{limit}}&fromDate={{fromDate}}&toDate={{toDate}}&status=active&code={{referralCode}}",
+            "description": "Filters: status active|inactive|expired|suspended, code, fromDate, toDate."
+          }
+        },
+        {
+          "name": "Referral Orders - All",
+          "description": "Filters: referral status pending|completed|cancelled|refunded|reversed; coinStatus locked|available|reversed; code; scope all|own|children.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/orders?page={{page}}&limit={{limit}}&fromDate={{fromDate}}&toDate={{toDate}}&scope=own",
+            "description": "Filters: referral status pending|completed|cancelled|refunded|reversed; coinStatus locked|available|reversed; code; scope all|own|children."
+          }
+        },
+        {
+          "name": "Referral Orders - Locked Coins",
+          "description": "Orders whose referral coins are still inside fulfillment/return-window lock.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/orders?page={{page}}&limit={{limit}}&coinStatus=locked",
+            "description": "Orders whose referral coins are still inside fulfillment/return-window lock."
+          }
+        },
+        {
+          "name": "Coin Ledger",
+          "description": "Optional filters: status, commissionType, transactionType, code, orderId. See collection documentation for allowed values.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/ledger?page={{page}}&limit={{limit}}&fromDate={{fromDate}}&toDate={{toDate}}",
+            "description": "Optional filters: status, commissionType, transactionType, code, orderId. See collection documentation for allowed values."
+          }
+        },
+        {
+          "name": "Coin Ledger - Payout Transactions",
+          "description": "Shows withdrawal ledger entries.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/ledger?page={{page}}&limit={{limit}}&transactionType=withdrawal_coins",
+            "description": "Shows withdrawal ledger entries."
+          }
+        },
+        {
+          "name": "Wallet",
+          "description": "Returns locked, available, reserved/in-payout, paid, reversed and expired coins plus payout rules and coin value.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/wallet",
+            "description": "Returns locked, available, reserved/in-payout, paid, reversed and expired coins plus payout rules and coin value."
+          }
+        },
+        {
+          "name": "Payout Requests",
+          "description": "Optional status: pending|approved|rejected|processing|paid|failed|cancelled. Paid responses include paidAt, UTR and Admin paymentProofUrl.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals?page={{page}}&limit={{limit}}&fromDate={{fromDate}}&toDate={{toDate}}",
+            "description": "Optional status: pending|approved|rejected|processing|paid|failed|cancelled. Paid responses include paidAt, UTR and Admin paymentProofUrl."
+          }
+        },
+        {
+          "name": "Paid Payouts with Admin Proof",
+          "description": "Use paymentProofUrl and transactionReference to display payment confirmation to the influencer.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals?page={{page}}&limit={{limit}}&status=paid",
+            "description": "Use paymentProofUrl and transactionReference to display payment confirmation to the influencer."
+          }
+        },
+        {
+          "name": "Bonus Progress",
+          "description": "ruleId and referenceDate are optional.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/bonus-progress?page={{page}}&limit={{limit}}&ruleId={{ruleId}}&referenceDate={{referenceDate}}",
+            "description": "ruleId and referenceDate are optional."
+          }
+        },
+        {
+          "name": "My Profile and Saved Payout Methods",
+          "description": "Returns personal/KYC details, saved bank and UPI profile, primary code and wallet.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/profile",
+            "description": "Returns personal/KYC details, saved bank and UPI profile, primary code and wallet."
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Child Profile and Network Writes",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{childAccessToken}}",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "Update Full Profile, KYC URLs and Saved Bank/UPI",
+          "description": "All fields are optional, but at least one is required. Upload files first and place returned URLs in environment variables.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Child\",\n  \"lastName\": \"Influencer\",\n  \"phone\": \"+919876543211\",\n  \"avatarUrl\": \"{{profileImageUrl}}\",\n  \"dateOfBirth\": \"1995-05-18\",\n  \"gender\": \"female\",\n  \"address\": {\n    \"line1\": \"12 Market Road\",\n    \"line2\": \"\",\n    \"country\": \"India\",\n    \"state\": \"Delhi\",\n    \"city\": \"New Delhi\",\n    \"postalCode\": \"110001\"\n  },\n  \"documents\": {\n    \"panCardUrl\": \"{{panDocumentUrl}}\",\n    \"aadhaarCardUrl\": \"{{aadhaarDocumentUrl}}\",\n    \"cancelledChequeUrl\": \"{{chequeDocumentUrl}}\"\n  },\n  \"payout\": {\n    \"method\": \"bank\",\n    \"accountHolderName\": \"{{accountHolderName}}\",\n    \"bankName\": \"{{bankName}}\",\n    \"accountNumber\": \"{{bankAccountNumber}}\",\n    \"ifscCode\": \"{{ifscCode}}\",\n    \"upiId\": \"{{savedUpiId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/influencer/referral/profile",
+            "description": "All fields are optional, but at least one is required. Upload files first and place returned URLs in environment variables."
+          }
+        },
+        {
+          "name": "Update Saved UPI Only",
+          "description": "Updates the profile payout method. Existing payout requests keep their immutable destination snapshot.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payout\": {\n    \"method\": \"upi\",\n    \"accountHolderName\": \"{{accountHolderName}}\",\n    \"upiId\": \"{{savedUpiId}}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/influencer/referral/profile",
+            "description": "Updates the profile payout method. Existing payout requests keep their immutable destination snapshot."
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Child Authenticated Uploads",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{childAccessToken}}",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "Upload Profile Image",
+          "description": "Supported image types: JPG, PNG, WebP, GIF; maximum 10 MB. Copy data.url into profileImageUrl.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "{{profileImagePath}}"
+                },
+                {
+                  "key": "module",
+                  "type": "text",
+                  "value": "INFLUENCER_PROFILE"
+                },
+                {
+                  "key": "type",
+                  "type": "text",
+                  "value": "avatar"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/v1/file-uploader/upload",
+            "description": "Supported image types: JPG, PNG, WebP, GIF; maximum 10 MB. Copy data.url into profileImageUrl."
+          }
+        },
+        {
+          "name": "Upload UPI QR Image",
+          "description": "Upload the QR first, then copy data.url into payoutQrUrl before creating a UPI QR payout.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "{{upiQrImagePath}}"
+                },
+                {
+                  "key": "module",
+                  "type": "text",
+                  "value": "REFERRAL_PAYOUT_QR"
+                },
+                {
+                  "key": "type",
+                  "type": "text",
+                  "value": "payout-qr"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/v1/file-uploader/upload",
+            "description": "Upload the QR first, then copy data.url into payoutQrUrl before creating a UPI QR payout."
+          }
+        },
+        {
+          "name": "Upload KYC Document",
+          "description": "Supported document types: PDF, JPG, PNG, WebP. Copy data.url into the appropriate profile document URL.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "{{kycDocumentPath}}"
+                },
+                {
+                  "key": "module",
+                  "type": "text",
+                  "value": "INFLUENCER_KYC"
+                },
+                {
+                  "key": "type",
+                  "type": "text",
+                  "value": "pan-card"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/v1/file-uploader/upload-document",
+            "description": "Supported document types: PDF, JPG, PNG, WebP. Copy data.url into the appropriate profile document URL."
+          }
+        },
+        {
+          "name": "Upload Multiple Images",
+          "description": "Optional shared uploader. Accepts up to 10 images.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "{{profileImagePath}}"
+                },
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "{{upiQrImagePath}}"
+                },
+                {
+                  "key": "module",
+                  "type": "text",
+                  "value": "INFLUENCER"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/api/v1/file-uploader/upload-multi",
+            "description": "Optional shared uploader. Accepts up to 10 images."
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Child Payout Request Use Cases",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{childAccessToken}}",
+            "type": "string"
+          }
+        ]
+      },
+      "description": "Requests reserve Available Coins immediately. Approved means awaiting Admin transfer. Paid means Admin transferred money, entered UTR, and uploaded proof.",
+      "item": [
+        {
+          "name": "Request to Saved Profile Bank",
+          "description": "Requires complete bank details in My Profile.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"{{payoutCoins}}\",\n  \"payoutMethod\": \"bank\",\n  \"destinationSource\": \"saved_profile\",\n  \"metadata\": {\n    \"note\": \"Saved bank payout\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals",
+            "description": "Requires complete bank details in My Profile."
+          }
+        },
+        {
+          "name": "Request to Saved Profile UPI",
+          "description": "Uses the UPI ID saved in My Profile.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"{{payoutCoins}}\",\n  \"payoutMethod\": \"upi\",\n  \"destinationSource\": \"saved_profile\",\n  \"metadata\": {\n    \"note\": \"Saved UPI payout\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals",
+            "description": "Uses the UPI ID saved in My Profile."
+          }
+        },
+        {
+          "name": "Request to One-time UPI",
+          "description": "Snapshots this UPI destination only for this request.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"{{payoutCoins}}\",\n  \"payoutMethod\": \"upi\",\n  \"destinationSource\": \"one_time\",\n  \"upiId\": \"{{oneTimeUpiId}}\",\n  \"metadata\": {\n    \"note\": \"One-time UPI payout\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals",
+            "description": "Snapshots this UPI destination only for this request."
+          }
+        },
+        {
+          "name": "Request using UPI QR",
+          "description": "Upload QR first. Both QR URL and underlying UPI ID are mandatory for Admin verification.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"{{payoutCoins}}\",\n  \"payoutMethod\": \"upi_qr\",\n  \"destinationSource\": \"one_time\",\n  \"upiId\": \"{{oneTimeUpiId}}\",\n  \"payoutQrUrl\": \"{{payoutQrUrl}}\",\n  \"metadata\": {\n    \"note\": \"QR payout\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals",
+            "description": "Upload QR first. Both QR URL and underlying UPI ID are mandatory for Admin verification."
+          }
+        },
+        {
+          "name": "Legacy Manual Bank Reference",
+          "description": "Backward-compatible legacy request; prefer saved_profile for new clients.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"{{payoutCoins}}\",\n  \"payoutMethod\": \"bank\",\n  \"destinationSource\": \"legacy\",\n  \"bankAccountId\": \"{{bankAccountReference}}\",\n  \"metadata\": {\n    \"note\": \"Backward-compatible request\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/influencer/referral/withdrawals",
+            "description": "Backward-compatible legacy request; prefer saved_profile for new clients."
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 - Role Restriction Checks",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{childAccessToken}}",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "Child Cannot View Parent Network (expected 403)",
+          "description": "Negative authorization test.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Forbidden for child', () => pm.expect(pm.response.code).to.equal(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/influencer/referral/network?page=1&limit=20",
+            "description": "Negative authorization test."
+          }
+        },
+        {
+          "name": "Child Cannot Create Another Child (expected 403)",
+          "description": "Negative authorization test.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Forbidden for child', () => pm.expect(pm.response.code).to.equal(403));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"blocked-child@example.com\",\n  \"firstName\": \"Blocked\",\n  \"lastName\": \"Child\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/api/v1/influencer/referral/network/children",
+            "description": "Negative authorization test."
+          }
+        }
       ]
     }
   ]
