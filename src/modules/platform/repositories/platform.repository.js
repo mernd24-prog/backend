@@ -77,6 +77,17 @@ class PlatformRepository {
     return { items, total };
   }
 
+  async listCategoriesFast(filter = {}, pagination = {}, projection = null) {
+    let query = CategoryTreeModel.find(filter)
+      .sort({ level: 1, sortOrder: 1, title: 1 })
+      .skip(pagination.skip || 0)
+      .limit(pagination.limit || 5000)
+      .lean();
+    if (projection) query = query.select(projection);
+    const items = await query;
+    return { items, total: items.length };
+  }
+
   async deleteCategory(categoryKey) {
     const category = await this.getCategory(categoryKey);
     if (!category) return null;

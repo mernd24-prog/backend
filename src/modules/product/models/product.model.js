@@ -463,6 +463,9 @@ productSchema.index({ tags: 1, status: 1 });
 productSchema.index({ status: 1, visibility: 1, publishedAt: 1, scheduledAt: 1 });
 productSchema.index({ status: 1, visibility: 1, category: 1, brand: 1 });
 productSchema.index({ status: 1, visibility: 1, price: 1, rating: 1 });
+productSchema.index({ status: 1, approvalStatus: 1, visibility: 1, category: 1, "analytics.purchases": -1 });
+productSchema.index({ status: 1, approvalStatus: 1, visibility: 1, createdAt: -1 });
+productSchema.index({ status: 1, approvalStatus: 1, visibility: 1, "analytics.purchases": -1 });
 productSchema.index({ "seo.keywords": 1 });
 productSchema.index({ scheduledAt: 1, status: 1 });
 

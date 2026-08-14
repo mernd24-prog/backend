@@ -124,10 +124,18 @@ class HomeService {
     this.productRepository = productRepository;
     this.dealRepository = dealRepository;
     this.platformRepository = platformRepository;
+    this.categoryCandidateCache = new Map();
+    this.activeCategoryCandidatesCache = null;
+    this.dashboardCategoryConfigCache = new Map();
   }
 
   async resolveCategoryCandidates(category, { includeAliases = true } = {}) {
     if (!category) return [];
+    const cacheKey = `${category}:${includeAliases ? "aliases" : "strict"}`;
+    if (this.categoryCandidateCache.has(cacheKey)) {
+      return this.categoryCandidateCache.get(cacheKey);
+    }
+
     const seedCandidates = uniqueValues(includeAliases ? FALLBACK_CATEGORIES[category] || [category] : [category]);
     const candidateKeys = new Set(seedCandidates);
 
@@ -155,23 +163,33 @@ class HomeService {
       item.parentKey,
     ]);
 
-    return uniqueValues([...keys, ...titleCandidates]);
+    const candidates = uniqueValues([...keys, ...titleCandidates]);
+    this.categoryCandidateCache.set(cacheKey, candidates);
+    return candidates;
   }
 
   async resolveActiveCategoryCandidates() {
+    if (this.activeCategoryCandidatesCache) return this.activeCategoryCandidatesCache;
+
     const categories = await this.platformRepository
       .listCategories({ active: true }, { skip: 0, limit: 5000 })
       .then((result) => result.items || [])
       .catch(() => []);
 
-    return uniqueValues(categories.flatMap((item) => [
+    this.activeCategoryCandidatesCache = uniqueValues(categories.flatMap((item) => [
       item.categoryKey,
       item.title,
       normalizeKey(item.title),
     ]));
+    return this.activeCategoryCandidatesCache;
   }
 
   async listDashboardCategoryConfigs(limit = 4) {
+    const cacheKey = String(limit);
+    if (this.dashboardCategoryConfigCache.has(cacheKey)) {
+      return this.dashboardCategoryConfigCache.get(cacheKey);
+    }
+
     const categories = await this.platformRepository
       .listCategories(
         { active: true, isDashboardVisible: true },
@@ -180,7 +198,7 @@ class HomeService {
       .then((result) => result.items || [])
       .catch(() => []);
 
-    return categories
+    const configs = categories
       .filter((category) => category?.categoryKey)
       .sort((a, b) =>
         Number(a.level || 0) - Number(b.level || 0) ||
@@ -197,6 +215,8 @@ class HomeService {
         strictCategory: true,
         sort: index === 2 ? "newest" : "popular",
       }));
+    this.dashboardCategoryConfigCache.set(cacheKey, configs);
+    return configs;
   }
 
   buildCategoryFilter(categoryCandidates = []) {
@@ -217,14 +237,31 @@ class HomeService {
     return { $or: fieldClauses };
   }
 
+  buildCategoryPrefixFilter(category) {
+    const normalizedCategory = normalizeKey(category);
+    if (!normalizedCategory) return {};
+    const prefixRegex = new RegExp(`^${escapeRegex(normalizedCategory)}(?:-|$)`, "i");
+    return {
+      $or: ["category", "categoryId", "category_id", "categoryKey", "categorySlug", "categoryName"]
+        .map((field) => ({ [field]: prefixRegex })),
+    };
+  }
+
   productImage(product = {}) {
     const images = Array.isArray(product.images) ? product.images : [];
-    const firstImage = images[0];
+    const commonImages = Array.isArray(product.commonImages) ? product.commonImages : [];
+    const variants = Array.isArray(product.variants) ? product.variants : [];
+    const variantWithImage = variants.find((variant) =>
+      variant?.image || (Array.isArray(variant?.images) && variant.images.length),
+    );
+    const firstImage = images[0] || commonImages[0] || variantWithImage?.image || variantWithImage?.images?.[0];
     if (typeof firstImage === "string") return firstImage;
     return firstDefined(
       firstImage?.url,
       firstImage?.image,
       firstImage?.imageUrl,
+      firstImage?.secure_url,
+      firstImage?.src,
       product.image,
       product.thumbnail,
       product.thumbnailUrl,
@@ -281,9 +318,11 @@ class HomeService {
 
   async listProductItems(config, limit, baseCategoryCandidates = []) {
     const hasCategory = Boolean(config.category);
-    const categoryCandidates = hasCategory
+    const categoryCandidates = hasCategory && config.strictCategory !== true
       ? await this.resolveCategoryCandidates(config.category, { includeAliases: config.strictCategory !== true })
-      : baseCategoryCandidates;
+      : hasCategory
+        ? [config.category]
+        : baseCategoryCandidates;
     const projection = {
       title: 1,
       slug: 1,
@@ -294,6 +333,9 @@ class HomeService {
       categorySlug: 1,
       categoryName: 1,
       images: 1,
+      commonImages: 1,
+      "variants.images": 1,
+      "variants.image": 1,
       image: 1,
       thumbnail: 1,
       thumbnailUrl: 1,
@@ -311,7 +353,7 @@ class HomeService {
       metadata: 1,
     };
     const readItems = async (filter = {}, readLimit = limit) => {
-      const result = await this.productRepository.paginate(
+      const items = await this.productRepository.list(
         applyPublicProductFilter(filter),
         {
           page: 1,
@@ -322,7 +364,7 @@ class HomeService {
         },
         { projection, lean: true },
       );
-      return (result.items || []).map((product) => this.toCollageItem(product)).filter(Boolean);
+      return (items || []).map((product) => this.toCollageItem(product)).filter(Boolean);
     };
 
     if (!hasCategory) {
@@ -330,7 +372,9 @@ class HomeService {
       return this.uniqueItems(await readItems(baseFilter, limit * 2), limit);
     }
 
-    const categoryFilter = this.buildCategoryFilter(categoryCandidates);
+    const categoryFilter = config.strictCategory === true
+      ? this.buildCategoryPrefixFilter(config.category)
+      : this.buildCategoryFilter(categoryCandidates);
     const categoryItems = await readItems(categoryFilter);
     const selectedCategoryItems = this.uniqueItems(categoryItems, limit);
     return selectedCategoryItems;
@@ -416,7 +460,9 @@ class HomeService {
     const items = config.source === "deals"
       ? await this.listDealItems(config, perSectionLimit + usedProductIds.size, baseCategoryCandidates)
       : await this.listProductItems(config, perSectionLimit + usedProductIds.size, baseCategoryCandidates);
-    const selectedItems = items.slice(0, perSectionLimit);
+    const selectedItems = items
+      .filter((item) => !usedProductIds.has(String(item.productId || item.link || item.image || "")))
+      .slice(0, perSectionLimit);
     if (!selectedItems.length) return null;
     selectedItems.forEach((item) => {
       const key = String(item.productId || item.link || item.image || "");
@@ -432,30 +478,96 @@ class HomeService {
     };
   }
 
+  async buildSectionCandidate(config, perSectionLimit, baseCategoryCandidates = []) {
+    const fetchLimit = Math.max(perSectionLimit * (config.category ? 4 : 10), perSectionLimit);
+    const items = config.source === "deals"
+      ? await this.listDealItems(config, fetchLimit, baseCategoryCandidates)
+      : await this.listProductItems(config, fetchLimit, baseCategoryCandidates);
+    const uniqueItems = this.uniqueItems(items, fetchLimit);
+    if (!uniqueItems.length) return null;
+    return {
+      key: config.key,
+      title: this.sectionTitle(config, uniqueItems),
+      label: config.label,
+      source: config.source,
+      category: config.category || null,
+      images: uniqueItems,
+    };
+  }
+
+  selectSectionCandidate(candidate, perSectionLimit, usedProductIds = new Set()) {
+    if (!candidate) return null;
+    const selectedItems = (candidate.images || [])
+      .filter((item) => !usedProductIds.has(String(item.productId || item.link || item.image || "")))
+      .slice(0, perSectionLimit);
+    if (!selectedItems.length) return null;
+    selectedItems.forEach((item) => {
+      const key = String(item.productId || item.link || item.image || "");
+      if (key) usedProductIds.add(key);
+    });
+    return {
+      ...candidate,
+      title: this.sectionTitle(candidate, selectedItems),
+      images: selectedItems,
+    };
+  }
+
   async listCollectionCollages(query = {}) {
     const perSectionLimit = Math.min(8, Math.max(1, Number(query.itemsPerSection || query.itemLimit || 4)));
     const sectionLimit = Math.min(8, Math.max(1, Number(query.limit || 4)));
-    const activeCategoryCandidates = await this.resolveActiveCategoryCandidates();
     const dashboardConfigs = await this.listDashboardCategoryConfigs(sectionLimit);
     const sections = [];
     const usedProductIds = new Set();
 
     const primaryConfigs = dashboardConfigs.length ? dashboardConfigs : SECTION_CONFIGS;
-    for (const config of primaryConfigs.slice(0, sectionLimit)) {
-      const section = await this.buildSection(config, perSectionLimit, usedProductIds);
+    const primaryCandidates = await Promise.all(
+      primaryConfigs
+        .slice(0, sectionLimit)
+        .map((config) => this.buildSectionCandidate(config, perSectionLimit)),
+    );
+    for (const candidate of primaryCandidates) {
+      const section = this.selectSectionCandidate(candidate, perSectionLimit, usedProductIds);
       if (section) sections.push(section);
     }
 
-    for (const config of GENERIC_SECTION_CONFIGS) {
+    const genericConfigs = GENERIC_SECTION_CONFIGS.filter(
+      (config) => !sections.some((section) => section.key === config.key),
+    );
+    const productGenericConfigs = genericConfigs.filter((config) => config.source !== "deals");
+    const dealGenericConfigs = genericConfigs.filter((config) => config.source === "deals");
+
+    const productGenericCandidates = await Promise.all(
+      productGenericConfigs.map((config) =>
+        this.buildSectionCandidate(
+          config,
+          perSectionLimit,
+          [],
+        ),
+      ),
+    );
+    for (const candidate of productGenericCandidates) {
       if (sections.length >= sectionLimit) break;
-      if (sections.some((section) => section.key === config.key)) continue;
-      const section = await this.buildSection(
-        config,
-        perSectionLimit,
-        usedProductIds,
-        activeCategoryCandidates,
-      );
+      if (sections.some((section) => section.key === candidate?.key)) continue;
+      const section = this.selectSectionCandidate(candidate, perSectionLimit, usedProductIds);
       if (section) sections.push(section);
+    }
+
+    if (sections.length < sectionLimit) {
+      const dealGenericCandidates = await Promise.all(
+        dealGenericConfigs.map((config) =>
+          this.buildSectionCandidate(
+            config,
+            perSectionLimit,
+            [],
+          ),
+        ),
+      );
+      for (const candidate of dealGenericCandidates) {
+        if (sections.length >= sectionLimit) break;
+        if (sections.some((section) => section.key === candidate?.key)) continue;
+        const section = this.selectSectionCandidate(candidate, perSectionLimit, usedProductIds);
+        if (section) sections.push(section);
+      }
     }
 
     return sections;

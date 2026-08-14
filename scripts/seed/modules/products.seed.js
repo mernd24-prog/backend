@@ -5,6 +5,7 @@ const { UserModel } = require('../../../src/modules/user/models/user.model');
 const { ProductModel } = require('../../../src/modules/product/models/product.model');
 const { ROLES } = require('../../../src/shared/constants/roles');
 const {
+  PRODUCT_APPROVAL_STATUS,
   PRODUCT_STATUS,
   PRODUCT_TYPE,
   PRODUCT_VISIBILITY,
@@ -132,6 +133,7 @@ class ProductsSeed {
               rating: Number((4.1 + (index % 5) * 0.15).toFixed(1)),
               reviewCount: 10 + index * 2,
               status: PRODUCT_STATUS.ACTIVE,
+              approvalStatus: PRODUCT_APPROVAL_STATUS.APPROVED,
               moderation: {
                 submittedAt: now,
                 reviewedAt: now,

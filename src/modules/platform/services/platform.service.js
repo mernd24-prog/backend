@@ -107,9 +107,11 @@ class PlatformService {
   } = {}) {
     this.platformRepository = platformRepository;
     this.orderRepository = orderRepository;
+    this.categoryTreeCache = new Map();
   }
 
   invalidateCatalogCaches() {
+    this.categoryTreeCache.clear();
     if (typeof forget === "function") {
       forget(/^products:/);
     }
@@ -215,15 +217,31 @@ class PlatformService {
     });
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
 
-    const result = await this.platformRepository.listCategories(filter, pagination);
+    if (isTreeRequested) {
+      const maxDepth = query.maxDepth || 3;
+      const cacheKey = JSON.stringify({ filter, maxDepth });
+      const cached = this.categoryTreeCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return cached.value;
+      }
 
-    if (!isTreeRequested) {
-      return result;
+      const result = await this.platformRepository.listCategoriesFast(
+        filter,
+        pagination,
+        "categoryKey title parentKey level active sortOrder bannerUrl iconUrl isDashboardVisible",
+      );
+      const tree = this.buildCategoryTree(result.items || [], maxDepth);
+      const value = { items: tree, total: tree.length };
+      this.categoryTreeCache.set(cacheKey, {
+        value,
+        expiresAt: Date.now() + 5 * 60 * 1000,
+      });
+      return value;
     }
 
-    const maxDepth = query.maxDepth || 3;
-    const tree = this.buildCategoryTree(result.items || [], maxDepth);
-    return { items: tree, total: tree.length };
+    const result = await this.platformRepository.listCategories(filter, pagination);
+
+    return result;
   }
 
   async deleteCategory(categoryKey, req) {

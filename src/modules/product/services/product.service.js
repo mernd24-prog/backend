@@ -1852,12 +1852,13 @@ class ProductService {
     const category = query.category_id || query.categoryId || query.categorySlug || query.category;
     if (category) {
       const selectedCategories = this.parseProductFilterValues(category);
-      const categoryKeys = new Set(selectedCategories);
-      for (const categoryKey of selectedCategories) {
-        const descendants = await this.platformRepository.getCategoryDescendantKeys(categoryKey).catch(() => []);
-        descendants.forEach((descendantKey) => categoryKeys.add(descendantKey));
-      }
-      filter.category = categoryKeys.size ? { $in: [...categoryKeys] } : category;
+      const categoryRegexes = selectedCategories
+        .map((categoryKey) => normalizeCategoryKey(categoryKey))
+        .filter(Boolean)
+        .map((categoryKey) => new RegExp(`^${escapeRegExp(categoryKey)}(?:-|$)`, "i"));
+      filter.category = categoryRegexes.length > 1
+        ? { $in: categoryRegexes }
+        : categoryRegexes[0] || category;
     }
     if (query.hsnCode) filter.hsnCode = query.hsnCode;
     if (query.color) filter.color = query.color;
@@ -3726,6 +3727,16 @@ function hasProductPermission(actor = {}, action) {
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeCategoryKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 function splitFilterValues(value) {

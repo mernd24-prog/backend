@@ -102,6 +102,23 @@ class ProductRepository {
     return { items, total };
   }
 
+  async list(filter, pagination, options = {}) {
+    const sort = this._buildSort(pagination.sortBy, pagination.sortDir);
+    let query = ProductModel.find(filter)
+      .skip(pagination.skip || 0)
+      .limit(pagination.limit)
+      .sort(sort);
+
+    if (options.projection) {
+      query = query.select(options.projection);
+    }
+    if (options.lean) {
+      query = query.lean();
+    }
+
+    return query;
+  }
+
   async paginateBySeller(sellerId, filter, pagination, options = {}) {
     return this.paginate({ ...filter, sellerId }, pagination, options);
   }
