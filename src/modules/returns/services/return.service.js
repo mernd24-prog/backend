@@ -1710,16 +1710,10 @@ class ReturnServiceClass {
     }
 
     const settings = await commerceSettingsService.getSettings().catch(() => null);
-    const policy = String(settings?.payments?.refundPolicy || "manual_review");
-    if (policy === "manual_review") return returnRequest;
-
-    const methodByPolicy = {
-      auto_after_return: "auto",
-      gateway_original: "original_payment",
-      instant_wallet: "wallet",
-    };
-    const method = methodByPolicy[policy];
-    if (!method) return returnRequest;
+    const policy = String(settings?.payments?.returnRefundMode || "manual_after_qc");
+    if (policy !== "automatic_after_qc") return returnRequest;
+    const destination = String(settings?.payments?.refundDestination || "original_payment_method");
+    const method = destination === "wallet" ? "wallet" : "original_payment";
 
     const systemActor = {
       userId: "system-auto-refund",

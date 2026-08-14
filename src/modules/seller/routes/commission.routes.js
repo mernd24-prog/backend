@@ -110,6 +110,24 @@ router.get("/my-payouts", authenticate, financeView, async (req, res, next) => {
   }
 });
 
+// Seller requests payout; admin approval and transfer remain separate actions.
+router.post("/my-payouts/request", authenticate, financeView, async (req, res, next) => {
+  try {
+    const sellerId = req.auth?.ownerSellerId || req.auth?.sub;
+    if (!sellerId) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const { error, value } = commissionValidation.requestPayout.validate(req.body || {});
+    if (error) return res.status(400).json({ success: false, message: "Validation error", details: error.details });
+    const result = await CommissionService.requestSellerPayout(sellerId, {
+      ...value,
+      organizationId: value.organizationId || req.auth?.selectedOrganizationId || undefined,
+      actor: req.auth,
+    });
+    return res.status(201).json({ success: true, message: result.message, data: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ==============================
 // Seller: Export payout history
 // ==============================

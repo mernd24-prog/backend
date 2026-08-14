@@ -145,6 +145,130 @@ test("item cancellation refunds shipping only when the seller group is fully can
   ]), 75);
 });
 
+test("customer cancellation stays requested until seller or admin approval", async () => {
+  let current = {
+    id: "cancel-requested",
+    order_id: "order-1",
+    status: "requested",
+    items: [{ orderItemId: "item-1", sellerId: "seller-1", quantity: 2 }],
+    metadata: {},
+  };
+  let processCalls = 0;
+  const service = new CancellationService({
+    cancellationRepository: {
+      findById: async () => current,
+      claimCancellationApproval: async (_id, actor) => {
+        current = { ...current, status: "approved", metadata: { approvedBy: actor.userId } };
+        return current;
+      },
+    },
+  });
+  service.processCancellation = async () => {
+    processCalls += 1;
+    return { ...current, status: "manual_review", refund_status: "manual_review" };
+  };
+  service.assertApprovalQuantitiesAvailable = async () => {};
+
+  assert.equal(current.status, "requested");
+  assert.equal(processCalls, 0);
+  const approved = await service.approveCancellation(current.id, { note: "Stock available" }, {
+    userId: "seller-1",
+    role: "seller",
+  });
+  assert.equal(processCalls, 1);
+  assert.equal(approved.status, "manual_review");
+});
+
+test("seller rejection never starts refund or cancellation projection", async () => {
+  let current = {
+    id: "cancel-reject",
+    order_id: "order-1",
+    status: "requested",
+    refund_status: "not_started",
+    items: [{ orderItemId: "item-1", sellerId: "seller-1", quantity: 1 }],
+  };
+  const service = new CancellationService({
+    cancellationRepository: {
+      findById: async () => current,
+      claimCancellationRejection: async (_id, actor, reason) => {
+        current = {
+          ...current,
+          status: "rejected",
+          refund_status: "not_required",
+          metadata: { rejectedBy: actor.userId, rejectionReason: reason },
+        };
+        return current;
+      },
+    },
+  });
+  const rejected = await service.rejectCancellation(current.id, { reason: "Already packed" }, {
+    userId: "seller-1",
+    role: "seller",
+  });
+  assert.equal(rejected.status, "rejected");
+  assert.equal(rejected.refund_status, "not_required");
+  assert.equal(rejected.metadata.rejectionReason, "Already packed");
+});
+
+test("admin approval submits a manual-review cancellation refund to Razorpay once", async () => {
+  let current = {
+    id: "cancel-razorpay",
+    order_id: "order-1",
+    scope: "full",
+    status: "manual_review",
+    refund_status: "manual_review",
+    payment_provider: "razorpay",
+    provider_refund_amount: 500,
+    wallet_refund_amount: 0,
+    metadata: {},
+  };
+  const providerCalls = [];
+  const service = new CancellationService({
+    cancellationRepository: {
+      findById: async () => current,
+      claimRefundApproval: async () => {
+        current = { ...current, status: "refund_pending", refund_status: "pending" };
+        return current;
+      },
+      update: async (_id, payload) => {
+        current = {
+          ...current,
+          status: payload.status ?? current.status,
+          refund_status: payload.refundStatus ?? current.refund_status,
+          provider_refund_id: payload.providerRefundId ?? current.provider_refund_id,
+          metadata: { ...current.metadata, ...(payload.metadata || {}) },
+        };
+        return current;
+      },
+    },
+    orderRepository: {
+      findByIdWithItems: async () => ({ id: "order-1", buyer_id: "buyer-1", payment_status: "captured" }),
+      findRefundablePaymentByOrderId: async () => ({ provider_payment_id: "pay_1" }),
+      updatePaymentsForOrderCancellation: async () => {},
+      updateStatus: async () => {},
+    },
+    razorpayProvider: {
+      createRefund: async (payload) => {
+        providerCalls.push(payload);
+        return { refundId: "rfnd_1", status: "pending" };
+      },
+    },
+  });
+  service.publishCancellationEvent = async () => {};
+
+  const result = await service.approveRefund("cancel-razorpay", { note: "Approved" }, {
+    userId: "admin-1",
+    role: "admin",
+  });
+
+  assert.equal(providerCalls.length, 1);
+  assert.equal(providerCalls[0].amount, 500);
+  assert.equal(result.status, "refund_pending");
+  assert.equal(result.refund_status, "provider_pending");
+  assert.equal(result.provider_refund_id, "rfnd_1");
+  assert.equal(result.metadata.refundApprovedBy, "admin-1");
+});
+
 test("COD commissions wait for collection capture before payout release", () => {
   const releaseData = new Map([["order-cod", {
     order: {
@@ -241,6 +365,50 @@ test("partial quantity cancellation and return allocation are proportional and r
   ReturnService.allocateItemRefunds(returned, 100);
   assert.equal(returned.reduce((sum, row) => sum + row.refundAmount, 0), 100);
   assert.deepEqual(returned.map((row) => row.refundAmount), [66.67, 33.33]);
+});
+
+test("item-wise cancellation validates remaining quantity and calculates only selected units", () => {
+  const service = new CancellationService();
+  const order = {
+    items: [{
+      id: "item-quantity",
+      product_id: "product-1",
+      product_title: "Pack of five",
+      seller_id: "seller-1",
+      quantity: 5,
+      cancelled_quantity: 1,
+      line_total: 500,
+      discount_amount: 50,
+      tax_amount: 45,
+      tax_breakup: {},
+    }],
+  };
+
+  const [item] = service.normalizeItems(order, [{ orderItemId: "item-quantity", quantity: 2 }]);
+  assert.equal(item.quantity, 2);
+  assert.equal(item.orderedQuantity, 5);
+  assert.equal(item.itemAmount, 200);
+  assert.equal(item.discountAmount, 20);
+  assert.equal(item.refundAmount, 180);
+  assert.equal(service.isFullCancellation(order, [item]), false);
+  assert.throws(
+    () => service.normalizeItems(order, [{ orderItemId: "item-quantity", quantity: 4 }], new Map([["item-quantity", 1]])),
+    /Only 3 units are still cancellable/,
+  );
+});
+
+test("final remaining item quantities make the cancellation full", () => {
+  const service = new CancellationService();
+  const order = {
+    items: [
+      { id: "item-a", quantity: 3, cancelled_quantity: 1 },
+      { id: "item-b", quantity: 2, cancelled_quantity: 0 },
+    ],
+  };
+  assert.equal(service.isFullCancellation(order, [
+    { orderItemId: "item-a", quantity: 2 },
+    { orderItemId: "item-b", quantity: 2 },
+  ]), true);
 });
 
 test("all seller shipping policies apply exactly once", () => {

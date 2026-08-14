@@ -182,6 +182,21 @@ class CancellationService {
     return quantities;
   }
 
+  async getPendingCancellationReservedQuantities(orderId) {
+    const cancellations = await this.cancellationRepository.listByOrder(orderId);
+    const quantities = new Map();
+    cancellations
+      .filter((request) => !["completed", "failed", "rejected"].includes(String(request.status || "").toLowerCase()))
+      .forEach((request) => {
+        (request.items || []).forEach((item) => {
+          const key = String(item.orderItemId || item.order_item_id || "");
+          if (!key) return;
+          quantities.set(key, (quantities.get(key) || 0) + Math.max(Number(item.quantity || 0), 0));
+        });
+      });
+    return quantities;
+  }
+
   isFullCancellation(order, items) {
     const cancelledByItem = new Map(items.map((item) => [String(item.orderItemId), Number(item.quantity || 0)]));
     return (order.items || []).every((item) => {
@@ -282,8 +297,15 @@ class CancellationService {
         throw new AppError("There are no active items from this seller to cancel", 409);
       }
     }
-    const returnReservedByItem = await this.getReturnReservedQuantities(orderId);
-    const items = this.normalizeItems(order, requestedItems, returnReservedByItem);
+    const [returnReservedByItem, cancellationReservedByItem] = await Promise.all([
+      this.getReturnReservedQuantities(orderId),
+      this.getPendingCancellationReservedQuantities(orderId),
+    ]);
+    const reservedByItem = new Map(returnReservedByItem);
+    cancellationReservedByItem.forEach((quantity, itemId) => {
+      reservedByItem.set(itemId, (reservedByItem.get(itemId) || 0) + quantity);
+    });
+    const items = this.normalizeItems(order, requestedItems, reservedByItem);
     await this.assertCanCancel(order, items, actor);
     const fullCancellation = this.isFullCancellation(order, items);
     const payment = await this.orderRepository.findRefundablePaymentByOrderId(orderId);
@@ -317,6 +339,12 @@ class CancellationService {
       fullCancellation,
       shippingRefundAmount + platformFeeRefundAmount,
     );
+    const refundDestination = commerceSettings.payments?.refundDestination || "original_payment_method";
+    if (refundDestination === "wallet" && refund.captured && !refund.isCod && refund.refundAmount > 0) {
+      refund.walletRefundAmount = refund.refundAmount;
+      refund.providerRefundAmount = 0;
+      refund.refundRequired = true;
+    }
     const idempotencyKey = this.makeIdempotencyKey(orderId, items, payload, actor);
     const existing = await this.cancellationRepository.findByIdempotencyKey(idempotencyKey);
     if (existing) {
@@ -344,12 +372,13 @@ class CancellationService {
       walletRefundAmount: refund.walletRefundAmount,
       providerRefundAmount: refund.providerRefundAmount,
       refundMethod: payload.refundMethod || "auto",
-      refundStatus: refund.refundRequired || refund.walletRefundAmount > 0 ? "pending" : "not_required",
+      refundStatus: refund.refundRequired || refund.walletRefundAmount > 0 ? "not_started" : "not_required",
       paymentId: payment?.id || null,
       paymentProvider: payment?.provider || order.payment_provider || null,
       idempotencyKey,
       requestedBy: actor.userId,
       requestedByRole: actor.role,
+      status: rtoSettlement ? "approved" : "requested",
       metadata: {
         fullCancellation,
         sellerSupplyCancellation: rtoSettlement,
@@ -359,11 +388,95 @@ class CancellationService {
         shippingRefundAmount,
         platformFeeRefundAmount,
         refundPolicyScenario: scenario,
+        refundDestination,
         refundPolicySnapshot: componentPolicies,
         requestedAt: new Date().toISOString(),
       },
     });
+    return rtoSettlement ? this.processCancellation(cancellation.id, actor) : cancellation;
+  }
+
+  async approveCancellation(cancellationId, payload = {}, actor = {}) {
+    let cancellation = await this.cancellationRepository.findById(cancellationId);
+    if (!cancellation) throw new AppError("Cancellation not found", 404);
+    if (!this.isAdmin(actor) && !this.isSeller(actor)) {
+      throw new AppError("Only the product seller or an admin can approve cancellation requests", 403);
+    }
+    if (this.isSeller(actor)) {
+      const sellerId = String(actor.ownerSellerId || actor.userId);
+      const ownsEveryItem = (cancellation.items || []).every((item) =>
+        String(item.sellerId || item.seller_id || "") === sellerId,
+      );
+      if (!ownsEveryItem) {
+        throw new AppError("You can approve only cancellation quantities belonging to your seller account", 403);
+      }
+    }
+    if (cancellation.status === "completed") return cancellation;
+    if (cancellation.status !== "requested") {
+      throw new AppError(`Cancellation cannot be approved while it is ${cancellation.status}`, 409);
+    }
+    await this.assertApprovalQuantitiesAvailable(cancellation);
+    cancellation = await this.cancellationRepository.claimCancellationApproval(cancellationId, actor, payload.note);
+    if (!cancellation) throw new AppError("Cancellation request is already being reviewed", 409);
     return this.processCancellation(cancellation.id, actor);
+  }
+
+  async assertApprovalQuantitiesAvailable(cancellation) {
+    const [order, requests] = await Promise.all([
+      this.orderRepository.findByIdWithItems(cancellation.order_id),
+      this.cancellationRepository.listByOrder(cancellation.order_id),
+    ]);
+    if (!order) throw new AppError("Order not found", 404);
+    const committedStatuses = new Set(["approved", "processing", "manual_review", "refund_pending"]);
+    const reserved = new Map();
+    requests
+      .filter((request) => String(request.id) !== String(cancellation.id) && committedStatuses.has(String(request.status || "")))
+      .flatMap((request) => request.items || [])
+      .forEach((item) => {
+        const key = String(item.orderItemId || item.order_item_id || "");
+        reserved.set(key, (reserved.get(key) || 0) + Number(item.quantity || 0));
+      });
+    for (const item of cancellation.items || []) {
+      const orderItem = (order.items || []).find((entry) => String(entry.id) === String(item.orderItemId || item.order_item_id));
+      if (!orderItem) throw new AppError("Cancellation item no longer exists in this order", 409);
+      const available = Math.max(
+        Number(orderItem.quantity || 0) - Number(orderItem.cancelled_quantity || 0) - Number(reserved.get(String(orderItem.id)) || 0),
+        0,
+      );
+      if (Number(item.quantity || 0) > available) {
+        throw new AppError(
+          `Only ${available} unit(s) of ${orderItem.product_title || "this item"} remain available for cancellation approval`,
+          409,
+        );
+      }
+    }
+  }
+
+  async rejectCancellation(cancellationId, payload = {}, actor = {}) {
+    const cancellation = await this.cancellationRepository.findById(cancellationId);
+    if (!cancellation) throw new AppError("Cancellation not found", 404);
+    if (!this.isAdmin(actor) && !this.isSeller(actor)) {
+      throw new AppError("Only the product seller or an admin can reject cancellation requests", 403);
+    }
+    if (this.isSeller(actor)) {
+      const sellerId = String(actor.ownerSellerId || actor.userId);
+      const ownsEveryItem = (cancellation.items || []).every((item) =>
+        String(item.sellerId || item.seller_id || "") === sellerId,
+      );
+      if (!ownsEveryItem) {
+        throw new AppError("A multi-seller cancellation can be rejected only by an admin", 403);
+      }
+    }
+    if (cancellation.status !== "requested") {
+      throw new AppError(`Cancellation cannot be rejected while it is ${cancellation.status}`, 409);
+    }
+    const rejected = await this.cancellationRepository.claimCancellationRejection(
+      cancellationId,
+      actor,
+      payload.reason,
+    );
+    if (!rejected) throw new AppError("Cancellation request is already being reviewed", 409);
+    return rejected;
   }
 
   async reconcileRtoSettlements({ limit = 100 } = {}) {
@@ -538,11 +651,14 @@ class CancellationService {
     let cancellation = await this.cancellationRepository.findById(cancellationId);
     if (!cancellation) throw new AppError("Cancellation not found", 404);
     if (cancellation.status === "completed") return cancellation;
+    if (cancellation.status === "requested") {
+      throw new AppError("Cancellation must be approved by the product seller or an admin before processing", 409);
+    }
     const order = await this.orderRepository.findByIdWithItems(cancellation.order_id);
     if (!order) throw new AppError("Order not found", 404);
     const commerceSettings = await commerceSettingsService.getSettings();
-    const refundPolicy = commerceSettings.payments?.refundPolicy || "manual_review";
-    const requiresManualRefundReview = refundPolicy === "manual_review";
+    const refundPolicy = commerceSettings.payments?.cancellationRefundMode || "manual_after_approval";
+    const requiresManualRefundReview = refundPolicy !== "automatic_after_approval";
     const attempt = { attemptId: uuidv4(), startedAt: new Date().toISOString(), status: "processing" };
     const attempts = [...(cancellation.attempts || []), attempt];
     cancellation = await this.cancellationRepository.update(cancellation.id, {
@@ -588,12 +704,12 @@ class CancellationService {
         providerRefundId: refundResult.providerRefundId || cancellation.provider_refund_id || null,
       });
       const fullCancellation = cancellation.scope === "full";
-      await this.cancellationRepository.applyOrderProjection(cancellation, fullCancellation);
-      cancellation = await this.cancellationRepository.update(cancellation.id, {
-        metadata: { projectionApplied: true, projectionAppliedAt: new Date().toISOString() },
-      });
+      const cancellationReady = ["completed", "not_required"].includes(refundResult.refundStatus);
+      if (cancellationReady) {
+        cancellation = await this.applyCancellationProjection(cancellation);
+      }
 
-      if (fullCancellation) {
+      if (fullCancellation && cancellationReady) {
         const paymentStatus = this.resolveOrderPaymentStatus(cancellation, order, refundResult.refundStatus);
         if (order.status !== ORDER_STATUS.CANCELLED || order.payment_status !== paymentStatus) {
           await this.orderRepository.updateStatus(order.id, ORDER_STATUS.CANCELLED, {
@@ -757,6 +873,14 @@ class CancellationService {
     }, actor);
   }
 
+  async applyCancellationProjection(cancellation) {
+    if (cancellation.metadata?.projectionApplied) return cancellation;
+    await this.cancellationRepository.applyOrderProjection(cancellation, cancellation.scope === "full");
+    return this.cancellationRepository.update(cancellation.id, {
+      metadata: { projectionApplied: true, projectionAppliedAt: new Date().toISOString() },
+    });
+  }
+
   async completeManualRefund(cancellationId, payload = {}, actor = {}) {
     if (!this.isAdmin(actor)) throw new AppError("Only admin users can confirm manual refunds", 403);
     const cancellation = await this.cancellationRepository.findById(cancellationId);
@@ -770,7 +894,8 @@ class CancellationService {
     if (!cancellation.metadata?.walletProcessed && Number(cancellation.wallet_refund_amount || 0) > 0) {
       await this.processWallet(cancellation, order, actor);
     }
-    const creditNote = await this.createCreditNoteIfRequired(cancellation, actor);
+    const projectedCancellation = await this.applyCancellationProjection(cancellation);
+    const creditNote = await this.createCreditNoteIfRequired(projectedCancellation, actor);
     const financeResult = await this.processSellerFinance(cancellation, actor);
     await this.syncPaymentState(cancellation, order, "completed");
     if (cancellation.scope === "full" && order.payment_status !== PAYMENT_STATUS.REFUNDED) {
@@ -792,13 +917,83 @@ class CancellationService {
         manualRefundReference: payload.referenceId,
         manualRefundProofUrl: payload.proofUrl || null,
         manualRefundConfirmedBy: actor.userId,
-        walletProcessed: Number(cancellation.wallet_refund_amount || 0) > 0 || Boolean(cancellation.metadata?.walletProcessed),
+        walletProcessed: Number(cancellation.wallet_refund_amount || 0) > 0 || Boolean(projectedCancellation.metadata?.walletProcessed),
         walletProcessedAt: Number(cancellation.wallet_refund_amount || 0) > 0 ? new Date().toISOString() : cancellation.metadata?.walletProcessedAt,
         sellerFinance: financeResult,
       },
     });
     await this.publishCancellationEvent(completed, actor);
     return completed;
+  }
+
+  async approveRefund(cancellationId, payload = {}, actor = {}) {
+    if (!this.isAdmin(actor)) throw new AppError("Only admin users can approve cancellation refunds", 403);
+    let cancellation = await this.cancellationRepository.findById(cancellationId);
+    if (!cancellation) throw new AppError("Cancellation not found", 404);
+    if (cancellation.refund_status === "completed") {
+      throw new AppError("This cancellation has already been refunded", 409, null, "REFUND_ALREADY_COMPLETED");
+    }
+    if (cancellation.refund_status !== "manual_review") {
+      throw new AppError("Cancellation is not awaiting refund approval", 409);
+    }
+    const order = await this.orderRepository.findByIdWithItems(cancellation.order_id);
+    if (!order) throw new AppError("Order not found", 404);
+    const providerAmount = Number(cancellation.provider_refund_amount || 0);
+    if (providerAmount > 0 && cancellation.payment_provider !== PAYMENT_PROVIDER.RAZORPAY) {
+      throw new AppError(
+        "This payment cannot be refunded through Razorpay. Use manual-refund after transferring the money.",
+        409,
+      );
+    }
+    cancellation = await this.cancellationRepository.claimRefundApproval(cancellationId, actor, payload.note);
+    if (!cancellation) throw new AppError("Cancellation refund is already being processed", 409);
+
+    if (!cancellation.metadata?.walletProcessed && Number(cancellation.wallet_refund_amount || 0) > 0) {
+      await this.processWallet(cancellation, order, actor);
+    }
+    let refundResult;
+    try {
+      refundResult = await this.processProviderRefund(cancellation, order);
+    } catch (error) {
+      await this.cancellationRepository.update(cancellationId, {
+        status: "failed",
+        refundStatus: "failed",
+        lastError: error.message,
+      });
+      throw error;
+    }
+    const refundCompleted = ["completed", "not_required"].includes(refundResult.refundStatus);
+    if (refundCompleted) cancellation = await this.applyCancellationProjection(cancellation);
+    const financeResult = refundCompleted ? await this.processSellerFinance(cancellation, actor) : null;
+    cancellation = await this.cancellationRepository.update(cancellationId, {
+      status: refundCompleted ? "completed" : "refund_pending",
+      refundStatus: refundResult.refundStatus,
+      providerRefundId: refundResult.providerRefundId || null,
+      financeStatus: refundCompleted ? "completed" : "pending",
+      completedAt: refundCompleted ? new Date() : null,
+      metadata: {
+        refundApprovedBy: actor.userId,
+        refundApprovedAt: new Date().toISOString(),
+        refundApprovalNote: payload.note || null,
+        walletProcessed: Number(cancellation.wallet_refund_amount || 0) > 0 || Boolean(cancellation.metadata?.walletProcessed),
+        walletProcessedAt: Number(cancellation.wallet_refund_amount || 0) > 0
+          ? new Date().toISOString()
+          : cancellation.metadata?.walletProcessedAt,
+        sellerFinance: financeResult,
+      },
+    });
+    await this.syncPaymentState(cancellation, order, refundResult.refundStatus);
+    if (refundCompleted && cancellation.scope === "full" && order.payment_status !== PAYMENT_STATUS.REFUNDED) {
+      await this.orderRepository.updateStatus(order.id, ORDER_STATUS.CANCELLED, {
+        actorId: actor.userId,
+        actorRole: actor.role,
+        reason: "approved_refund_completed",
+        paymentStatus: PAYMENT_STATUS.REFUNDED,
+        metadata: { cancellationId },
+      });
+    }
+    await this.publishCancellationEvent(cancellation, actor);
+    return cancellation;
   }
 
   async retry(cancellationId, actor = {}) {
@@ -849,6 +1044,7 @@ class CancellationService {
       ? await this.cancellationRepository.findById(cancellationId)
       : await this.cancellationRepository.findByProviderRefundId(entity.id);
     if (!cancellation) return { ignored: true };
+    if (cancellation.status === "completed" && cancellation.refund_status === "completed") return cancellation;
 
     if (eventType === "refund.failed" || entity.status === "failed") {
       return this.cancellationRepository.update(cancellation.id, {
@@ -869,6 +1065,7 @@ class CancellationService {
 
     const order = await this.orderRepository.findByIdWithItems(cancellation.order_id);
     if (!order) throw new AppError("Order not found", 404);
+    cancellation = await this.applyCancellationProjection(cancellation);
     const creditNote = await this.createCreditNoteIfRequired(cancellation, actor);
     const financeResult = await this.processSellerFinance(cancellation, actor);
     await this.syncPaymentState(cancellation, order, "completed");
@@ -921,6 +1118,9 @@ class CancellationService {
     const adjustments = Array.isArray(sellerFinance.adjustments)
       ? sellerFinance.adjustments.filter((adjustment) => String(adjustment.sellerId || adjustment.seller_id || "") === sellerKey)
       : [];
+    const sellerCanReview = (cancellation.items || []).every((item) =>
+      String(item.sellerId || item.seller_id || "") === sellerKey,
+    );
 
     return {
       ...cancellation,
@@ -935,8 +1135,14 @@ class CancellationService {
       seller_scoped: true,
       seller_id: sellerKey,
       seller_cancelled_value: sellerCancelledValue,
+      seller_can_review: sellerCanReview,
       metadata: {
         fullCancellation: Boolean(metadata.fullCancellation),
+        approvedAt: metadata.approvedAt || null,
+        approvalNote: metadata.approvalNote || null,
+        rejectedAt: metadata.rejectedAt || null,
+        rejectionReason: metadata.rejectionReason || null,
+        refundDestination: metadata.refundDestination || null,
         sellerFinance: { ...sellerFinance, adjustments },
       },
     };

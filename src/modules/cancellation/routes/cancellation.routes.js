@@ -8,7 +8,10 @@ const {
   listCancellationsSchema,
   cancellationParamSchema,
   retryCancellationSchema,
+  approveCancellationSchema,
+  rejectCancellationSchema,
   completeManualRefundSchema,
+  approveCancellationRefundSchema,
 } = require("../validation/cancellation.validation");
 
 const cancellationRoutes = express.Router();
@@ -17,6 +20,25 @@ const cancellationController = new CancellationController();
 cancellationRoutes.get("/", authenticate, checkInput(listCancellationsSchema), catchErrors(cancellationController.list));
 cancellationRoutes.get("/:cancellationId", authenticate, checkInput(cancellationParamSchema), catchErrors(cancellationController.get));
 cancellationRoutes.post("/:cancellationId/retry", authenticate, checkInput(retryCancellationSchema), catchErrors(cancellationController.retry));
+cancellationRoutes.post(
+  "/:cancellationId/approve",
+  authenticate,
+  checkInput(approveCancellationSchema),
+  catchErrors(cancellationController.approveCancellation),
+);
+cancellationRoutes.post(
+  "/:cancellationId/reject",
+  authenticate,
+  checkInput(rejectCancellationSchema),
+  catchErrors(cancellationController.rejectCancellation),
+);
+cancellationRoutes.post(
+  "/:cancellationId/approve-refund",
+  authenticate,
+  allowPermissions("orders:update"),
+  checkInput(approveCancellationRefundSchema),
+  catchErrors(cancellationController.approveRefund),
+);
 cancellationRoutes.post(
   "/:cancellationId/manual-refund",
   authenticate,

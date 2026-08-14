@@ -234,8 +234,22 @@ class PaymentService {
           },
           ...(codDisabledReason ? { disabledReason: codDisabledReason } : {}),
         },
-        { provider: PAYMENT_PROVIDER.MANUAL_UPI, label: "Manual UPI", enabled: true, chargeAmount: 0, payableNow: false },
-        { provider: PAYMENT_PROVIDER.MANUAL_BANK_TRANSFER, label: "Bank Transfer", enabled: true, chargeAmount: 0, payableNow: false },
+        {
+          provider: PAYMENT_PROVIDER.MANUAL_UPI,
+          label: "Manual UPI",
+          enabled: false,
+          chargeAmount: 0,
+          payableNow: false,
+          disabledReason: "Manual UPI is unavailable until payment instructions and proof verification are configured",
+        },
+        {
+          provider: PAYMENT_PROVIDER.MANUAL_BANK_TRANSFER,
+          label: "Bank Transfer",
+          enabled: false,
+          chargeAmount: 0,
+          payableNow: false,
+          disabledReason: "Bank transfer is unavailable until beneficiary details and proof verification are configured",
+        },
       ],
     };
   }
@@ -382,20 +396,10 @@ class PaymentService {
     }
 
     if ([PAYMENT_PROVIDER.MANUAL_BANK_TRANSFER, PAYMENT_PROVIDER.MANUAL_UPI].includes(payload.provider)) {
-      const payment = await this.createOfflinePayment({
-        ...payload,
-        buyerId: actor.userId,
-        order,
-        payableAmount,
-        status: PAYMENT_STATUS.INITIATED,
-        metadata: {
-          manual: true,
-          referenceId: payload.referenceId || null,
-          screenshotUrl: payload.screenshotUrl || null,
-          notes: payload.notes || {},
-        },
-      });
-      return mapPaymentResponse(payment);
+      throw new AppError(
+        "Manual UPI and bank transfer are unavailable until beneficiary instructions and payment-proof verification are configured",
+        409,
+      );
     }
 
     if (order.status === ORDER_STATUS.PAYMENT_FAILED) {

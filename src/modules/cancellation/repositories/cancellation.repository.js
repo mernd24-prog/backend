@@ -14,7 +14,7 @@ class CancellationRepository {
       order_id: payload.orderId,
       buyer_id: payload.buyerId,
       scope: payload.scope,
-      status: payload.status || "processing",
+      status: payload.status || "requested",
       reason_code: payload.reasonCode || null,
       reason: payload.reason,
       source_order_status: payload.sourceOrderStatus,
@@ -84,6 +84,65 @@ class CancellationRepository {
       values.metadata = knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify(payload.metadata || {})]);
     }
     const [row] = await knex("order_cancellations").where("id", id).update(values).returning("*");
+    return row || null;
+  }
+
+  async claimRefundApproval(id, actor = {}, note = null) {
+    const [row] = await knex("order_cancellations")
+      .where("id", id)
+      .where("refund_status", "manual_review")
+      .update({
+        status: "refund_pending",
+        refund_status: "pending",
+        metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({
+          refundApprovedBy: actor.userId || actor.sub || null,
+          refundApprovedAt: new Date().toISOString(),
+          refundApprovalNote: note || null,
+        })]),
+        updated_at: knex.fn.now(),
+      })
+      .returning("*");
+    return row || null;
+  }
+
+  async claimCancellationApproval(id, actor = {}, note = null) {
+    const [row] = await knex("order_cancellations")
+      .where("id", id)
+      .where("status", "requested")
+      .update({
+        status: "approved",
+        metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({
+          approvedBy: actor.userId || actor.sub || null,
+          approvedByRole: actor.role || null,
+          approvedAt: new Date().toISOString(),
+          approvalNote: note || null,
+        })]),
+        updated_at: knex.fn.now(),
+      })
+      .returning("*");
+    return row || null;
+  }
+
+  async claimCancellationRejection(id, actor = {}, reason) {
+    const [row] = await knex("order_cancellations")
+      .where("id", id)
+      .where("status", "requested")
+      .update({
+        status: "rejected",
+        refund_status: "not_required",
+        inventory_status: "not_required",
+        shipment_status: "not_required",
+        finance_status: "not_required",
+        completed_at: knex.fn.now(),
+        metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({
+          rejectedBy: actor.userId || actor.sub || null,
+          rejectedByRole: actor.role || null,
+          rejectedAt: new Date().toISOString(),
+          rejectionReason: reason,
+        })]),
+        updated_at: knex.fn.now(),
+      })
+      .returning("*");
     return row || null;
   }
 

@@ -23,6 +23,9 @@ const DEFAULT_SETTINGS = {
     gatewayFeePolicy: "platform_absorbs",
     gateway: "razorpay",
     refundPolicy: "manual_review",
+    cancellationRefundMode: "manual_after_approval",
+    returnRefundMode: "manual_after_qc",
+    refundDestination: "original_payment_method",
   },
   platformFees: {
     customerFeeType: "fixed",
@@ -123,6 +126,9 @@ const ALLOWED = {
     gatewayFeePolicy: ["platform_absorbs", "seller_deducted", "split"],
     gateway: ["razorpay", "cashfree", "stripe", "manual"],
     refundPolicy: ["manual_review", "auto_after_return", "instant_wallet", "gateway_original"],
+    cancellationRefundMode: ["manual_after_approval", "automatic_after_approval"],
+    returnRefundMode: ["manual_after_qc", "automatic_after_qc"],
+    refundDestination: ["original_payment_method", "wallet"],
   },
   platformFees: {
     feeType: ["fixed", "percentage"],
@@ -239,6 +245,22 @@ class CommerceSettingsService {
         merged[section] = value;
       }
     }
+    const paymentOverride = isPlainObject(override.payments) ? override.payments : {};
+    if (!Object.prototype.hasOwnProperty.call(paymentOverride, "cancellationRefundMode") && paymentOverride.refundPolicy) {
+      merged.payments.cancellationRefundMode = paymentOverride.refundPolicy === "manual_review"
+        ? "manual_after_approval"
+        : "automatic_after_approval";
+    }
+    if (!Object.prototype.hasOwnProperty.call(paymentOverride, "returnRefundMode") && paymentOverride.refundPolicy) {
+      merged.payments.returnRefundMode = paymentOverride.refundPolicy === "manual_review"
+        ? "manual_after_qc"
+        : "automatic_after_qc";
+    }
+    if (!Object.prototype.hasOwnProperty.call(paymentOverride, "refundDestination") && paymentOverride.refundPolicy) {
+      merged.payments.refundDestination = paymentOverride.refundPolicy === "instant_wallet"
+        ? "wallet"
+        : "original_payment_method";
+    }
     return this.normalize(merged);
   }
 
@@ -295,6 +317,21 @@ class CommerceSettingsService {
           source.payments.refundPolicy,
           ALLOWED.payments.refundPolicy,
           DEFAULT_SETTINGS.payments.refundPolicy,
+        ),
+        cancellationRefundMode: pickAllowed(
+          source.payments.cancellationRefundMode,
+          ALLOWED.payments.cancellationRefundMode,
+          source.payments.refundPolicy === "manual_review" ? "manual_after_approval" : "automatic_after_approval",
+        ),
+        returnRefundMode: pickAllowed(
+          source.payments.returnRefundMode,
+          ALLOWED.payments.returnRefundMode,
+          source.payments.refundPolicy === "manual_review" ? "manual_after_qc" : "automatic_after_qc",
+        ),
+        refundDestination: pickAllowed(
+          source.payments.refundDestination,
+          ALLOWED.payments.refundDestination,
+          source.payments.refundPolicy === "instant_wallet" ? "wallet" : "original_payment_method",
         ),
       },
       platformFees: {

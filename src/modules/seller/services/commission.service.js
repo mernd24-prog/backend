@@ -1595,7 +1595,9 @@ gstTcsAmount,
 
       const payoutId = uuidv4();
       const razorpayXSelected = this.isRazorpayXRequested(options.paymentMethod) || options.autoProcess === true;
-      const payoutStatus = razorpayXSelected ? "processing" : (payoutPolicy.manualApprovalRequired ? "pending" : "processing");
+      const payoutStatus = options.forceManualApproval
+        ? "pending"
+        : razorpayXSelected ? "processing" : (payoutPolicy.manualApprovalRequired ? "pending" : "processing");
       const skippedCommissions = evaluations
         .filter(({ release }) => !release.available)
         .map(({ release }) => ({
@@ -2380,6 +2382,45 @@ gstTcsAmount,
       return this.initiateRazorpayXPayout(payoutId, options);
     }
     return this.processPayout(payoutId, options.paymentReference || `batch_${Date.now()}`, options);
+  }
+
+  async requestSellerPayout(sellerId, options = {}) {
+    if (options.organizationId === undefined && !options.commissionIds?.length) {
+      const organizations = await knex("seller_commissions")
+        .distinct("organization_id")
+        .where("seller_id", sellerId)
+        .whereIn("status", ["pending", "approved"])
+        .whereNull("payout_id");
+      if (!organizations.length) throw new AppError("No commissions to payout", 400);
+      const results = [];
+      for (const row of organizations) {
+        results.push(await this.requestSellerPayout(sellerId, {
+          ...options,
+          organizationId: row.organization_id || null,
+        }));
+      }
+      return {
+        sellerId,
+        organizationWise: true,
+        results,
+        approvalRequired: true,
+        message: "Payout requests submitted for admin approval and manual transfer",
+      };
+    }
+    const range = this.buildDateRange(options.periodStart, options.periodEnd);
+    const payoutId = await this.initiatePayout(sellerId, range.periodStart, range.periodEnd, {
+      ...options,
+      source: "seller_request",
+      forceManualApproval: true,
+      paymentMethod: null,
+      autoProcess: false,
+    });
+    const payout = await knex("seller_payouts").where("id", payoutId).first();
+    return {
+      payout,
+      approvalRequired: true,
+      message: "Payout request submitted for admin approval and manual transfer",
+    };
   }
 
   async processScheduledPayouts(options = {}) {

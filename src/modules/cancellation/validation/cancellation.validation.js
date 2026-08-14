@@ -10,8 +10,8 @@ const listCancellationsSchema = Joi.object({
   query: Joi.object({
     orderId: Joi.string().uuid(),
     buyerId: Joi.string().max(128),
-    status: Joi.string().valid("processing", "refund_pending", "manual_review", "completed", "failed"),
-    refundStatus: Joi.string().valid("not_required", "pending", "provider_pending", "manual_review", "completed", "failed"),
+    status: Joi.string().valid("requested", "approved", "processing", "refund_pending", "manual_review", "completed", "failed", "rejected"),
+    refundStatus: Joi.string().valid("not_started", "not_required", "pending", "provider_pending", "manual_review", "completed", "failed"),
     scope: Joi.string().valid("full", "partial"),
     fromDate: Joi.date().iso(),
     toDate: Joi.date().iso(),
@@ -35,6 +35,22 @@ const retryCancellationSchema = Joi.object({
   params: cancellationIdParams.required(),
 });
 
+const approveCancellationSchema = Joi.object({
+  body: Joi.object({
+    note: Joi.string().trim().max(1000).allow("", null),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: cancellationIdParams.required(),
+});
+
+const rejectCancellationSchema = Joi.object({
+  body: Joi.object({
+    reason: Joi.string().trim().min(3).max(1000).required(),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: cancellationIdParams.required(),
+});
+
 const completeManualRefundSchema = Joi.object({
   body: Joi.object({
     referenceId: Joi.string().trim().min(3).max(180).required(),
@@ -45,9 +61,20 @@ const completeManualRefundSchema = Joi.object({
   params: cancellationIdParams.required(),
 });
 
+const approveCancellationRefundSchema = Joi.object({
+  body: Joi.object({
+    note: Joi.string().trim().max(1000).allow("", null),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: cancellationIdParams.required(),
+});
+
 module.exports = {
   listCancellationsSchema,
   cancellationParamSchema,
   retryCancellationSchema,
+  approveCancellationSchema,
+  rejectCancellationSchema,
   completeManualRefundSchema,
+  approveCancellationRefundSchema,
 };

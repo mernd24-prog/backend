@@ -32,6 +32,34 @@ class CancellationController {
     res.json(okResponse(result, "Cancellation recovery processed"));
   };
 
+  approveCancellation = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.cancellationService.approveCancellation(req.params.cancellationId, req.body, actor);
+    await auditService.approve(req, {
+      module: "orders",
+      entityId: result.order_id,
+      entityType: "OrderCancellation",
+      newData: result,
+      reason: req.body.note || "cancellation_approved",
+      description: "Item and quantity cancellation approved",
+    });
+    res.json(okResponse(result, "Cancellation approved; refund processing is now awaiting admin action where required"));
+  };
+
+  rejectCancellation = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.cancellationService.rejectCancellation(req.params.cancellationId, req.body, actor);
+    await auditService.statusChange(req, {
+      module: "orders",
+      entityId: result.order_id,
+      entityType: "OrderCancellation",
+      newData: result,
+      reason: req.body.reason,
+      description: "Item and quantity cancellation rejected",
+    });
+    res.json(okResponse(result, "Cancellation request rejected"));
+  };
+
   completeManualRefund = async (req, res) => {
     const actor = getCurrentUser(req);
     const result = await this.cancellationService.completeManualRefund(req.params.cancellationId, req.body, actor);
@@ -44,6 +72,22 @@ class CancellationController {
       description: "Manual cancellation refund confirmed",
     });
     res.json(okResponse(result, "Manual refund confirmed"));
+  };
+
+  approveRefund = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.cancellationService.approveRefund(req.params.cancellationId, req.body, actor);
+    await auditService.approve(req, {
+      module: "orders",
+      entityId: result.order_id,
+      entityType: "OrderCancellation",
+      newData: result,
+      reason: req.body.note || "cancellation_refund_approved",
+      description: "Cancellation refund approved for Razorpay processing",
+    });
+    res.json(okResponse(result, result.refund_status === "completed"
+      ? "Cancellation refund completed"
+      : "Cancellation refund approved and submitted to Razorpay"));
   };
 }
 

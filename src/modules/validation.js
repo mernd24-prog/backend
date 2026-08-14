@@ -382,6 +382,13 @@ const commissionValidation = {
     autoProcess: Joi.boolean(),
     note: Joi.string().trim().max(1000).allow("", null),
   }),
+  requestPayout: Joi.object({
+    organizationId: Joi.string().guid({ version: "uuidv4" }).allow(null),
+    commissionIds: Joi.array().items(Joi.string().guid({ version: "uuidv4" })).min(1).max(100),
+    periodStart: Joi.date(),
+    periodEnd: Joi.date(),
+    note: Joi.string().trim().max(1000).allow("", null),
+  }),
 };
 
 const searchValidation = {

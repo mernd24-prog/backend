@@ -266,6 +266,9 @@ class OrderService {
   async ensureShipmentsForOrder(orderId, actor = {}, reason = "order_created") {
     const order = await this.orderRepository.findByIdWithItems(orderId);
     if (!order || [ORDER_STATUS.CANCELLED, ORDER_STATUS.PAYMENT_FAILED].includes(order.status)) return;
+    const paidForFulfillment = order.payment_status === PAYMENT_STATUS.CAPTURED ||
+      (order.payment_provider === PAYMENT_PROVIDER.COD && order.payment_status === PAYMENT_STATUS.AUTHORIZED);
+    if (!paidForFulfillment) return;
 
     const itemsBySeller = this.groupOrderItemsBySeller(order.items || []);
     for (const group of itemsBySeller.values()) {
@@ -308,6 +311,12 @@ class OrderService {
   }
 
   async createOrder(payload, actor) {
+    if ([PAYMENT_PROVIDER.MANUAL_BANK_TRANSFER, PAYMENT_PROVIDER.MANUAL_UPI].includes(payload.paymentProvider)) {
+      throw new AppError(
+        "Manual UPI and bank transfer are not available. Choose Razorpay or Cash on Delivery.",
+        409,
+      );
+    }
     if (payload.idempotencyKey) {
       const existingOrder = await this.orderRepository.findByBuyerIdempotencyKey(
         actor.userId,
@@ -448,11 +457,6 @@ class OrderService {
         userId: actor.userId,
         role: actor.role || "buyer",
       });
-      // Create one forward shipment per seller as soon as the order exists.
-      // Confirmation later reuses the same shipment through repository
-      // idempotency rather than inserting a duplicate.
-      await this.ensureShipmentsForOrder(order.id, actor, "order_created");
-
       await this.referralService.recordInfluencerReferralOrder({
         orderId: order.id,
         customerId: actor.userId,
@@ -517,6 +521,12 @@ class OrderService {
   }
 
   async quoteOrder(payload, actor, options = {}) {
+    if ([PAYMENT_PROVIDER.MANUAL_BANK_TRANSFER, PAYMENT_PROVIDER.MANUAL_UPI].includes(payload.paymentProvider)) {
+      throw new AppError(
+        "Manual UPI and bank transfer are not available. Choose Razorpay or Cash on Delivery.",
+        409,
+      );
+    }
     const quoteUserId = options.buyerId || actor.userId;
     const pricedOrder = await this.pricingService.priceOrder({
       items: payload.items,
@@ -1206,9 +1216,23 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
         ),
         ...itemCancellations.map((cancellation) => ({
           id: `cancellation:${cancellation.id}:${item.id}`,
-          status: item.cancellation_status || "cancelled",
-          to_status: item.cancellation_status || "cancelled",
-          note: cancellation.reason || "Item cancellation processed",
+          status: cancellation.status === "requested"
+            ? "cancellation_requested"
+            : cancellation.status === "rejected"
+              ? "cancellation_rejected"
+              : cancellation.status === "completed"
+                ? (item.cancellation_status || "cancelled")
+                : "cancellation_approved",
+          to_status: cancellation.status === "requested"
+            ? "cancellation_requested"
+            : cancellation.status === "rejected"
+              ? "cancellation_rejected"
+              : cancellation.status === "completed"
+                ? (item.cancellation_status || "cancelled")
+                : "cancellation_approved",
+          note: cancellation.status === "rejected"
+            ? cancellation.metadata?.rejectionReason || "Cancellation request rejected"
+            : cancellation.reason || "Item cancellation request updated",
           source: "cancellation",
           cancellation_id: cancellation.id,
           created_at: cancellation.completed_at || cancellation.updated_at || cancellation.created_at,
@@ -1504,6 +1528,13 @@ const sellerPayoutAmount = Number(
       ORDER_STATUS.DELIVERED,
       ORDER_STATUS.FULFILLED,
     ];
+
+    const effectivePaymentStatus = actor.paymentStatus || order.payment_status;
+    const paidForFulfillment = effectivePaymentStatus === PAYMENT_STATUS.CAPTURED ||
+      (order.payment_provider === PAYMENT_PROVIDER.COD && effectivePaymentStatus === PAYMENT_STATUS.AUTHORIZED);
+    if ((nextStatus === ORDER_STATUS.CONFIRMED || fulfillmentStatuses.includes(nextStatus)) && !paidForFulfillment) {
+      throw new AppError("Payment must be completed before this order can be confirmed, packed, or shipped", 409);
+    }
 
     if (fulfillmentStatuses.includes(nextStatus)) {
       await this.inventoryService.assertCommittedForFulfillment(orderId);
@@ -2060,6 +2091,27 @@ const sellerPayoutAmount = Number(
     const order = await this.orderRepository.findByIdWithItems(orderId);
     if (!order) {
       throw new AppError("Order not found", 404);
+    }
+
+    const isAdmin = ["admin", "sub-admin", "super-admin"].includes(actor.role) || actor.isSuperAdmin;
+    if (!isAdmin && String(actor.userId || "") !== String(order.buyer_id || "")) {
+      throw new AppError("You cannot retry payment for this order", 403);
+    }
+    if (![ORDER_STATUS.PENDING_PAYMENT, ORDER_STATUS.PAYMENT_FAILED].includes(order.status)) {
+      throw new AppError("Payment cannot be retried after the order is confirmed or closed", 409);
+    }
+    if (order.payment_status === PAYMENT_STATUS.CAPTURED ||
+        (order.payment_provider === PAYMENT_PROVIDER.COD && order.payment_status === PAYMENT_STATUS.AUTHORIZED)) {
+      throw new AppError("This order is already paid", 409);
+    }
+    if (order.payment_provider && order.payment_provider !== PAYMENT_PROVIDER.RAZORPAY) {
+      throw new AppError("Only Razorpay orders can be retried online", 409);
+    }
+
+    // A pending order still owns its reservation. Reopening it would reserve the
+    // same units twice; payment initiation can safely reuse its provider order.
+    if (order.status === ORDER_STATUS.PENDING_PAYMENT) {
+      return order;
     }
 
     await this.inventoryService.reserveForOrder(

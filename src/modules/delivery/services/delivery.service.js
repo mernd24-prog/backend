@@ -6,7 +6,7 @@ const { OrderRepository } = require("../../order/repositories/order.repository")
 const { UserModel } = require("../../user/models/user.model");
 const { DealService } = require("../../deal/services/deal.service");
 const { CommissionService } = require("../../seller/services/commission.service");
-const { ORDER_STATUS, PAYMENT_PROVIDER } = require("../../../shared/domain/commerce-constants");
+const { ORDER_STATUS, PAYMENT_PROVIDER, PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const { DELIVERY_STATUS } = require("../models/delivery.model");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
@@ -242,6 +242,11 @@ class DeliveryService {
     if (![ORDER_STATUS.CONFIRMED, ORDER_STATUS.PACKED, ORDER_STATUS.SHIPPED, ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED].includes(order.status)) {
       throw new AppError("Shipment can be created only after order is confirmed", 409);
     }
+    const paidForFulfillment = order.payment_status === PAYMENT_STATUS.CAPTURED ||
+      (order.payment_provider === PAYMENT_PROVIDER.COD && order.payment_status === PAYMENT_STATUS.AUTHORIZED);
+    if (!paidForFulfillment) {
+      throw new AppError("Payment must be completed before a shipment can be created", 409);
+    }
 
     const orderSellerIds = Array.from(new Set(
       (order.items || []).map((item) => String(item.seller_id || item.sellerId || "")).filter(Boolean),
@@ -453,6 +458,13 @@ class DeliveryService {
     }
 
     await this.assertCanManageShipment(shipment, actor);
+    const order = await this.orderRepository.findById(shipment.order_id);
+    if (!order) throw new AppError("Order not found", 404);
+    const paidForFulfillment = order.payment_status === PAYMENT_STATUS.CAPTURED ||
+      (order.payment_provider === PAYMENT_PROVIDER.COD && order.payment_status === PAYMENT_STATUS.AUTHORIZED);
+    if (this.isForwardShipment(shipment) && payload.status !== DELIVERY_STATUS.CANCELLED && !paidForFulfillment) {
+      throw new AppError("Payment must be completed before shipment processing can begin", 409);
+    }
     if (payload.status === DELIVERY_STATUS.CANCELLED) {
       throw new AppError(
         "Cancel the order items through the Cancellations workflow so inventory and refunds are processed correctly",
