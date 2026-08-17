@@ -925,6 +925,189 @@ class ProductService {
     });
   }
 
+  async getProductPrefillBasic(query = {}, actor = {}) {
+    const includeInactive = query.includeInactive === true || query.includeInactive === "true";
+    const cacheKey = `products:prefill:basic:${JSON.stringify({ includeInactive })}`;
+    return remember(cacheKey, 300, async () => {
+      const catalog = await this.platformService.getCatalogPrefillData({ includeInactive });
+      const optionValuesByOptionId = (catalog.optionValues || []).reduce((acc, item) => {
+        const optionId = String(item.optionId || item.option_id || "");
+        if (!optionId) return acc;
+        if (!acc[optionId]) acc[optionId] = [];
+        acc[optionId].push(item);
+        return acc;
+      }, {});
+
+      const categoryTree = this.platformService.buildCategoryTree(
+        (catalog.categories || []).map((category) =>
+          category?.toObject ? category.toObject({ depopulate: true, flattenMaps: true }) : category,
+        ),
+      );
+
+      return {
+        categories: catalog.categories || [],
+        subCategories: (catalog.categories || []).filter((category) => Number(category.level || 0) === 1),
+        childCategories: (catalog.categories || []).filter((category) => Number(category.level || 0) >= 2),
+        categoryTree,
+        categoryAttributes: catalog.categoryAttributes || [],
+        attributes: catalog.categoryAttributes || [],
+        brands: catalog.brands || [],
+        warrantyTemplates: catalog.warrantyTemplates || [],
+        productFamilies: catalog.families || [],
+        families: catalog.families || [],
+        productVariants: catalog.variants || [],
+        productOptions: catalog.options || [],
+        options: catalog.options || [],
+        optionValues: catalog.optionValues || [],
+        optionValuesByOptionId,
+        hsn: catalog.hsnCodes || [],
+        hsnCodes: catalog.hsnCodes || [],
+        gst: {
+          taxes: catalog.taxes || [],
+          subTaxes: catalog.subTaxes || [],
+          taxRules: catalog.taxRules || [],
+        },
+        taxClasses: catalog.taxes || [],
+        meta: { cached: true, generatedAt: new Date().toISOString(), includeInactive },
+      };
+    });
+  }
+
+  async getProductPrefillLookups(query = {}, actor = {}) {
+    const includeInactive = query.includeInactive === true || query.includeInactive === "true";
+    const sellerId = isSellerRole(actor) ? actor.ownerSellerId || actor.userId : query.sellerId || null;
+    const cacheKey = `products:prefill:lookups:${JSON.stringify({ includeInactive, sellerId })}`;
+    return remember(cacheKey, 300, async () => {
+      const activeFilter = includeInactive ? {} : { active: true };
+      const rawActiveFilter = includeInactive
+        ? {}
+        : { $or: [{ active: true }, { isActive: true }, { active: { $exists: false }, isActive: { $exists: false } }] };
+
+      const [collections, tags, badges, organizationsResult, sellers] = await Promise.all([
+        this.listRawMasterCollection("collections", rawActiveFilter, { sort: { sortOrder: 1, name: 1 } }),
+        this.listRawMasterCollection("tags", activeFilter, { sort: { group: 1, name: 1 }, limit: 1000 }),
+        this.listRawMasterCollection("badges", activeFilter, { sort: { type: 1, priority: 1, name: 1 } }),
+        sellerId
+          ? sellerOrganizationService.organizationRepository.listBySeller(sellerId)
+          : sellerOrganizationService.organizationRepository.list({ limit: 500 }),
+        UserModel.find({
+          role: { $in: ["seller"] },
+          ...(includeInactive ? {} : { accountStatus: "active" }),
+        })
+          .select("email phone profile sellerProfile accountStatus role")
+          .sort({ "sellerProfile.displayName": 1, email: 1 })
+          .limit(500)
+          .lean(),
+      ]);
+
+      return {
+        collections,
+        tags,
+        badges,
+        organizations: Array.isArray(organizationsResult) ? organizationsResult : organizationsResult.items || [],
+        sellers: sellers.map((seller) => ({
+          ...seller,
+          _id: String(seller._id || seller.id),
+          id: String(seller._id || seller.id),
+          name:
+            seller.sellerProfile?.displayName ||
+            seller.sellerProfile?.legalBusinessName ||
+            [seller.profile?.firstName, seller.profile?.lastName].filter(Boolean).join(" ") ||
+            seller.email,
+        })),
+        shippingClasses: [
+          { value: "light", label: "Light" },
+          { value: "standard", label: "Standard" },
+          { value: "heavy", label: "Heavy" },
+          { value: "fragile", label: "Fragile" },
+          { value: "cold_chain", label: "Cold chain" },
+          { value: "hazmat", label: "Dangerous goods" },
+        ],
+        returnPolicies: [
+          { value: "standard", label: "Standard return", days: 7 },
+          { value: "replacement_only", label: "Replacement only", days: 7 },
+          { value: "non_returnable", label: "Non-returnable", days: 0 },
+        ],
+        meta: { cached: true, generatedAt: new Date().toISOString(), includeInactive },
+      };
+    });
+  }
+
+  async getProductPrefillLocations(query = {}, actor = {}) {
+    const includeInactive = query.includeInactive === true || query.includeInactive === "true";
+    const cacheKey = `products:prefill:locations:${JSON.stringify({ includeInactive })}`;
+    return remember(cacheKey, 300, async () => {
+      const [warehouses, countries, states, cities] = await Promise.all([
+        WarehouseModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(500).lean(),
+        AdminCountryModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(500).lean(),
+        AdminStateModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(2000).lean(),
+        AdminCityModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(5000).lean(),
+      ]);
+
+      return {
+        warehouses,
+        countries,
+        states,
+        cities,
+        meta: { cached: true, generatedAt: new Date().toISOString(), includeInactive },
+      };
+    });
+  }
+
+  async getProductPrefillProducts(query = {}, actor = {}) {
+    const includeInactive = query.includeInactive === true || query.includeInactive === "true";
+    const productLimit = Math.min(200, Math.max(1, Number(query.productLimit || query.limit || 100)));
+    const sellerId = isSellerRole(actor)
+      ? actor.ownerSellerId || actor.userId
+      : query.sellerId || null;
+
+    const cacheKey = `products:prefill:products:${JSON.stringify({ includeInactive, sellerId, productLimit })}`;
+    return remember(cacheKey, 300, async () => {
+      const relatedProductFilter = {
+        ...(sellerId ? { sellerId } : {}),
+        ...(query.organizationId ? { organizationId: query.organizationId } : {}),
+        ...(includeInactive
+          ? {}
+          : { status: { $in: [PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.INACTIVE, PRODUCT_STATUS.DRAFT, PRODUCT_STATUS.PENDING_APPROVAL] } }),
+      };
+
+      const relatedProducts = (await this.productRepository.paginate(relatedProductFilter, {
+        page: 1,
+        limit: productLimit,
+        skip: 0,
+        sortBy: "newest",
+      }, {
+        projection: {
+          title: 1,
+          sku: 1,
+          sellerId: 1,
+          organizationId: 1,
+          status: 1,
+          brand: 1,
+          category: 1,
+          images: 1,
+        },
+        lean: true,
+      })).items.map((product) => ({
+        _id: String(product._id || product.id),
+        id: String(product._id || product.id),
+        title: product.title,
+        sku: product.sku || "",
+        sellerId: product.sellerId || "",
+        organizationId: product.organizationId || "",
+        status: product.status,
+        brand: product.brand || "",
+        category: product.category || "",
+        image: product.images?.[0] || null,
+      }));
+
+      return {
+        relatedProducts,
+        meta: { cached: true, generatedAt: new Date().toISOString(), includeInactive, includeProducts: true },
+      };
+    });
+  }
+
   async validateProductReferences(payload = {}, actor = {}, existingProduct = null) {
     const brand = payload.brand;
     if (brand) {

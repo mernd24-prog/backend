@@ -49,6 +49,34 @@ productRoutes.get(
   checkInput(productPrefillSchema),
   catchErrors(productController.prefill),
 );
+productRoutes.get(
+  "/prefill/basic",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(productPrefillSchema),
+  catchErrors(productController.prefillBasic),
+);
+productRoutes.get(
+  "/prefill/lookups",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(productPrefillSchema),
+  catchErrors(productController.prefillLookups),
+);
+productRoutes.get(
+  "/prefill/locations",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(productPrefillSchema),
+  catchErrors(productController.prefillLocations),
+);
+productRoutes.get(
+  "/prefill/products",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(productPrefillSchema),
+  catchErrors(productController.prefillProducts),
+);
 
 // ── Seller ────────────────────────────────────────────────────────────────────
 

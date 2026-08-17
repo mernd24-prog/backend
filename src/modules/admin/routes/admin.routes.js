@@ -593,6 +593,26 @@ adminRoutes.get(
   checkInput(productPrefillSchema),
   catchErrors(productController.prefill),
 );
+adminRoutes.get(
+  "/products/prefill/basic",
+  checkInput(productPrefillSchema),
+  catchErrors(productController.prefillBasic),
+);
+adminRoutes.get(
+  "/products/prefill/lookups",
+  checkInput(productPrefillSchema),
+  catchErrors(productController.prefillLookups),
+);
+adminRoutes.get(
+  "/products/prefill/locations",
+  checkInput(productPrefillSchema),
+  catchErrors(productController.prefillLocations),
+);
+adminRoutes.get(
+  "/products/prefill/products",
+  checkInput(productPrefillSchema),
+  catchErrors(productController.prefillProducts),
+);
 adminRoutes.post(
   "/products/bulk/update",
   checkInput(bulkProductSchema),

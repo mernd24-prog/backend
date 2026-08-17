@@ -3,6 +3,7 @@ const { getPage } = require("../../../shared/tools/page");
 const { ProductService } = require("../services/product.service");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
 const { auditService } = require("../../../shared/logger/audit.service");
+const { logger } = require("../../../shared/logger/logger");
 
 class ProductController {
   constructor({ productService = new ProductService() } = {}) {
@@ -23,7 +24,51 @@ class ProductController {
 
   prefill = async (req, res) => {
     const actor = getCurrentUser(req);
+    const start = Date.now();
+    const actorId = actor?.userId || actor?.sub || actor?.id || null;
     const result = await this.productService.getProductPrefillData(req.query, actor);
+    const duration = Date.now() - start;
+    logger.info({ actorId, duration, cached: result?.meta?.cached }, "product.prefill: full fetched");
+    res.json(okResponse(result));
+  };
+
+  prefillBasic = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const start = Date.now();
+    const actorId = actor?.userId || actor?.sub || actor?.id || null;
+    const result = await this.productService.getProductPrefillBasic(req.query, actor);
+    const duration = Date.now() - start;
+    logger.info({ actorId, duration, keys: Object.keys(result || {}).length, cached: result?.meta?.cached }, "product.prefill.basic: fetched");
+    res.json(okResponse(result));
+  };
+
+  prefillLookups = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const start = Date.now();
+    const actorId = actor?.userId || actor?.sub || actor?.id || null;
+    const result = await this.productService.getProductPrefillLookups(req.query, actor);
+    const duration = Date.now() - start;
+    logger.info({ actorId, duration, keys: Object.keys(result || {}).length, cached: result?.meta?.cached }, "product.prefill.lookups: fetched");
+    res.json(okResponse(result));
+  };
+
+  prefillLocations = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const start = Date.now();
+    const actorId = actor?.userId || actor?.sub || actor?.id || null;
+    const result = await this.productService.getProductPrefillLocations(req.query, actor);
+    const duration = Date.now() - start;
+    logger.info({ actorId, duration, keys: Object.keys(result || {}).length, cached: result?.meta?.cached }, "product.prefill.locations: fetched");
+    res.json(okResponse(result));
+  };
+
+  prefillProducts = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const start = Date.now();
+    const actorId = actor?.userId || actor?.sub || actor?.id || null;
+    const result = await this.productService.getProductPrefillProducts(req.query, actor);
+    const duration = Date.now() - start;
+    logger.info({ actorId, duration, relatedProducts: (result?.relatedProducts || []).length, cached: result?.meta?.cached }, "product.prefill.products: fetched");
     res.json(okResponse(result));
   };
 
