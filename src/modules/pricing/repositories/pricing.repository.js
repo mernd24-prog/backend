@@ -11,7 +11,28 @@ class PricingRepository {
   }
 
   async incrementCouponUsage(couponId) {
-    return CouponModel.findByIdAndUpdate(couponId, { $inc: { usedCount: 1 } }, { new: true });
+    return CouponModel.findOneAndUpdate(
+      {
+        _id: couponId,
+        $expr: {
+          $or: [
+            { $eq: [{ $ifNull: ["$usageLimit", null] }, null] },
+            { $lt: [{ $ifNull: ["$usedCount", 0] }, "$usageLimit"] },
+          ],
+        },
+      },
+      { $inc: { usedCount: 1 } },
+      { new: true },
+    );
+  }
+
+  async decrementCouponUsage(couponId) {
+    if (!couponId) return null;
+    return CouponModel.findOneAndUpdate(
+      { _id: couponId, usedCount: { $gt: 0 } },
+      { $inc: { usedCount: -1 } },
+      { new: true },
+    );
   }
 
   async listCoupons(filter = {}) {

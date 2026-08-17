@@ -24,6 +24,11 @@ function getRazorpayClient() {
     key_id: env.razorpay.keyId,
     key_secret: env.razorpay.keySecret,
   });
+  // The SDK does not expose timeout in its constructor, but its HTTP client is
+  // Axios. Set a finite deadline so provider degradation cannot pin requests.
+  if (razorpayClient.api?.rq?.defaults) {
+    razorpayClient.api.rq.defaults.timeout = env.razorpay.timeoutMs;
+  }
 
   return razorpayClient;
 }
@@ -38,7 +43,9 @@ function verifyRazorpaySignature({ orderId, paymentId, signature }) {
     .update(`${orderId}|${paymentId}`)
     .digest("hex");
 
-  return expectedSignature === signature;
+  const received = Buffer.from(String(signature || ""), "utf8");
+  const expected = Buffer.from(expectedSignature, "utf8");
+  return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
 
 function verifyRazorpayWebhookSignature(rawBody, signature, secret = env.razorpay.webhookSecret) {
@@ -51,7 +58,9 @@ function verifyRazorpayWebhookSignature(rawBody, signature, secret = env.razorpa
     .update(rawBody)
     .digest("hex");
 
-  return expectedSignature === signature;
+  const received = Buffer.from(String(signature || ""), "utf8");
+  const expected = Buffer.from(expectedSignature, "utf8");
+  return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
 
 module.exports = {

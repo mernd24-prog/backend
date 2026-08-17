@@ -10,7 +10,9 @@ const { notFoundHandler } = require("../shared/middleware/not-found");
 const { errorHandler } = require("../shared/middleware/error-handler");
 const { connectMongo } = require("../infrastructure/mongo/mongo-client");
 const { connectPostgres } = require("../infrastructure/postgres/postgres-client");
-// const { connectRedis } = require("../infrastructure/redis/redis-client");
+const { redis } = require("../infrastructure/redis/redis-client");
+const { mongoose } = require("../infrastructure/mongo/mongo-client");
+const { postgresPool } = require("../infrastructure/postgres/postgres-client");
 const { registerRoutes } = require("../api/register-routes");
 const { registerWorkers } = require("../workers/register-workers");
 const { registerCronJobs } = require("../infrastructure/cron/register-cron");
@@ -18,6 +20,7 @@ const { auditLog } = require("../shared/middleware/audit-log");
 const { registerRealtimeSubscribers } = require("../infrastructure/realtime/register-realtime");
 const { registerDomainHandlers } = require("../infrastructure/events/register-domain-handlers");
 const { createMetricsMiddleware } = require("../infrastructure/observability/metrics");
+const { RedisRateLimitStore } = require("../shared/middleware/redis-rate-limit-store");
 
 function registerBackgroundServices() {
   registerWorkers();
@@ -69,8 +72,23 @@ function requestLoggerOptions() {
   };
 }
 
+function withHealthTimeout(promise, name, timeoutMs = 2000) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`${name} readiness check timed out`)), timeoutMs);
+      timer.unref?.();
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 async function createApp({ startBackgroundServices = true } = {}) {
-  await Promise.all([connectMongo(), connectPostgres()]);
+  await Promise.all([
+    connectMongo(),
+    connectPostgres(),
+    env.production ? redis.ping() : Promise.resolve(),
+  ]);
 
   const app = express();
 
@@ -93,7 +111,12 @@ async function createApp({ startBackgroundServices = true } = {}) {
   });
   app.use(
     cors({
-      origin: env.cors.origin === "*" ? true : env.cors.origin,
+      origin(origin, callback) {
+        if (!origin || env.cors.origin === "*" || env.cors.origin.includes(origin)) {
+          return callback(null, true);
+        }
+        return callback(new Error("Origin is not allowed by CORS"));
+      },
       credentials: true,
       exposedHeaders: [
         "X-Selected-Organization-Id",
@@ -102,14 +125,14 @@ async function createApp({ startBackgroundServices = true } = {}) {
     })
   );
 
-  // app.use(
-  //   rateLimit({
-  //     windowMs: 60 * 1000,
-  //     max: 300,
-  //     standardHeaders: true,
-  //     legacyHeaders: false,
-  //   })
-  // );
+  app.use(rateLimit({
+    windowMs: 60 * 1000,
+    max: env.production ? 300 : 3000,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new RedisRateLimitStore({ prefix: "rate:api:", windowMs: 60 * 1000 }),
+    skip: (req) => req.path === "/health" || req.path === "/live" || req.path === "/ready",
+  }));
 
   app.use(
     express.json({
@@ -135,7 +158,36 @@ async function createApp({ startBackgroundServices = true } = {}) {
     res.json({ success: true, service: env.appName, status: "ok" });
   });
 
-  app.use("/uploads", express.static(path.resolve(__dirname, "../../uploads")));
+  app.get("/live", (req, res) => {
+    res.json({ success: true, service: env.appName, status: "alive" });
+  });
+
+  app.get("/ready", async (req, res) => {
+    const checks = await Promise.allSettled([
+      withHealthTimeout(postgresPool.query("SELECT 1"), "PostgreSQL"),
+      mongoose.connection.readyState === 1
+        ? Promise.resolve()
+        : Promise.reject(new Error("MongoDB is not connected")),
+      withHealthTimeout(redis.ping(), "Redis"),
+    ]);
+    const names = ["postgres", "mongo", "redis"];
+    const dependencies = Object.fromEntries(checks.map((result, index) => [
+      names[index], result.status === "fulfilled" ? "ok" : "unavailable",
+    ]));
+    const ready = checks.every((result) => result.status === "fulfilled");
+    res.status(ready ? 200 : 503).json({
+      success: ready,
+      service: env.appName,
+      status: ready ? "ready" : "not_ready",
+      dependencies,
+    });
+  });
+
+  // Production uploads must use private/object storage. Do not accidentally
+  // expose files left on an application instance by an older deployment.
+  if (!env.production) {
+    app.use("/uploads", express.static(path.resolve(__dirname, "../../uploads")));
+  }
   app.use(auditLog);
   app.use(createMetricsMiddleware());
 

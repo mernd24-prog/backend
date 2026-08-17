@@ -1,20 +1,5 @@
-const redis = require("ioredis");
-const { env } = require("../../config/env");
+const { redis: redisClient } = require("../redis/redis-client");
 const { logger } = require("../../shared/logger/logger");
-
-const redisClient = new redis(env.redisUrl || "redis://localhost:6379", {
-  maxRetriesPerRequest: null,
-  enableReadyCheck: false,
-  enableOfflineQueue: false,
-});
-
-redisClient.on("connect", () => {
-  logger.info("Redis connected");
-});
-
-redisClient.on("error", (err) => {
-  logger.error({ err }, "Redis connection error");
-});
 
 // Cache TTL constants (in seconds)
 const CACHE_TTL = {
@@ -77,10 +62,12 @@ async function deleteCached(key) {
 
 async function deletePatternCached(pattern) {
   try {
-    const keys = await redisClient.keys(pattern);
-    if (keys.length > 0) {
-      await redisClient.del(...keys);
-    }
+    let cursor = "0";
+    do {
+      const [nextCursor, keys] = await redisClient.scan(cursor, "MATCH", pattern, "COUNT", 200);
+      cursor = nextCursor;
+      if (keys.length > 0) await redisClient.unlink(...keys);
+    } while (cursor !== "0");
     return true;
   } catch (error) {
     logger.warn({ err: error, pattern }, "Cache pattern delete error");

@@ -23,7 +23,11 @@ const {
 const authRoutes = express.Router();
 const authController = new AuthController();
 
-// authRoutes.use(authRateLimit);
+authRoutes.use([
+  "/register", "/register-otp", "/verify-registration", "/login",
+  "/influencer/login", "/social", "/refresh", "/otp-auth", "/send-otp",
+  "/verify-otp", "/resend-otp", "/forgot-password", "/reset-password",
+], authRateLimit);
 authRoutes.post("/register", checkInput(registerSchema), catchErrors(authController.register));
 authRoutes.post("/register-otp", checkInput(registerWithOtpSchema), catchErrors(authController.registerWithOtp));
 authRoutes.post("/verify-registration", checkInput(verifyRegistrationSchema), catchErrors(authController.verifyRegistration));
@@ -49,4 +53,3 @@ authRoutes.post("/change-password", authenticate, checkInput(changePasswordSchem
 authRoutes.get("/status", authenticateForStatus, catchErrors(authController.status));
 
 module.exports = { authRoutes };
-

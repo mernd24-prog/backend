@@ -1,5 +1,5 @@
 const { logger } = require("../../shared/logger/logger");
-const { incrementCounter } = require("../cache/redis-client");
+const { redis } = require("../redis/redis-client");
 
 /**
  * Observability & Metrics Tracking
@@ -24,7 +24,8 @@ const metrics = {
 
 async function trackMetric(metricName, value = 1) {
   try {
-    await incrementCounter(`metric:${metricName}`, value);
+    if (redis.status !== "ready") return;
+    await redis.incrby(`metric:${metricName}`, value);
   } catch (error) {
     logger.warn({ err: error, metricName }, "Metric tracking error");
   }
@@ -33,8 +34,8 @@ async function trackMetric(metricName, value = 1) {
 async function trackLatency(endpoint, latencyMs) {
   const bucketKey = `latency:${endpoint}`;
   try {
-    await incrementCounter(`${bucketKey}:total`, latencyMs);
-    await incrementCounter(`${bucketKey}:count`, 1);
+    if (redis.status !== "ready") return;
+    await redis.multi().incrby(`${bucketKey}:total`, latencyMs).incrby(`${bucketKey}:count`, 1).exec();
   } catch (error) {
     logger.warn({ err: error, endpoint }, "Latency tracking error");
   }
@@ -46,13 +47,19 @@ function createMetricsMiddleware() {
 
     res.on("finish", async () => {
       const latency = Date.now() - startTime;
-      const endpoint = `${req.method}:${req.route?.path || req.path}`;
+      const normalizedPath = String(req.baseUrl || "") + String(req.route?.path || req.path || "")
+        .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, ":id")
+        .replace(/\b[0-9a-f]{24}\b/gi, ":id")
+        .replace(/\/\d+(?=\/|$)/g, "/:id");
+      const endpoint = `${req.method}:${normalizedPath}`;
 
-      await trackLatency(endpoint, latency);
-      await trackMetric("requests");
-
-      if (res.statusCode >= 400) {
-        await trackMetric("errors");
+      if (redis.status === "ready") {
+        const pipeline = redis.multi()
+          .incrby(`latency:${endpoint}:total`, latency)
+          .incrby(`latency:${endpoint}:count`, 1)
+          .incrby("metric:requests", 1);
+        if (res.statusCode >= 400) pipeline.incrby("metric:errors", 1);
+        await pipeline.exec().catch((error) => logger.warn({ err: error, endpoint }, "Metric tracking error"));
       }
 
       logger.debug({ endpoint, statusCode: res.statusCode, latency }, "Request completed");

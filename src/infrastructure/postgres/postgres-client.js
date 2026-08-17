@@ -12,6 +12,18 @@ const postgresPool = new Pool({
   idleTimeoutMillis: env.postgres.idleTimeoutMillis,
 });
 
+// node-postgres emits idle-client failures on the Pool itself. Without an
+// error listener Node treats that event as an uncaught exception and shuts
+// down the entire API for a recoverable database/network disconnect. The pool
+// automatically removes the failed client and creates a replacement for the
+// next request.
+postgresPool.on("error", (error) => {
+  logger.error({
+    code: error?.code || "POSTGRES_IDLE_CONNECTION_ERROR",
+    message: error?.message || "PostgreSQL idle connection failed",
+  }, "PostgreSQL pool discarded a failed idle connection");
+});
+
 function describePostgresTarget() {
   try {
     const url = new URL(env.postgresUrl);

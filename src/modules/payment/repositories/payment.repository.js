@@ -7,6 +7,13 @@ class PaymentRepository {
     this.outboxRepository = outboxRepository;
   }
 
+  async withOrderPaymentLock(orderId, callback) {
+    return knex.transaction(async (trx) => {
+      await trx.raw("SELECT pg_advisory_xact_lock(hashtext(?))", [`payment:${orderId}`]);
+      return callback();
+    });
+  }
+
   async createPayment(payload, event) {
     const payment = {
       id: uuidv4(),
@@ -69,7 +76,7 @@ class PaymentRepository {
   }
 
   async listPaymentsByBuyer(buyerId) {
-    return knex("payments").where("buyer_id", buyerId).orderBy("created_at", "desc");
+    return knex("payments").where("buyer_id", buyerId).orderBy("created_at", "desc").limit(100);
   }
 
   async findByOrderId(orderId, buyerId) {
@@ -177,8 +184,13 @@ class PaymentRepository {
     const trx = await knex.transaction();
 
     try {
-      const [payment] = await trx("payments")
-        .where("id", paymentId)
+      const updateQuery = trx("payments").where("id", paymentId);
+      if (payload.status === "failed") {
+        updateQuery.whereNotIn("status", ["captured", "partially_refunded", "refunded"]);
+      } else if (payload.status === "captured") {
+        updateQuery.whereNotIn("status", ["partially_refunded", "refunded"]);
+      }
+      const [payment] = await updateQuery
         .update({
           status: payload.status,
           provider_payment_id: payload.providerPaymentId || knex.raw("COALESCE(provider_payment_id, ?)", [null]),
@@ -199,7 +211,7 @@ class PaymentRepository {
       }
 
       await trx.commit();
-      return payment || null;
+      return payment || this.findById(paymentId);
     } catch (error) {
       await trx.rollback();
       throw error;

@@ -3,10 +3,12 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const multer = require("multer");
+const { rateLimit, ipKeyGenerator } = require("express-rate-limit");
 const { AppError } = require("../errors/app-error");
 const { env } = require("../../config/env");
 const { okResponse } = require("../http/reply");
 const { authenticate } = require("../middleware/authenticate");
+const { RedisRateLimitStore } = require("../middleware/redis-rate-limit-store");
 const { catchErrors } = require("../middleware/catch-errors");
 const {
   ALLOWED_DOCUMENT_MIME_TYPES,
@@ -20,6 +22,16 @@ const maxImageBytes = 10 * 1024 * 1024;
 const maxVideoBytes = 100 * 1024 * 1024;
 const maxDocumentBytes = env.upload.maxDocumentBytes;
 const tempUploadDir = path.join(os.tmpdir(), "ecommerce-uploads");
+const uploadRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: new RedisRateLimitStore({ prefix: "rate:upload:", windowMs: 15 * 60 * 1000 }),
+  keyGenerator: (req) => req.auth?.sub || ipKeyGenerator(req.ip),
+});
+
+fileUploaderRoutes.use(authenticate, uploadRateLimit);
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -101,7 +113,6 @@ function runUpload(middleware) {
 
 fileUploaderRoutes.post(
   "/upload",
-  authenticate,
   runUpload(upload.single("file")),
   catchErrors(async (req, res) => {
     const image = await fileUploadService.uploadImage(req.file, {
@@ -120,7 +131,6 @@ fileUploaderRoutes.post(
 
 fileUploaderRoutes.post(
   "/upload-multi",
-  authenticate,
   runUpload(upload.array("file", 10)),
   catchErrors(async (req, res) => {
     const files = req.files || [];
@@ -147,7 +157,6 @@ fileUploaderRoutes.post(
 
 fileUploaderRoutes.post(
   "/upload-document",
-  authenticate,
   runUpload(documentUpload.single("file")),
   catchErrors(async (req, res) => {
     const document = await fileUploadService.uploadDocument(req.file, {
@@ -166,7 +175,6 @@ fileUploaderRoutes.post(
 
 fileUploaderRoutes.post(
   "/upload-video",
-  authenticate,
   runUpload(videoUpload.single("file")),
   catchErrors(async (req, res) => {
     const video = await fileUploadService.uploadVideo(req.file, {

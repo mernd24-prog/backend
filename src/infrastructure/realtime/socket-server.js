@@ -2,8 +2,13 @@ const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
 const { env } = require("../../config/env");
 const { logger } = require("../../shared/logger/logger");
+const { UserModel } = require("../../modules/user/models/user.model");
+const { OrderRepository } = require("../../modules/order/repositories/order.repository");
+const { getSessionAuthError, getStatusAuthError } = require("../../shared/auth/session-state");
 
 let io = null;
+const orderRepository = new OrderRepository();
+const ADMIN_ROLES = new Set(["admin", "sub-admin", "super-admin"]);
 
 function attachSocketServer(httpServer) {
   io = new Server(httpServer, {
@@ -13,17 +18,21 @@ function attachSocketServer(httpServer) {
     },
   });
 
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const rawToken = socket.handshake.auth?.token || socket.handshake.headers.authorization;
     if (!rawToken) {
-      return next();
+      return next(new Error("Authentication required"));
     }
 
     const token = rawToken.startsWith("Bearer ") ? rawToken.replace("Bearer ", "") : rawToken;
 
     try {
       const payload = jwt.verify(token, env.jwtAccessSecret);
-      socket.data.auth = payload;
+      const user = await UserModel.findById(payload.sub).select("role accountStatus tokenVersion sessionVersion permissionVersion").lean();
+      if (!user || getStatusAuthError(user) || getSessionAuthError(user, payload) || (payload.role && payload.role !== user.role)) {
+        return next(new Error("Unauthorized socket connection"));
+      }
+      socket.data.auth = { ...payload, role: user.role };
       return next();
     } catch (error) {
       return next(new Error("Unauthorized socket connection"));
@@ -37,9 +46,21 @@ function attachSocketServer(httpServer) {
       socket.join(`role:${auth.role}`);
     }
 
-    socket.on("join:order", (orderId) => {
-      if (auth?.sub && orderId) {
-        socket.join(`order:${orderId}`);
+    socket.on("join:order", async (orderId, acknowledge) => {
+      try {
+        if (!auth?.sub || !orderId) throw new Error("Invalid order room request");
+        const order = await orderRepository.findByIdWithItems(String(orderId));
+        const allowed = order && (
+          ADMIN_ROLES.has(auth.role) ||
+          String(order.buyer_id) === String(auth.sub) ||
+          (order.items || []).some((item) => String(item.seller_id) === String(auth.ownerSellerId || auth.sub))
+        );
+        if (!allowed) throw new Error("Forbidden order room");
+        await socket.join(`order:${orderId}`);
+        if (typeof acknowledge === "function") acknowledge({ success: true });
+      } catch (error) {
+        logger.warn({ socketId: socket.id, orderId }, "Rejected unauthorized order room join");
+        if (typeof acknowledge === "function") acknowledge({ success: false, message: "Forbidden" });
       }
     });
 

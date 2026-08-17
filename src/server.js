@@ -60,6 +60,7 @@ async function bootstrap() {
   httpServer = http.createServer(app);
 
   attachSocketServer(httpServer);
+  registerBackgroundServices();
 
   const localIp = getLocalIp();
 
@@ -76,8 +77,6 @@ async function bootstrap() {
     httpServer.once("listening", onListening);
     httpServer.listen(env.port);
   });
-
-  registerBackgroundServices();
 
   logger.info(
     {
@@ -112,10 +111,9 @@ async function shutdown(reason, error = null, exitCode = 0) {
   }, 10000);
   forcedExit.unref();
 
-  stopCronJobs();
   // Socket.IO owns connections on the HTTP server. Close it first to avoid
   // racing two server.close() calls during nodemon and container shutdowns.
-  await Promise.allSettled([closeSocketServer(), closeWorkers()]);
+  await Promise.allSettled([stopCronJobs(), closeSocketServer(), closeWorkers()]);
   await Promise.allSettled([closeHttpServer()]);
   await Promise.allSettled([
     mongoose.connection.readyState ? mongoose.disconnect() : Promise.resolve(),

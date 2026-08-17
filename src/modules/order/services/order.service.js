@@ -311,6 +311,17 @@ class OrderService {
   }
 
   async createOrder(payload, actor) {
+    const operation = () => this.createOrderLocked(payload, actor);
+    const keys = [
+      payload.idempotencyKey ? `buyer:${actor.userId}:${payload.idempotencyKey}` : null,
+      payload.couponCode ? `coupon:${String(payload.couponCode).trim().toUpperCase()}` : null,
+    ];
+    return typeof this.orderRepository.withCheckoutLocks === "function"
+      ? this.orderRepository.withCheckoutLocks(keys, operation)
+      : operation();
+  }
+
+  async createOrderLocked(payload, actor) {
     if ([PAYMENT_PROVIDER.MANUAL_BANK_TRANSFER, PAYMENT_PROVIDER.MANUAL_UPI].includes(payload.paymentProvider)) {
       throw new AppError(
         "Manual UPI and bank transfer are not available. Choose Razorpay or Cash on Delivery.",
@@ -367,6 +378,7 @@ class OrderService {
         source: "order-module",
       },
     );
+    let couponUsageFinalized = false;
 
     try {
       await this.inventoryService.reserveForOrder(orderId, actor.userId, pricedOrder.items);
@@ -444,6 +456,7 @@ class OrderService {
           },
           items: pricedOrder.items,
           buyerId: actor.userId,
+          idempotencyKey: payload.idempotencyKey || null,
           status: payableAmount > 0 ? ORDER_STATUS.PENDING_PAYMENT : ORDER_STATUS.CONFIRMED,
           paymentStatus: payableAmount > 0 ? PAYMENT_STATUS.INITIATED : PAYMENT_STATUS.CAPTURED,
           deliveryStatus: null,
@@ -466,6 +479,7 @@ class OrderService {
       });
 
       await this.pricingService.finalizeCouponUsage(pricedOrder.couponToConsume);
+      couponUsageFinalized = Boolean(pricedOrder.couponToConsume);
       if (payableAmount <= 0) {
         await this.walletService.capture(actor.userId, orderId);
         await this.inventoryService.commitForOrder(orderId);
@@ -509,6 +523,10 @@ class OrderService {
       }
       return this.filterOrderForBuyer(await this.orderRepository.findByIdWithItems(order.id));
     } catch (error) {
+      if (couponUsageFinalized) {
+        await this.pricingService.rollbackCouponUsage(pricedOrder.couponToConsume).catch((rollbackError) =>
+          logger.error({ err: rollbackError, orderId, couponId: pricedOrder.couponToConsume }, "Coupon usage rollback failed"));
+      }
       await this.inventoryService.releaseForOrder(orderId);
       await this.walletService.release(actor.userId, orderId);
       await this.dealService.releaseOrderSales(orderId, {
@@ -2139,6 +2157,93 @@ const sellerPayoutAmount = Number(
       paymentStatus: PAYMENT_STATUS.INITIATED,
       reason: "payment_retry",
     });
+  }
+
+  async reconcileExpiredPaymentReservations({ limit = 100, now = new Date() } = {}) {
+    const reservations = await this.inventoryService.inventoryRepository
+      .findExpiredReservations({ now, limit: Math.min(Math.max(Number(limit) || 100, 1), 500) });
+    const summary = { scanned: reservations.length, released: 0, committed: 0, skipped: 0, failed: 0 };
+    for (const reservation of reservations) {
+      try {
+        const order = await this.orderRepository.findById(reservation.orderId);
+        if (!order) {
+          await this.inventoryService.releaseForOrder(reservation.orderId, {
+            reason: "expired_orphan_reservation",
+            actor: { userId: "order-cleanup", role: "system" },
+          });
+          summary.released += 1;
+          continue;
+        }
+        const paid = order.payment_status === PAYMENT_STATUS.CAPTURED ||
+          (order.payment_provider === PAYMENT_PROVIDER.COD && order.payment_status === PAYMENT_STATUS.AUTHORIZED);
+        if (paid) {
+          await this.inventoryService.commitForOrder(order.id, {
+            reason: "expired_reservation_paid_reconciliation",
+            actor: { userId: "order-cleanup", role: "system" },
+          });
+          summary.committed += 1;
+        } else if (order.status === ORDER_STATUS.PENDING_PAYMENT) {
+          await this.markPaymentFailed(order.id, {
+            userId: order.buyer_id,
+            role: "system",
+            reason: "payment_window_expired",
+            metadata: { reservationExpiredAt: reservation.expiresAt },
+          });
+          summary.released += 1;
+        } else if (order.status === ORDER_STATUS.PAYMENT_FAILED) {
+          await this.inventoryService.releaseForOrder(order.id, {
+            reason: "expired_failed_payment_reservation",
+            actor: { userId: "order-cleanup", role: "system" },
+          });
+          await this.walletService.release(order.buyer_id, order.id);
+          summary.released += 1;
+        } else {
+          summary.skipped += 1;
+        }
+      } catch (error) {
+        summary.failed += 1;
+        logger.error({ err: error, orderId: reservation.orderId }, "Expired payment reservation reconciliation failed");
+      }
+    }
+    return summary;
+  }
+
+  async reconcilePaidOrderState({ limit = 100 } = {}) {
+    const rows = await this.orderRepository.listPaymentReconciliationCandidates(limit);
+    const summary = { scanned: rows.length, confirmed: 0, inventoryCommitted: 0, skipped: 0, failed: 0 };
+    for (const order of rows) {
+      try {
+        const providerPaid = order.latest_payment_status === PAYMENT_STATUS.CAPTURED ||
+          (order.payment_provider === PAYMENT_PROVIDER.COD && order.latest_payment_status === PAYMENT_STATUS.AUTHORIZED);
+        if (providerPaid && [ORDER_STATUS.PENDING_PAYMENT, ORDER_STATUS.PAYMENT_FAILED].includes(order.status)) {
+          if (order.status === ORDER_STATUS.PAYMENT_FAILED) {
+            await this.reopenPayment(order.id, { userId: order.buyer_id, role: "system", source: "payment-reconciliation" });
+          }
+          const reconcilePayment = order.payment_provider === PAYMENT_PROVIDER.COD &&
+            order.latest_payment_status === PAYMENT_STATUS.AUTHORIZED
+            ? this.markPaymentAuthorized.bind(this)
+            : this.markPaymentCaptured.bind(this);
+          await reconcilePayment(order.id, {
+            userId: order.buyer_id, role: "system", reason: "payment_reconciliation",
+            metadata: { paymentId: order.latest_payment_id },
+          });
+          summary.confirmed += 1;
+        } else if (order.status === ORDER_STATUS.CONFIRMED &&
+          [PAYMENT_STATUS.CAPTURED, PAYMENT_STATUS.AUTHORIZED].includes(order.payment_status)) {
+          await this.inventoryService.commitForOrder(order.id, {
+            reason: "paid_order_inventory_reconciliation",
+            actor: { userId: "payment-reconciliation", role: "system" },
+          });
+          summary.inventoryCommitted += 1;
+        } else {
+          summary.skipped += 1;
+        }
+      } catch (error) {
+        summary.failed += 1;
+        logger.error({ err: error, orderId: order.id }, "Paid order reconciliation failed");
+      }
+    }
+    return summary;
   }
 
   async addNote(orderId, payload, actor) {

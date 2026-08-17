@@ -13,7 +13,7 @@ class EventPublisher {
         "Domain event log persistence failed",
       );
     }
-    await eventBus.publish(event.eventName, event);
+    return eventBus.publish(event.eventName, event);
   }
 }
 

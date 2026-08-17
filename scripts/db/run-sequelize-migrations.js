@@ -95,6 +95,11 @@ async function main() {
   await ensureMigrationTable();
   const applied = await getAppliedMigrationIds();
   const migrations = loadMigrationFiles();
+  const migrationIds = new Set();
+  for (const migration of migrations) {
+    if (migrationIds.has(migration.id)) throw new Error(`Duplicate migration id: ${migration.id}`);
+    migrationIds.add(migration.id);
+  }
 
   for (const migration of migrations) {
     if (!applied.has(migration.id)) {

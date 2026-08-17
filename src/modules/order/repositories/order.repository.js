@@ -30,6 +30,16 @@ class OrderRepository {
     return knex.raw("?::jsonb", [JSON.stringify(normalized)]);
   }
 
+  async withCheckoutLocks(keys, callback) {
+    const lockKeys = [...new Set((keys || []).filter(Boolean).map(String))].sort();
+    return knex.transaction(async (trx) => {
+      for (const key of lockKeys) {
+        await trx.raw("SELECT pg_advisory_xact_lock(hashtext(?))", [`checkout:${key}`]);
+      }
+      return callback();
+    });
+  }
+
   async createOrder(payload, event) {
     const orderId = payload.id || uuidv4();
     const trx = await knex.transaction();
@@ -40,6 +50,7 @@ class OrderRepository {
         id: orderId,
         order_number: orderNumber,
         buyer_id: payload.buyerId,
+        checkout_idempotency_key: payload.idempotencyKey || null,
         status: payload.status,
         payment_status: payload.paymentStatus || PAYMENT_STATUS.INITIATED,
         delivery_status: payload.deliveryStatus || null,
@@ -144,6 +155,10 @@ class OrderRepository {
       return { id: orderId, orderNumber, ...payload };
     } catch (error) {
       await trx.rollback();
+      if (error?.code === "23505" && payload.idempotencyKey) {
+        const existing = await this.findByBuyerIdempotencyKey(payload.buyerId, payload.idempotencyKey);
+        if (existing) return existing;
+      }
       throw error;
     }
   }
@@ -152,11 +167,36 @@ class OrderRepository {
     if (!buyerId || !idempotencyKey) return null;
     const [order] = await knex("orders")
       .where("buyer_id", buyerId)
-      .whereRaw("metadata->>'idempotencyKey' = ?", [idempotencyKey])
+      .where("checkout_idempotency_key", idempotencyKey)
       .orderBy("created_at", "desc")
       .limit(1);
     if (!order) return null;
     return this.findByIdWithItems(order.id);
+  }
+
+  async findOrderNumbersByIds(orderIds = []) {
+    const ids = [...new Set(orderIds.filter(Boolean).map(String))];
+    if (!ids.length) return [];
+    return knex("orders").select("id", "order_number").whereIn("id", ids);
+  }
+
+  async listPaymentReconciliationCandidates(limit = 100) {
+    return knex("orders as o")
+      .leftJoin(
+        knex("payments").select("order_id", "status", "id")
+          .distinctOn("order_id")
+          .orderBy("order_id")
+          .orderBy("created_at", "desc")
+          .as("p"),
+        "p.order_id", "o.id",
+      )
+      .select("o.*", "p.status as latest_payment_status", "p.id as latest_payment_id")
+      .whereIn("o.status", ["pending_payment", "confirmed", "payment_failed"])
+      .where((builder) => builder
+        .whereIn("p.status", ["captured", "authorized"])
+        .orWhereIn("o.payment_status", ["captured", "authorized"]))
+      .orderBy("o.updated_at", "asc")
+      .limit(Math.min(Math.max(Number(limit) || 100, 1), 500));
   }
 
   generateOrderNumber(date = new Date()) {
@@ -882,7 +922,15 @@ class OrderRepository {
       const orderItems = grouped.items.get(order.id) || [];
       const sellerIds = [...new Set(orderItems.map((item) => item.seller_id).filter(Boolean))];
       const sellers = sellerIds.map((sellerId) => usersById.get(String(sellerId)) || { id: sellerId }).filter(Boolean);
-      const buyer = usersById.get(String(order.buyer_id)) || { id: order.buyer_id };
+      const shippingAddress = this.parseJson(order.shipping_address, {});
+      const storedBuyer = usersById.get(String(order.buyer_id)) || {};
+      const snapshotName = shippingAddress.fullName || shippingAddress.name || null;
+      const buyer = {
+        id: order.buyer_id,
+        ...(snapshotName ? { displayName: snapshotName, fullName: snapshotName } : {}),
+        ...(shippingAddress.phone ? { phone: shippingAddress.phone } : {}),
+        ...storedBuyer,
+      };
       const orderShipments = (grouped.shipments.get(order.id) || []).map((shipment) => ({
         ...shipment,
         order_number: order.order_number,
@@ -907,6 +955,9 @@ class OrderRepository {
 
       return {
         ...order,
+        ...(buyer.displayName ? { buyerName: buyer.displayName } : {}),
+        ...(buyer.email ? { buyerEmail: buyer.email } : {}),
+        ...(buyer.phone ? { buyerPhone: buyer.phone } : {}),
         summary,
         ...(includeItems ? { items: orderItems } : {}),
         ...(includeTimeline ? { timeline: grouped.timeline.get(order.id) || [] } : {}),

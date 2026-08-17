@@ -19,7 +19,10 @@ class OutboxRepository {
     try {
       const rows = await trx("outbox_events")
         .select("id", "event_name", "aggregate_id", "version", "payload", "occurred_at")
-        .where("status", "pending")
+        .where((builder) => builder
+          .where("status", "pending")
+          .orWhere((retry) => retry.where("status", "failed").where((due) => due.whereNull("next_attempt_at").orWhere("next_attempt_at", "<=", trx.fn.now())))
+          .orWhere((stale) => stale.where("status", "processing").where("processing_started_at", "<", trx.raw("NOW() - INTERVAL '5 minutes'"))))
         .orderBy("occurred_at", "asc")
         .limit(limit)
         .forUpdate()
@@ -31,7 +34,11 @@ class OutboxRepository {
             "id",
             rows.map((row) => row.id),
           )
-          .update({ status: "processing" });
+          .update({
+            status: "processing",
+            processing_started_at: trx.fn.now(),
+            attempt_count: trx.raw("COALESCE(attempt_count, 0) + 1"),
+          });
       }
 
       await trx.commit();
@@ -46,13 +53,19 @@ class OutboxRepository {
     await knex("outbox_events").where("id", eventId).update({
       status: "published",
       processed_at: knex.fn.now(),
+      processing_started_at: null,
     });
   }
 
   async markFailed(eventId, errorMessage) {
+    const row = await knex("outbox_events").where("id", eventId).first();
+    const attempts = Number(row?.attempt_count || 1);
+    const terminal = attempts >= 10;
     await knex("outbox_events").where("id", eventId).update({
-      status: "failed",
+      status: terminal ? "dead_letter" : "failed",
       last_error: errorMessage?.slice(0, 500) || "Unknown outbox failure",
+      next_attempt_at: terminal ? null : new Date(Date.now() + Math.min(300000, 1000 * (2 ** Math.min(attempts, 8)))),
+      processing_started_at: null,
     });
   }
 }

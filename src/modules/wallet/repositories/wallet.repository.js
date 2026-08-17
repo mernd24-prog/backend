@@ -216,8 +216,11 @@ class WalletRepository {
     }
   }
 
-  async listTransactions(userId) {
-    return knex("wallet_transactions").where("user_id", userId).orderBy("created_at", "desc");
+  async listTransactions(userId, limit = 100) {
+    return knex("wallet_transactions")
+      .where("user_id", userId)
+      .orderBy("created_at", "desc")
+      .limit(Math.min(Math.max(Number(limit) || 100, 1), 200));
   }
 
   applyTransactionFilters(query, filters = {}) {

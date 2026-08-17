@@ -7,6 +7,17 @@ const { AppError } = require("../../../shared/errors/app-error");
 const { env } = require("../../../config/env");
 
 class RazorpayProvider {
+  normalizeProviderError(error, operation) {
+    if (error?.statusCode && error?.error) {
+      return new AppError(error.error.description || `Razorpay ${operation} failed`, error.statusCode >= 500 ? 503 : 400);
+    }
+    return new AppError(
+      `Razorpay ${operation} could not be confirmed. Please check the transaction status before retrying.`,
+      503,
+      { operation, retrySafe: false },
+      "PAYMENT_PROVIDER_UNCERTAIN",
+    );
+  }
   createMockOrder(payload) {
     const amount = Number(payload.amount || 0);
     const amountInPaise = Math.round(amount * 100);
@@ -50,12 +61,17 @@ class RazorpayProvider {
     }
 
     const client = getRazorpayClient();
-    const order = await client.orders.create({
-      amount: Math.round(Number(payload.amount) * 100),
-      currency: payload.currency || "INR",
-      receipt: payload.receipt,
-      notes: payload.notes || {},
-    });
+    let order;
+    try {
+      order = await client.orders.create({
+        amount: Math.round(Number(payload.amount) * 100),
+        currency: payload.currency || "INR",
+        receipt: payload.receipt,
+        notes: payload.notes || {},
+      });
+    } catch (error) {
+      throw this.normalizeProviderError(error, "order creation");
+    }
 
     return {
       providerOrderId: order.id,
@@ -92,7 +108,12 @@ class RazorpayProvider {
     const refundBody = { speed: "normal", notes: { ...notes, returnId: String(returnId || "") } };
     if (amount) refundBody.amount = Math.round(Number(amount) * 100);
 
-    const refund = await client.payments.refund(providerPaymentId, refundBody);
+    let refund;
+    try {
+      refund = await client.payments.refund(providerPaymentId, refundBody);
+    } catch (error) {
+      throw this.normalizeProviderError(error, "refund");
+    }
 
     return {
       refundId: refund.id,
@@ -117,7 +138,12 @@ class RazorpayProvider {
     }
 
     const client = getRazorpayClient();
-    const refund = await client.refunds.fetch(refundId);
+    let refund;
+    try {
+      refund = await client.refunds.fetch(refundId);
+    } catch (error) {
+      throw this.normalizeProviderError(error, "refund lookup");
+    }
     return {
       refundId: refund.id,
       amount: Number(refund.amount || 0) / 100,

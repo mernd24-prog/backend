@@ -13,15 +13,18 @@ class InMemoryEventBus {
 
   async publish(eventName, payload) {
     const handlers = this.handlers.get(eventName) || [];
-    await Promise.all(
+    const results = await Promise.all(
       handlers.map(async (handler) => {
         try {
           await handler(payload);
+          return null;
         } catch (error) {
           logger.error({ err: error, eventName }, "Event handler failed");
+          return error;
         }
       }),
     );
+    return { failures: results.filter(Boolean), handlerCount: handlers.length };
   }
 }
 

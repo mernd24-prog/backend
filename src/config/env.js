@@ -2,11 +2,12 @@ const dotenv = require("dotenv");
 
 dotenv.config();
 
-const defaultMaxDocumentBytes = 5 * 1024 * 1024;
-const maxDocumentBytes = Number(process.env.MAX_DOCUMENT_UPLOAD_BYTES||500*1024*1024);
+const defaultMaxDocumentBytes = 10 * 1024 * 1024;
+const maxDocumentBytes = Number(process.env.MAX_DOCUMENT_UPLOAD_BYTES || defaultMaxDocumentBytes);
 const emailPort = Number(process.env.EMAIL_PORT || process.env.SMTP_PORT || 1025);
 const emailSecureDefault = emailPort === 465 ? "true" : "false";
-const isProductionMode = parseBoolean(process.env.PRODUCTION, false);
+const isProductionMode = String(process.env.NODE_ENV || "").toLowerCase() === "production" ||
+  parseBoolean(process.env.PRODUCTION, false);
 
 function parsePositiveInteger(value, fallback) {
   const parsed = Number(value);
@@ -225,8 +226,8 @@ const env = {
   },
   jwtAccessSecret: process.env.JWT_ACCESS_SECRET || "access-secret",
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || "refresh-secret",
-  jwtAccessTtl: process.env.JWT_ACCESS_TTL || "7d",
-  jwtRefreshTtl: process.env.JWT_REFRESH_TTL || "30d",
+  jwtAccessTtl: process.env.JWT_ACCESS_TTL || "15m",
+  jwtRefreshTtl: process.env.JWT_REFRESH_TTL || "7d",
   googleClientIds,
   firebase: {
     projectId: process.env.FIREBASE_PROJECT_ID || "",
@@ -246,6 +247,7 @@ const env = {
     liveRequested: razorpayLiveRequested,
     missingKeys: razorpayMissingKeys,
     mockAutoCapture: readBooleanFlag(["RAZORPAY_MOCK_AUTO_CAPTURE"], true),
+    timeoutMs: parsePositiveInteger(process.env.RAZORPAY_TIMEOUT_MS, 10000),
   },
   razorpayX: {
     keyId: process.env.RAZORPAYX_KEY_ID || process.env.RAZORPAY_KEY_ID || "",
@@ -345,7 +347,7 @@ const env = {
     missingKeys: cloudinaryMissingKeys,
   },
   upload: {
-    jsonBodyLimit: process.env.JSON_BODY_LIMIT || "50mb",
+    jsonBodyLimit: process.env.JSON_BODY_LIMIT || "1mb",
     maxDocumentBytes:
       Number.isFinite(maxDocumentBytes) && maxDocumentBytes > 0
         ? maxDocumentBytes
@@ -367,5 +369,29 @@ const env = {
   enableCron: String(process.env.ENABLE_CRON || "true") === "true",
   production: isProductionMode,
 };
+
+function assertProductionEnvironment() {
+  if (!isProductionMode) return;
+  const errors = [];
+  const accessSecret = cleanEnvValue(process.env.JWT_ACCESS_SECRET);
+  const refreshSecret = cleanEnvValue(process.env.JWT_REFRESH_SECRET);
+  if (accessSecret.length < 32 || accessSecret === "access-secret") errors.push("JWT_ACCESS_SECRET must be a unique secret of at least 32 characters");
+  if (refreshSecret.length < 32 || refreshSecret === "refresh-secret") errors.push("JWT_REFRESH_SECRET must be a unique secret of at least 32 characters");
+  if (accessSecret && accessSecret === refreshSecret) errors.push("JWT access and refresh secrets must be different");
+  for (const [key, value] of [["MONGO_URI", process.env.MONGO_URI], ["POSTGRES_URL", process.env.POSTGRES_URL], ["REDIS_URL", process.env.REDIS_URL]]) {
+    if (!hasEnvValue(value)) errors.push(`${key} is required in production`);
+  }
+  if (env.cors.origin === "*") errors.push("CORS_ORIGIN must be an explicit allowlist in production");
+  if (env.auth.otpMode === "static" || env.auth.exposeStaticOtp) errors.push("Static or exposed OTP is forbidden in production");
+  if (env.upload.localStorageEnabled) errors.push("Local upload storage is not supported in production; configure Cloudinary");
+  if (env.razorpay.live && !env.razorpay.webhookSecret) errors.push("RAZORPAY_WEBHOOK_SECRET is required for live Razorpay");
+  if (errors.length) {
+    const error = new Error(`Invalid production environment:\n- ${errors.join("\n- ")}`);
+    error.code = "INVALID_PRODUCTION_ENVIRONMENT";
+    throw error;
+  }
+}
+
+assertProductionEnvironment();
 
 module.exports = { env };

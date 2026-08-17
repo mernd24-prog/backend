@@ -713,7 +713,15 @@ const incomeTaxTdsAmount = Number(
       return null;
     }
 
-    return this.pricingRepository.incrementCouponUsage(couponId);
+    const coupon = await this.pricingRepository.incrementCouponUsage(couponId);
+    if (!coupon) {
+      throw new AppError("Coupon usage limit reached", 409);
+    }
+    return coupon;
+  }
+
+  async rollbackCouponUsage(couponId) {
+    return this.pricingRepository.decrementCouponUsage(couponId);
   }
 
   isAdminActor(actor = {}) {

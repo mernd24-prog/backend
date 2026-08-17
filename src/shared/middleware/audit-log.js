@@ -9,7 +9,7 @@ function auditLog(req, res, next) {
     AuditLogModel.create({
       actorId: req.auth?.sub || null,
       method: req.method,
-      path: req.originalUrl,
+      path: String(req.originalUrl || req.path || "").split("?")[0],
       statusCode: res.statusCode,
       requestId: req.id,
       ip: req.ip || req.headers["x-forwarded-for"] || req.socket?.remoteAddress || null,

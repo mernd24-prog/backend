@@ -90,7 +90,7 @@ class PaymentService {
       buyerIds.length
         ? UserModel.find({ _id: { $in: buyerIds } }).select("email phone profile").lean().catch(() => [])
         : [],
-      Promise.all(orderIds.map((orderId) => this.orderRepository.findById(orderId).catch(() => null))),
+      this.orderRepository.findOrderNumbersByIds(orderIds).catch(() => []),
     ]);
     const buyersById = new Map(buyers.map((buyer) => {
       const fullName = [buyer.profile?.firstName, buyer.profile?.lastName].filter(Boolean).join(" ").trim();
@@ -280,6 +280,13 @@ class PaymentService {
   }
 
   async initiatePayment(payload, actor) {
+    const operation = () => this.initiatePaymentLocked(payload, actor);
+    return typeof this.paymentRepository.withOrderPaymentLock === "function"
+      ? this.paymentRepository.withOrderPaymentLock(payload.orderId, operation)
+      : operation();
+  }
+
+  async initiatePaymentLocked(payload, actor) {
     const existingByKey = await this.paymentRepository.findByIdempotencyKey(payload.idempotencyKey);
     if (existingByKey) {
       return mapPaymentResponse(existingByKey);
@@ -575,7 +582,7 @@ class PaymentService {
       paymentEvent,
     );
 
-    if (verification.status === PAYMENT_STATUS.CAPTURED) {
+    if (updatedPayment?.status === PAYMENT_STATUS.CAPTURED) {
       await this.orderService.markPaymentCaptured(payload.orderId, {
         userId: actor.userId,
         role: actor.role,
@@ -589,7 +596,7 @@ class PaymentService {
       });
     }
 
-    if (verification.status === PAYMENT_STATUS.FAILED) {
+    if (updatedPayment?.status === PAYMENT_STATUS.FAILED) {
       await this.orderService.markPaymentFailed(payload.orderId, {
         userId: actor.userId,
         role: actor.role,
@@ -717,7 +724,7 @@ class PaymentService {
           },
           { source: "payment-webhook" },
         );
-        await this.paymentRepository.updatePaymentStatus(
+        const updatedPayment = await this.paymentRepository.updatePaymentStatus(
           payment.id,
           {
             status: PAYMENT_STATUS.CAPTURED,
@@ -728,6 +735,7 @@ class PaymentService {
           },
           paymentEvent,
         );
+        if (updatedPayment?.status !== PAYMENT_STATUS.CAPTURED) return;
         await this.orderService.markPaymentCaptured(payment.order_id, {
           userId: payment.buyer_id,
           role: "system",
@@ -774,7 +782,7 @@ class PaymentService {
           },
           { source: "payment-webhook" },
         );
-        await this.paymentRepository.updatePaymentStatus(
+        const updatedPayment = await this.paymentRepository.updatePaymentStatus(
           payment.id,
           {
             status: PAYMENT_STATUS.FAILED,
@@ -785,6 +793,7 @@ class PaymentService {
           },
           paymentEvent,
         );
+        if (updatedPayment?.status !== PAYMENT_STATUS.FAILED) return;
         await this.orderService.markPaymentFailed(payment.order_id, {
           userId: payment.buyer_id,
           role: "system",

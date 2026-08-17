@@ -20,7 +20,7 @@ class OutboxProcessor {
 
       for (const event of events) {
         try {
-          await eventPublisher.publish({
+          const delivery = await eventPublisher.publish({
             id: event.id,
             eventName: event.event_name,
             aggregateId: event.aggregate_id,
@@ -28,6 +28,9 @@ class OutboxProcessor {
             payload: event.payload,
             occurredAt: event.occurred_at,
           });
+          if (delivery?.failures?.length) {
+            throw new Error(`${delivery.failures.length} domain event handler(s) failed`);
+          }
           await this.outboxRepository.markPublished(event.id);
         } catch (error) {
           logger.error({ err: error, eventId: event.id }, "Outbox publish failed");
