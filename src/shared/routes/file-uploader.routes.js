@@ -11,11 +11,13 @@ const { catchErrors } = require("../middleware/catch-errors");
 const {
   ALLOWED_DOCUMENT_MIME_TYPES,
   ALLOWED_IMAGE_MIME_TYPES,
+  ALLOWED_VIDEO_MIME_TYPES,
   fileUploadService,
 } = require("../upload/file-upload.service");
 
 const fileUploaderRoutes = express.Router();
 const maxImageBytes = 10 * 1024 * 1024;
+const maxVideoBytes = 100 * 1024 * 1024;
 const maxDocumentBytes = env.upload.maxDocumentBytes;
 const tempUploadDir = path.join(os.tmpdir(), "ecommerce-uploads");
 
@@ -57,6 +59,23 @@ const documentUpload = multer({
     if (!ALLOWED_DOCUMENT_MIME_TYPES.has(file.mimetype)) {
       return cb(new AppError("Unsupported document type", 400, {
         allowedMimeTypes: Array.from(ALLOWED_DOCUMENT_MIME_TYPES),
+      }));
+    }
+
+    return cb(null, true);
+  },
+});
+
+const videoUpload = multer({
+  storage,
+  limits: {
+    fileSize: maxVideoBytes,
+    files: 1,
+  },
+  fileFilter: (req, file, cb) => {
+    if (!ALLOWED_VIDEO_MIME_TYPES.has(file.mimetype)) {
+      return cb(new AppError("Unsupported video type", 400, {
+        allowedMimeTypes: Array.from(ALLOWED_VIDEO_MIME_TYPES),
       }));
     }
 
@@ -141,6 +160,25 @@ fileUploaderRoutes.post(
       documentURL: document.url,
       url: document.url,
       document,
+    }));
+  }),
+);
+
+fileUploaderRoutes.post(
+  "/upload-video",
+  authenticate,
+  runUpload(videoUpload.single("file")),
+  catchErrors(async (req, res) => {
+    const video = await fileUploadService.uploadVideo(req.file, {
+      moduleName: req.body.module,
+      videoType: req.body.videoType || req.body.type || "video",
+      req,
+    });
+
+    return res.status(201).json(okResponse({
+      videoURL: video.url,
+      url: video.url,
+      video,
     }));
   }),
 );

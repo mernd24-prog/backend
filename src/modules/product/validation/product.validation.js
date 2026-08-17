@@ -249,7 +249,8 @@ const productBodyBase = {
   // Media
   images: deprecatedRootVariantField(),
   commonImages: Joi.array().items(Joi.string().uri()).max(8).default([]),
-  videos: Joi.array().items(Joi.string().uri()).default([]),
+  videos: Joi.array().items(Joi.string().uri()).max(1).default([]),
+  video: Joi.string().uri().allow("", null),
   documents: deprecatedRootVariantField(),
 
   // Physical

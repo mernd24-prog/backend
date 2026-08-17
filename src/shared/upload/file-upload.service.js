@@ -15,11 +15,24 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/gif",
 ]);
 
+const ALLOWED_VIDEO_MIME_TYPES = new Set([
+  "video/mp4",
+  "video/webm",
+  "video/ogg",
+  "video/quicktime",
+]);
+
 const MIME_EXTENSION_MAP = {
   "image/jpeg": ".jpg",
   "image/png": ".png",
   "image/webp": ".webp",
   "image/gif": ".gif",
+};
+const VIDEO_EXTENSION_MAP = {
+  "video/mp4": ".mp4",
+  "video/webm": ".webm",
+  "video/ogg": ".ogv",
+  "video/quicktime": ".mov",
 };
 const ALLOWED_DOCUMENT_MIME_TYPES = new Set(SUPPORTED_DOCUMENT_MIME_TYPES);
 
@@ -85,6 +98,18 @@ class FileUploadService {
     if (!ALLOWED_DOCUMENT_MIME_TYPES.has(file.mimetype)) {
       throw new AppError("Unsupported document type", 400, {
         allowedMimeTypes: Array.from(ALLOWED_DOCUMENT_MIME_TYPES),
+      });
+    }
+  }
+
+  validateVideo(file) {
+    if (!file) {
+      throw new AppError("Video file is required", 400);
+    }
+
+    if (!ALLOWED_VIDEO_MIME_TYPES.has(file.mimetype)) {
+      throw new AppError("Unsupported video type", 400, {
+        allowedMimeTypes: Array.from(ALLOWED_VIDEO_MIME_TYPES),
       });
     }
   }
@@ -200,6 +225,77 @@ class FileUploadService {
       await fs.unlink(file.path).catch(() => {});
     }
   }
+
+  async uploadVideo(file, options = {}) {
+    this.validateVideo(file);
+
+    const moduleName = sanitizeSegment(options.moduleName, "default");
+    const videoType = sanitizeSegment(options.videoType || options.type, "video");
+    const publicId = `${videoType}-${uuidv4()}`;
+
+    if (hasCloudinaryConfig()) {
+      try {
+        const upload = await storageService.upload(file.path, {
+          resource_type: "video",
+          folder: `ecommerce/uploads/${moduleName}/videos`,
+          public_id: publicId,
+          overwrite: false,
+          use_filename: false,
+          unique_filename: false,
+          context: {
+            module: moduleName,
+            video_type: videoType,
+            original_name: file.originalname || "",
+          },
+        });
+
+        const url = upload.secure_url || upload.url;
+        return {
+          videoURL: url,
+          url,
+          publicId: upload.public_id,
+          assetId: upload.asset_id,
+          storage: "cloudinary",
+          folder: `ecommerce/uploads/${moduleName}/videos`,
+          module: moduleName,
+          videoType,
+          originalName: file.originalname,
+          mimeType: file.mimetype,
+          size: file.size,
+        };
+      } finally {
+        await fs.unlink(file.path).catch(() => {});
+      }
+    }
+
+    if (!env.upload.localStorageEnabled) {
+      await fs.unlink(file.path).catch(() => {});
+      throw new AppError("Upload storage is disabled by environment configuration", 503);
+    }
+
+    const extension =
+      path.extname(file.originalname || "").toLowerCase() ||
+      VIDEO_EXTENSION_MAP[file.mimetype] ||
+      ".mp4";
+    const fileName = `${publicId}${extension}`;
+    const uploadRoot = path.resolve(__dirname, "../../../uploads");
+    const destination = path.join(uploadRoot, moduleName, "videos", fileName);
+    await moveFile(file.path, destination);
+
+    const url = `${getRequestBaseUrl(options.req)}/uploads/${moduleName}/videos/${fileName}`;
+    return {
+      videoURL: url,
+      url,
+      publicId: `local/${moduleName}/videos/${fileName}`,
+      storage: "local",
+      folder: `uploads/${moduleName}/videos`,
+      module: moduleName,
+      videoType,
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      size: file.size,
+    };
+  }
 }
 
 const fileUploadService = new FileUploadService();
@@ -207,5 +303,6 @@ const fileUploadService = new FileUploadService();
 module.exports = {
   ALLOWED_DOCUMENT_MIME_TYPES,
   ALLOWED_IMAGE_MIME_TYPES,
+  ALLOWED_VIDEO_MIME_TYPES,
   fileUploadService,
 };

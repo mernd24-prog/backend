@@ -517,6 +517,17 @@ class ProductService {
     );
   }
 
+  normalizeVideos(videos = []) {
+    const list = Array.isArray(videos) ? videos : [videos];
+    return Array.from(
+      new Set(
+        list
+          .map((video) => this.normalizeImageUrl(video))
+          .filter(Boolean),
+      ),
+    ).slice(0, 1);
+  }
+
   withPrimaryImageAlias(product = {}) {
     const { variants, ...productWithoutVariants } = product || {};
     const variantImage = (Array.isArray(variants) ? variants : [])
@@ -538,6 +549,13 @@ class ProductService {
     const normalized = { ...payload };
     if (Object.prototype.hasOwnProperty.call(payload, "commonImages")) {
       normalized.commonImages = this.normalizeImages(payload.commonImages || []);
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(payload, "videos") ||
+      Object.prototype.hasOwnProperty.call(payload, "video")
+    ) {
+      normalized.videos = this.normalizeVideos(payload.videos || payload.video || []);
+      delete normalized.video;
     }
     delete normalized.images;
     delete normalized.imageUrls;
