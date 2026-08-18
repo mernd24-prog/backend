@@ -49,9 +49,9 @@ const DEFAULT_SETTINGS = {
   },
   returns: {
     // One platform-owned policy is snapshotted when delivery is verified.
-    defaultWindowDays: 7,
+    defaultWindowDays: 0,
     allowSellerOverrides: false,
-    maxSellerOverrideDays: 7,
+    maxSellerOverrideDays: 0,
     refundPolicy: {
       shipping: {
         fullCancellation: true,
@@ -100,6 +100,9 @@ const DEFAULT_SETTINGS = {
     sellerPayoutBase: "gross_customer_price",
     platformFeeTaxRate: 18,
     chargePlatformFeeTaxToSeller: true,
+    payoutMode: "manual",
+    defaultPayoutDestination: "razorpayx",
+    allowSellerPayoutDestinationChoice: true,
     payoutReleaseMilestone: "return_window_closed",
     payoutSchedule: "manual",
     payoutManualApprovalRequired: true,
@@ -144,6 +147,8 @@ const ALLOWED = {
   },
   finance: {
     sellerPayoutBase: ["gross_customer_price", "taxable_ex_gst"],
+    payoutMode: ["manual", "auto_razorpayx"],
+    defaultPayoutDestination: ["razorpayx", "seller_wallet"],
     payoutReleaseMilestone: ["return_window_closed"],
     payoutSchedule: ["manual", "daily", "weekly", "monthly"],
     shippingPolicy: ["not_in_seller_payout", "reimburse_seller", "deduct_from_seller"],
@@ -382,9 +387,9 @@ class CommerceSettingsService {
           : Math.max(num(source.cod.maxOrderAmount, 0), 0),
       },
       returns: {
-        defaultWindowDays: Math.min(Math.max(num(source.returns.defaultWindowDays, 7), 1), 60),
+        defaultWindowDays: Math.min(Math.max(num(source.returns.defaultWindowDays, 0), 0), 60),
         allowSellerOverrides: bool(source.returns.allowSellerOverrides, false),
-        maxSellerOverrideDays: Math.min(Math.max(num(source.returns.maxSellerOverrideDays, 7), 1), 60),
+        maxSellerOverrideDays: Math.min(Math.max(num(source.returns.maxSellerOverrideDays, 0), 0), 60),
         refundPolicy: {
           shipping: normalizeRefundComponentPolicy(
             source.returns.refundPolicy?.shipping,
@@ -423,6 +428,20 @@ class CommerceSettingsService {
           source.finance.sellerPayoutBase,
           ALLOWED.finance.sellerPayoutBase,
           DEFAULT_SETTINGS.finance.sellerPayoutBase,
+        ),
+        payoutMode: pickAllowed(
+          source.finance.payoutMode,
+          ALLOWED.finance.payoutMode,
+          DEFAULT_SETTINGS.finance.payoutMode,
+        ),
+        defaultPayoutDestination: pickAllowed(
+          source.finance.defaultPayoutDestination,
+          ALLOWED.finance.defaultPayoutDestination,
+          DEFAULT_SETTINGS.finance.defaultPayoutDestination,
+        ),
+        allowSellerPayoutDestinationChoice: bool(
+          source.finance.allowSellerPayoutDestinationChoice,
+          DEFAULT_SETTINGS.finance.allowSellerPayoutDestinationChoice,
         ),
         platformFeeTaxRate: Math.min(Math.max(num(source.finance.platformFeeTaxRate, 18), 0), 100),
         chargePlatformFeeTaxToSeller: bool(source.finance.chargePlatformFeeTaxToSeller, true),

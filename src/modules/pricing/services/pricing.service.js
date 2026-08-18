@@ -107,9 +107,12 @@ class PricingService {
         const gstInclusive = Boolean(product.gstInclusive ?? product.gst_inclusive ?? true);
 
         const productReturnPolicy = product.warranty?.returnPolicy || {};
-        const returnable = productReturnPolicy.returnable ?? productReturnPolicy.eligible ?? true;
+        const isNonReturnable = String(productReturnPolicy.type || "").toLowerCase() === "non_returnable";
+        const returnable = isNonReturnable
+          ? false
+          : productReturnPolicy.returnable ?? productReturnPolicy.eligible ?? true;
         const returnWindowDays = returnable
-          ? Math.max(Number(productReturnPolicy.returnWindowDays ?? productReturnPolicy.days ?? 7), 0)
+          ? Math.max(Number(productReturnPolicy.returnWindowDays ?? productReturnPolicy.days ?? 0), 0)
           : 0;
         const returnPolicySnapshot = {
           ...productReturnPolicy,

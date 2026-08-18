@@ -5,6 +5,7 @@ const { authenticate } = require("../../../shared/middleware/authenticate");
 const { allowPermissions } = require("../../../shared/middleware/access");
 
 const { CommissionService } = require("../services/commission.service");
+const { settlementLifecycleService } = require("../services/settlement-lifecycle.service");
 const { commissionValidation } = require("../../validation");
 
 const financeView = allowPermissions("sellers/commissions:view");
@@ -30,6 +31,16 @@ function sendDocument(res, document) {
   res.setHeader("Content-Type", document.contentType);
   res.setHeader("Content-Disposition", `attachment; filename="${document.fileName}"`);
   res.send(document.body);
+}
+
+function defaultPayoutMethod(paymentMethod) {
+  return paymentMethod || undefined;
+}
+
+function shouldAutoProcessWithRazorpayX(paymentMethod, autoProcess) {
+  const selectedMethod = defaultPayoutMethod(paymentMethod);
+  return autoProcess === true ||
+    ["razorpayx", "razorpay_x", "bank_transfer_auto"].includes(String(selectedMethod || "").toLowerCase());
 }
 
 function sellerOrganizationQuery(req) {
@@ -168,6 +179,33 @@ router.get("/my-wallet", authenticate, financeView, async (req, res, next) => {
     return res.status(200).json({
       success: true,
       data: wallet,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/my-payout-preference", authenticate, financeView, async (req, res, next) => {
+  try {
+    const userId = req.auth?.ownerSellerId || req.auth?.sub;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const result = await CommissionService.updateSellerPayoutPreference(userId, {
+      organizationId: req.body?.organizationId || req.auth?.selectedOrganizationId || undefined,
+      payoutDestination: req.body?.payoutDestination || req.body?.destination,
+      bankDetails: req.body?.bankDetails,
+    }, req.auth);
+
+    return res.status(200).json({
+      success: true,
+      message: "Payout preference updated",
+      data: result,
     });
   } catch (err) {
     next(err);
@@ -374,6 +412,38 @@ router.get("/payout-ops/queue", authenticate, platformFinanceOnly, financeView, 
 });
 
 // ==============================
+// Admin: Refresh payout eligibility
+// ==============================
+router.post("/payout-ops/refresh-eligibility", authenticate, platformFinanceOnly, financeManage, async (req, res, next) => {
+  try {
+    const refreshedOrders = await settlementLifecycleService.refreshDeliveredOrderEligibility(
+      Math.min(Math.max(Number(req.body?.limit || 500), 1), 1000),
+    );
+    const eligibleItems = await settlementLifecycleService.markEligibleOrderItems(
+      Math.min(Math.max(Number(req.body?.limit || 500), 1), 1000),
+    );
+    const fulfilledOrders = await settlementLifecycleService.finalizeEligibleOrders();
+    const scheduledPayouts = await CommissionService.processScheduledPayouts({
+      force: true,
+      actor: req.auth,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Payout eligibility refreshed",
+      data: {
+        refreshedOrders,
+        eligibleItems,
+        fulfilledOrders,
+        scheduledPayouts,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ==============================
 // Admin: Negative balance recovery queue
 // ==============================
 router.get("/negative-balances", authenticate, platformFinanceOnly, financeView, async (req, res, next) => {
@@ -413,9 +483,9 @@ router.post("/negative-balances/:settlementId/resolve", authenticate, platformFi
 // ==============================
 router.post("/payouts/:payoutId/process", authenticate, platformFinanceOnly, financeManage, async (req, res, next) => {
   try {
-    const paymentMethod = req.body?.paymentMethod;
-    const result = ["razorpayx", "razorpay_x", "bank_transfer_auto"].includes(String(paymentMethod || "").toLowerCase())
-      ? await CommissionService.initiateRazorpayXPayout(req.params.payoutId, { actor: req.auth })
+    const paymentMethod = defaultPayoutMethod(req.body?.paymentMethod);
+    const result = ["razorpayx", "razorpay_x", "bank_transfer_auto", "seller_wallet", "wallet"].includes(String(paymentMethod || "").toLowerCase()) || !paymentMethod
+      ? await CommissionService.startPayoutTransfer(req.params.payoutId, { actor: req.auth, paymentMethod })
       : await CommissionService.processPayout(
         req.params.payoutId,
         req.body?.paymentReference || `manual_${Date.now()}`,
@@ -481,8 +551,8 @@ router.post("/payouts/:payoutId/approve", authenticate, platformFinanceOnly, fin
     const approvalNote = req.body?.note ?? req.body?.notes;
     const result = await CommissionService.approvePayout(req.params.payoutId, {
       note: approvalNote,
-      paymentMethod: req.body?.paymentMethod,
-      autoProcess: req.body?.autoProcess === true,
+      paymentMethod: defaultPayoutMethod(req.body?.paymentMethod),
+      autoProcess: shouldAutoProcessWithRazorpayX(req.body?.paymentMethod, req.body?.autoProcess),
       actor: req.auth,
     });
     return res.status(200).json({
@@ -519,8 +589,8 @@ router.post("/payouts/:payoutId/release-hold", authenticate, platformFinanceOnly
     const result = await CommissionService.releasePayoutHold(req.params.payoutId, {
       approve: req.body?.approve === true,
       note: req.body?.note,
-      paymentMethod: req.body?.paymentMethod,
-      autoProcess: req.body?.autoProcess === true,
+      paymentMethod: defaultPayoutMethod(req.body?.paymentMethod),
+      autoProcess: shouldAutoProcessWithRazorpayX(req.body?.paymentMethod, req.body?.autoProcess),
       actor: req.auth,
     });
     return res.status(200).json({
@@ -540,8 +610,8 @@ router.post("/payouts/:payoutId/retry", authenticate, platformFinanceOnly, finan
   try {
     const result = await CommissionService.retryFailedPayout(req.params.payoutId, {
       paymentReference: req.body?.paymentReference,
-      paymentMethod: req.body?.paymentMethod,
-      autoProcess: req.body?.autoProcess === true,
+      paymentMethod: defaultPayoutMethod(req.body?.paymentMethod),
+      autoProcess: shouldAutoProcessWithRazorpayX(req.body?.paymentMethod, req.body?.autoProcess),
       actor: req.auth,
     });
     return res.status(200).json({
@@ -624,15 +694,14 @@ router.post(
           ...(value.organizationId ? { organizationId: value.organizationId } : {}),
           commissionIds: value.commissionIds,
           paymentReference: req.body?.paymentReference,
-          paymentMethod: req.body?.paymentMethod,
+          paymentMethod: defaultPayoutMethod(req.body?.paymentMethod),
           note: value.note,
           notes: value.note,
-          autoProcess: value.autoProcess,
+          autoProcess: shouldAutoProcessWithRazorpayX(req.body?.paymentMethod, value.autoProcess),
           actor: req.auth,
         },
       );
-      const shouldAutoPayout = value.autoProcess === true ||
-        ["razorpayx", "razorpay_x", "bank_transfer_auto"].includes(String(req.body?.paymentMethod || "").toLowerCase());
+      const shouldAutoPayout = shouldAutoProcessWithRazorpayX(req.body?.paymentMethod, value.autoProcess);
       let finalResult = result;
       if (shouldAutoPayout) {
         const resolveCreatedPayoutId = (entry) => {

@@ -235,6 +235,8 @@ const MODULE_ALIASES = {
   "deal-management": "deals",
   "deal-payouts": "deals",
   "deal-sponsorships": "deals",
+  festivals: "festivals",
+  "festival-management": "festivals",
 
   // Cancellations
   cancellations: "cancellations",
@@ -572,6 +574,15 @@ function getRequestModule(req) {
   }
   if (first === "pricing" && second === "promotion-banners") {
     return "banners";
+  }
+  if (first === "festivals") {
+    return "festivals";
+  }
+  if (first === "admin" && second === "festivals") {
+    return "festivals";
+  }
+  if (first === "seller" && second === "festivals") {
+    return "festivals";
   }
   if (first === "analytics") {
     return "reports";

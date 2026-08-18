@@ -147,6 +147,26 @@ class ProductService {
     this.dealRepository = dealRepository || new DealRepository();
   }
 
+  normalizeReturnPolicy(policy = {}, fallback = {}) {
+    const source = { ...(fallback || {}), ...(policy || {}) };
+    const type = String(source.type || "").toLowerCase();
+    const returnable = type === "non_returnable" || source.returnable === false || source.eligible === false
+      ? false
+      : source.returnable ?? source.eligible ?? true;
+    const returnWindowDays = returnable
+      ? Math.max(Number(source.returnWindowDays ?? source.days ?? 0), 0)
+      : 0;
+
+    return {
+      ...source,
+      returnable,
+      eligible: returnable,
+      returnWindowDays,
+      days: returnWindowDays,
+      type: returnable ? source.type || "standard" : "non_returnable",
+    };
+  }
+
   // ─── Category & attribute helpers ─────────────────────────────────────────
 
   normalizeCategoryAttributes(category = {}) {
@@ -1174,6 +1194,10 @@ class ProductService {
         },
       };
     }
+    payload.warranty = {
+      ...(payload.warranty || {}),
+      returnPolicy: this.normalizeReturnPolicy(payload.warranty?.returnPolicy),
+    };
     payload = await this.normalizeProductCompliance(payload, actor);
     const productType = (payload.hasVariants === true || (payload.variants || []).length > 0)
       ? PRODUCT_TYPE.VARIABLE
@@ -1296,6 +1320,13 @@ class ProductService {
         },
       };
     }
+    payload.warranty = {
+      ...(payload.warranty || existingProduct.warranty || {}),
+      returnPolicy: this.normalizeReturnPolicy(
+        payload.warranty?.returnPolicy,
+        existingProduct.warranty?.returnPolicy,
+      ),
+    };
     payload = await this.normalizeProductCompliance(payload, actor, existingProduct);
 
     const categoryKey =

@@ -3,6 +3,7 @@
 const https = require("https");
 const { env } = require("../../../config/env");
 const { AppError } = require("../../../shared/errors/app-error");
+const { logger } = require("../../../shared/logger/logger");
 
 class RazorpayXPayoutProvider {
   request(path, method = "GET", body = null) {
@@ -24,12 +25,32 @@ class RazorpayXPayoutProvider {
           let parsed = {};
           try { parsed = data ? JSON.parse(data) : {}; } catch { parsed = { raw: data }; }
           if (res.statusCode >= 400) {
+            logger.error({
+              provider: "razorpayx",
+              method,
+              path,
+              statusCode: res.statusCode,
+              errorCode: parsed.error?.code || parsed.code || null,
+              errorDescription: parsed.error?.description || parsed.message || null,
+              field: parsed.error?.field || null,
+            }, "RazorpayX API request failed");
             return reject(new AppError(parsed.error?.description || parsed.message || "RazorpayX payout request failed", res.statusCode));
           }
+          logger.warn({
+            provider: "razorpayx",
+            method,
+            path,
+            statusCode: res.statusCode,
+            entityId: parsed.id || null,
+            entityStatus: parsed.status || null,
+          }, "RazorpayX API request completed");
           return resolve(parsed);
         });
       });
-      req.on("error", reject);
+      req.on("error", (error) => {
+        logger.error({ err: error, provider: "razorpayx", method, path }, "RazorpayX API request errored");
+        reject(error);
+      });
       if (payload) req.write(payload);
       req.end();
     });
@@ -43,13 +64,13 @@ class RazorpayXPayoutProvider {
     if (env.razorpayX.mock || !env.razorpayX.live) {
       return { id: this.mockId("cont"), name, email, contact, reference_id: referenceId, notes, mock: true };
     }
+    logger.warn({ referenceId, hasEmail: Boolean(email), hasContact: Boolean(contact) }, "Creating RazorpayX contact for seller payout");
     return this.request("/v1/contacts", "POST", {
       name,
       email,
       contact,
       type: "vendor",
       reference_id: referenceId,
-      notes,
     });
   }
 
@@ -57,6 +78,12 @@ class RazorpayXPayoutProvider {
     if (env.razorpayX.mock || !env.razorpayX.live) {
       return { id: this.mockId("fa"), contact_id: contactId, account_type: "bank_account", mock: true };
     }
+    logger.warn({
+      contactId,
+      accountHolderName,
+      accountNumberLast4: String(accountNumber || "").slice(-4),
+      ifsc,
+    }, "Creating RazorpayX fund account for seller payout");
     return this.request("/v1/fund_accounts", "POST", {
       contact_id: contactId,
       account_type: "bank_account",
@@ -65,7 +92,6 @@ class RazorpayXPayoutProvider {
         ifsc,
         account_number: accountNumber,
       },
-      notes,
     });
   }
 
@@ -80,9 +106,16 @@ class RazorpayXPayoutProvider {
         currency,
         reference_id: referenceId,
         mock: true,
-        notes,
       };
     }
+    logger.warn({
+      fundAccountId,
+      amount,
+      currency,
+      referenceId,
+      mode: "IMPS",
+      accountNumberConfigured: Boolean(env.razorpayX.accountNumber),
+    }, "Creating RazorpayX payout");
     return this.request("/v1/payouts", "POST", {
       account_number: env.razorpayX.accountNumber,
       fund_account_id: fundAccountId,
@@ -93,7 +126,6 @@ class RazorpayXPayoutProvider {
       queue_if_low_balance: true,
       reference_id: referenceId,
       narration: String(narration || "Seller payout").slice(0, 30),
-      notes,
     });
   }
 
@@ -102,6 +134,7 @@ class RazorpayXPayoutProvider {
     if (env.razorpayX.mock || !env.razorpayX.live || String(payoutId).includes("_mock_")) {
       return { id: payoutId, status: "processed", mock: true };
     }
+    logger.warn({ payoutId }, "Fetching RazorpayX payout status");
     return this.request(`/v1/payouts/${encodeURIComponent(payoutId)}`, "GET");
   }
 }

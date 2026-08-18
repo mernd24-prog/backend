@@ -14,15 +14,18 @@ const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { env } = require("../../../config/env");
+const { sendMail } = require("../../../infrastructure/mail/mailer");
 const { RazorpayXPayoutProvider } = require("../../../infrastructure/payouts/providers/razorpayx.provider");
+const { WalletService } = require("../../wallet/services/wallet.service");
 const {
   calculateInclusiveShippingTax,
   resolveShippingPolicy,
 } = require("../../../shared/domain/seller-payout-rules");
 
 class SellerCommissionService {
-  constructor({ razorpayXProvider = new RazorpayXPayoutProvider() } = {}) {
+  constructor({ razorpayXProvider = new RazorpayXPayoutProvider(), walletService = new WalletService() } = {}) {
     this.razorpayXProvider = razorpayXProvider;
+    this.walletService = walletService;
   }
 
   async publishPayoutEvent(payout = {}, actor = {}) {
@@ -55,6 +58,172 @@ class SellerCommissionService {
     return Math.round(Number(value || 0) * 100) / 100;
   }
 
+  sanitizeRazorpayXName(value, fallback = "Seller") {
+    const cleaned = String(value || "")
+      .replace(/@/g, " ")
+      .replace(/[^a-zA-Z0-9 .,&()'-]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120);
+    if (cleaned.length >= 3) return cleaned;
+    const fallbackName = String(fallback || "Seller")
+      .replace(/[^a-zA-Z0-9 .,&()'-]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120);
+    return fallbackName.length >= 3 ? fallbackName : "Seller";
+  }
+
+  escapeMailHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  formatPayoutDate(value) {
+    if (!value) return "-";
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return "-";
+    return new Intl.DateTimeFormat("en-IN", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: "Asia/Kolkata",
+    }).format(date);
+  }
+
+  payoutMethodLabel(paymentMethod) {
+    const value = String(paymentMethod || "").toLowerCase();
+    if (this.isSellerWalletRequested(value)) return "Seller Wallet";
+    if (this.isRazorpayXRequested(value) || value === "razorpayx") return "Bank Transfer via RazorpayX";
+    return value ? value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase()) : "Manual Transfer";
+  }
+
+  getRazorpayXFailureReason(entity = {}, providerStatus = "failed") {
+    const statusDetails = entity.status_details || {};
+    const statusDetailText = typeof statusDetails === "string"
+      ? statusDetails
+      : statusDetails.description || statusDetails.reason || statusDetails.message;
+    return [
+      entity.failure_reason,
+      entity.failure_description,
+      entity.error?.description,
+      entity.error?.reason,
+      statusDetailText,
+      entity.reason,
+      `RazorpayX ${providerStatus}`,
+    ].find((value) => String(value || "").trim()) || `RazorpayX ${providerStatus}`;
+  }
+
+  getRazorpayXReversalId(entity = {}) {
+    return entity.reversal_id ||
+      entity.reversal?.id ||
+      entity.reversal?.entity?.id ||
+      entity.reversals?.items?.[0]?.id ||
+      null;
+  }
+
+  async sendSellerPayoutCompletedEmail(payout = {}) {
+    if (!payout?.id || !payout?.seller_id) return null;
+    const seller = await UserModel.findById(String(payout.seller_id))
+      .select("email profile sellerProfile")
+      .lean()
+      .catch((error) => {
+        logger.warn({ err: error, sellerId: payout.seller_id, payoutId: payout.id }, "Unable to load seller for payout email");
+        return null;
+      });
+    const organizationSnapshot = this.parseJson(payout.organization_snapshot, {});
+    const to = seller?.email || seller?.sellerProfile?.supportEmail || organizationSnapshot.supportEmail || organizationSnapshot.email;
+    if (!to) {
+      logger.warn({ sellerId: payout.seller_id, payoutId: payout.id }, "Seller payout email skipped because seller email is missing");
+      return null;
+    }
+
+    const sellerName = organizationSnapshot.storeDisplayName ||
+      organizationSnapshot.legalBusinessName ||
+      seller?.sellerProfile?.displayName ||
+      seller?.sellerProfile?.businessName ||
+      [seller?.profile?.firstName, seller?.profile?.lastName].filter(Boolean).join(" ") ||
+      "Seller";
+    const currency = payout.currency || "INR";
+    const method = this.payoutMethodLabel(payout.payment_method);
+    const processedAt = this.formatPayoutDate(payout.processed_at || new Date());
+    const period = `${this.formatPayoutDate(payout.period_start)} - ${this.formatPayoutDate(payout.period_end)}`;
+    const reference = payout.payment_reference || payout.id;
+    const amount = this.renderMoney(payout.net_amount, currency);
+    const rows = [
+      ["Payout ID", payout.id],
+      ["Amount Credited", amount],
+      ["Payment Method", method],
+      ["Payment Reference", reference],
+      ["Status", "Completed"],
+      ["Processed At", processedAt],
+      ["Settlement Period", period],
+      ["Gross Sales", this.renderMoney(payout.total_amount, currency)],
+      ["Platform Commission", this.renderMoney(payout.commission_amount, currency)],
+      ["Tax / TCS / TDS", this.renderMoney(payout.tax_amount, currency)],
+      ["Refunds / Adjustments", this.renderMoney((Number(payout.refund_amount || 0) + Number(payout.adjustment_amount || 0)), currency)],
+    ];
+    const tableRows = rows.map(([label, value]) => `
+      <tr>
+        <td style="padding:10px 12px;border-bottom:1px solid #e8edf5;color:#64748b;">${this.escapeMailHtml(label)}</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #e8edf5;color:#0f172a;font-weight:600;">${this.escapeMailHtml(value)}</td>
+      </tr>
+    `).join("");
+    const subject = `Seller payout completed - ${amount}`;
+    const text = [
+      `Hi ${sellerName},`,
+      "",
+      `Your seller payout has been completed.`,
+      `Amount: ${amount}`,
+      `Method: ${method}`,
+      `Reference: ${reference}`,
+      `Payout ID: ${payout.id}`,
+      `Processed at: ${processedAt}`,
+      `Period: ${period}`,
+      "",
+      "You can check the payout status in your seller finance dashboard.",
+    ].join("\n");
+    const html = `
+      <div style="font-family:Arial,sans-serif;background:#f6f8fb;padding:24px;color:#0f172a;">
+        <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+          <div style="padding:22px 24px;background:#0f1b4c;color:#ffffff;">
+            <div style="font-size:18px;font-weight:700;">Seller payout completed</div>
+            <div style="font-size:14px;margin-top:6px;color:#dbeafe;">${this.escapeMailHtml(amount)} has been settled to ${this.escapeMailHtml(method)}.</div>
+          </div>
+          <div style="padding:24px;">
+            <p style="margin:0 0 16px;">Hi ${this.escapeMailHtml(sellerName)},</p>
+            <p style="margin:0 0 18px;color:#475569;">Your payout is now marked completed. Here are the payout details:</p>
+            <table style="width:100%;border-collapse:collapse;border:1px solid #e8edf5;border-radius:6px;overflow:hidden;">${tableRows}</table>
+            <p style="margin:18px 0 0;color:#64748b;font-size:13px;">You can check the full status and settlement details in your seller finance dashboard.</p>
+          </div>
+        </div>
+      </div>
+    `;
+
+    logger.warn({
+      payoutId: payout.id,
+      sellerId: payout.seller_id,
+      to,
+      smtpMode: env.smtp.mode,
+      smtpLive: env.smtp.live,
+    }, "Sending seller payout completion email");
+
+    const result = await sendMail({ to, subject, text, html });
+    logger.warn({
+      payoutId: payout.id,
+      sellerId: payout.seller_id,
+      to,
+      messageId: result?.messageId,
+      mode: result?.mode,
+      accepted: result?.accepted || [],
+      rejected: result?.rejected || [],
+    }, "Seller payout completion email sent");
+    return result;
+  }
+
   jsonb(value, fallback = {}) {
     let normalized = value;
     if (normalized === undefined || normalized === null || normalized === "") {
@@ -84,21 +253,177 @@ class SellerCommissionService {
     return ["razorpayx", "razorpay_x", "bank_transfer_auto"].includes(String(paymentMethod || "").toLowerCase());
   }
 
+  isSellerWalletRequested(paymentMethod) {
+    return ["seller_wallet", "wallet", "internal_wallet"].includes(String(paymentMethod || "").toLowerCase());
+  }
+
+  normalizePayoutDestination(destination) {
+    const value = String(destination || "").toLowerCase();
+    return this.isSellerWalletRequested(value) ? "seller_wallet" : "razorpayx";
+  }
+
+  async ensureSellerPayoutProfilesTable() {
+    if (this.sellerPayoutProfilesReady) return;
+    await knex.schema.raw(`
+      CREATE TABLE IF NOT EXISTS seller_payout_profiles (
+        id UUID PRIMARY KEY,
+        seller_id VARCHAR(64) NOT NULL,
+        organization_id UUID,
+        payout_destination VARCHAR(32) NOT NULL DEFAULT 'razorpayx',
+        bank_details JSONB NOT NULL DEFAULT '{}'::jsonb,
+        bank_verification_status VARCHAR(32) NOT NULL DEFAULT 'submitted',
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_seller_payout_profiles_org
+      ON seller_payout_profiles(seller_id, organization_id)
+      WHERE organization_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_seller_payout_profiles_default
+      ON seller_payout_profiles(seller_id)
+      WHERE organization_id IS NULL;
+    `);
+    this.sellerPayoutProfilesReady = true;
+  }
+
+  async getSellerPayoutProfile(sellerId, organizationId = null) {
+    await this.ensureSellerPayoutProfilesTable();
+    const query = knex("seller_payout_profiles").where("seller_id", sellerId);
+    if (organizationId) query.where("organization_id", organizationId);
+    else query.whereNull("organization_id");
+    return query.first();
+  }
+
+  async findSellerPayoutProfile(sellerId, organizationId = null) {
+    const scoped = organizationId ? await this.getSellerPayoutProfile(sellerId, organizationId) : null;
+    if (scoped) return scoped;
+    return this.getSellerPayoutProfile(sellerId, null);
+  }
+
+  async saveSellerPayoutProfile(sellerId, organizationId = null, payload = {}, actor = {}) {
+    await this.ensureSellerPayoutProfilesTable();
+    const existing = await this.getSellerPayoutProfile(sellerId, organizationId);
+    const now = new Date().toISOString();
+    const bankDetails = payload.bankDetails !== undefined
+      ? {
+        accountHolderName: String(payload.bankDetails?.accountHolderName || "").trim(),
+        accountNumber: String(payload.bankDetails?.accountNumber || "").replace(/\D/g, ""),
+        ifscCode: String(payload.bankDetails?.ifscCode || "").trim().toUpperCase(),
+        bankName: String(payload.bankDetails?.bankName || "").trim(),
+        branchName: String(payload.bankDetails?.branchName || "").trim(),
+      }
+      : this.parseJson(existing?.bank_details, {});
+    const destination = this.normalizePayoutDestination(payload.payoutDestination || payload.destination || existing?.payout_destination);
+    const data = {
+      payout_destination: destination,
+      bank_details: this.jsonb(bankDetails),
+      bank_verification_status: payload.bankDetails !== undefined ? "submitted" : existing?.bank_verification_status || "submitted",
+      metadata: this.jsonb({
+        ...this.parseJson(existing?.metadata, {}),
+        updatedBy: actor.userId || actor.sub || sellerId,
+        updatedAt: now,
+      }),
+      updated_at: knex.fn.now(),
+    };
+    if (existing) {
+      const [updated] = await knex("seller_payout_profiles")
+        .where("id", existing.id)
+        .update(data)
+        .returning("*");
+      return updated;
+    }
+    const [created] = await knex("seller_payout_profiles")
+      .insert({
+        id: uuidv4(),
+        seller_id: sellerId,
+        organization_id: organizationId || null,
+        ...data,
+        created_at: knex.fn.now(),
+      })
+      .returning("*");
+    return created;
+  }
+
+  async resolveSellerPayoutPreference(sellerId, organizationId = null, settings = null) {
+    const commerceSettings = settings || await commerceSettingsService.getSettings();
+    const finance = commerceSettings.finance || {};
+    let organization = null;
+    if (organizationId) {
+      organization = await knex("seller_organizations")
+        .where({ id: organizationId, seller_id: sellerId })
+        .first();
+    } else {
+      organization = await knex("seller_organizations")
+        .where("seller_id", sellerId)
+        .orderByRaw("CASE WHEN is_default THEN 0 ELSE 1 END")
+        .orderBy("created_at", "asc")
+        .first();
+    }
+    const payoutProfile = await this.findSellerPayoutProfile(sellerId, organization?.id || organizationId || null);
+    const sellerChoice = payoutProfile?.payout_destination || null;
+    const destination = finance.allowSellerPayoutDestinationChoice !== false && sellerChoice
+      ? sellerChoice
+      : finance.defaultPayoutDestination;
+    return {
+      sellerId,
+      organizationId: organization?.id || organizationId || null,
+      destination: this.normalizePayoutDestination(destination),
+      sellerChoice: sellerChoice ? this.normalizePayoutDestination(sellerChoice) : null,
+      platformDefault: this.normalizePayoutDestination(finance.defaultPayoutDestination),
+      sellerCanChoose: finance.allowSellerPayoutDestinationChoice !== false,
+      bankDetails: this.parseJson(payoutProfile?.bank_details, {}),
+      bankVerificationStatus: payoutProfile?.bank_verification_status || null,
+    };
+  }
+
+  async updateSellerPayoutPreference(sellerId, payload = {}, actor = {}) {
+    const commerceSettings = await commerceSettingsService.getSettings();
+    if (commerceSettings.finance?.allowSellerPayoutDestinationChoice === false) {
+      throw new AppError("Seller payout destination choice is disabled by admin", 403);
+    }
+    const destination = this.normalizePayoutDestination(payload.destination || payload.payoutDestination);
+    const organizationId = payload.organizationId || actor.selectedOrganizationId || null;
+    const organization = organizationId
+      ? await knex("seller_organizations").where({ id: organizationId, seller_id: sellerId }).first()
+      : await knex("seller_organizations")
+        .where("seller_id", sellerId)
+        .orderByRaw("CASE WHEN is_default THEN 0 ELSE 1 END")
+        .orderBy("created_at", "asc")
+        .first();
+    const payoutOrganizationId = organization?.id || null;
+    const updated = await this.saveSellerPayoutProfile(sellerId, payoutOrganizationId, {
+      payoutDestination: destination,
+      bankDetails: payload.bankDetails,
+    }, actor);
+    return {
+      sellerId,
+      organizationId: payoutOrganizationId,
+      destination,
+      payoutSettings: {
+        payoutDestination: destination,
+        bankVerificationStatus: updated.bank_verification_status,
+        bankDetails: this.parseJson(updated.bank_details, {}),
+      },
+      updatedAt: updated?.updated_at || new Date().toISOString(),
+    };
+  }
+
   async resolvePayoutBankDetails(payout = {}) {
     let organization = null;
     if (payout.organization_id) {
       organization = await knex("seller_organizations").where("id", payout.organization_id).first();
     }
     const seller = await UserModel.findById(payout.seller_id).lean().catch(() => null);
-    const orgBank = this.parseJson(organization?.bank_details, {});
+    const payoutProfile = await this.findSellerPayoutProfile(payout.seller_id, payout.organization_id || null);
+    const orgBank = this.parseJson(payoutProfile?.bank_details, {});
     const profileBank = seller?.sellerProfile?.bankDetails || {};
     const bank = Object.keys(orgBank || {}).length ? orgBank : profileBank;
     const accountHolderName = bank.accountHolderName || bank.holderName || bank.account_holder_name;
     const accountNumber = bank.accountNumber || bank.account_number;
     const ifscCode = bank.ifscCode || bank.ifsc || bank.ifsc_code;
     const bankName = bank.bankName || bank.bank_name;
-    const verified = ["verified", "approved"].includes(String(
-      organization?.bank_verification_status || seller?.sellerProfile?.bankVerificationStatus || "",
+    const verified = ["verified", "approved", "submitted"].includes(String(
+      payoutProfile?.bank_verification_status || seller?.sellerProfile?.bankVerificationStatus || "",
     ).toLowerCase());
     if (!accountHolderName || !accountNumber || !ifscCode || !bankName) {
       throw new AppError("Seller bank details are incomplete. Complete seller onboarding bank details before RazorpayX payout.", 409);
@@ -147,7 +472,22 @@ class SellerCommissionService {
     const metadata = this.parseJson(payout.metadata, {});
     if (metadata.razorpayX?.payoutId) return payout;
     const { seller, organization, bank } = await this.resolvePayoutBankDetails(payout);
-    const sellerName = organization?.legal_business_name || seller?.profile?.name || seller?.email || payout.seller_id;
+    const organizationSnapshot = this.parseJson(payout.organization_snapshot, {});
+    const sellerName = this.sanitizeRazorpayXName(
+      organization?.legal_business_name ||
+        organization?.store_display_name ||
+        organizationSnapshot.legalBusinessName ||
+        organizationSnapshot.storeDisplayName ||
+        seller?.profile?.name ||
+        seller?.name ||
+        seller?.email ||
+        payout.seller_id,
+      "Seller",
+    );
+    const accountHolderName = this.sanitizeRazorpayXName(
+      bank.accountHolderName,
+      sellerName,
+    );
     const contact = await this.razorpayXProvider.createContact({
       name: sellerName,
       email: seller?.email || organization?.support_email || undefined,
@@ -157,7 +497,7 @@ class SellerCommissionService {
     });
     const fundAccount = await this.razorpayXProvider.createFundAccount({
       contactId: contact.id,
-      accountHolderName: bank.accountHolderName,
+      accountHolderName,
       accountNumber: bank.accountNumber,
       ifsc: bank.ifscCode,
       notes: { sellerId: String(payout.seller_id), organizationId: payout.organization_id || "" },
@@ -171,6 +511,8 @@ class SellerCommissionService {
       notes: { sellerPayoutId: payout.id, sellerId: String(payout.seller_id) },
     });
     const providerStatus = String(providerPayout.status || "processing").toLowerCase();
+    const providerFailureReason = this.getRazorpayXFailureReason(providerPayout, providerStatus);
+    const providerReversalId = this.getRazorpayXReversalId(providerPayout);
     const providerMeta = {
       provider: "razorpayx",
       mode: env.razorpayX.mode,
@@ -178,6 +520,8 @@ class SellerCommissionService {
       fundAccountId: fundAccount.id,
       payoutId: providerPayout.id,
       status: providerStatus,
+      failureReason: ["failed", "rejected", "cancelled", "reversed"].includes(providerStatus) ? providerFailureReason : null,
+      reversalId: providerReversalId,
       initiatedAt: new Date().toISOString(),
       initiatedBy: options.actor?.userId || options.actor?.sub || null,
       bank: {
@@ -188,6 +532,18 @@ class SellerCommissionService {
       },
       raw: providerPayout,
     };
+    logger.warn({
+      payoutId,
+      sellerId: payout.seller_id,
+      organizationId: payout.organization_id || null,
+      providerPayoutId: providerPayout.id,
+      providerStatus,
+      reversalId: providerReversalId,
+      failureReason: providerMeta.failureReason,
+      amount: payout.net_amount,
+      bankName: bank.bankName,
+      accountNumberLast4: String(bank.accountNumber).slice(-4),
+    }, "RazorpayX seller payout created");
     if (["processed", "completed"].includes(providerStatus)) {
       await knex("seller_payouts").where("id", payoutId).update({
         status: "processing",
@@ -200,6 +556,20 @@ class SellerCommissionService {
         paymentMethod: "razorpayx",
         notes: "RazorpayX payout processed",
         actor: options.actor,
+      });
+    }
+    if (["failed", "rejected", "cancelled", "reversed"].includes(providerStatus)) {
+      await knex("seller_payouts").where("id", payoutId).update({
+        status: "processing",
+        payment_method: "razorpayx",
+        payment_reference: providerPayout.id,
+        metadata: this.jsonb({ ...metadata, razorpayX: providerMeta }),
+        updated_at: knex.fn.now(),
+      });
+      return this.failPayout(payoutId, providerFailureReason, options.actor, {
+        providerStatus,
+        providerPayoutId: providerPayout.id,
+        reversalId: providerReversalId,
       });
     }
     const [updated] = await knex("seller_payouts").where("id", payoutId).update({
@@ -222,17 +592,32 @@ class SellerCommissionService {
       .first();
     if (!payout) return { acknowledged: true, ignored: true };
     const providerStatus = String(entity.status || eventType.split(".")[1] || "processing").toLowerCase();
+    const failureReason = this.getRazorpayXFailureReason(entity, providerStatus);
+    const reversalId = this.getRazorpayXReversalId(entity);
     const metadata = {
       ...this.parseJson(payout.metadata, {}),
       razorpayX: {
         ...(this.parseJson(payout.metadata, {}).razorpayX || {}),
         payoutId: providerPayoutId,
         status: providerStatus,
+        failureReason: ["failed", "rejected", "cancelled", "reversed"].includes(providerStatus) ? failureReason : null,
+        reversalId,
         lastWebhookEvent: eventType,
         lastWebhookAt: new Date().toISOString(),
         rawWebhook: entity,
       },
     };
+    logger.warn({
+      payoutId: payout.id,
+      sellerId: payout.seller_id,
+      organizationId: payout.organization_id || null,
+      currentStatus: payout.status,
+      providerPayoutId,
+      providerStatus,
+      eventType,
+      reversalId,
+      failureReason: ["failed", "rejected", "cancelled", "reversed"].includes(providerStatus) ? failureReason : null,
+    }, "RazorpayX seller payout status received");
     await knex("seller_payouts").where("id", payout.id).update({
       payment_method: "razorpayx",
       payment_reference: providerPayoutId,
@@ -247,14 +632,18 @@ class SellerCommissionService {
         actor,
       });
     }
-    if (["failed", "rejected", "cancelled"].includes(providerStatus)) {
-      if (payout.status === "completed") {
-        await knex("seller_payouts").where("id", payout.id).update({ status: "failed", updated_at: knex.fn.now() });
-        const failed = { ...payout, status: "failed", metadata };
-        await this.publishPayoutEvent(failed, actor);
-        return failed;
-      }
-      return this.failPayout(payout.id, entity.failure_reason || entity.status_details?.description || `RazorpayX ${providerStatus}`, actor);
+    if (["failed", "rejected", "cancelled", "reversed"].includes(providerStatus)) {
+      return this.failPayout(
+        payout.id,
+        failureReason,
+        actor,
+        {
+          allowCompleted: providerStatus === "reversed",
+          providerStatus,
+          providerPayoutId,
+          reversalId,
+        },
+      );
     }
     const [updated] = await knex("seller_payouts").where("id", payout.id).update({
       status: "processing",
@@ -279,11 +668,149 @@ class SellerCommissionService {
     if (!env.razorpayX.enabled) {
       throw new AppError("RazorpayX payouts are not enabled. Configure RazorpayX before syncing status.", 503);
     }
+    logger.warn({
+      payoutId,
+      sellerId: payout.seller_id,
+      organizationId: payout.organization_id || null,
+      providerPayoutId,
+      currentStatus: payout.status,
+    }, "Syncing RazorpayX seller payout status");
     const providerPayout = await this.razorpayXProvider.fetchPayout(providerPayoutId);
     return this.handleRazorpayXPayoutWebhook(
       providerPayout,
       `payout.${String(providerPayout.status || "pending").toLowerCase()}`,
       actor,
+    );
+  }
+
+  async syncPendingRazorpayXPayouts(options = {}) {
+    if (!env.razorpayX.enabled) {
+      return { skipped: true, reason: "razorpayx_disabled", checked: 0, updated: 0, failed: [] };
+    }
+    const limit = Math.min(Math.max(Number(options.limit || 50), 1), 100);
+    const rows = await knex("seller_payouts")
+      .where("status", "processing")
+      .andWhere((builder) => {
+        builder
+          .whereRaw("LOWER(COALESCE(payment_method, '')) = 'razorpayx'")
+          .orWhereRaw("COALESCE(metadata, '{}'::jsonb) #>> '{razorpayX,payoutId}' IS NOT NULL");
+      })
+      .orderBy("updated_at", "asc")
+      .limit(limit);
+
+    const synced = [];
+    const failed = [];
+    for (const row of rows) {
+      try {
+        const result = await this.syncRazorpayXPayoutStatus(row.id, options.actor || {
+          userId: "system:razorpayx-payout-sync",
+          role: "system",
+        });
+        synced.push({
+          payoutId: row.id,
+          providerPayoutId: row.payment_reference || this.parseJson(row.metadata, {}).razorpayX?.payoutId || null,
+          previousStatus: row.status,
+          status: result?.status || null,
+          providerStatus: this.parseJson(result?.metadata, {}).razorpayX?.status || null,
+        });
+      } catch (error) {
+        failed.push({
+          payoutId: row.id,
+          providerPayoutId: row.payment_reference || this.parseJson(row.metadata, {}).razorpayX?.payoutId || null,
+          error: error.message,
+          statusCode: error.statusCode || error.status || null,
+        });
+      }
+    }
+
+    logger.warn({
+      checked: rows.length,
+      synced: synced.length,
+      failed: failed.length,
+      syncedPayouts: synced,
+      failedPayouts: failed,
+    }, "RazorpayX processing seller payouts sync completed");
+    return { checked: rows.length, synced, failed };
+  }
+
+  async completeSellerWalletPayout(payoutId, options = {}) {
+    const payout = await knex("seller_payouts").where("id", payoutId).first();
+    if (!payout) throw new AppError("Payout not found", 404);
+    if (payout.status === "completed") return payout;
+    if (payout.status !== "processing") {
+      throw new AppError(`Seller wallet payout cannot be completed from ${payout.status}`, 409);
+    }
+    const metadata = this.parseJson(payout.metadata, {});
+    const walletReference = `seller_payout:${payoutId}`;
+    await this.walletService.credit(payout.seller_id, Number(payout.net_amount || 0), {
+      referenceType: "seller_payout",
+      referenceId: payoutId,
+      metadata: {
+        sellerId: payout.seller_id,
+        organizationId: payout.organization_id || null,
+        payoutId,
+        source: "seller_wallet_payout",
+        creditedBy: options.actor?.userId || options.actor?.sub || "system",
+      },
+    });
+    await knex("seller_payouts").where("id", payoutId).update({
+      payment_method: "seller_wallet",
+      payment_reference: walletReference,
+      metadata: this.jsonb({
+        ...metadata,
+        sellerWallet: {
+          credited: true,
+          walletReference,
+          creditedAt: new Date().toISOString(),
+          creditedBy: options.actor?.userId || options.actor?.sub || "system",
+        },
+      }),
+      updated_at: knex.fn.now(),
+    });
+    return this.processPayout(payoutId, walletReference, {
+      paymentMethod: "seller_wallet",
+      notes: options.notes || "Seller payout credited to seller wallet",
+      actor: options.actor,
+    });
+  }
+
+  async startPayoutTransfer(payoutId, options = {}) {
+    const payout = await knex("seller_payouts").where("id", payoutId).first();
+    if (!payout) throw new AppError("Payout not found", 404);
+    const commerceSettings = await commerceSettingsService.getSettings();
+    const preference = await this.resolveSellerPayoutPreference(
+      payout.seller_id,
+      payout.organization_id || null,
+      commerceSettings,
+    );
+    const paymentMethod = options.paymentMethod || payout.payment_method || preference.destination;
+    if (this.isSellerWalletRequested(paymentMethod)) {
+      if (["pending", "on_hold", "approved"].includes(payout.status)) {
+        await knex("seller_payouts").where("id", payoutId).update({
+          status: "processing",
+          payment_method: "seller_wallet",
+          updated_at: knex.fn.now(),
+        });
+        await knex("seller_commissions")
+          .where("payout_id", payoutId)
+          .whereIn("status", ["pending", "approved"])
+          .update({ status: "approved", updated_at: knex.fn.now() });
+      }
+      return this.completeSellerWalletPayout(payoutId, {
+        ...options,
+        paymentMethod: "seller_wallet",
+      });
+    }
+    if (this.isRazorpayXRequested(paymentMethod) || paymentMethod === "razorpayx") {
+      return this.initiateRazorpayXPayout(payoutId, {
+        ...options,
+        paymentMethod: "razorpayx",
+      });
+    }
+    return this.processPayout(
+      payoutId,
+      options.paymentReference || `manual_${Date.now()}`,
+      { ...options, paymentMethod },
     );
   }
 
@@ -631,10 +1158,14 @@ resolveSellerFeeTaxAmount(
 
   getPayoutPolicy(settings = {}) {
     const finance = settings.finance || settings || {};
+    const mode = finance.payoutMode || (finance.payoutManualApprovalRequired === false ? "auto_razorpayx" : "manual");
+    const autoRazorpayX = mode === "auto_razorpayx";
     return {
+      mode,
+      autoRazorpayX,
       releaseMilestone: finance.payoutReleaseMilestone || "return_window_closed",
       schedule: finance.payoutSchedule || "manual",
-      manualApprovalRequired: finance.payoutManualApprovalRequired !== false,
+      manualApprovalRequired: autoRazorpayX ? false : finance.payoutManualApprovalRequired !== false,
       minimumPayoutAmount: this.round(finance.minimumPayoutAmount || 0),
       codPayoutRequiresCapture: settings.cod?.payoutRequiresCapture !== false,
     };
@@ -772,7 +1303,7 @@ resolveSellerFeeTaxAmount(
     return releaseData;
   }
 
-  evaluateCommissionRelease(commission = {}, releaseData = new Map(), policy = {}, now = new Date()) {
+  evaluateCommissionRelease(commission = {}, releaseData = new Map(), policy = {}, now = new Date(), options = {}) {
     const status = String(commission.status || "pending");
     const netAmount = this.round(commission.net_amount || 0);
     const orderData = releaseData.get(String(commission.order_id || "")) || {};
@@ -830,6 +1361,18 @@ resolveSellerFeeTaxAmount(
 
     if (orderItem) {
       const eligibleAt = this.toDate(orderItem.payout_eligible_at || orderItem.return_eligible_until);
+      if (
+        options.allowFailedPayoutItems === true &&
+        ["failed", "cancelled"].includes(String(orderItem.payout_status || "").toLowerCase())
+      ) {
+        return {
+          ...base,
+          releaseStatus: "available",
+          available: true,
+          eligibleAt: (eligibleAt || now).toISOString(),
+          reason: "retry_after_failed_payout",
+        };
+      }
       if (orderItem.payout_status === "refunded" || (Number(commission.net_amount || 0) <= 0 && Number(commission.refund_amount || 0) > 0)) {
         return {
           ...base,
@@ -881,13 +1424,13 @@ resolveSellerFeeTaxAmount(
     };
   }
 
-  async evaluateCommissionsRelease(commissions = [], settings = {}, client = knex) {
+  async evaluateCommissionsRelease(commissions = [], settings = {}, client = knex, options = {}) {
     const policy = this.getPayoutPolicy(settings);
     const releaseData = await this.getCommissionOrderReleaseData(commissions, client);
     const now = new Date();
     return commissions.map((commission) => ({
       commission,
-      release: this.evaluateCommissionRelease(commission, releaseData, policy, now),
+      release: this.evaluateCommissionRelease(commission, releaseData, policy, now, options),
     }));
   }
 
@@ -896,6 +1439,7 @@ resolveSellerFeeTaxAmount(
       commissions,
       options.settings || {},
       options.trx || knex,
+      { allowFailedPayoutItems: options.allowFailedPayoutItems === true },
     );
     const eligible = evaluations
       .filter(({ release }) => release.available)
@@ -925,6 +1469,37 @@ resolveSellerFeeTaxAmount(
       sellerId: orderItem.seller_id,
       orderAmount: Number(order.subtotal_amount),
     };
+  }
+
+  isUuidLike(value) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      String(value || "").trim(),
+    );
+  }
+
+  async resolveCommissionOrderId(orderId) {
+    const raw = String(orderId || "").trim();
+    if (!raw) return raw;
+    const orderNumber = raw.replace(/^#/, "");
+    const order = await knex("orders")
+      .select("id")
+      .modify((query) => {
+        if (this.isUuidLike(raw)) query.where("id", raw);
+        query.orWhere("order_number", raw).orWhere("order_number", orderNumber);
+      })
+      .first();
+    if (!order?.id) {
+      logger.warn(
+        { requestedOrderId: raw, normalizedOrderNumber: orderNumber },
+        "Commission order id could not be resolved",
+      );
+    } else if (String(order.id) !== raw) {
+      logger.info(
+        { requestedOrderId: raw, resolvedOrderId: order.id },
+        "Commission order id resolved from order number",
+      );
+    }
+    return order?.id || raw;
   }
 
   async getOrderSellerGroups(orderId, sellerId = null, orderAmount = null, sellerTier = null, organizationId = null) {
@@ -983,7 +1558,31 @@ resolveSellerFeeTaxAmount(
       });
 
     if (!rows.length) {
-      throw new AppError("Unable to get order commission data", 400);
+      const [order, unfilteredItemCount, sellerItemCount, organizationItemCount] = await Promise.all([
+        knex("orders").select("id", "order_number", "status").where("id", orderId).first(),
+        knex("order_items").where("order_id", orderId).count({ count: "*" }).first(),
+        sellerId
+          ? knex("order_items").where({ order_id: orderId, seller_id: sellerId }).count({ count: "*" }).first()
+          : Promise.resolve({ count: null }),
+        organizationId
+          ? knex("order_items").where({ order_id: orderId, organization_id: organizationId }).count({ count: "*" }).first()
+          : Promise.resolve({ count: null }),
+      ]);
+      logger.warn(
+        {
+          orderId,
+          sellerId,
+          organizationId,
+          orderFound: Boolean(order?.id),
+          orderNumber: order?.order_number || null,
+          orderStatus: order?.status || null,
+          orderItemCount: Number(unfilteredItemCount?.count || 0),
+          sellerMatchedItemCount: sellerId ? Number(sellerItemCount?.count || 0) : null,
+          organizationMatchedItemCount: organizationId ? Number(organizationItemCount?.count || 0) : null,
+        },
+        "Commission calculation found no matching order items",
+      );
+      throw new AppError("No order items found for commission calculation. Use the real order ID/order number and check seller or organization filters.", 400);
     }
 
     const grouped = new Map();
@@ -1320,9 +1919,10 @@ gstTcsAmount,
   }
 
   async calculateCommission(orderId, sellerIdOrOptions, orderAmount, sellerTier = null) {
+    const commissionOrderId = await this.resolveCommissionOrderId(orderId);
     const options = this.normalizeCalculateArgs(sellerIdOrOptions, orderAmount, sellerTier);
     const groups = await this.getOrderSellerGroups(
-      orderId,
+      commissionOrderId,
       options.sellerId,
       options.orderAmount,
       options.sellerTier,
@@ -1337,7 +1937,7 @@ gstTcsAmount,
 
       for (const group of groups) {
         const existingQuery = trx("seller_commissions")
-          .where({ seller_id: group.sellerId, order_id: orderId });
+          .where({ seller_id: group.sellerId, order_id: commissionOrderId });
         if (group.orderItemId) existingQuery.where("order_item_id", group.orderItemId);
         if (group.organizationId) {
           existingQuery.where("organization_id", group.organizationId);
@@ -1372,7 +1972,7 @@ gstTcsAmount,
           seller_id: group.sellerId,
           organization_id: group.organizationId || null,
           organization_snapshot: this.jsonb(group.organizationSnapshot || {}),
-          order_id: orderId,
+          order_id: commissionOrderId,
           order_item_ids: this.jsonb(group.orderItemIds, []),
           order_item_id: group.orderItemId || null,
           amount: group.amount,
@@ -1411,7 +2011,8 @@ gstTcsAmount,
       }
 
       return {
-        orderId,
+        orderId: commissionOrderId,
+        requestedOrderId: orderId,
         created,
         updated,
         skipped,
@@ -1422,7 +2023,8 @@ gstTcsAmount,
 
     logger.info(
       {
-        orderId,
+        orderId: commissionOrderId,
+        requestedOrderId: orderId,
         sellers: result.items.map((item) => item.seller_id),
         created: result.created,
         updated: result.updated,
@@ -1471,26 +2073,50 @@ gstTcsAmount,
     const commerceSettings = await commerceSettingsService.getSettings();
     const payoutPolicy = this.getPayoutPolicy(commerceSettings);
     const organizationId = options.organizationId || null;
-    const pendingOrders = await knex("seller_commissions")
-      .where("seller_id", sellerId)
-      .whereIn("status", ["pending", "approved"])
-      .whereNull("payout_id")
-      .modify((builder) => {
-        if (organizationId) builder.where("organization_id", organizationId);
-        else if (options.organizationId === null) builder.whereNull("organization_id");
-      })
-      .modify((builder) => {
-        if (options.commissionIds?.length) builder.whereIn("id", options.commissionIds);
-        else builder.whereBetween("created_at", [range.periodStart, `${range.periodEnd} 23:59:59`]);
-      })
-      .distinct("order_id");
-    for (const row of pendingOrders) {
-      await this.calculateCommission(row.order_id, {
+    logger.info(
+      {
         sellerId,
         organizationId,
-        actor: options.actor || {},
-        sourceStatus: "pre_payout_refresh",
-      });
+        periodStart: range.periodStart,
+        periodEnd: range.periodEnd,
+        commissionIdsCount: Array.isArray(options.commissionIds) ? options.commissionIds.length : 0,
+        skipPrePayoutRefresh: options.skipPrePayoutRefresh === true,
+        source: options.source || "batch_payout",
+        paymentMethod: options.paymentMethod || null,
+        autoProcess: options.autoProcess === true,
+      },
+      "Seller payout initiation started",
+    );
+    if (!options.commissionIds?.length && options.skipPrePayoutRefresh !== true) {
+      const pendingOrders = await knex("seller_commissions")
+        .where("seller_id", sellerId)
+        .whereIn("status", ["pending", "approved"])
+        .whereNull("payout_id")
+        .modify((builder) => {
+          if (organizationId) builder.where("organization_id", organizationId);
+          else if (options.organizationId === null) builder.whereNull("organization_id");
+        })
+        .whereBetween("created_at", [range.periodStart, `${range.periodEnd} 23:59:59`])
+        .distinct("order_id");
+      logger.info(
+        { sellerId, organizationId, pendingOrderCount: pendingOrders.length },
+        "Refreshing commissions before payout",
+      );
+      for (const row of pendingOrders) {
+        try {
+          await this.calculateCommission(row.order_id, {
+            sellerId,
+            organizationId,
+            actor: options.actor || {},
+            sourceStatus: "pre_payout_refresh",
+          });
+        } catch (error) {
+          logger.warn(
+            { err: error, orderId: row.order_id, sellerId, organizationId },
+            "Skipping commission refresh before payout; existing commission row will be used",
+          );
+        }
+      }
     }
     return await knex.transaction(async (trx) => {
       const commissions = await trx("seller_commissions")
@@ -1511,6 +2137,22 @@ gstTcsAmount,
         })
         .forUpdate();
 
+      logger.info(
+        {
+          sellerId,
+          organizationId,
+          source: options.source || "batch_payout",
+          commissionIds: options.commissionIds || null,
+          matchedCommissionCount: commissions.length,
+          matchedStatuses: commissions.reduce((acc, row) => {
+            const status = row.status || "unknown";
+            acc[status] = (acc[status] || 0) + 1;
+            return acc;
+          }, {}),
+        },
+        "Seller payout matched commission rows",
+      );
+
       if (!commissions.length) {
         throw new AppError("No commissions to payout", 400);
       }
@@ -1524,7 +2166,29 @@ gstTcsAmount,
       const { eligible: payoutCommissions, evaluations } = await this.filterPayoutEligibleCommissions(commissions, {
         settings: commerceSettings,
         trx,
+        allowFailedPayoutItems: options.source === "failed_payout_retry",
       });
+
+      logger.info(
+        {
+          sellerId,
+          organizationId,
+          payoutCandidateCount: commissions.length,
+          eligibleCommissionCount: payoutCommissions.length,
+          blockedCommissions: evaluations
+            .filter(({ release }) => !release.available)
+            .map(({ commission, release }) => ({
+              commissionId: commission.id,
+              orderId: commission.order_id,
+              orderItemId: commission.order_item_id,
+              status: commission.status,
+              reason: release.reason,
+              eligibleAt: release.eligibleAt,
+              releaseStatus: release.releaseStatus,
+            })),
+        },
+        "Seller payout eligibility evaluated",
+      );
 
       if (!payoutCommissions.length) {
         throw new AppError("No released commissions to payout for the selected period", 400);
@@ -1594,10 +2258,11 @@ gstTcsAmount,
       }
 
       const payoutId = uuidv4();
-      const razorpayXSelected = this.isRazorpayXRequested(options.paymentMethod) || options.autoProcess === true;
+      const walletSelected = this.isSellerWalletRequested(options.paymentMethod);
+      const razorpayXSelected = !walletSelected && (this.isRazorpayXRequested(options.paymentMethod) || options.autoProcess === true);
       const payoutStatus = options.forceManualApproval
         ? "pending"
-        : razorpayXSelected ? "processing" : (payoutPolicy.manualApprovalRequired ? "pending" : "processing");
+        : (razorpayXSelected || walletSelected) ? "processing" : (payoutPolicy.manualApprovalRequired ? "pending" : "processing");
       const skippedCommissions = evaluations
         .filter(({ release }) => !release.available)
         .map(({ release }) => ({
@@ -1608,11 +2273,19 @@ gstTcsAmount,
           reason: release.reason,
           eligibleAt: release.eligibleAt,
         }));
+      const payoutOrganizationIds = Array.from(
+        new Set(
+          payoutCommissions
+            .map((commission) => commission.organization_id || null)
+            .filter(Boolean),
+        ),
+      );
+      const payoutOrganizationId = organizationId || (payoutOrganizationIds.length === 1 ? payoutOrganizationIds[0] : null);
 
       await trx("seller_payouts").insert({
         id: payoutId,
         seller_id: sellerId,
-        organization_id: organizationId,
+        organization_id: payoutOrganizationId,
         organization_snapshot: this.jsonb(payoutCommissions[0]?.organization_snapshot || {}),
         period_start: payoutRange.periodStart,
         period_end: payoutRange.periodEnd,
@@ -1693,7 +2366,8 @@ gstTcsAmount,
   }
 
   async processPayout(payoutId, paymentReference, options = {}) {
-    return await knex.transaction(async (trx) => {
+    let shouldSendCompletionEmail = false;
+    const completedPayout = await knex.transaction(async (trx) => {
       const payout = await trx("seller_payouts")
         .where("id", payoutId)
         .first()
@@ -1785,15 +2459,26 @@ gstTcsAmount,
 
       const result = { ...payout, status: "completed", payment_reference: paymentReference, payment_method: options.paymentMethod || payout.payment_method || null, processed_at: new Date() };
       await this.publishPayoutEvent(result, options.actor);
+      shouldSendCompletionEmail = true;
       return result;
     });
+
+    if (shouldSendCompletionEmail) {
+      await this.sendSellerPayoutCompletedEmail(completedPayout).catch((error) => {
+        logger.error({ err: error, payoutId }, "Seller payout completion email failed");
+      });
+    }
+
+    return completedPayout;
   }
 
-  async failPayout(payoutId, reason, actor = {}) {
+  async failPayout(payoutId, reason, actor = {}, options = {}) {
     return knex.transaction(async (trx) => {
       const payout = await trx("seller_payouts").where("id", payoutId).first().forUpdate();
       if (!payout) throw new AppError("Payout not found", 404);
-      if (payout.status === "completed") throw new AppError("Completed payouts cannot be failed", 409);
+      if (payout.status === "completed" && options.allowCompleted !== true) {
+        throw new AppError("Completed payouts cannot be failed", 409);
+      }
 
       await trx("seller_payouts").where("id", payoutId).update({
         status: "failed",
@@ -1802,6 +2487,10 @@ gstTcsAmount,
           failedReason: reason || "payout_failed",
           failedBy: actor.userId || actor.sub || null,
           failedAt: new Date().toISOString(),
+          failedFromStatus: payout.status,
+          providerStatus: options.providerStatus || null,
+          providerPayoutId: options.providerPayoutId || payout.payment_reference || null,
+          reversalId: options.reversalId || null,
         }),
         updated_at: knex.fn.now(),
       });
@@ -1812,6 +2501,22 @@ gstTcsAmount,
       await trx("seller_commissions")
         .where("payout_id", payoutId)
         .update({ status: "pending", payout_id: null, updated_at: knex.fn.now() });
+      await trx("seller_settlements")
+        .where("payout_id", payoutId)
+        .update({
+          status: "failed",
+          notes: reason || "Seller payout failed",
+          metadata: this.jsonb({
+            ...this.parseJson(payout.metadata, {}),
+            failedPayoutId: payoutId,
+            failedReason: reason || "payout_failed",
+            providerStatus: options.providerStatus || null,
+            providerPayoutId: options.providerPayoutId || payout.payment_reference || null,
+            reversalId: options.reversalId || null,
+            failedAt: new Date().toISOString(),
+          }),
+          updated_at: knex.fn.now(),
+        });
       const payoutMetadata = this.parseJson(payout.metadata, {});
       if (Array.isArray(payoutMetadata.recoverySettlementIds) && payoutMetadata.recoverySettlementIds.length) {
         await trx("seller_settlements")
@@ -1826,6 +2531,17 @@ gstTcsAmount,
             updated_at: knex.fn.now(),
           });
       }
+      logger.warn({
+        payoutId,
+        sellerId: payout.seller_id,
+        organizationId: payout.organization_id || null,
+        previousStatus: payout.status,
+        reason: reason || "payout_failed",
+        providerStatus: options.providerStatus || null,
+        providerPayoutId: options.providerPayoutId || payout.payment_reference || null,
+        reversalId: options.reversalId || null,
+        allowCompleted: options.allowCompleted === true,
+      }, "Seller payout marked failed");
       const result = { ...payout, status: "failed" };
       await this.publishPayoutEvent(result, actor);
       return result;
@@ -1858,9 +2574,16 @@ gstTcsAmount,
   }
 
   async approvePayout(payoutId, options = {}) {
+    const shouldStartTransfer =
+      this.isSellerWalletRequested(options.paymentMethod) ||
+      this.isRazorpayXRequested(options.paymentMethod) ||
+      options.autoProcess === true;
     const updated = await knex.transaction(async (trx) => {
       const payout = await trx("seller_payouts").where("id", payoutId).first().forUpdate();
       if (!payout) throw new AppError("Payout not found", 404);
+      if (payout.status === "processing" && shouldStartTransfer) {
+        return payout;
+      }
       if (!["pending", "on_hold"].includes(payout.status)) {
         throw new AppError(`Payout cannot be approved from ${payout.status}`, 409);
       }
@@ -1889,8 +2612,8 @@ gstTcsAmount,
       await this.publishPayoutEvent(updated, options.actor);
       return updated;
     });
-    if (this.isRazorpayXRequested(options.paymentMethod) || (env.razorpayX.enabled && options.autoProcess === true)) {
-      return this.initiateRazorpayXPayout(payoutId, options);
+    if (shouldStartTransfer) {
+      return this.startPayoutTransfer(payoutId, options);
     }
     return updated;
   }
@@ -1948,7 +2671,7 @@ gstTcsAmount,
       return updated;
     });
     if (options.approve === true && (this.isRazorpayXRequested(options.paymentMethod) || (env.razorpayX.enabled && options.autoProcess === true))) {
-      return this.initiateRazorpayXPayout(payoutId, options);
+      return this.startPayoutTransfer(payoutId, options);
     }
     return updated;
   }
@@ -1959,10 +2682,32 @@ gstTcsAmount,
     if (payout.status !== "failed") {
       throw new AppError(`Only failed payouts can be retried`, 409);
     }
+    const payoutMetadata = this.parseJson(payout.metadata, {});
+    const retryCommissionIds = Array.isArray(payoutMetadata.commissionIds)
+      ? payoutMetadata.commissionIds.filter(Boolean)
+      : undefined;
+    logger.info(
+      {
+        payoutId,
+        sellerId: payout.seller_id,
+        organizationId: payout.organization_id || null,
+        status: payout.status,
+        paymentMethod: options.paymentMethod || payout.payment_method || null,
+        autoProcess: options.autoProcess === true,
+        retryCommissionIds,
+        retryCommissionIdsCount: retryCommissionIds?.length || 0,
+        previousRazorpayXStatus: payoutMetadata.razorpayX?.status || null,
+        previousRazorpayXPayoutId: payoutMetadata.razorpayX?.payoutId || null,
+        previousFailureReason: payoutMetadata.failedReason || payoutMetadata.razorpayX?.rawWebhook?.failure_reason || null,
+      },
+      "Retrying failed seller payout",
+    );
     const newPayoutId = await this.processBatchPayouts(payout.seller_id, {
       periodStart: payout.period_start,
       periodEnd: payout.period_end,
       organizationId: payout.organization_id || undefined,
+      commissionIds: retryCommissionIds,
+      skipPrePayoutRefresh: true,
       source: "failed_payout_retry",
       previousPayoutId: payoutId,
       paymentReference: options.paymentReference,
@@ -1970,8 +2715,8 @@ gstTcsAmount,
       autoProcess: options.autoProcess === true,
       actor: options.actor,
     });
-    if (this.isRazorpayXRequested(options.paymentMethod || payout.payment_method) || (env.razorpayX.enabled && options.autoProcess === true)) {
-      return this.initiateRazorpayXPayout(newPayoutId, options);
+    if (this.isSellerWalletRequested(options.paymentMethod || payout.payment_method) || this.isRazorpayXRequested(options.paymentMethod || payout.payment_method) || options.autoProcess === true) {
+      return this.startPayoutTransfer(newPayoutId, options);
     }
     return newPayoutId;
   }
@@ -2030,7 +2775,7 @@ gstTcsAmount,
         if (query.toDate) builder.where("created_at", "<=", query.toDate);
       });
 
-    const [commerceSettings, commissions, paidPayoutRow, inProcessPayoutRow, adjustmentRow] = await Promise.all([
+    const [commerceSettings, commissions, paidPayoutRow, inProcessPayoutRow, adjustmentRow, walletRow, walletTransactions] = await Promise.all([
       commerceSettingsService.getSettings(),
       buildCommissionQuery().orderBy("created_at", "desc"),
       knex("seller_payouts")
@@ -2060,9 +2805,16 @@ gstTcsAmount,
         .sum({ adjustment_balance: "net_amount" })
         .count({ count: "*" })
         .first(),
+      this.walletService.ensureWallet(sellerId),
+      knex("wallet_transactions")
+        .where("user_id", sellerId)
+        .where("reference_type", "seller_payout")
+        .orderBy("created_at", "desc")
+        .limit(20),
     ]);
 
     const payoutPolicy = this.getPayoutPolicy(commerceSettings);
+    const payoutPreference = await this.resolveSellerPayoutPreference(sellerId, query.organizationId || null, commerceSettings);
     const evaluations = await this.evaluateCommissionsRelease(commissions, commerceSettings);
     const balances = {
       pendingBalance: 0,
@@ -2139,6 +2891,8 @@ gstTcsAmount,
       currency: commissions[0]?.currency || "INR",
       balances: {
         ...balances,
+        sellerWalletAvailableBalance: this.round(walletRow?.available_balance || 0),
+        sellerWalletLockedBalance: this.round(walletRow?.locked_balance || 0),
         totalOpenBalance: this.round(
           balances.pendingBalance +
           balances.availableBalance +
@@ -2148,6 +2902,20 @@ gstTcsAmount,
       },
       counts,
       payoutPolicy,
+      payoutPreference,
+      sellerWallet: {
+        availableBalance: this.round(walletRow?.available_balance || 0),
+        lockedBalance: this.round(walletRow?.locked_balance || 0),
+        transactions: walletTransactions.map((transaction) => ({
+          id: transaction.id,
+          amount: this.round(transaction.amount || 0),
+          type: transaction.type,
+          status: transaction.status,
+          referenceId: transaction.reference_id,
+          metadata: this.parseJson(transaction.metadata, {}),
+          createdAt: transaction.created_at,
+        })),
+      },
       nextEligibleAt,
       canRequestPayout: balances.availableBalance > 0 && minimumPayoutShortfall === 0,
       minimumPayoutShortfall,
@@ -2343,6 +3111,7 @@ gstTcsAmount,
 
   async processBatchPayouts(sellerId, options = {}) {
     const range = this.buildDateRange(options.periodStart, options.periodEnd);
+    const commerceSettings = await commerceSettingsService.getSettings();
     if (options.organizationId === undefined && !options.commissionIds?.length) {
       const organizationRows = await knex("seller_commissions")
         .distinct("organization_id")
@@ -2366,8 +3135,13 @@ gstTcsAmount,
         results,
       };
     }
-    const payoutId = await this.initiatePayout(sellerId, range.periodStart, range.periodEnd, options);
-    const commerceSettings = await commerceSettingsService.getSettings();
+    const preference = await this.resolveSellerPayoutPreference(sellerId, options.organizationId || null, commerceSettings);
+    const resolvedOptions = {
+      ...options,
+      paymentMethod: options.paymentMethod || preference.destination,
+      payoutDestination: options.payoutDestination || preference.destination,
+    };
+    const payoutId = await this.initiatePayout(sellerId, range.periodStart, range.periodEnd, resolvedOptions);
     const payoutPolicy = this.getPayoutPolicy(commerceSettings);
     if (payoutPolicy.manualApprovalRequired) {
       const payout = await knex("seller_payouts").where("id", payoutId).first();
@@ -2378,10 +3152,13 @@ gstTcsAmount,
         message: "Payout is pending manual approval",
       };
     }
-    if (this.isRazorpayXRequested(options.paymentMethod) || (env.razorpayX.enabled && options.autoProcess === true)) {
-      return this.initiateRazorpayXPayout(payoutId, options);
+    if (this.isSellerWalletRequested(resolvedOptions.paymentMethod)) {
+      return this.completeSellerWalletPayout(payoutId, resolvedOptions);
     }
-    return this.processPayout(payoutId, options.paymentReference || `batch_${Date.now()}`, options);
+    if (this.isRazorpayXRequested(resolvedOptions.paymentMethod) || (env.razorpayX.enabled && resolvedOptions.autoProcess === true)) {
+      return this.initiateRazorpayXPayout(payoutId, resolvedOptions);
+    }
+    return this.processPayout(payoutId, resolvedOptions.paymentReference || `batch_${Date.now()}`, resolvedOptions);
   }
 
   async requestSellerPayout(sellerId, options = {}) {
@@ -2428,6 +3205,26 @@ gstTcsAmount,
     const commerceSettings = await commerceSettingsService.getSettings();
     const payoutPolicy = this.getPayoutPolicy(commerceSettings);
 
+    if (!payoutPolicy.autoRazorpayX && options.autoProcess !== true) {
+      return {
+        skipped: true,
+        reason: "auto_payout_disabled",
+        payoutPolicy,
+        processed: [],
+        failed: [],
+      };
+    }
+
+    if ((payoutPolicy.autoRazorpayX || options.autoProcess === true) && !env.razorpayX.enabled) {
+      return {
+        skipped: true,
+        reason: "razorpayx_disabled",
+        payoutPolicy,
+        processed: [],
+        failed: [],
+      };
+    }
+
     if (!this.shouldRunScheduledPayout(payoutPolicy, now, options)) {
       return {
         skipped: true,
@@ -2461,8 +3258,11 @@ gstTcsAmount,
           ...range,
           organizationId,
           source: "scheduled_payout",
-          autoProcess: options.autoProcess === true,
-          paymentReference: options.paymentReference || `scheduled_${payoutPolicy.schedule}_${Date.now()}`,
+          paymentMethod: options.paymentMethod,
+          autoProcess: payoutPolicy.autoRazorpayX || options.autoProcess === true,
+          paymentReference: payoutPolicy.autoRazorpayX
+            ? undefined
+            : options.paymentReference || `scheduled_${payoutPolicy.schedule}_${Date.now()}`,
           actor: options.actor || { userId: "system", role: "system" },
         });
         processed.push({
