@@ -2531,7 +2531,7 @@ renderBoxLabelPdf(document = {}) {
       const issuerAddress = isCommission || isOrderReceipt || isCustomerFee
         ? [process.env.INVOICE_REGISTERED_OFFICE].filter(Boolean)
         : sellerAddress;
-      issuerAddress.slice(0, 3).forEach((addressLine, index) => text(compact(addressLine, 46), 40, 622 - index * 10, 7.5));
+      issuerAddress.forEach((addressLine, index) => text(addressLine , 40, 622 - index * 10, 7.5));
       if (issuerGstin) text(`${isCommission || isCustomerFee || isOrderReceipt ? "Marketplace" : "Supplier"} GSTIN: ${issuerGstin}`, 40, 587, 7.5, true);
 
       text(isCommission ? "BILLED TO / SELLER" : "BILL TO / CUSTOMER", 220, 650, 8, true);
