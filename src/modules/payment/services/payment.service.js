@@ -16,6 +16,7 @@ const { commerceSettingsService } = require("../../admin/services/commerce-setti
 const { sellerChargeSettingsService } = require("../../seller/services/seller-charge-settings.service");
 const { UserModel } = require("../../user/models/user.model");
 const { settlementLifecycleService } = require("../../seller/services/settlement-lifecycle.service");
+const { logger } = require("../../../shared/logger/logger");
 
 const PROVIDER_RECEIPT_MAX_LENGTH = 40;
 
@@ -616,12 +617,22 @@ class PaymentService {
 
   async handleWebhook(signature, rawBody) {
     const { verifyRazorpayWebhookSignature } = require("../../../infrastructure/payments/razorpay-client");
-    if (!env.razorpay.live) {
+    logger.warn({
+      hasSignature: Boolean(signature),
+      hasRawBody: Boolean(rawBody),
+      rawBodyLength: rawBody?.length || 0,
+      razorpayMode: env.razorpay.mode,
+      razorpayXMode: env.razorpayX.mode,
+      hasRazorpayWebhookSecret: Boolean(env.razorpay.webhookSecret),
+      hasRazorpayXWebhookSecret: Boolean(env.razorpayX.webhookSecret),
+    }, "Razorpay webhook request received");
+
+    if (!env.razorpay.live && !env.razorpayX.live) {
       return {
         acknowledged: true,
         ignored: true,
-        mode: env.razorpay.mode,
-        reason: "Razorpay webhook ignored because live Razorpay is disabled.",
+        mode: { razorpay: env.razorpay.mode, razorpayX: env.razorpayX.mode },
+        reason: "Razorpay webhook ignored because live Razorpay and RazorpayX are disabled.",
       };
     }
 
@@ -635,7 +646,15 @@ class PaymentService {
 
     const validPaymentWebhook = verifyRazorpayWebhookSignature(rawBody, signature, env.razorpay.webhookSecret);
     const validPayoutWebhook = verifyRazorpayWebhookSignature(rawBody, signature, env.razorpayX.webhookSecret);
+    logger.warn({
+      validPaymentWebhook,
+      validPayoutWebhook,
+    }, "Razorpay webhook signature checked");
     if (!validPaymentWebhook && !validPayoutWebhook) {
+      logger.warn({
+        hasSignature: Boolean(signature),
+        rawBodyLength: rawBody?.length || 0,
+      }, "Invalid Razorpay webhook signature");
       throw new AppError("Invalid Razorpay webhook signature", 401);
     }
 
@@ -646,10 +665,24 @@ class PaymentService {
       throw new AppError("Invalid Razorpay webhook payload", 400);
     }
     const eventType = payload.event;
+    logger.warn({
+      eventType,
+      providerEventId: payload.id || null,
+      containsPayout: Boolean(payload.payload?.payout?.entity),
+      containsPayment: Boolean(payload.payload?.payment?.entity),
+      containsRefund: Boolean(payload.payload?.refund?.entity),
+    }, "Razorpay webhook payload parsed");
 
     if (["payout.created", "payout.queued", "payout.pending", "payout.processed", "payout.reversed", "payout.failed", "payout.rejected", "payout.cancelled"].includes(eventType)) {
       const entity = payload.payload?.payout?.entity;
       if (!entity?.id) throw new AppError("Invalid RazorpayX payout webhook payload", 400);
+      logger.warn({
+        eventType,
+        providerPayoutId: entity.id,
+        providerStatus: entity.status || null,
+        referenceId: entity.reference_id || null,
+        reversalId: entity.reversal_id || entity.reversal?.id || null,
+      }, "Processing RazorpayX payout webhook");
       const eventId = payload.id || `${eventType}:${entity.id}:${entity.status || "unknown"}`;
       const duplicate = await this.processWebhookEvent({
         provider: "razorpayx",

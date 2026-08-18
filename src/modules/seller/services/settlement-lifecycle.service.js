@@ -5,11 +5,13 @@ const { knex } = require("../../../infrastructure/postgres/postgres-client");
 const { AppError } = require("../../../shared/errors/app-error");
 const { ORDER_STATUS, PAYMENT_PROVIDER, PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
+const { ProductModel } = require("../../product/models/product.model");
 const { ReturnModel } = require("../../returns/models/return.model");
 
 const ADMIN_ROLES = new Set(["admin", "sub-admin", "super-admin"]);
 const OPEN_RETURN_STATUSES = ["requested", "approved", "picked_up", "received", "qc_pending", "refund_pending"];
 const FINAL_COLLECTION_STATUSES = ["verified", "remitted"];
+const mongooseIdLike = (value) => /^[a-f\d]{24}$/i.test(String(value || ""));
 
 class SettlementLifecycleService {
   isAdmin(actor = {}) {
@@ -33,10 +35,33 @@ class SettlementLifecycleService {
     return date;
   }
 
+  isNonReturnablePolicy(policy = {}) {
+    return policy.returnable === false ||
+      policy.eligible === false ||
+      String(policy.type || "").toLowerCase() === "non_returnable";
+  }
+
+  resolveReturnWindowDays(policy = {}, item = {}, fallbackDays = 0) {
+    if (this.isNonReturnablePolicy(policy) || item.returnable === false) return 0;
+    const rawDays = policy.returnWindowDays ?? policy.days ?? item.return_window_days ?? fallbackDays;
+    const parsed = Number(rawDays);
+    return Number.isFinite(parsed) ? Math.max(parsed, 0) : 0;
+  }
+
+  policyHasExplicitWindow(policy = {}) {
+    return Object.prototype.hasOwnProperty.call(policy, "returnWindowDays") ||
+      Object.prototype.hasOwnProperty.call(policy, "days");
+  }
+
+  isLegacyOneDayDefault(policy = {}, item = {}) {
+    const days = Number(policy.returnWindowDays ?? policy.days ?? item.return_window_days);
+    return days === 1 && !this.isNonReturnablePolicy(policy);
+  }
+
   async getPolicy() {
     const settings = await commerceSettingsService.getSettings();
     return {
-      returnWindowDays: Math.max(Number(settings.returns?.defaultWindowDays || 7), 1),
+      returnWindowDays: Math.max(Number(settings.returns?.defaultWindowDays ?? 0), 0),
       payoutSchedule: settings.finance?.payoutSchedule || "manual",
       codCollectionMode: settings.cod?.collectionPolicy || "platform_or_courier",
       payoutRequiresCapture: settings.cod?.payoutRequiresCapture !== false,
@@ -59,19 +84,35 @@ class SettlementLifecycleService {
       })
       : allOrderItems;
     if (!orderItems.length) return null;
+    const productIds = [...new Set(orderItems.map((item) => String(item.product_id || "")).filter(mongooseIdLike))];
+    const currentProducts = productIds.length
+      ? await ProductModel.find({ _id: { $in: productIds } }).select("warranty").lean().catch(() => [])
+      : [];
+    const currentProductMap = new Map(currentProducts.map((product) => [String(product._id), product]));
     const itemSnapshots = orderItems.map((item) => {
       const productSnapshot = this.parseJson(item.product_snapshot, {});
       const existingSnapshot = this.parseJson(item.return_policy_snapshot, {});
+      const currentProductPolicy = currentProductMap.get(String(item.product_id || ""))?.warranty?.returnPolicy || {};
       const productPolicy = productSnapshot.returnPolicy || productSnapshot.return_policy ||
         productSnapshot.commercialPolicy?.returnPolicy || existingSnapshot;
-      const returnable = productPolicy.returnable ?? productPolicy.eligible ?? item.returnable ?? true;
-      const returnWindowDays = returnable
-        ? Math.max(Number(productPolicy.returnWindowDays ?? productPolicy.days ?? item.return_window_days ?? policy.returnWindowDays), 0)
-        : 0;
+      const hasCurrentExplicitPolicy = this.isNonReturnablePolicy(currentProductPolicy) ||
+        this.policyHasExplicitWindow(currentProductPolicy);
+      const effectivePolicy = hasCurrentExplicitPolicy
+        ? currentProductPolicy
+        : policy.returnWindowDays === 0 && this.isLegacyOneDayDefault(productPolicy, item)
+          ? { ...productPolicy, returnWindowDays: 0, days: 0, source: "legacy_default_zero_window_refresh" }
+          : productPolicy;
+      const returnable = this.isNonReturnablePolicy(effectivePolicy) || item.returnable === false
+        ? false
+        : effectivePolicy.returnable ?? effectivePolicy.eligible ?? item.returnable ?? true;
+      const returnWindowDays = this.resolveReturnWindowDays(effectivePolicy, item, policy.returnWindowDays);
       const itemDeliveredAt = item.delivered_at ? new Date(item.delivered_at) : new Date(deliveredAt);
-      const returnEligibleUntil = item.return_eligible_until
-        ? new Date(item.return_eligible_until)
-        : this.addDays(itemDeliveredAt, returnWindowDays);
+      const calculatedEligibleUntil = this.addDays(itemDeliveredAt, returnWindowDays);
+      const returnEligibleUntil = returnWindowDays === 0
+        ? itemDeliveredAt
+        : item.return_eligible_until
+          ? new Date(item.return_eligible_until)
+          : calculatedEligibleUntil;
       return {
         item,
         returnable: Boolean(returnable),
@@ -135,6 +176,29 @@ class SettlementLifecycleService {
       await this.ensureCodCollectionForShipment(order, shipment, policy);
     }
     return { ...snapshot, orderId };
+  }
+
+  async refreshDeliveredOrderEligibility(limit = 500) {
+    const rows = await knex("order_items")
+      .select("order_id")
+      .where("payout_status", "pending")
+      .whereNotNull("delivered_at")
+      .groupBy("order_id")
+      .limit(Math.min(Math.max(Number(limit || 500), 1), 1000));
+    const results = [];
+    for (const row of rows) {
+      const item = await knex("order_items")
+        .where({ order_id: row.order_id })
+        .whereNotNull("delivered_at")
+        .orderBy("delivered_at", "asc")
+        .first();
+      const result = await this.ensureOrderDeliveryLifecycle(row.order_id, item?.delivered_at || new Date()).catch((error) => ({
+        orderId: row.order_id,
+        error: error.message,
+      }));
+      results.push(result);
+    }
+    return results;
   }
 
   async ensureCodCollectionForShipment(order, shipment, policy) {

@@ -27,6 +27,15 @@ function buildStaticMailResult({ to, subject, html, text, from, reason }) {
 
 async function sendMail({ to, subject, html, text, from = env.defaultFromEmail }) {
   if (!thirdPartyMailEnabled) {
+    logger.warn({
+      to,
+      subject,
+      from,
+      smtpMode: env.smtp.mode,
+      smtpLive: env.smtp.live,
+      smtpConfigured: env.smtp.configured,
+      missingKeys: env.smtp.missingKeys,
+    }, "Email delivery skipped by SMTP configuration");
     return buildStaticMailResult({
       to,
       subject,
@@ -41,6 +50,15 @@ async function sendMail({ to, subject, html, text, from = env.defaultFromEmail }
   }
 
   try {
+    logger.warn({
+      to,
+      subject,
+      from,
+      smtpHost: env.smtp.host,
+      smtpPort: env.smtp.port,
+      smtpSecure: env.smtp.secure,
+      smtpAuthConfigured: env.smtp.authConfigured,
+    }, "Sending email through SMTP");
     return await transporter.sendMail({
       from,
       to,

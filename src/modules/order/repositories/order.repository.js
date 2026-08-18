@@ -75,9 +75,12 @@ class OrderRepository {
       });
       const items = payload.items.map((item) => {
         const returnPolicy = item.productSnapshot?.returnPolicy || item.productSnapshot?.commercialPolicy?.returnPolicy || {};
-        const returnable = returnPolicy.returnable ?? returnPolicy.eligible ?? true;
+        const isNonReturnable = String(returnPolicy.type || "").toLowerCase() === "non_returnable";
+        const returnable = isNonReturnable
+          ? false
+          : returnPolicy.returnable ?? returnPolicy.eligible ?? true;
         const returnWindowDays = returnable
-          ? Math.max(Number(returnPolicy.returnWindowDays ?? returnPolicy.days ?? 7), 0)
+          ? Math.max(Number(returnPolicy.returnWindowDays ?? returnPolicy.days ?? 0), 0)
           : 0;
         return {
         id: uuidv4(),

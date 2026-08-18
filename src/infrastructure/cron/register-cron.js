@@ -113,9 +113,19 @@ function registerCronJobs() {
   runPeriodicJob("seller-payout-scheduler", async () => {
     await CommissionService.processScheduledPayouts();
   }, 6 * 60 * 60 * 1000);
+  runPeriodicJob("razorpayx-payout-status-sync", async () => {
+    return CommissionService.syncPendingRazorpayXPayouts({
+      actor: { userId: "system:razorpayx-payout-sync", role: "system" },
+    });
+  }, 2 * 60 * 1000);
   runPeriodicJob("return-window-fulfillment", async () => {
-    await settlementLifecycleService.markEligibleOrderItems();
-    await settlementLifecycleService.finalizeEligibleOrders();
+    const eligibleItems = await settlementLifecycleService.markEligibleOrderItems();
+    const fulfilledOrders = await settlementLifecycleService.finalizeEligibleOrders();
+    const autoPayouts = await CommissionService.processScheduledPayouts({
+      force: true,
+      actor: { userId: "system:return-window", role: "system" },
+    });
+    return { eligibleItems, fulfilledOrders, autoPayouts };
   }, 15 * 60 * 1000);
   runPeriodicJob("cancellation-refund-reconciliation", async () => {
     return cancellationService.reconcileProviderRefunds({ limit: 100 });

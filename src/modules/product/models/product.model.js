@@ -355,8 +355,8 @@ const productSchema = new mongoose.Schema(
       returnPolicy: {
         eligible: { type: Boolean, default: true },
         returnable: { type: Boolean, default: true },
-        days: { type: Number, min: 0, default: 7 },
-        returnWindowDays: { type: Number, min: 0, default: 7 },
+        days: { type: Number, min: 0, default: 0 },
+        returnWindowDays: { type: Number, min: 0, default: 0 },
         type: { type: String, enum: ["standard", "replacement_only", "non_returnable"], default: "standard" },
         resolution: { type: String, enum: ["refund", "replacement", "refund_or_replacement"], default: "refund_or_replacement" },
         requiresImages: { type: Boolean, default: false },
