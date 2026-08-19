@@ -2,6 +2,9 @@ const slugify = require("slugify");
 const { getPage } = require("../../../shared/tools/page");
 const { ProductRepository } = require("../repositories/product.repository");
 const {
+  CategoryTreeModel,
+} = require("../../platform/models/category-tree.model");
+const {
   elasticsearchClient,
   isElasticsearchEnabled,
 } = require("../../../shared/search/elasticsearch-client");
@@ -3842,57 +3845,578 @@ async getProduct(productId) {
     return review || null;
   }
 
-  async getRelatedProducts(productId, { limit = 8 } = {}) {
-    const product = await this.productRepository.findById(productId);
-    if (!product) return [];
+async getRelatedProducts(productId, { limit = 8 } = {}) {
+  try {
+    const product =
+      await this.productRepository.findById(productId);
 
-    const publicFilter = applyPublicProductFilter({
-      _id: { $ne: product._id },
-      $or: [
-        { category: product.category },
-        { brand: product.brand },
-        { tags: { $in: Array.isArray(product.tags) ? product.tags : [] } },
-      ].filter((clause) => {
-        if (clause.category) return !!product.category;
-        if (clause.brand) return !!product.brand;
-        if (clause.tags) return (product.tags || []).length > 0;
-        return false;
-      }),
-    });
+    if (!product) {
+      return [];
+    }
 
-    // Fall back to same category only if brand+tags are empty
-    const categoryFilter = applyPublicProductFilter({
-      _id: { $ne: product._id },
-      category: product.category,
-    });
+    const currentCategoryKey =
+      product.categoryId ||
+      product.category ||
+      null;
 
-    const activeFilter = publicFilter.$or?.length ? publicFilter : categoryFilter;
+    if (!currentCategoryKey) {
+      return [];
+    }
 
-    const results = await this.productRepository.paginate(activeFilter, { page: 1, limit, skip: 0, sortBy: "rating" }, {
-      projection: { title: 1, slug: 1, images: 1, commonImages: 1, "variants.images": 1, "variants.image": 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1, tags: 1 },
-      lean: true,
-    });
+    // ---------------------------------------------------------
+    // 1. FIND CURRENT CATEGORY
+    // ---------------------------------------------------------
 
-    return (results.items || []).map((item) => this.withPrimaryImageAlias(item));
+    const currentCategory =
+      await CategoryTreeModel.findOne({
+        categoryKey: currentCategoryKey,
+        active: true,
+      }).lean();
+
+    if (!currentCategory) {
+      return [];
+    }
+
+    // ---------------------------------------------------------
+    // 2. FIND ROOT CATEGORY
+    // ---------------------------------------------------------
+
+    let rootCategory = currentCategory;
+    let parentKey = currentCategory.parentKey;
+
+    const visited = new Set();
+
+    while (
+      parentKey &&
+      !visited.has(parentKey)
+    ) {
+      visited.add(parentKey);
+
+      const parentCategory =
+        await CategoryTreeModel.findOne({
+          categoryKey: parentKey,
+          active: true,
+        }).lean();
+
+      if (!parentCategory) {
+        break;
+      }
+
+      rootCategory = parentCategory;
+      parentKey = parentCategory.parentKey;
+    }
+
+    const rootCategoryKey =
+      rootCategory.categoryKey;
+
+    // ---------------------------------------------------------
+    // 3. FIND ALL CATEGORIES UNDER SAME ROOT
+    // ---------------------------------------------------------
+
+    const allCategories =
+      await CategoryTreeModel.find({
+        active: true,
+      }).lean();
+
+    const matchingCategoryKeys = [];
+
+    for (const category of allCategories) {
+      let categoryRoot = category;
+      let categoryParentKey = category.parentKey;
+
+      const categoryVisited = new Set();
+
+      while (
+        categoryParentKey &&
+        !categoryVisited.has(categoryParentKey)
+      ) {
+        categoryVisited.add(categoryParentKey);
+
+        const parentCategory =
+          allCategories.find(
+            (item) =>
+              item.categoryKey === categoryParentKey
+          );
+
+        if (!parentCategory) {
+          break;
+        }
+
+        categoryRoot = parentCategory;
+        categoryParentKey =
+          parentCategory.parentKey;
+      }
+
+      if (
+        categoryRoot.categoryKey ===
+        rootCategoryKey
+      ) {
+        matchingCategoryKeys.push(
+          category.categoryKey
+        );
+      }
+    }
+
+    if (
+      !matchingCategoryKeys.includes(
+        currentCategoryKey
+      )
+    ) {
+      matchingCategoryKeys.push(
+        currentCategoryKey
+      );
+    }
+
+    // ---------------------------------------------------------
+    // 4. BUILD RELATED PRODUCT CONDITIONS
+    // ---------------------------------------------------------
+
+    const relatedConditions = [];
+
+    // Same category / parent category
+    if (matchingCategoryKeys.length > 0) {
+      relatedConditions.push({
+        categoryId: {
+          $in: matchingCategoryKeys,
+        },
+      });
+
+      relatedConditions.push({
+        category: {
+          $in: matchingCategoryKeys,
+        },
+      });
+    }
+
+    // Same brand
+    if (product.brand) {
+      relatedConditions.push({
+        brand: product.brand,
+      });
+    }
+
+    // Same tags
+    if (
+      Array.isArray(product.tags) &&
+      product.tags.length > 0
+    ) {
+      relatedConditions.push({
+        tags: {
+          $in: product.tags,
+        },
+      });
+    }
+
+    if (relatedConditions.length === 0) {
+      return [];
+    }
+
+    // ---------------------------------------------------------
+    // 5. PUBLIC FILTER
+    // ---------------------------------------------------------
+
+    const relatedFilter =
+      applyPublicProductFilter({
+        _id: {
+          $ne: product._id,
+        },
+
+        $or: relatedConditions,
+      });
+
+    // ---------------------------------------------------------
+    // 6. PRODUCT PROJECTION
+    // ---------------------------------------------------------
+
+    const results =
+      await this.productRepository.paginate(
+        relatedFilter,
+        {
+          page: 1,
+          limit: Math.max(limit * 5, 30),
+          skip: 0,
+          sortBy: "rating",
+        },
+        {
+          projection: {
+            sellerId: 1,
+            organizationId: 1,
+            storeId: 1,
+            warehouseId: 1,
+            organizationSnapshot: 1,
+
+            title: 1,
+            slug: 1,
+            productType: 1,
+
+            visibility: 1,
+
+            categoryId: 1,
+            category: 1,
+            brand: 1,
+
+            productFamilyCode: 1,
+            tags: 1,
+
+            price: 1,
+            mrp: 1,
+            salePrice: 1,
+            currency: 1,
+
+            gstRate: 1,
+            hsnCode: 1,
+            sku: 1,
+
+            attributes: 1,
+            variantAxes: 1,
+            hasVariants: 1,
+            variants: 1,
+
+            images: 1,
+            commonImages: 1,
+
+            stock: 1,
+            reservedStock: 1,
+            availableStock: 1,
+
+            inventorySettings: 1,
+            shipping: 1,
+
+            collectionIds: 1,
+
+            rating: 1,
+            reviewCount: 1,
+
+            metadata: 1,
+
+            status: 1,
+            approvalStatus: 1,
+            revisionStatus: 1,
+
+            analytics: 1,
+
+            createdAt: 1,
+            updatedAt: 1,
+            approvedAt: 1,
+
+            origin: 1,
+          },
+
+          lean: true,
+        }
+      );
+
+    const items =
+      results?.items || [];
+
+    // ---------------------------------------------------------
+    // 7. REMOVE DUPLICATES
+    // ---------------------------------------------------------
+
+    const uniqueProducts = [];
+    const seenIds = new Set();
+
+    for (const item of items) {
+      const id = String(item._id);
+
+      if (id === String(product._id)) {
+        continue;
+      }
+
+      if (seenIds.has(id)) {
+        continue;
+      }
+
+      seenIds.add(id);
+      uniqueProducts.push(item);
+    }
+
+    // ---------------------------------------------------------
+    // 8. FINAL RESPONSE
+    // ---------------------------------------------------------
+
+    return uniqueProducts
+      .slice(0, limit)
+      .map((item) =>
+        this.withPrimaryImageAlias(item)
+      );
+  } catch (error) {
+    return [];
   }
+}
 
-  async getCrossSellProducts(productId, { limit = 6 } = {}) {
+async getCrossSellProducts(productId, { limit = 6 } = {}) {
+  try {
     const product = await this.productRepository.findById(productId);
-    if (!product) return [];
 
-    // Cross-sell: same tags or complementary categories (different from main category)
-    const tags = Array.isArray(product.tags) ? product.tags.slice(0, 5) : [];
-    const baseFilter = tags.length
-      ? applyPublicProductFilter({ _id: { $ne: product._id }, tags: { $in: tags }, category: { $ne: product.category } })
-      : applyPublicProductFilter({ _id: { $ne: product._id }, category: { $ne: product.category } });
+    if (!product) {
+      return [];
+    }
 
-    const results = await this.productRepository.paginate(baseFilter, { page: 1, limit, skip: 0, sortBy: "newest" }, {
-      projection: { title: 1, slug: 1, images: 1, commonImages: 1, "variants.images": 1, "variants.image": 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1 },
-      lean: true,
-    });
+    const currentCategoryKey =
+      product.categoryId || product.category || null;
 
-    return (results.items || []).map((item) => this.withPrimaryImageAlias(item));
+    if (!currentCategoryKey) {
+      return [];
+    }
+
+    // 1. Find current category
+    const currentCategory = await CategoryTreeModel.findOne({
+      categoryKey: currentCategoryKey,
+      active: true,
+    }).lean();
+
+    if (!currentCategory) {
+      return [];
+    }
+
+    // 2. Find root category
+    let rootCategory = currentCategory;
+    let parentKey = currentCategory.parentKey;
+
+    const visited = new Set();
+
+    while (
+      parentKey &&
+      !visited.has(parentKey)
+    ) {
+      visited.add(parentKey);
+
+      const parentCategory =
+        await CategoryTreeModel.findOne({
+          categoryKey: parentKey,
+          active: true,
+        }).lean();
+
+      if (!parentCategory) {
+        break;
+      }
+
+      rootCategory = parentCategory;
+      parentKey = parentCategory.parentKey;
+    }
+
+    const rootCategoryKey = rootCategory.categoryKey;
+
+    // 3. Find all categories under same root
+    const allRootCategories =
+      await CategoryTreeModel.find({
+        active: true,
+      }).lean();
+
+    const matchingCategoryKeys = [];
+
+    for (const category of allRootCategories) {
+      let categoryRoot = category;
+      let categoryParentKey = category.parentKey;
+
+      const categoryVisited = new Set();
+
+      while (
+        categoryParentKey &&
+        !categoryVisited.has(categoryParentKey)
+      ) {
+        categoryVisited.add(categoryParentKey);
+
+        const parentCategory =
+          allRootCategories.find(
+            (item) =>
+              item.categoryKey === categoryParentKey
+          );
+
+        if (!parentCategory) {
+          break;
+        }
+
+        categoryRoot = parentCategory;
+        categoryParentKey = parentCategory.parentKey;
+      }
+
+      if (
+        categoryRoot.categoryKey === rootCategoryKey
+      ) {
+        matchingCategoryKeys.push(
+          category.categoryKey
+        );
+      }
+    }
+
+    // Make sure current category is included
+    if (
+      !matchingCategoryKeys.includes(
+        currentCategoryKey
+      )
+    ) {
+      matchingCategoryKeys.push(
+        currentCategoryKey
+      );
+    }
+
+    // 4. Same root category products
+    const rootCategoryFilter =
+      applyPublicProductFilter({
+        _id: {
+          $ne: product._id,
+        },
+
+        $or: [
+          {
+            categoryId: {
+              $in: matchingCategoryKeys,
+            },
+          },
+          {
+            category: {
+              $in: matchingCategoryKeys,
+            },
+          },
+        ],
+      });
+
+    const productProjection = {
+      sellerId: 1,
+      organizationId: 1,
+      storeId: 1,
+      warehouseId: 1,
+      organizationSnapshot: 1,
+
+      title: 1,
+      slug: 1,
+      productType: 1,
+
+      visibility: 1,
+
+      categoryId: 1,
+      category: 1,
+      brand: 1,
+
+      productFamilyCode: 1,
+      tags: 1,
+
+      price: 1,
+      mrp: 1,
+      salePrice: 1,
+      currency: 1,
+
+      gstRate: 1,
+      hsnCode: 1,
+      sku: 1,
+
+      attributes: 1,
+      variantAxes: 1,
+      hasVariants: 1,
+      variants: 1,
+
+      images: 1,
+      commonImages: 1,
+
+      stock: 1,
+      reservedStock: 1,
+      availableStock: 1,
+
+      inventorySettings: 1,
+      shipping: 1,
+
+      collectionIds: 1,
+
+      rating: 1,
+      reviewCount: 1,
+
+      metadata: 1,
+
+      status: 1,
+      approvalStatus: 1,
+      revisionStatus: 1,
+
+      analytics: 1,
+
+      createdAt: 1,
+      updatedAt: 1,
+      approvedAt: 1,
+
+      origin: 1,
+    };
+
+    const rootCategoryResults =
+      await this.productRepository.paginate(
+        rootCategoryFilter,
+        {
+          page: 1,
+          limit: Math.max(limit * 5, 30),
+          skip: 0,
+          sortBy: "newest",
+        },
+        {
+          projection: productProjection,
+          lean: true,
+        }
+      );
+
+    let matchedProducts =
+      rootCategoryResults?.items || [];
+
+    // 5. Fallback: same brand
+    if (
+      matchedProducts.length === 0 &&
+      product.brand
+    ) {
+      const brandFilter =
+        applyPublicProductFilter({
+          _id: {
+            $ne: product._id,
+          },
+
+          brand: product.brand,
+        });
+
+      const brandResults =
+        await this.productRepository.paginate(
+          brandFilter,
+          {
+            page: 1,
+            limit: Math.max(limit * 5, 30),
+            skip: 0,
+            sortBy: "newest",
+          },
+          {
+            projection: productProjection,
+            lean: true,
+          }
+        );
+
+      matchedProducts =
+        brandResults?.items || [];
+    }
+
+    // 6. Remove duplicates and current product
+    const uniqueProducts = [];
+    const seenIds = new Set();
+
+    for (const item of matchedProducts) {
+      const id = String(item._id);
+
+      if (id === String(product._id)) {
+        continue;
+      }
+
+      if (seenIds.has(id)) {
+        continue;
+      }
+
+      seenIds.add(id);
+      uniqueProducts.push(item);
+    }
+
+    // 7. Return final products
+    return uniqueProducts
+      .slice(0, limit)
+      .map((item) =>
+        this.withPrimaryImageAlias(item)
+      );
+  } catch (error) {
+    return [];
   }
+}
 
   async getUpSellProducts(productId, { limit = 4 } = {}) {
     const product = await this.productRepository.findById(productId);
