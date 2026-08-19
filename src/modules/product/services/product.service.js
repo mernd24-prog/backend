@@ -2084,13 +2084,37 @@ class ProductService {
     const category = query.category_id || query.categoryId || query.categorySlug || query.category;
     if (category) {
       const selectedCategories = this.parseProductFilterValues(category);
-      const categoryRegexes = selectedCategories
-        .map((categoryKey) => normalizeCategoryKey(categoryKey))
-        .filter(Boolean)
-        .map((categoryKey) => new RegExp(`^${escapeRegExp(categoryKey)}(?:-|$)`, "i"));
-      filter.category = categoryRegexes.length > 1
-        ? { $in: categoryRegexes }
-        : categoryRegexes[0] || category;
+      const categoryMatches = [];
+
+      for (const selectedCategory of selectedCategories) {
+        const normalizedCategory = normalizeCategoryKey(selectedCategory);
+        if (!normalizedCategory) continue;
+
+        const descendantKeys = await this.platformRepository
+          .getCategoryDescendantKeys(normalizedCategory)
+          .catch(() => []);
+
+        if (descendantKeys.length) {
+          categoryMatches.push(...descendantKeys);
+        } else {
+          categoryMatches.push(
+            new RegExp(`^${escapeRegExp(normalizedCategory)}(?:-|$)`, "i"),
+          );
+        }
+      }
+
+      if (categoryMatches.length) {
+        const uniqueCategoryMatches = [...new Set(categoryMatches)];
+        filter.$and = [
+          ...(filter.$and || []),
+          {
+            $or: [
+              { category: { $in: uniqueCategoryMatches } },
+              { categoryId: { $in: uniqueCategoryMatches } },
+            ],
+          },
+        ];
+      }
     }
     if (query.hsnCode) filter.hsnCode = query.hsnCode;
     if (query.color) filter.color = query.color;
