@@ -114,7 +114,6 @@ const SIDEBAR_MODULES = [
   { moduleName: "User Addresses", moduleKey: "users-addresses", moduleSlug: "users-addresses", icon: "MdLocationOn", routePath: "/app/users-addresses", moduleType: "page", order: 215, parentModule: "users-access", requiredModule: "users" },
 
   // Festival Management
-  { moduleName: "Festivals", moduleKey: "festivals", moduleSlug: "festivals", icon: "MdCampaign", routePath: "/app/festivals", moduleType: "page", order: 121, parentModule: null, requiredModule: "festivals" },
 
   // Marketing additions
   { moduleName: "Notifications", moduleKey: "notifications", moduleSlug: "notifications", icon: "MdNotifications", routePath: "/app/notifications", moduleType: "page", order: 238, parentModule: "marketing", requiredModule: "notifications" },
@@ -161,7 +160,6 @@ const SELLER_SIDEBAR_MODULES = [
   { moduleName: "Shipping Profiles", moduleKey: "seller-shipping-profiles", moduleSlug: "seller-shipping-profiles", icon: "MdRule", routePath: "/app/shipping-profiles", moduleType: "page", order: 82, parentModule: "seller-shipping-management", requiredModule: "delivery" },
 
   { moduleName: "Marketing", moduleKey: "seller-marketing-management", moduleSlug: "seller-marketing-management", icon: "MdCampaign", moduleType: "group", order: 60, parentModule: null, requiredModule: "pricing" },
-  { moduleName: "Festivals", moduleKey: "seller-festivals", moduleSlug: "seller-festivals", icon: "MdCampaign", routePath: "/app/festivals", moduleType: "page", order: 61, parentModule: null, requiredModule: "festivals" },
   { moduleName: "Notifications", moduleKey: "seller-notifications", moduleSlug: "seller-notifications", icon: "MdNotifications", routePath: "/app/messages", moduleType: "page", order: 63, parentModule: "seller-marketing-management", requiredModule: "notifications" },
 
   // { moduleName: "Access", moduleKey: "seller-access-management", moduleSlug: "seller-access-management", icon: "MdGroup", moduleType: "group", order: 60, parentModule: null, requiredModule: "seller-management" },
