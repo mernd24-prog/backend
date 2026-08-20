@@ -7,7 +7,7 @@ const googleClient = new OAuth2Client();
 
 class SocialAuthService {
   async verifyIdentityToken(payload) {
-    const { provider, idToken } = payload;
+    const { provider, idToken, authCode } = payload;
     if (env.socialAuth.static) {
       return this.verifyStaticToken(payload);
     }
@@ -17,6 +17,7 @@ class SocialAuthService {
     }
 
     if (provider === "google") {
+      if (authCode) return this.verifyGoogleAuthCode(payload);
       return this.verifyGoogleToken(idToken);
     }
 
@@ -25,6 +26,33 @@ class SocialAuthService {
     }
 
     throw new AppError("Unsupported social login provider", 400);
+  }
+
+  getGoogleClientId(clientId) {
+    const requestedClientId = String(clientId || "").trim();
+    if (requestedClientId) {
+      if (!env.googleClientIds.includes(requestedClientId)) {
+        throw new AppError("Google client ID is not authorized for this backend", 401);
+      }
+      return requestedClientId;
+    }
+    return env.googleClientIds[0];
+  }
+
+  getGoogleRedirectUri(redirectUri) {
+    const normalizedRedirectUri = String(redirectUri || "").trim().replace(/\/+$/, "");
+    if (!normalizedRedirectUri) {
+      throw new AppError("Google OAuth redirect URI is required", 400);
+    }
+
+    if (
+      env.googleOAuth.redirectUris.length &&
+      !env.googleOAuth.redirectUris.includes(normalizedRedirectUri)
+    ) {
+      throw new AppError("Google OAuth redirect URI is not allowed", 401);
+    }
+
+    return normalizedRedirectUri;
   }
 
   verifyStaticToken({ provider, idToken, email, firstName, lastName, avatarUrl }) {
@@ -88,6 +116,34 @@ class SocialAuthService {
       lastName: payload.family_name || "",
       avatarUrl: payload.picture || "",
     };
+  }
+
+  async verifyGoogleAuthCode({ authCode, clientId, redirectUri }) {
+    if (!env.googleClientIds.length || !env.googleOAuth.clientSecret) {
+      throw new AppError("Google OAuth login is not configured", 503);
+    }
+
+    const selectedClientId = this.getGoogleClientId(clientId);
+    const selectedRedirectUri = this.getGoogleRedirectUri(redirectUri);
+    const oauthClient = new OAuth2Client(
+      selectedClientId,
+      env.googleOAuth.clientSecret,
+      selectedRedirectUri,
+    );
+
+    let tokens;
+    try {
+      const tokenResponse = await oauthClient.getToken(String(authCode || "").trim());
+      tokens = tokenResponse.tokens;
+    } catch (error) {
+      throw new AppError("Google authorization code could not be exchanged", 401);
+    }
+
+    if (!tokens?.id_token) {
+      throw new AppError("Google did not return an identity token", 401);
+    }
+
+    return this.verifyGoogleToken(tokens.id_token);
   }
 
   async verifyFirebaseToken(idToken) {

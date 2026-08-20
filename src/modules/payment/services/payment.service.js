@@ -627,12 +627,12 @@ class PaymentService {
       hasRazorpayXWebhookSecret: Boolean(env.razorpayX.webhookSecret),
     }, "Razorpay webhook request received");
 
-    if (!env.razorpay.live && !env.razorpayX.live) {
+    if (!env.razorpay.enabled && !env.razorpayX.enabled) {
       return {
         acknowledged: true,
         ignored: true,
         mode: { razorpay: env.razorpay.mode, razorpayX: env.razorpayX.mode },
-        reason: "Razorpay webhook ignored because live Razorpay and RazorpayX are disabled.",
+        reason: "Razorpay webhook ignored because Razorpay and RazorpayX are disabled.",
       };
     }
 
@@ -674,6 +674,15 @@ class PaymentService {
     }, "Razorpay webhook payload parsed");
 
     if (["payout.created", "payout.queued", "payout.pending", "payout.processed", "payout.reversed", "payout.failed", "payout.rejected", "payout.cancelled"].includes(eventType)) {
+      if (!validPayoutWebhook) {
+        logger.warn({
+          eventType,
+          providerEventId: payload.id || null,
+          validPaymentWebhook,
+          validPayoutWebhook,
+        }, "RazorpayX payout webhook rejected because RazorpayX signature did not match");
+        throw new AppError("Invalid RazorpayX webhook signature", 401);
+      }
       const entity = payload.payload?.payout?.entity;
       if (!entity?.id) throw new AppError("Invalid RazorpayX payout webhook payload", 400);
       logger.warn({
@@ -703,6 +712,9 @@ class PaymentService {
     }
 
     if (["refund.created", "refund.processed", "refund.failed"].includes(eventType)) {
+      if (!validPaymentWebhook) {
+        throw new AppError("Invalid Razorpay payment webhook signature", 401);
+      }
       const entity = payload.payload?.refund?.entity;
       if (!entity?.id) throw new AppError("Invalid Razorpay refund webhook payload", 400);
       const eventId = payload.id || `${eventType}:${entity.id}:${entity.status || "unknown"}`;
@@ -728,6 +740,9 @@ class PaymentService {
     }
 
     if (eventType === "payment.captured") {
+      if (!validPaymentWebhook) {
+        throw new AppError("Invalid Razorpay payment webhook signature", 401);
+      }
       const entity = payload.payload?.payment?.entity;
       if (!entity?.id || !entity?.order_id) {
         throw new AppError("Invalid Razorpay payment captured payload", 400);
@@ -785,6 +800,9 @@ class PaymentService {
     }
 
     if (eventType === "payment.failed") {
+      if (!validPaymentWebhook) {
+        throw new AppError("Invalid Razorpay payment webhook signature", 401);
+      }
       const entity = payload.payload?.payment?.entity;
       if (!entity?.id || !entity?.order_id) {
         throw new AppError("Invalid Razorpay payment failed payload", 400);
@@ -844,6 +862,9 @@ class PaymentService {
     }
 
     if (eventType === "refund.processed" || eventType === "payment.refunded") {
+      if (!validPaymentWebhook) {
+        throw new AppError("Invalid Razorpay payment webhook signature", 401);
+      }
       const entity = payload.payload?.refund?.entity || payload.payload?.payment?.entity;
       if (!entity?.id) {
         throw new AppError("Invalid Razorpay refund payload", 400);

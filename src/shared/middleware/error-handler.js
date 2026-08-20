@@ -166,7 +166,13 @@ function errorHandler(error, req, res, next) {
     if (!postgresResult) message = "An unexpected error occurred. Please try again later.";
   } else {
     req.log?.warn(
-      { statusCode, errorCode: code || "REQUEST_ERROR" },
+      {
+        err: error,
+        statusCode,
+        errorCode: code || "REQUEST_ERROR",
+        dbCode: error.code || error.original?.code || error.parent?.code || null,
+        route: req.originalUrl || req.url,
+      },
       `${req.method} ${req.originalUrl || req.url} -> ${statusCode} ${code || "REQUEST_ERROR"}: ${message}`,
     );
   }

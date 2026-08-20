@@ -495,9 +495,14 @@ router.post("/payouts/:payoutId/process", authenticate, platformFinanceOnly, fin
           actor: req.auth,
         },
       );
+    const status = String(result?.status || "").toLowerCase();
     return res.status(200).json({
       success: true,
-      message: "Payout completed",
+      message: status === "completed"
+        ? "Payout completed"
+        : status === "processing"
+          ? "Payout transfer started"
+          : "Payout updated",
       data: result,
     });
   } catch (err) {

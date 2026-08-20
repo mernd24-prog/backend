@@ -7,6 +7,7 @@ const {
   setCached,
   getCached,
   deleteCached,
+  deletePatternCached,
   cacheKeys,
   CACHE_TTL,
 } = require("../../../infrastructure/cache/redis-client");
@@ -50,13 +51,13 @@ class RecommendationService {
     };
   }
 
-  async findPublicProductsByIds(productIds = [], limit = 10) {
+  async findPublicProductsByIds(productIds = [], limit = 10, options = {}) {
     const ids = [...new Set(productIds.filter(Boolean).map(String))].slice(0, limit);
     if (!ids.length) return [];
 
     const products = await ProductModel.find({
       _id: { $in: ids },
-      ...this.productFilter(),
+      ...this.productFilter(options.category),
     }).lean();
 
     const byId = new Map(products.map((product) => [String(product._id), product]));
@@ -89,12 +90,14 @@ class RecommendationService {
   // ==============================
   async getRecommendations(userId, options = {}) {
     const limit = this.normalizeLimit(options.limit);
+    const category = options.category ? String(options.category).trim().toLowerCase() : "all";
+    const period = options.period || "week";
 
     if (!userId) {
       return this.getTrendingProducts(options.category, options.period, { limit });
     }
 
-    const cacheKey = `${cacheKeys.recommendations(userId)}:${limit}`;
+    const cacheKey = `${cacheKeys.recommendations(userId)}:${category}:${period}:${limit}`;
 
     let recs = await getCached(cacheKey);
 
@@ -120,6 +123,7 @@ class RecommendationService {
     const recommended = await this.findPublicProductsByIds(
       ranked.map((item) => item.productId),
       limit,
+      { category: options.category },
     );
 
     if (recommended.length >= limit) return recommended;
@@ -222,6 +226,7 @@ class RecommendationService {
       return this.findPublicProductsByIds(
         trending.map((product) => product?._id || product?.id),
         limit,
+        { category },
       );
     }
 
@@ -237,6 +242,7 @@ class RecommendationService {
   // ==============================
   async clearCache(userId) {
     await deleteCached(cacheKeys.recommendations(userId));
+    await deletePatternCached(`${cacheKeys.recommendations(userId)}:*`);
   }
 }
 

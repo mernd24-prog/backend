@@ -2093,9 +2093,13 @@ class ProductService {
         const normalizedCategory = normalizeCategoryKey(selectedCategory);
         if (!normalizedCategory) continue;
 
-        const descendantKeys = await this.platformRepository
-          .getCategoryDescendantKeys(normalizedCategory)
-          .catch(() => []);
+        const descendantKeys = await remember(
+          `categories:descendants:${normalizedCategory}`,
+          300,
+          () => this.platformRepository
+            .getCategoryDescendantKeys(normalizedCategory)
+            .catch(() => []),
+        );
 
         if (descendantKeys.length) {
           categoryMatches.push(...descendantKeys);

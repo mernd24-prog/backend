@@ -105,8 +105,10 @@ const razorpayXMissingKeys = findMissingConfig([
 const razorpayXConfigured = razorpayXMissingKeys.length === 0;
 const razorpayXLiveRequested = readBooleanFlag(["ENABLE_RAZORPAYX_PAYOUTS", "USE_LIVE_RAZORPAYX"], false);
 const razorpayXMockEnabled = readBooleanFlag(["ENABLE_RAZORPAYX_MOCK", "USE_MOCK_RAZORPAYX"], false);
+const razorpayXKeyId = cleanEnvValue(process.env.RAZORPAYX_KEY_ID || process.env.RAZORPAY_KEY_ID);
+const razorpayXTestKey = razorpayXKeyId.startsWith("rzp_test_");
 const razorpayXMode = razorpayXLiveRequested && razorpayXConfigured
-  ? "live"
+  ? (razorpayXTestKey ? "test" : "live")
   : razorpayXMockEnabled
     ? "mock"
     : "disabled";
@@ -137,6 +139,17 @@ const uploadStorageMode = cloudinaryLiveRequested && cloudinaryConfigured
 const googleClientIds = (process.env.GOOGLE_CLIENT_IDS || "")
   .split(",")
   .map((value) => value.trim())
+  .filter(hasEnvValue);
+const googleOAuthRedirectUris = (
+  process.env.GOOGLE_OAUTH_REDIRECT_URIS ||
+  [
+    process.env.CUSTOMER_APP_BASE_URL,
+    process.env.ADMIN_APP_BASE_URL,
+    process.env.SELLER_APP_BASE_URL,
+  ].filter(hasEnvValue).join(",")
+)
+  .split(",")
+  .map((value) => value.trim().replace(/\/+$/, ""))
   .filter(hasEnvValue);
 const firebaseConfigured = findMissingConfig([
   { key: "FIREBASE_PROJECT_ID", value: process.env.FIREBASE_PROJECT_ID },
@@ -229,6 +242,10 @@ const env = {
   jwtAccessTtl: process.env.JWT_ACCESS_TTL || "15m",
   jwtRefreshTtl: process.env.JWT_REFRESH_TTL || "7d",
   googleClientIds,
+  googleOAuth: {
+    clientSecret: cleanEnvValue(process.env.GOOGLE_CLIENT_SECRET),
+    redirectUris: googleOAuthRedirectUris,
+  },
   firebase: {
     projectId: process.env.FIREBASE_PROJECT_ID || "",
     clientEmail: process.env.FIREBASE_CLIENT_EMAIL || "",
@@ -250,12 +267,13 @@ const env = {
     timeoutMs: parsePositiveInteger(process.env.RAZORPAY_TIMEOUT_MS, 10000),
   },
   razorpayX: {
-    keyId: cleanEnvValue(process.env.RAZORPAYX_KEY_ID || process.env.RAZORPAY_KEY_ID),
+    keyId: razorpayXKeyId,
     keySecret: cleanEnvValue(process.env.RAZORPAYX_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET),
     accountNumber: cleanEnvValue(process.env.RAZORPAYX_ACCOUNT_NUMBER),
     webhookSecret: cleanEnvValue(process.env.RAZORPAYX_WEBHOOK_SECRET),
     configured: razorpayXConfigured,
     live: razorpayXMode === "live",
+    test: razorpayXMode === "test",
     mock: razorpayXMode === "mock",
     enabled: razorpayXMode !== "disabled",
     mode: razorpayXMode,
