@@ -21,6 +21,7 @@ const {
   calculateInclusiveShippingTax,
   resolveShippingPolicy,
 } = require("../../../shared/domain/seller-payout-rules");
+const { allocatePayoutRecoveries } = require("../../../shared/domain/payout-recovery-allocation");
 
 class SellerCommissionService {
   constructor({ razorpayXProvider = new RazorpayXPayoutProvider(), walletService = new WalletService() } = {}) {
@@ -1314,6 +1315,8 @@ resolveSellerFeeTaxAmount(
     const orderStatus = String(order.status || commission.source_status || "");
     const codCollections = (orderData.codCollections || []).filter((row) =>
       String(row.seller_id || "") === String(commission.seller_id || ""));
+    const sellerCodCollectionConfirmed = codCollections.length > 0 && codCollections.every((row) =>
+      ["verified", "remitted"].includes(String(row.status || "").toLowerCase()));
     const deliveredAt =
       this.toDate(orderData.releaseStatusAt) ||
       (this.isReleasedOrderStatus(orderStatus)
@@ -1354,7 +1357,8 @@ resolveSellerFeeTaxAmount(
     if (
       policy.codPayoutRequiresCapture &&
       order.payment_provider === PAYMENT_PROVIDER.COD &&
-      order.payment_status !== PAYMENT_STATUS.CAPTURED
+      order.payment_status !== PAYMENT_STATUS.CAPTURED &&
+      !sellerCodCollectionConfirmed
     ) {
       return { ...base, releaseStatus: "blocked", reason: "waiting_for_cod_collection_confirmation" };
     }
@@ -2241,26 +2245,30 @@ gstTcsAmount,
         .where("net_amount", "<", 0)
         .where("status", "pending")
         .forUpdate();
-      const recoveryAdjustment = this.round(
-        recoveryRows.reduce((sum, row) => sum + Number(row.net_amount || 0), 0),
-      );
-      if (recoveryAdjustment < 0) {
-        totals.adjustmentAmount = this.round(totals.adjustmentAmount + recoveryAdjustment);
-        totals.netAmount = this.round(totals.netAmount + recoveryAdjustment);
+      const availableBeforeRecovery = this.round(totals.netAmount);
+      const recoveryAllocation = allocatePayoutRecoveries(availableBeforeRecovery, recoveryRows);
+      const recoveryAppliedAmount = recoveryAllocation.appliedAmount;
+      const appliedRecoveryAdjustment = this.round(-recoveryAppliedAmount);
+      if (appliedRecoveryAdjustment < 0) {
+        totals.adjustmentAmount = this.round(totals.adjustmentAmount + appliedRecoveryAdjustment);
+        totals.netAmount = this.round(totals.netAmount + appliedRecoveryAdjustment);
       }
 
-      if (totals.netAmount <= 0) {
+      if (totals.netAmount < 0) {
         throw new AppError("Invalid payout amount", 400);
       }
 
-      if (payoutPolicy.minimumPayoutAmount > 0 && totals.netAmount < payoutPolicy.minimumPayoutAmount) {
+      const offsetOnly = totals.netAmount === 0 && recoveryAppliedAmount > 0;
+      if (!offsetOnly && payoutPolicy.minimumPayoutAmount > 0 && totals.netAmount < payoutPolicy.minimumPayoutAmount) {
         throw new AppError(`Payout amount is below the minimum threshold of ${payoutPolicy.minimumPayoutAmount}`, 400);
       }
 
       const payoutId = uuidv4();
       const walletSelected = this.isSellerWalletRequested(options.paymentMethod);
       const razorpayXSelected = !walletSelected && (this.isRazorpayXRequested(options.paymentMethod) || options.autoProcess === true);
-      const payoutStatus = options.forceManualApproval
+      const payoutStatus = offsetOnly
+        ? "completed"
+        : options.forceManualApproval
         ? "pending"
         : (razorpayXSelected || walletSelected) ? "processing" : (payoutPolicy.manualApprovalRequired ? "pending" : "processing");
       const skippedCommissions = evaluations
@@ -2297,14 +2305,16 @@ gstTcsAmount,
         net_amount: this.round(totals.netAmount),
         currency: options.currency || payoutCommissions[0]?.currency || "INR",
         status: payoutStatus,
-        payment_method: options.paymentMethod || null,
-        payment_reference: options.paymentReference || null,
+        payment_method: offsetOnly ? "ledger_offset" : options.paymentMethod || null,
+        payment_reference: offsetOnly ? `offset_${payoutId}` : options.paymentReference || null,
         metadata: this.jsonb({
           source: options.source || "batch_payout",
           commissionIds: payoutCommissions.map((commission) => commission.id),
           skippedCommissions,
-          recoverySettlementIds: recoveryRows.map((row) => row.id),
-          recoveryAdjustment,
+          recoverySettlementIds: [],
+          recoveryAdjustment: appliedRecoveryAdjustment,
+          recoveryAppliedAmount,
+          offsetOnly,
           financialBreakdown,
           payoutPolicy,
           note: options.note || null,
@@ -2320,30 +2330,109 @@ gstTcsAmount,
           payoutCommissions.map((c) => c.id)
         )
         .update({
-          status: "approved",
+          status: offsetOnly ? "paid" : "approved",
           payout_id: payoutId,
           updated_at: knex.fn.now(),
         });
-      await this.transitionPayoutItems(trx, payoutId, "eligible", {
-        reason: "payout_prepared",
+      await this.transitionPayoutItems(trx, payoutId, offsetOnly ? "released" : "eligible", {
+        reason: offsetOnly ? "cod_liability_offset" : "payout_prepared",
         actor: options.actor,
         metadata: { payoutStatus },
       });
 
-      if (recoveryRows.length) {
-        await trx("seller_settlements")
-          .whereIn("id", recoveryRows.map((row) => row.id))
-          .update({
-            status: "processing",
+      const recoverySettlementIds = [];
+      const recoveryApplications = [];
+      for (const allocation of recoveryAllocation.applications) {
+        const recovery = allocation.recovery;
+        const outstanding = Math.abs(this.round(recovery.net_amount));
+        const consumed = allocation.appliedAmount;
+        const remaining = allocation.remainingAmount;
+        const recoveryMetadata = this.parseJson(recovery.metadata, {});
+        if (remaining === 0) {
+          await trx("seller_settlements").where("id", recovery.id).update({
+            status: offsetOnly ? "completed" : "processing",
+            payout_id: payoutId,
             metadata: this.jsonb({
+              ...recoveryMetadata,
               source: "negative_balance_offset",
               offsetPayoutId: payoutId,
-              offsetAmount: recoveryAdjustment,
+              offsetAmount: -consumed,
+              remainingAmount: 0,
               updatedBy: options.actor?.userId || options.actor?.sub || null,
               updatedAt: new Date().toISOString(),
             }),
             updated_at: knex.fn.now(),
           });
+          recoverySettlementIds.push(recovery.id);
+        } else {
+          await trx("seller_settlements").where("id", recovery.id).update({
+            adjustment_amount: -remaining,
+            net_amount: -remaining,
+            metadata: this.jsonb({
+              ...recoveryMetadata,
+              originalLiabilityAmount: Number(recoveryMetadata.originalLiabilityAmount || outstanding),
+              recoveredAmount: this.round(Number(recoveryMetadata.recoveredAmount || 0) + consumed),
+              remainingAmount: remaining,
+              lastOffsetPayoutId: payoutId,
+              updatedAt: new Date().toISOString(),
+            }),
+            updated_at: knex.fn.now(),
+          });
+          const appliedSettlementId = uuidv4();
+          await trx("seller_settlements").insert({
+            id: appliedSettlementId,
+            seller_id: recovery.seller_id,
+            organization_id: recovery.organization_id || null,
+            organization_snapshot: this.jsonb(this.parseJson(recovery.organization_snapshot, {})),
+            payout_id: payoutId,
+            settlement_date: knex.fn.now(),
+            period_start: recovery.period_start || null,
+            period_end: recovery.period_end || null,
+            gross_amount: 0,
+            commission_amount: 0,
+            tax_amount: 0,
+            refund_amount: 0,
+            adjustment_amount: -consumed,
+            net_amount: -consumed,
+            currency: recovery.currency || "INR",
+            status: offsetOnly ? "completed" : "processing",
+            notes: "Partial negative balance recovered through payout offset",
+            metadata: this.jsonb({
+              ...recoveryMetadata,
+              source: "negative_balance_offset_application",
+              sourceSettlementId: recovery.id,
+              offsetPayoutId: payoutId,
+              offsetAmount: -consumed,
+              remainingAmount: remaining,
+            }),
+            created_at: knex.fn.now(),
+            updated_at: knex.fn.now(),
+          });
+          recoverySettlementIds.push(appliedSettlementId);
+        }
+        recoveryApplications.push({ sourceSettlementId: recovery.id, appliedAmount: consumed, remainingAmount: remaining });
+      }
+
+      await trx("seller_payouts").where("id", payoutId).update({
+        metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({
+          recoverySettlementIds,
+          recoveryApplications,
+        })]),
+        updated_at: knex.fn.now(),
+      });
+
+      if (offsetOnly) {
+        await trx("seller_settlements").insert({
+          id: uuidv4(), seller_id: sellerId, organization_id: payoutOrganizationId,
+          payout_id: payoutId, settlement_date: knex.fn.now(), period_start: payoutRange.periodStart,
+          period_end: payoutRange.periodEnd, gross_amount: this.round(totals.totalAmount),
+          commission_amount: this.round(totals.commissionAmount), tax_amount: this.round(totals.taxAmount),
+          refund_amount: this.round(totals.refundAmount || 0), adjustment_amount: appliedRecoveryAdjustment,
+          net_amount: 0, currency: options.currency || payoutCommissions[0]?.currency || "INR",
+          status: "completed", notes: "Seller earnings fully offset against COD/negative liability",
+          metadata: this.jsonb({ source: "ledger_offset_only", recoveryApplications }),
+          created_at: knex.fn.now(), updated_at: knex.fn.now(),
+        });
       }
 
       logger.info(
@@ -2443,11 +2532,10 @@ gstTcsAmount,
           .update({
             status: "completed",
             notes: "Negative balance recovered through payout offset",
-            metadata: this.jsonb({
-              ...payoutMetadata,
+            metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({
               recoveredByPayoutId: payoutId,
               recoveredAt: new Date().toISOString(),
-            }),
+            })]),
             updated_at: knex.fn.now(),
           });
       }
@@ -2506,15 +2594,14 @@ gstTcsAmount,
         .update({
           status: "failed",
           notes: reason || "Seller payout failed",
-          metadata: this.jsonb({
-            ...this.parseJson(payout.metadata, {}),
+          metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({
             failedPayoutId: payoutId,
             failedReason: reason || "payout_failed",
             providerStatus: options.providerStatus || null,
             providerPayoutId: options.providerPayoutId || payout.payment_reference || null,
             reversalId: options.reversalId || null,
             failedAt: new Date().toISOString(),
-          }),
+          })]),
           updated_at: knex.fn.now(),
         });
       const payoutMetadata = this.parseJson(payout.metadata, {});
@@ -2523,11 +2610,10 @@ gstTcsAmount,
           .whereIn("id", payoutMetadata.recoverySettlementIds)
           .update({
             status: "pending",
-            metadata: this.jsonb({
-              ...payoutMetadata,
+            metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({
               releasedFromFailedPayoutId: payoutId,
               releasedAt: new Date().toISOString(),
-            }),
+            })]),
             updated_at: knex.fn.now(),
           });
       }
@@ -2566,8 +2652,22 @@ gstTcsAmount,
       }).returning("*");
       await this.transitionPayoutItems(trx, payoutId, "cancelled", { reason, actor });
       await trx("seller_commissions").where("payout_id", payoutId).whereNot("status", "paid").update({
-        status: "cancelled", updated_at: trx.fn.now(),
+        status: "pending", payout_id: null, updated_at: trx.fn.now(),
       });
+      const payoutMetadata = this.parseJson(payout.metadata, {});
+      if (Array.isArray(payoutMetadata.recoverySettlementIds) && payoutMetadata.recoverySettlementIds.length) {
+        await trx("seller_settlements")
+          .whereIn("id", payoutMetadata.recoverySettlementIds)
+          .update({
+            status: "pending",
+            payout_id: null,
+            metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({
+              releasedFromCancelledPayoutId: payoutId,
+              releasedAt: new Date().toISOString(),
+            })]),
+            updated_at: knex.fn.now(),
+          });
+      }
       await this.publishPayoutEvent(updated, actor);
       return updated;
     });
@@ -2775,7 +2875,7 @@ gstTcsAmount,
         if (query.toDate) builder.where("created_at", "<=", query.toDate);
       });
 
-    const [commerceSettings, commissions, paidPayoutRow, inProcessPayoutRow, adjustmentRow, walletRow, walletTransactions] = await Promise.all([
+    const [commerceSettings, commissions, paidPayoutRow, inProcessPayoutRow, adjustmentRow, codLiabilityRow, walletRow, walletTransactions] = await Promise.all([
       commerceSettingsService.getSettings(),
       buildCommissionQuery().orderBy("created_at", "desc"),
       knex("seller_payouts")
@@ -2797,12 +2897,26 @@ gstTcsAmount,
         .first(),
       knex("seller_settlements")
         .where("seller_id", sellerId)
-        .whereIn("status", ["pending", "processing"])
+        .where("status", "pending")
         .where("net_amount", "<", 0)
         .modify((builder) => {
           if (query.organizationId) builder.where("organization_id", query.organizationId);
         })
         .sum({ adjustment_balance: "net_amount" })
+        .count({ count: "*" })
+        .first(),
+      knex("seller_settlements")
+        .where("seller_id", sellerId)
+        .where("status", "pending")
+        .where("net_amount", "<", 0)
+        .whereRaw("(COALESCE(metadata, '{}'::jsonb) ->> 'source' = ? OR COALESCE(metadata, '{}'::jsonb) ->> 'adjustmentType' = ?)", [
+          "seller_direct_cod_recovery",
+          "cod_recovery",
+        ])
+        .modify((builder) => {
+          if (query.organizationId) builder.where("organization_id", query.organizationId);
+        })
+        .sum({ cod_liability_balance: "net_amount" })
         .count({ count: "*" })
         .first(),
       this.walletService.ensureWallet(sellerId),
@@ -2823,6 +2937,10 @@ gstTcsAmount,
       paidBalance: this.round(paidPayoutRow?.paid_amount || 0),
       blockedBalance: 0,
       refundAdjustmentBalance: this.round(adjustmentRow?.adjustment_balance || 0),
+      codLiabilityBalance: this.round(codLiabilityRow?.cod_liability_balance || 0),
+      otherAdjustmentBalance: this.round(
+        Number(adjustmentRow?.adjustment_balance || 0) - Number(codLiabilityRow?.cod_liability_balance || 0),
+      ),
     };
     const counts = {
       pending: 0,
@@ -2862,9 +2980,15 @@ gstTcsAmount,
     });
 
     const nextEligibleAt = nextEligibleDates.sort()[0] || null;
+    balances.effectiveAvailablePayout = this.round(Math.max(
+      0,
+      balances.availableBalance + balances.refundAdjustmentBalance,
+    ));
     const minimumPayoutShortfall = Math.max(
       0,
-      this.round(payoutPolicy.minimumPayoutAmount - balances.availableBalance),
+      balances.effectiveAvailablePayout === 0
+        ? 0
+        : this.round(payoutPolicy.minimumPayoutAmount - balances.effectiveAvailablePayout),
     );
     const items = evaluations.slice(offset, offset + limit).map(({ commission, release }) => ({
       commissionId: commission.id,
@@ -3143,10 +3267,19 @@ gstTcsAmount,
     };
     const payoutId = await this.initiatePayout(sellerId, range.periodStart, range.periodEnd, resolvedOptions);
     const payoutPolicy = this.getPayoutPolicy(commerceSettings);
-    if (payoutPolicy.manualApprovalRequired) {
-      const payout = await knex("seller_payouts").where("id", payoutId).first();
+    const initiatedPayout = await knex("seller_payouts").where("id", payoutId).first();
+    if (initiatedPayout?.status === "completed" && Number(initiatedPayout.net_amount || 0) === 0) {
       return {
-        payout,
+        payout: initiatedPayout,
+        approvalRequired: false,
+        payoutPolicy,
+        offsetOnly: true,
+        message: "Available earnings were applied to the outstanding COD/negative liability; no cash transfer was due",
+      };
+    }
+    if (payoutPolicy.manualApprovalRequired) {
+      return {
+        payout: initiatedPayout,
         approvalRequired: true,
         payoutPolicy,
         message: "Payout is pending manual approval",
@@ -3193,6 +3326,14 @@ gstTcsAmount,
       autoProcess: false,
     });
     const payout = await knex("seller_payouts").where("id", payoutId).first();
+    if (payout?.status === "completed" && Number(payout.net_amount || 0) === 0) {
+      return {
+        payout,
+        approvalRequired: false,
+        offsetOnly: true,
+        message: "Available earnings were applied to the outstanding COD/negative liability; no cash transfer was due",
+      };
+    }
     return {
       payout,
       approvalRequired: true,
@@ -3409,7 +3550,19 @@ gstTcsAmount,
       buildBase().count({ total: "*" }),
     ]);
     return {
-      items,
+      items: items.map((item) => {
+        const metadata = this.parseJson(item.metadata, {});
+        const isCodLiability = metadata.source === "seller_direct_cod_recovery" || metadata.adjustmentType === "cod_recovery";
+        return {
+          ...item,
+          liabilityType: isCodLiability ? "seller_collected_cod" : "other_adjustment",
+          orderId: metadata.orderId || item.order_id || null,
+          codCollectionId: metadata.codCollectionId || null,
+          originalLiabilityAmount: Number(metadata.originalLiabilityAmount || Math.abs(Number(item.net_amount || 0))),
+          recoveredAmount: Number(metadata.recoveredAmount || 0),
+          remainingAmount: Number(metadata.remainingAmount ?? Math.abs(Number(item.net_amount || 0))),
+        };
+      }),
       total: Number(countRows?.[0]?.total || 0),
       limit,
       offset,

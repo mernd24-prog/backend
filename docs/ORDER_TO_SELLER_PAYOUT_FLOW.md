@@ -293,7 +293,7 @@ items. Payment failure releases inventory, wallet, and deal reservations and
 moves the order to `payment_failed`. A retry moves it back to `pending_payment`
 after reserving inventory again.
 
-Razorpay payment and refund webhooks use a PostgreSQL idempotency/audit table. COD is authorization-only in this path; there is no implemented COD cash-receivable reconciliation that later captures the payment automatically.
+Razorpay payment and refund webhooks use a PostgreSQL idempotency/audit table. COD starts as authorization-only. Delivery creates shipment-scoped COD collection obligations. Platform/courier collections and seller-direct submissions are verified by Admin; a verified seller-direct collection creates a negative seller liability that is offset FIFO against later released earnings. If earnings are smaller than the liability, the payout is recorded as a zero-transfer ledger offset and only the remaining liability carries forward.
 
 ## 7. Order and delivery status
 

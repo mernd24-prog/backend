@@ -336,9 +336,13 @@ class SettlementLifecycleService {
       orderId: collection.order_id,
       collectedAmount: this.number(collection.collected_amount),
       adjustmentType: "cod_recovery",
+      originalLiabilityAmount: this.number(collection.collected_amount),
+      recoveredAmount: 0,
+      remainingAmount: this.number(collection.collected_amount),
     };
     if (existingRecovery) {
       await knex("seller_settlements").where("id", existingRecovery.id).update({
+        adjustment_amount: adjustmentAmount,
         net_amount: adjustmentAmount,
         notes: "Seller-direct COD collection recovery",
         metadata: recoveryMetadata,

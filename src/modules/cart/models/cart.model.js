@@ -22,7 +22,9 @@ const cartSchema = new mongoose.Schema(
         stockStatus: { type: String, enum: ["in_stock", "low_stock", "out_of_stock", "backorder"], default: "in_stock" },
       },
     ],
-    wishlist: [{ type: String }],
+    // Mixed keeps legacy product-id strings readable while new writes use the
+    // variant-aware object shape normalized by CartService.
+    wishlist: [{ type: mongoose.Schema.Types.Mixed }],
     metadata: { type: Object, default: {} },
   },
   { timestamps: true },
@@ -31,6 +33,7 @@ const cartSchema = new mongoose.Schema(
 cartSchema.index({ updatedAt: -1 });
 cartSchema.index({ "items.productId": 1 });
 cartSchema.index({ "items.sellerId": 1 });
+cartSchema.index({ "wishlist.productId": 1 });
 
 const CartModel = mongoose.model("Cart", cartSchema);
 

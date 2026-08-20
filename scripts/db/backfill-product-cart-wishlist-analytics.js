@@ -21,7 +21,9 @@ async function buildCounts() {
     (Array.isArray(cart.items) ? cart.items : []).forEach((item) => {
       addCount(cartAdds, item.productId, Math.max(0, Number(item.quantity || 0)));
     });
-    new Set(Array.isArray(cart.wishlist) ? cart.wishlist : []).forEach((productId) => {
+    new Set((Array.isArray(cart.wishlist) ? cart.wishlist : []).map((item) =>
+      String(item?.productId || item?._id || item || ""),
+    ).filter(Boolean)).forEach((productId) => {
       addCount(wishlistAdds, productId, 1);
     });
   }

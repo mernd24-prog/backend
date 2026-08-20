@@ -78,7 +78,7 @@ paymentRoutes.get(
 paymentRoutes.post(
   "/cod-collections/shipments/:shipmentId/submit",
   authenticate,
-  allowPermissions("sellers/commissions:view"),
+  allowPermissions("sellers/commissions:update"),
   checkInput(codCollectionSubmitSchema),
   catchErrors(async (req, res) => {
     const collection = await settlementLifecycleService.submitSellerCodCollection(req.params.shipmentId, req.body, req.auth);

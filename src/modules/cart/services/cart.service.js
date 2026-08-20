@@ -114,6 +114,14 @@ class CartService {
     );
   }
 
+  wishlistKey(item = {}) {
+    return this.itemKey({
+      productId: this.productId(item?.productId || item),
+      variantId: item?.variantId,
+      variantSku: item?.variantSku,
+    });
+  }
+
   async incrementProductAnalytics(productId, field, increment = 1) {
     if (!productId || !increment) return null;
     return ProductModel.updateOne(
@@ -263,18 +271,45 @@ class CartService {
   }
 
   async normalizeWishlist(wishlist = []) {
-    const ids = [...new Set((wishlist || []).map((item) => this.productId(item)).filter(Boolean))];
+    const requested = new Map();
+    for (const rawItem of wishlist || []) {
+      const item = typeof rawItem === "object" && rawItem !== null
+        ? rawItem
+        : { productId: rawItem };
+      const productId = this.productId(item.productId || item);
+      if (!productId) continue;
+      this.assertProductId(productId);
+      requested.set(this.wishlistKey({ ...item, productId }), { ...item, productId });
+    }
+    const entries = [...requested.values()];
+    const ids = [...new Set(entries.map((item) => item.productId))];
     if (!ids.length) return [];
-    ids.forEach((id) => this.assertProductId(id));
     const products = await ProductModel.find({ _id: { $in: ids } })
-      .select("status approvalStatus visibility publishedAt scheduledAt")
+      .select("status approvalStatus visibility publishedAt scheduledAt variants")
       .lean();
-    const publicIds = new Set(
+    const publicProducts = new Map(
       products
         .filter((product) => isPublicProduct(product))
-        .map((product) => String(product._id)),
+        .map((product) => [String(product._id), product]),
     );
-    return ids.filter((id) => publicIds.has(String(id)));
+    return entries.flatMap((entry) => {
+      const product = publicProducts.get(String(entry.productId));
+      if (!product) return [];
+      const requestedVariant = entry.variantId || entry.variantSku;
+      const variants = Array.isArray(product.variants) ? product.variants : [];
+      const variant = requestedVariant ? variants.find((candidate) =>
+        (entry.variantId && String(candidate._id || candidate.id || "") === String(entry.variantId)) ||
+        (entry.variantSku && String(candidate.sku || "") === String(entry.variantSku))
+      ) : null;
+      if (requestedVariant && (!variant || (variant.status && variant.status !== "active"))) return [];
+      return [{
+        productId: entry.productId,
+        variantId: variant?._id || variant?.id || "",
+        variantSku: variant?.sku || entry.variantSku || "",
+        variantTitle: variant?.title || entry.variantTitle || "",
+        attributes: variant?.attributes || entry.attributes || {},
+      }];
+    });
   }
 
   async mergeItems(items = []) {

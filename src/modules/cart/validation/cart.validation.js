@@ -16,7 +16,18 @@ const upsertCartSchema = Joi.object({
           price: Joi.number().min(0),
         }),
       ),
-    wishlist: Joi.array().items(objectId),
+    wishlist: Joi.array().items(
+      Joi.alternatives().try(
+        objectId,
+        Joi.object({
+          productId: objectId.required(),
+          variantId: objectId.allow("", null),
+          variantSku: Joi.string().allow("", null),
+          variantTitle: Joi.string().allow("", null),
+          attributes: Joi.object().default({}),
+        }),
+      ),
+    ),
   })
     .or("items", "wishlist")
     .required(),

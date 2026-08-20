@@ -224,14 +224,18 @@ class CancellationService {
     ));
     const captured = payment?.status === PAYMENT_STATUS.CAPTURED || order.payment_status === PAYMENT_STATUS.CAPTURED;
     const isCod = (payment?.provider || order.payment_provider) === PAYMENT_PROVIDER.COD;
-    const providerRefundAmount = captured && !isCod
+    // Captured COD means cash was actually collected. There is no gateway rail
+    // to reverse, so retain the cash portion as a provider/manual amount; the
+    // refund processor will route it to Admin manual review. Uncaptured COD has
+    // no cash component to return.
+    const providerRefundAmount = captured
       ? this.round(refundAmount - walletRefundAmount)
       : 0;
     return {
       refundAmount,
       walletRefundAmount,
       providerRefundAmount,
-      refundRequired: captured && refundAmount > 0 && !isCod,
+      refundRequired: captured && refundAmount > 0,
       captured,
       isCod,
     };
@@ -340,7 +344,7 @@ class CancellationService {
       shippingRefundAmount + platformFeeRefundAmount,
     );
     const refundDestination = commerceSettings.payments?.refundDestination || "original_payment_method";
-    if (refundDestination === "wallet" && refund.captured && !refund.isCod && refund.refundAmount > 0) {
+    if (refundDestination === "wallet" && refund.captured && refund.refundAmount > 0) {
       refund.walletRefundAmount = refund.refundAmount;
       refund.providerRefundAmount = 0;
       refund.refundRequired = true;
