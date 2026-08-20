@@ -110,8 +110,16 @@ const socialLoginSchema = Joi.object({
       .valid("google", "firebase")
       .required(),
 
-    idToken: Joi.string()
-      .required(),
+    idToken: Joi.string(),
+
+    authCode: Joi.string()
+      .trim(),
+
+    clientId: Joi.string()
+      .trim(),
+
+    redirectUri: Joi.string()
+      .uri(),
 
     email: Joi.string()
       .trim()
@@ -140,7 +148,7 @@ const socialLoginSchema = Joi.object({
       .trim()
       .uppercase()
       .allow("", null),
-  }).required(),
+  }).xor("idToken", "authCode").required(),
 
   query: emptyQuerySchema,
   params: emptyParamsSchema,

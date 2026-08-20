@@ -51,22 +51,42 @@ class PlatformRepository {
   }
 
   async getCategoryDescendantKeys(categoryKey) {
-    const category = await this.getCategory(categoryKey);
-    if (!category) return [];
+    const [result] = await CategoryTreeModel.aggregate([
+      {
+        $match: mongoose.Types.ObjectId.isValid(String(categoryKey))
+          ? { $or: [{ _id: new mongoose.Types.ObjectId(String(categoryKey)) }, { categoryKey }] }
+          : { categoryKey },
+      },
+      { $limit: 1 },
+      {
+        $graphLookup: {
+          from: "categorytrees",
+          startWith: "$categoryKey",
+          connectFromField: "categoryKey",
+          connectToField: "parentKey",
+          as: "descendants",
+          restrictSearchWithMatch: { active: true },
+        },
+      },
+      {
+        $project: {
+          keys: {
+            $setUnion: [
+              ["$categoryKey"],
+              {
+                $map: {
+                  input: "$descendants",
+                  as: "descendant",
+                  in: "$$descendant.categoryKey",
+                },
+              },
+            ],
+          },
+        },
+      },
+    ]);
 
-    const keys = [category.categoryKey];
-    for (let index = 0; index < keys.length; index += 1) {
-      const children = await CategoryTreeModel.find({
-        parentKey: keys[index],
-        active: true,
-      }).select("categoryKey");
-      children.forEach((child) => {
-        if (child.categoryKey && !keys.includes(child.categoryKey)) {
-          keys.push(child.categoryKey);
-        }
-      });
-    }
-    return keys;
+    return (result?.keys || []).filter(Boolean);
   }
 
   async listCategories(filter = {}, pagination = {}) {

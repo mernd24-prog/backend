@@ -6,7 +6,17 @@ const { AppError } = require("../../../shared/errors/app-error");
 const { logger } = require("../../../shared/logger/logger");
 
 class RazorpayXPayoutProvider {
-  request(path, method = "GET", body = null) {
+  isTestModeKey() {
+    return String(env.razorpayX.keyId || "").startsWith("rzp_test_");
+  }
+
+  assertModeMatchesKey() {
+    if (env.razorpayX.live && this.isTestModeKey()) {
+      throw new AppError("RazorpayX configuration mismatch: live payouts are enabled but RAZORPAYX_KEY_ID is a test key. Use live RazorpayX keys or disable live payouts for test mode.", 503);
+    }
+  }
+
+  request(path, method = "GET", body = null, headers = {}) {
     return new Promise((resolve, reject) => {
       const payload = body ? JSON.stringify(body) : null;
       const req = https.request({
@@ -16,6 +26,7 @@ class RazorpayXPayoutProvider {
         auth: `${env.razorpayX.keyId}:${env.razorpayX.keySecret}`,
         headers: {
           "Content-Type": "application/json",
+          ...headers,
           ...(payload ? { "Content-Length": Buffer.byteLength(payload) } : {}),
         },
       }, (res) => {
@@ -61,7 +72,8 @@ class RazorpayXPayoutProvider {
   }
 
   async createContact({ name, email, contact, referenceId, notes = {} }) {
-    if (env.razorpayX.mock || !env.razorpayX.live) {
+    this.assertModeMatchesKey();
+    if (env.razorpayX.mock || !env.razorpayX.enabled) {
       return { id: this.mockId("cont"), name, email, contact, reference_id: referenceId, notes, mock: true };
     }
     logger.warn({ referenceId, hasEmail: Boolean(email), hasContact: Boolean(contact) }, "Creating RazorpayX contact for seller payout");
@@ -75,7 +87,8 @@ class RazorpayXPayoutProvider {
   }
 
   async createFundAccount({ contactId, accountHolderName, accountNumber, ifsc, notes = {} }) {
-    if (env.razorpayX.mock || !env.razorpayX.live) {
+    this.assertModeMatchesKey();
+    if (env.razorpayX.mock || !env.razorpayX.enabled) {
       return { id: this.mockId("fa"), contact_id: contactId, account_type: "bank_account", mock: true };
     }
     logger.warn({
@@ -95,10 +108,52 @@ class RazorpayXPayoutProvider {
     });
   }
 
-  async createPayout({ fundAccountId, amount, currency = "INR", referenceId, narration, notes = {} }) {
+  async validateFundAccount({ fundAccountId, referenceId, amount = 100, currency = "INR", notes = {} }) {
+    this.assertModeMatchesKey();
+    if (!fundAccountId) throw new AppError("RazorpayX fund account is required", 400);
+    if (env.razorpayX.mock || !env.razorpayX.enabled || this.isTestModeKey()) {
+      return {
+        id: this.mockId("fav"),
+        status: "completed",
+        fund_account: { id: fundAccountId },
+        amount,
+        currency,
+        reference_id: referenceId,
+        skipped_reason: this.isTestModeKey() ? "razorpayx_test_mode_fav_not_supported" : undefined,
+        mock: true,
+      };
+    }
+    logger.warn({ fundAccountId, referenceId, amount, currency }, "Validating RazorpayX fund account before seller payout");
+    return this.request("/v1/fund_accounts/validations", "POST", {
+      account_number: env.razorpayX.accountNumber,
+      fund_account: { id: fundAccountId },
+      amount,
+      currency,
+      reference_id: referenceId,
+      notes,
+    });
+  }
+
+  async fetchFundAccountValidation(validationId) {
+    this.assertModeMatchesKey();
+    if (!validationId) throw new AppError("RazorpayX fund account validation ID is required", 400);
+    if (env.razorpayX.mock || !env.razorpayX.enabled || this.isTestModeKey() || String(validationId).includes("_mock_")) {
+      return {
+        id: validationId,
+        status: "completed",
+        skipped_reason: this.isTestModeKey() ? "razorpayx_test_mode_fav_not_supported" : undefined,
+        mock: true,
+      };
+    }
+    logger.warn({ validationId }, "Fetching RazorpayX fund account validation status");
+    return this.request(`/v1/fund_accounts/validations/${encodeURIComponent(validationId)}`, "GET");
+  }
+
+  async createPayout({ fundAccountId, amount, currency = "INR", referenceId, narration, notes = {}, idempotencyKey }) {
+    this.assertModeMatchesKey();
     if (!fundAccountId) throw new AppError("RazorpayX fund account is required", 400);
     if (Number(amount || 0) <= 0) throw new AppError("Payout amount must be greater than zero", 400);
-    if (env.razorpayX.mock || !env.razorpayX.live) {
+    if (env.razorpayX.mock || !env.razorpayX.enabled) {
       return {
         id: this.mockId("pout"),
         status: "processed",
@@ -126,12 +181,14 @@ class RazorpayXPayoutProvider {
       queue_if_low_balance: true,
       reference_id: referenceId,
       narration: String(narration || "Seller payout").slice(0, 30),
-    });
+      notes,
+    }, idempotencyKey ? { "X-Payout-Idempotency": idempotencyKey } : {});
   }
 
   async fetchPayout(payoutId) {
+    this.assertModeMatchesKey();
     if (!payoutId) throw new AppError("RazorpayX payout ID is required", 400);
-    if (env.razorpayX.mock || !env.razorpayX.live || String(payoutId).includes("_mock_")) {
+    if (env.razorpayX.mock || !env.razorpayX.enabled || String(payoutId).includes("_mock_")) {
       return { id: payoutId, status: "processed", mock: true };
     }
     logger.warn({ payoutId }, "Fetching RazorpayX payout status");

@@ -126,6 +126,31 @@ class SellerCommissionService {
       null;
   }
 
+  getRazorpayXValidationFailureReason(validation = {}) {
+    const statusDetails = validation.status_details || validation.validation_results?.status_details || {};
+    const resultDetails = validation.results || validation.validation_results || {};
+    return [
+      validation.failure_reason,
+      validation.failure_description,
+      validation.error?.description,
+      statusDetails.description,
+      statusDetails.reason,
+      statusDetails.message,
+      resultDetails.description,
+      resultDetails.reason,
+      resultDetails.message,
+      validation.status ? `RazorpayX fund account validation ${validation.status}` : null,
+    ].find((value) => String(value || "").trim()) || "RazorpayX fund account validation failed";
+  }
+
+  bankFingerprint(bank = {}) {
+    return [
+      String(bank.accountHolderName || "").trim().toLowerCase(),
+      String(bank.accountNumber || "").replace(/\D/g, ""),
+      String(bank.ifscCode || "").trim().toUpperCase(),
+    ].join(":");
+  }
+
   async sendSellerPayoutCompletedEmail(payout = {}) {
     if (!payout?.id || !payout?.seller_id) return null;
     const seller = await UserModel.findById(String(payout.seller_id))
@@ -417,25 +442,200 @@ class SellerCommissionService {
     const seller = await UserModel.findById(payout.seller_id).lean().catch(() => null);
     const payoutProfile = await this.findSellerPayoutProfile(payout.seller_id, payout.organization_id || null);
     const orgBank = this.parseJson(payoutProfile?.bank_details, {});
+    const organizationBank = this.parseJson(organization?.bank_details, {});
     const profileBank = seller?.sellerProfile?.bankDetails || {};
-    const bank = Object.keys(orgBank || {}).length ? orgBank : profileBank;
+    const bank = Object.keys(orgBank || {}).length
+      ? orgBank
+      : Object.keys(organizationBank || {}).length
+        ? organizationBank
+        : profileBank;
     const accountHolderName = bank.accountHolderName || bank.holderName || bank.account_holder_name;
     const accountNumber = bank.accountNumber || bank.account_number;
     const ifscCode = bank.ifscCode || bank.ifsc || bank.ifsc_code;
     const bankName = bank.bankName || bank.bank_name;
-    const verified = ["verified", "approved", "submitted"].includes(String(
-      payoutProfile?.bank_verification_status || seller?.sellerProfile?.bankVerificationStatus || "",
-    ).toLowerCase());
+    const bankVerificationStatus = String(
+      payoutProfile?.bank_verification_status ||
+        organization?.bank_verification_status ||
+        seller?.sellerProfile?.bankVerificationStatus ||
+        "",
+    ).toLowerCase();
+    const rejected = ["rejected", "failed", "invalid"].includes(bankVerificationStatus);
     if (!accountHolderName || !accountNumber || !ifscCode || !bankName) {
       throw new AppError("Seller bank details are incomplete. Complete seller onboarding bank details before RazorpayX payout.", 409);
     }
-    if (!verified) {
-      throw new AppError("Seller bank account is not verified. Verify bank details before RazorpayX payout.", 409);
+    if (rejected) {
+      throw new AppError("Seller bank account is rejected. Update and verify bank details before RazorpayX payout.", 409);
     }
     return {
       seller,
       organization,
+      payoutProfile,
+      bankVerificationStatus,
       bank: { accountHolderName, accountNumber, ifscCode, bankName },
+    };
+  }
+
+  async ensureRazorpayXFundAccount(payout = {}, seller = {}, organization = {}, bank = {}, payoutProfile = null, actor = {}) {
+    const existingProfile = payoutProfile || await this.findSellerPayoutProfile(payout.seller_id, payout.organization_id || null);
+    const profileMetadata = this.parseJson(existingProfile?.metadata, {});
+    const cached = profileMetadata.razorpayX || {};
+    const fingerprint = this.bankFingerprint(bank);
+    if (
+      cached.bankFingerprint === fingerprint &&
+      cached.mode === env.razorpayX.mode &&
+      cached.contactId &&
+      cached.fundAccountId &&
+      cached.validationId &&
+      cached.validationStatus !== "completed"
+    ) {
+      const validation = await this.razorpayXProvider.fetchFundAccountValidation(cached.validationId);
+      const validationStatus = String(validation.status || cached.validationStatus || "created").toLowerCase();
+      const validationMetadata = {
+        ...profileMetadata,
+        razorpayX: {
+          ...cached,
+          mode: env.razorpayX.mode,
+          validationStatus,
+          validatedAt: validationStatus === "completed" ? new Date().toISOString() : cached.validatedAt || null,
+          validation,
+          updatedAt: new Date().toISOString(),
+          updatedBy: actor?.userId || actor?.sub || null,
+        },
+      };
+      await knex("seller_payout_profiles")
+        .where("id", existingProfile.id)
+        .update({
+          bank_verification_status: validationStatus === "completed" ? "verified" : validationStatus,
+          metadata: this.jsonb(validationMetadata),
+          updated_at: knex.fn.now(),
+        });
+      if (validationStatus === "completed") {
+        return {
+          contactId: cached.contactId,
+          fundAccountId: cached.fundAccountId,
+          validation,
+          reused: true,
+        };
+      }
+      const reason = this.getRazorpayXValidationFailureReason(validation);
+      throw new AppError(
+        validationStatus === "failed"
+          ? `Seller bank account validation failed: ${reason}`
+          : "Seller bank account validation is still pending. Retry the payout after RazorpayX confirms the fund account.",
+        409,
+      );
+    }
+    if (
+      cached.bankFingerprint === fingerprint &&
+      cached.mode === env.razorpayX.mode &&
+      cached.contactId &&
+      cached.fundAccountId &&
+      cached.validationStatus === "completed"
+    ) {
+      return {
+        contactId: cached.contactId,
+        fundAccountId: cached.fundAccountId,
+        validation: cached.validation || { status: "completed" },
+        reused: true,
+      };
+    }
+
+    const organizationSnapshot = this.parseJson(payout.organization_snapshot, {});
+    const sellerName = this.sanitizeRazorpayXName(
+      organization?.legal_business_name ||
+        organization?.store_display_name ||
+        organizationSnapshot.legalBusinessName ||
+        organizationSnapshot.storeDisplayName ||
+        seller?.profile?.name ||
+        seller?.name ||
+        seller?.email ||
+        payout.seller_id,
+      "Seller",
+    );
+    const accountHolderName = this.sanitizeRazorpayXName(bank.accountHolderName, sellerName);
+    const contact = await this.razorpayXProvider.createContact({
+      name: sellerName,
+      email: seller?.email || organization?.support_email || undefined,
+      contact: seller?.phone || organization?.support_phone || undefined,
+      referenceId: String(payout.seller_id),
+      notes: { sellerId: String(payout.seller_id), organizationId: payout.organization_id || "" },
+    });
+    const fundAccount = await this.razorpayXProvider.createFundAccount({
+      contactId: contact.id,
+      accountHolderName,
+      accountNumber: bank.accountNumber,
+      ifsc: bank.ifscCode,
+      notes: { sellerId: String(payout.seller_id), organizationId: payout.organization_id || "" },
+    });
+    const validation = await this.razorpayXProvider.validateFundAccount({
+      fundAccountId: fundAccount.id,
+      referenceId: `fav_${String(payout.id).slice(0, 32)}`,
+      notes: { sellerPayoutId: payout.id, sellerId: String(payout.seller_id) },
+    });
+    const validationStatus = String(validation.status || "created").toLowerCase();
+    const validationMetadata = {
+      ...profileMetadata,
+      razorpayX: {
+        bankFingerprint: fingerprint,
+        mode: env.razorpayX.mode,
+        contactId: contact.id,
+        fundAccountId: fundAccount.id,
+        validationId: validation.id || null,
+        validationStatus,
+        validatedAt: validationStatus === "completed" ? new Date().toISOString() : null,
+        validation,
+        updatedAt: new Date().toISOString(),
+        updatedBy: actor?.userId || actor?.sub || null,
+      },
+    };
+    if (existingProfile?.id) {
+      await knex("seller_payout_profiles")
+        .where("id", existingProfile.id)
+        .update({
+          bank_verification_status: validationStatus === "completed" ? "verified" : validationStatus,
+          metadata: this.jsonb(validationMetadata),
+          updated_at: knex.fn.now(),
+        });
+    } else {
+      await knex("seller_payout_profiles")
+        .insert({
+          id: uuidv4(),
+          seller_id: payout.seller_id,
+          organization_id: payout.organization_id || null,
+          payout_destination: "razorpayx",
+          bank_details: this.jsonb(bank),
+          bank_verification_status: validationStatus === "completed" ? "verified" : validationStatus,
+          metadata: this.jsonb(validationMetadata),
+          created_at: knex.fn.now(),
+          updated_at: knex.fn.now(),
+        })
+        .catch((error) => {
+          if (error?.code !== "23505") throw error;
+        });
+    }
+    if (validationStatus !== "completed") {
+      const reason = this.getRazorpayXValidationFailureReason(validation);
+      logger.warn({
+        payoutId: payout.id,
+        sellerId: payout.seller_id,
+        organizationId: payout.organization_id || null,
+        fundAccountId: fundAccount.id,
+        validationId: validation.id || null,
+        validationStatus,
+        reason,
+      }, "RazorpayX fund account validation did not complete");
+      throw new AppError(
+        validationStatus === "failed"
+          ? `Seller bank account validation failed: ${reason}`
+          : "Seller bank account validation is still pending. Retry the payout after RazorpayX confirms the fund account.",
+        409,
+      );
+    }
+    return {
+      contactId: contact.id,
+      fundAccountId: fundAccount.id,
+      validation,
+      reused: false,
     };
   }
 
@@ -472,57 +672,91 @@ class SellerCommissionService {
 
     const metadata = this.parseJson(payout.metadata, {});
     if (metadata.razorpayX?.payoutId) return payout;
-    const { seller, organization, bank } = await this.resolvePayoutBankDetails(payout);
-    const organizationSnapshot = this.parseJson(payout.organization_snapshot, {});
-    const sellerName = this.sanitizeRazorpayXName(
-      organization?.legal_business_name ||
-        organization?.store_display_name ||
-        organizationSnapshot.legalBusinessName ||
-        organizationSnapshot.storeDisplayName ||
-        seller?.profile?.name ||
-        seller?.name ||
-        seller?.email ||
-        payout.seller_id,
-      "Seller",
-    );
-    const accountHolderName = this.sanitizeRazorpayXName(
-      bank.accountHolderName,
-      sellerName,
-    );
-    const contact = await this.razorpayXProvider.createContact({
-      name: sellerName,
-      email: seller?.email || organization?.support_email || undefined,
-      contact: seller?.phone || organization?.support_phone || undefined,
-      referenceId: String(payout.seller_id),
-      notes: { sellerId: String(payout.seller_id), organizationId: payout.organization_id || "" },
-    });
-    const fundAccount = await this.razorpayXProvider.createFundAccount({
-      contactId: contact.id,
-      accountHolderName,
-      accountNumber: bank.accountNumber,
-      ifsc: bank.ifscCode,
-      notes: { sellerId: String(payout.seller_id), organizationId: payout.organization_id || "" },
-    });
-    const providerPayout = await this.razorpayXProvider.createPayout({
-      fundAccountId: fundAccount.id,
-      amount: payout.net_amount,
-      currency: payout.currency || "INR",
-      referenceId: payout.id,
-      narration: "Seller payout",
-      notes: { sellerPayoutId: payout.id, sellerId: String(payout.seller_id) },
-    });
+    const { seller, organization, bank, payoutProfile } = await this.resolvePayoutBankDetails(payout);
+    let fundAccountContext;
+    try {
+      fundAccountContext = await this.ensureRazorpayXFundAccount(
+        payout,
+        seller,
+        organization,
+        bank,
+        payoutProfile,
+        options.actor,
+      );
+    } catch (error) {
+      const holdMetadata = {
+        ...this.parseJson((await knex("seller_payouts").where("id", payoutId).first())?.metadata, metadata),
+        razorpayXValidationError: {
+          message: error.message,
+          statusCode: error.statusCode || error.status || null,
+          at: new Date().toISOString(),
+        },
+      };
+      await knex("seller_payouts")
+        .where("id", payoutId)
+        .update({
+          status: "on_hold",
+          metadata: this.jsonb(holdMetadata),
+          updated_at: knex.fn.now(),
+        });
+      await knex("seller_commissions")
+        .where("payout_id", payoutId)
+        .whereIn("status", ["pending", "approved"])
+        .update({ status: "approved", updated_at: knex.fn.now() });
+      throw error;
+    }
+    const payoutMetadata = await knex("seller_payouts").where("id", payoutId).first();
+    const latestMetadata = this.parseJson(payoutMetadata?.metadata, metadata);
+    const idempotencyKey = latestMetadata.razorpayX?.idempotencyKey || uuidv4();
+    let providerPayout;
+    try {
+      providerPayout = await this.razorpayXProvider.createPayout({
+        fundAccountId: fundAccountContext.fundAccountId,
+        amount: payout.net_amount,
+        currency: payout.currency || "INR",
+        referenceId: payout.id,
+        narration: "Seller payout",
+        notes: { sellerPayoutId: payout.id, sellerId: String(payout.seller_id) },
+        idempotencyKey,
+      });
+    } catch (error) {
+      await knex("seller_payouts")
+        .where("id", payoutId)
+        .update({
+          status: "on_hold",
+          metadata: this.jsonb({
+            ...latestMetadata,
+            razorpayX: {
+              ...(latestMetadata.razorpayX || {}),
+              contactId: fundAccountContext.contactId,
+              fundAccountId: fundAccountContext.fundAccountId,
+              idempotencyKey,
+              fundAccountValidation: fundAccountContext.validation,
+              payoutCreateError: {
+                message: error.message,
+                statusCode: error.statusCode || error.status || null,
+                at: new Date().toISOString(),
+              },
+            },
+          }),
+          updated_at: knex.fn.now(),
+        });
+      throw error;
+    }
     const providerStatus = String(providerPayout.status || "processing").toLowerCase();
     const providerFailureReason = this.getRazorpayXFailureReason(providerPayout, providerStatus);
     const providerReversalId = this.getRazorpayXReversalId(providerPayout);
     const providerMeta = {
       provider: "razorpayx",
       mode: env.razorpayX.mode,
-      contactId: contact.id,
-      fundAccountId: fundAccount.id,
+      contactId: fundAccountContext.contactId,
+      fundAccountId: fundAccountContext.fundAccountId,
       payoutId: providerPayout.id,
       status: providerStatus,
+      idempotencyKey,
       failureReason: ["failed", "rejected", "cancelled", "reversed"].includes(providerStatus) ? providerFailureReason : null,
       reversalId: providerReversalId,
+      fundAccountValidation: fundAccountContext.validation,
       initiatedAt: new Date().toISOString(),
       initiatedBy: options.actor?.userId || options.actor?.sub || null,
       bank: {
@@ -550,7 +784,7 @@ class SellerCommissionService {
         status: "processing",
         payment_method: "razorpayx",
         payment_reference: providerPayout.id,
-        metadata: this.jsonb({ ...metadata, razorpayX: providerMeta }),
+        metadata: this.jsonb({ ...latestMetadata, razorpayX: providerMeta }),
         updated_at: knex.fn.now(),
       });
       return this.processPayout(payoutId, providerPayout.id, {
@@ -564,7 +798,7 @@ class SellerCommissionService {
         status: "processing",
         payment_method: "razorpayx",
         payment_reference: providerPayout.id,
-        metadata: this.jsonb({ ...metadata, razorpayX: providerMeta }),
+        metadata: this.jsonb({ ...latestMetadata, razorpayX: providerMeta }),
         updated_at: knex.fn.now(),
       });
       return this.failPayout(payoutId, providerFailureReason, options.actor, {
@@ -577,7 +811,7 @@ class SellerCommissionService {
       status: "processing",
       payment_method: "razorpayx",
       payment_reference: providerPayout.id,
-      metadata: this.jsonb({ ...metadata, razorpayX: providerMeta }),
+      metadata: this.jsonb({ ...latestMetadata, razorpayX: providerMeta }),
       updated_at: knex.fn.now(),
     }).returning("*");
     await this.publishPayoutEvent(updated, options.actor);
@@ -2776,6 +3010,18 @@ gstTcsAmount,
     return updated;
   }
 
+  resolvePayoutIdFromRetryResult(result) {
+    if (!result) return null;
+    if (typeof result === "string") return result;
+    if (result.id) return result.id;
+    if (result.payout?.id) return result.payout.id;
+    if (Array.isArray(result.results)) {
+      const first = result.results.find(Boolean);
+      return this.resolvePayoutIdFromRetryResult(first);
+    }
+    return null;
+  }
+
   async retryFailedPayout(payoutId, options = {}) {
     const payout = await knex("seller_payouts").where("id", payoutId).first();
     if (!payout) throw new AppError("Payout not found", 404);
@@ -2786,6 +3032,15 @@ gstTcsAmount,
     const retryCommissionIds = Array.isArray(payoutMetadata.commissionIds)
       ? payoutMetadata.commissionIds.filter(Boolean)
       : undefined;
+    if (!retryCommissionIds?.length) {
+      logger.warn({
+        payoutId,
+        sellerId: payout.seller_id,
+        organizationId: payout.organization_id || null,
+        metadataKeys: Object.keys(payoutMetadata || {}),
+      }, "Failed seller payout retry blocked because commission IDs are missing");
+      throw new AppError("Cannot retry this payout because the original commission IDs are missing. Rebuild the seller payout from eligible commissions.", 409);
+    }
     logger.info(
       {
         payoutId,
@@ -2802,23 +3057,57 @@ gstTcsAmount,
       },
       "Retrying failed seller payout",
     );
-    const newPayoutId = await this.processBatchPayouts(payout.seller_id, {
-      periodStart: payout.period_start,
-      periodEnd: payout.period_end,
-      organizationId: payout.organization_id || undefined,
-      commissionIds: retryCommissionIds,
-      skipPrePayoutRefresh: true,
-      source: "failed_payout_retry",
+    let retryResult;
+    try {
+      retryResult = await this.processBatchPayouts(payout.seller_id, {
+        periodStart: payout.period_start,
+        periodEnd: payout.period_end,
+        organizationId: payout.organization_id || null,
+        commissionIds: retryCommissionIds,
+        skipPrePayoutRefresh: true,
+        source: "failed_payout_retry",
+        previousPayoutId: payoutId,
+        paymentReference: options.paymentReference,
+        paymentMethod: options.paymentMethod || payout.payment_method || null,
+        autoProcess: options.autoProcess === true,
+        actor: options.actor,
+      });
+    } catch (error) {
+      logger.error({
+        err: error,
+        payoutId,
+        sellerId: payout.seller_id,
+        organizationId: payout.organization_id || null,
+        paymentMethod: options.paymentMethod || payout.payment_method || null,
+        autoProcess: options.autoProcess === true,
+        retryCommissionIds,
+        previousProviderPayoutId: payoutMetadata.razorpayX?.payoutId || payout.payment_reference || null,
+        previousProviderStatus: payoutMetadata.razorpayX?.status || payoutMetadata.providerStatus || null,
+      }, "Failed seller payout retry could not create a replacement payout");
+      throw error;
+    }
+    const newPayoutId = this.resolvePayoutIdFromRetryResult(retryResult);
+    if (!newPayoutId) {
+      logger.error({
+        payoutId,
+        sellerId: payout.seller_id,
+        organizationId: payout.organization_id || null,
+        retryResult,
+      }, "Failed seller payout retry returned no replacement payout ID");
+      throw new AppError("Payout retry could not resolve the replacement payout ID. Check server logs for retryResult.", 500);
+    }
+    logger.info({
       previousPayoutId: payoutId,
-      paymentReference: options.paymentReference,
-      paymentMethod: options.paymentMethod || payout.payment_method || null,
+      newPayoutId,
+      sellerId: payout.seller_id,
+      organizationId: payout.organization_id || null,
       autoProcess: options.autoProcess === true,
-      actor: options.actor,
-    });
+      paymentMethod: options.paymentMethod || payout.payment_method || null,
+    }, "Failed seller payout replacement payout created");
     if (this.isSellerWalletRequested(options.paymentMethod || payout.payment_method) || this.isRazorpayXRequested(options.paymentMethod || payout.payment_method) || options.autoProcess === true) {
       return this.startPayoutTransfer(newPayoutId, options);
     }
-    return newPayoutId;
+    return retryResult;
   }
 
   async getSellerCommissions(sellerId, query = {}) {
