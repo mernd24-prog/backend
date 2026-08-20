@@ -660,11 +660,6 @@ adminRoutes.patch(
   catchErrors(productController.update),
 );
 adminRoutes.delete(
-  "/products/:productId",
-  checkInput(productParamSchema),
-  catchErrors(productController.delete),
-);
-adminRoutes.delete(
   "/products/:productId/permanent",
   checkInput(productParamSchema),
   catchErrors(productController.purge),
@@ -673,16 +668,6 @@ adminRoutes.patch(
   "/products/:productId/status",
   checkInput(productStatusSchema),
   catchErrors(productController.status),
-);
-adminRoutes.patch(
-  "/products/:productId/archive",
-  checkInput(productLifecycleSchema),
-  catchErrors(productController.archive),
-);
-adminRoutes.patch(
-  "/products/:productId/restore",
-  checkInput(productLifecycleSchema),
-  catchErrors(productController.restore),
 );
 adminRoutes.post(
   "/products/:productId/duplicate",

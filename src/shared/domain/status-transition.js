@@ -2,11 +2,10 @@ const { AppError, ERROR_CODES } = require("../errors/app-error");
 
 const FLOWS = {
   product: {
-    draft:    ["active", "rejected", "archived"],
-    active:   ["inactive", "archived"],
-    inactive: ["active", "archived"],
-    rejected: ["draft", "archived"],
-    archived: ["draft"],
+    draft:    ["active", "rejected"],
+    active:   ["inactive"],
+    inactive: ["active"],
+    rejected: ["draft"],
   },
 
   order: {

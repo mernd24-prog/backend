@@ -47,6 +47,21 @@ class AuthController {
     res.json(okResponse(result));
   };
 
+  influencerForgotPassword = async (req, res) => {
+    const result = await this.authService.influencerForgotPassword(req.body, getRequestInfo(req));
+    res.json(okResponse(result));
+  };
+
+  influencerVerifyResetOtp = async (req, res) => {
+    const result = await this.authService.influencerVerifyResetOtp(req.body, getRequestInfo(req));
+    res.json(okResponse(result));
+  };
+
+  influencerResetPassword = async (req, res) => {
+    const result = await this.authService.influencerResetPassword(req.body, getRequestInfo(req));
+    res.json(okResponse(result));
+  };
+
   refresh = async (req, res) => {
     const result = await this.authService.refreshToken(req.body.refreshToken, getRequestInfo(req));
     res.json(okResponse(result));

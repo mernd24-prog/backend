@@ -42,30 +42,11 @@ class CartService {
     const hasItems = Object.prototype.hasOwnProperty.call(payload, "items");
     const hasWishlist = Object.prototype.hasOwnProperty.call(payload, "wishlist");
     const existingCart = await this.cartRepository.getByUserId(userId);
-    if (hasItems && existingCart?.items?.length) {
-      const refreshedExisting = await this.refreshCartAvailability(existingCart);
-      const outOfStockItems = (refreshedExisting.items || []).filter(
-        (item) => item.stockStatus === "out_of_stock",
-      );
-      if (outOfStockItems.length) {
-        const existingKeys = new Set((existingCart.items || []).map((item) => this.itemKey({
-          ...item,
-          productId: this.productId(item.productId),
-        })));
-        const addsAnotherProduct = (payload.items || []).some((item) =>
-          !existingKeys.has(this.itemKey({ ...item, productId: this.productId(item.productId) })),
-        );
-        if (addsAnotherProduct) {
-          throw new AppError(
-            "Remove the out-of-stock product from your cart before adding another product",
-            409,
-          );
-        }
-      }
-    }
-    const nextItems = await this.mergeItems(
-      hasItems ? payload.items || [] : existingCart?.items || [],
-    );
+    // Wishlist-only changes must not fail because a previously-added cart line
+    // later went out of stock. Stock is enforced only when item lines change.
+    const nextItems = hasItems
+      ? await this.mergeItems(payload.items || [], existingCart?.items || [])
+      : existingCart?.items || [];
     const nextWishlist = await this.normalizeWishlist(
       hasWishlist ? payload.wishlist || [] : existingCart?.wishlist || [],
     );
@@ -199,6 +180,9 @@ class CartService {
       const byId = variants.find((variant) => String(variant._id || variant.id || "") === String(item.variantId));
       if (byId) return byId;
     }
+    // Never silently switch a requested SKU/variant to the default variant;
+    // doing so validates price and stock against the wrong inventory line.
+    if (item.variantId || item.variantSku) return null;
     return variants.find((variant) => variant.isDefault) || variants[0] || null;
   }
 
@@ -301,7 +285,9 @@ class CartService {
         (entry.variantId && String(candidate._id || candidate.id || "") === String(entry.variantId)) ||
         (entry.variantSku && String(candidate.sku || "") === String(entry.variantSku))
       ) : null;
-      if (requestedVariant && (!variant || (variant.status && variant.status !== "active"))) return [];
+      // Out-of-stock variants may still be wishlisted; only removed/inactive
+      // variants are invalid wishlist targets.
+      if (requestedVariant && (!variant || variant.status === "inactive")) return [];
       return [{
         productId: entry.productId,
         variantId: variant?._id || variant?.id || "",
@@ -312,9 +298,13 @@ class CartService {
     });
   }
 
-  async mergeItems(items = []) {
+  async mergeItems(items = [], baselineItems = []) {
     const byKey = new Map();
-    const productIds = [...new Set(items.map((item) => this.productId(item?.productId)).filter(Boolean))];
+    const productIds = [...new Set(
+      [...items, ...(baselineItems || [])]
+        .map((item) => this.productId(item?.productId))
+        .filter(Boolean),
+    )];
     productIds.forEach((productId) => this.assertProductId(productId));
     const products = productIds.length
       ? await ProductModel.find({ _id: { $in: productIds } })
@@ -322,6 +312,21 @@ class CartService {
         .lean()
       : [];
     const productsById = new Map(products.map((product) => [String(product._id), product]));
+    const baselineQuantities = new Map();
+    for (const item of baselineItems || []) {
+      const productId = this.productId(item?.productId);
+      const product = productsById.get(productId);
+      const variant = product ? this.resolveVariant(product, item) : null;
+      const key = this.itemKey({
+        productId,
+        variantId: variant?._id || variant?.id || item?.variantId || "",
+        variantSku: variant?.sku || item?.variantSku || "",
+      });
+      baselineQuantities.set(
+        key,
+        (baselineQuantities.get(key) || 0) + Number(item?.quantity || 0),
+      );
+    }
 
     for (const item of items) {
       if (!item?.productId) continue;
@@ -349,7 +354,13 @@ class CartService {
       });
       const existing = byKey.get(key);
       const nextQuantity = Number(existing?.quantity || 0) + quantity;
-      if (trackInventory && !allowBackorder && nextQuantity > available) {
+      const baselineQuantity = Number(baselineQuantities.get(key) || 0);
+      if (
+        trackInventory &&
+        !allowBackorder &&
+        nextQuantity > available &&
+        nextQuantity > baselineQuantity
+      ) {
         throw new AppError(
           `${product.title} has only ${available} item${available === 1 ? "" : "s"} available`,
           409,

@@ -2215,13 +2215,13 @@ class ProductService {
           query.includeArchived !== true &&
           query.includeArchived !== "true"
         ) {
-          filter.status = { $ne: PRODUCT_STATUS.ARCHIVED };
+          filter.status = { $in: Object.values(PRODUCT_STATUS) };
         }
       } else {
         filter.status = query.status || PRODUCT_STATUS.ACTIVE;
 
         if (!query.status && query.includeArchived !== true && query.includeArchived !== "true") {
-          filter.status = { $ne: PRODUCT_STATUS.ARCHIVED };
+          filter.status = { $in: Object.values(PRODUCT_STATUS) };
         }
       }
 
@@ -2260,12 +2260,12 @@ class ProductService {
         query.includeArchived !== true &&
         query.includeArchived !== "true"
       ) {
-        filter.status = { $ne: PRODUCT_STATUS.ARCHIVED };
+        filter.status = { $in: Object.values(PRODUCT_STATUS) };
       }
     } else if (query.status) {
       filter.status = query.status;
     } else {
-      filter.status = { $ne: PRODUCT_STATUS.ARCHIVED };
+      filter.status = { $in: Object.values(PRODUCT_STATUS) };
     }
     if (query.approvalStatus) filter.approvalStatus = query.approvalStatus;
     if (query.category) {
@@ -3039,7 +3039,6 @@ async getProduct(productId) {
         status,
         lastUpdatedBy: actor.userId,
         ...(status === PRODUCT_STATUS.ACTIVE ? { publishedAt: product.publishedAt || new Date() } : {}),
-        ...(status === PRODUCT_STATUS.ARCHIVED ? { visibility: PRODUCT_VISIBILITY.HIDDEN } : {}),
         statusHistory: this.appendStatusHistory(product, {
           fromStatus: product.status,
           toStatus: status,
@@ -3315,10 +3314,6 @@ async getProduct(productId) {
 
   // ─── Delete ───────────────────────────────────────────────────────────────
 
-  async deleteProduct(productId, actor) {
-    return this.archiveProduct(productId, { reason: "product_deleted" }, actor);
-  }
-
   async permanentlyDeleteProduct(productId, actor = {}) {
     const existingProduct = await this.productRepository.findById(productId);
     if (!existingProduct) throw new AppError("Product not found", 404);
@@ -3326,12 +3321,9 @@ async getProduct(productId) {
       throw new AppError("Only Admin can permanently delete products", 403);
     }
     this.assertCanAccessManagementProduct(existingProduct, actor);
-    if (existingProduct.status !== PRODUCT_STATUS.ARCHIVED) {
-      throw new AppError("Archive the product before deleting it permanently", 409);
-    }
     if (await this.productRepository.hasOrderReferences(productId)) {
       throw new AppError(
-        "This product has order history and cannot be permanently deleted. Keep it archived for audit and customer records.",
+        "This product has order history and cannot be permanently deleted because it is required for audit and customer records.",
         409,
       );
     }
@@ -3356,17 +3348,12 @@ async getProduct(productId) {
     if (isSellerRole(actor)) {
       throw new AppError("Only Admin can permanently delete products", 403);
     }
-    products.forEach((product) => {
-      this.assertCanAccessManagementProduct(product, actor);
-      if (product.status !== PRODUCT_STATUS.ARCHIVED) {
-        throw new AppError("All selected products must be archived before permanent deletion", 409);
-      }
-    });
+    products.forEach((product) => this.assertCanAccessManagementProduct(product, actor));
 
     const referencedIds = await this.productRepository.findProductIdsWithOrderReferences(normalizedIds);
     if (referencedIds.length) {
       throw new AppError(
-        `${referencedIds.length} selected product(s) have order history and must remain archived`,
+        `${referencedIds.length} selected product(s) have order history and cannot be permanently deleted`,
         409,
       );
     }
@@ -3376,83 +3363,6 @@ async getProduct(productId) {
     await Promise.allSettled(normalizedIds.map((id) => this._deleteFromIndex(id)));
     this._invalidateProductCache();
     return { deleted: Number(result?.deletedCount || 0), productIds: normalizedIds };
-  }
-
-  async archiveProduct(productId, payload = {}, actor = {}) {
-    const existingProduct = await this.productRepository.findById(productId);
-    if (!existingProduct) throw new AppError("Product not found", 404);
-
-    const sellerId = actor.ownerSellerId || actor.userId;
-    if (
-      isSellerRole(actor) &&
-      existingProduct.sellerId !== sellerId
-    ) {
-      throw new AppError("Permission denied", 403);
-    }
-    if (isScopedSellerRole(actor) && String(existingProduct.createdBy || "") !== String(actor.userId || "")) {
-      throw new AppError("Permission denied", 403);
-    }
-
-    const updatedProduct = await this.productRepository.update(productId, {
-      status: PRODUCT_STATUS.ARCHIVED,
-      visibility: PRODUCT_VISIBILITY.HIDDEN,
-      lastUpdatedBy: actor.userId,
-      statusHistory: this.appendStatusHistory(existingProduct, {
-        fromStatus: existingProduct.status,
-        toStatus: PRODUCT_STATUS.ARCHIVED,
-        fromRevisionStatus:
-          existingProduct.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
-        toRevisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
-        actor,
-        reason: payload.reason || "product_archived",
-      }),
-    });
-
-    await this._deleteFromIndex(productId);
-    this._invalidateProductCache();
-
-    return updatedProduct;
-  }
-
-  async restoreProduct(productId, payload = {}, actor = {}) {
-    const existingProduct = await this.productRepository.findById(productId);
-    if (!existingProduct) throw new AppError("Product not found", 404);
-    this.assertCanAccessManagementProduct(existingProduct, actor);
-
-    const nextStatus = payload.status || PRODUCT_STATUS.DRAFT;
-    if (nextStatus === PRODUCT_STATUS.ARCHIVED) {
-      throw new AppError("Restore status cannot be archived", 400);
-    }
-    if (isSellerRole(actor) && ![
-      PRODUCT_STATUS.DRAFT,
-      PRODUCT_STATUS.PENDING_APPROVAL,
-    ].includes(nextStatus)) {
-      throw new AppError("Seller restore can only return a product to draft or pending approval", 403);
-    }
-
-    const updatedProduct = await this.productRepository.update(productId, {
-      status: nextStatus,
-      visibility: payload.visibility || PRODUCT_VISIBILITY.PRIVATE,
-      lastUpdatedBy: actor.userId,
-      ...(nextStatus === PRODUCT_STATUS.PENDING_APPROVAL
-        ? {
-            "moderation.submittedAt": new Date(),
-            rejectionReason: null,
-          }
-        : {}),
-      statusHistory: this.appendStatusHistory(existingProduct, {
-        fromStatus: existingProduct.status,
-        toStatus: nextStatus,
-        actor,
-        reason: payload.reason || "product_restored",
-      }),
-    });
-
-    if (updatedProduct.status === PRODUCT_STATUS.ACTIVE) {
-      await this._indexProduct(updatedProduct);
-    }
-    this._invalidateProductCache();
-    return updatedProduct;
   }
 
   async duplicateProduct(productId, payload = {}, actor = {}) {
@@ -3529,9 +3439,6 @@ async getProduct(productId) {
       nextStatus === PRODUCT_STATUS.ACTIVE;
 
     if (isSellerRole(actor)) {
-      if (nextStatus === PRODUCT_STATUS.ARCHIVED) {
-        return this.archiveProduct(productId, payload, actor);
-      }
       this.assertSellerCanSetStatus(existingProduct, nextStatus);
     } else if (isAdminReactivation || nextStatus === PRODUCT_STATUS.INACTIVE) {
       this.assertCanReviewProductStatus(actor, PRODUCT_STATUS.INACTIVE);
@@ -3554,7 +3461,6 @@ async getProduct(productId) {
           }
         : {}),
       ...(nextStatus === PRODUCT_STATUS.ACTIVE ? { publishedAt: existingProduct.publishedAt || new Date() } : {}),
-      ...(nextStatus === PRODUCT_STATUS.ARCHIVED ? { visibility: PRODUCT_VISIBILITY.HIDDEN } : {}),
       lastUpdatedBy: actor.userId,
       statusHistory: this.appendStatusHistory(existingProduct, {
         fromStatus: existingProduct.status,
@@ -3769,7 +3675,6 @@ async getProduct(productId) {
       PRODUCT_STATUS.DRAFT,
       PRODUCT_STATUS.PENDING_APPROVAL,
       PRODUCT_STATUS.INACTIVE,
-      PRODUCT_STATUS.ARCHIVED,
     ]);
 
     if (!allowedSellerStatuses.has(nextStatus)) {
@@ -3786,7 +3691,7 @@ async getProduct(productId) {
     //   );
     // }
 
-    if (currentStatus === PRODUCT_STATUS.ACTIVE && nextStatus !== PRODUCT_STATUS.INACTIVE && nextStatus !== PRODUCT_STATUS.ARCHIVED) {
+    if (currentStatus === PRODUCT_STATUS.ACTIVE && nextStatus !== PRODUCT_STATUS.INACTIVE) {
       throw new AppError("Active product changes must be submitted as a pending revision", 403);
     }
 

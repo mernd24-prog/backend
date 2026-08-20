@@ -8,7 +8,6 @@ const { AppError } = require("../../../shared/errors/app-error");
 const { mapPaymentResponse } = require("../dtos/payment-response");
 const { OrderRepository } = require("../../order/repositories/order.repository");
 const { OrderService } = require("../../order/services/order.service");
-const { PaymentMethodConfigRepository } = require("../repositories/payment-method-config.repository");
 const { env } = require("../../../config/env");
 const { ReturnService } = require("../../returns/services/return.service");
 const { CancellationService } = require("../../cancellation/services/cancellation.service");
@@ -53,14 +52,12 @@ class PaymentService {
   constructor({
     paymentRepository = new PaymentRepository(),
     orderRepository = new OrderRepository(),
-    paymentMethodConfigRepository = new PaymentMethodConfigRepository(),
     orderService = new OrderService({ orderRepository }),
     returnService = ReturnService,
     cancellationService = new CancellationService(),
   } = {}) {
     this.paymentRepository = paymentRepository;
     this.orderRepository = orderRepository;
-    this.paymentMethodConfigRepository = paymentMethodConfigRepository;
     this.orderService = orderService;
     this.returnService = returnService;
     this.cancellationService = cancellationService;
@@ -111,18 +108,6 @@ class PaymentService {
     }));
   }
 
-  mapCodConfig(config = {}) {
-    return {
-      method: PAYMENT_PROVIDER.COD,
-      enabled: Boolean(config.enabled),
-      chargeAmount: Number(config.charge_amount ?? config.chargeAmount ?? 0),
-      minOrderAmount: config.min_order_amount === null || config.min_order_amount === undefined ? null : Number(config.min_order_amount),
-      maxOrderAmount: config.max_order_amount === null || config.max_order_amount === undefined ? null : Number(config.max_order_amount),
-      currency: config.currency || "INR",
-      metadata: this.normalizeJson(config.metadata, {}),
-    };
-  }
-
   async processWebhookEvent(event, handler) {
     const claimed = await this.paymentRepository.claimWebhookEvent(event);
     if (!claimed) return { acknowledged: true, duplicate: true };
@@ -147,8 +132,15 @@ class PaymentService {
   }
 
   async getPaymentOptions(query = {}) {
-    const cod = this.mapCodConfig(await this.paymentMethodConfigRepository.getCodConfig());
     const commerceSettings = await commerceSettingsService.getSettings();
+    const cod = {
+      method: PAYMENT_PROVIDER.COD,
+      enabled: commerceSettings.cod.enabled !== false,
+      chargeAmount: Number(commerceSettings.cod.feeAmount || 0),
+      minOrderAmount: commerceSettings.cod.minOrderAmount,
+      maxOrderAmount: commerceSettings.cod.maxOrderAmount,
+      currency: "INR",
+    };
     const orderAmount = Number(query.orderAmount || 0);
     const shippingAddress = {
       postalCode: query.postalCode || query.pincode || query.zip || "",
@@ -227,8 +219,6 @@ class PaymentService {
           payableNow: false,
           config: {
             ...cod,
-            availabilityMode: commerceSettings.cod.availabilityMode,
-            collectionPolicy: commerceSettings.cod.collectionPolicy,
             payoutRequiresCapture: commerceSettings.cod.payoutRequiresCapture,
             sellerChargeAmount: Number(sellerCod.sellerChargeAmount || 0),
             sellerRules: sellerCod.sellers,
@@ -253,31 +243,6 @@ class PaymentService {
         },
       ],
     };
-  }
-
-  async getCodConfig(actor) {
-    if (!["admin", "super-admin"].includes(actor.role) && !actor.isSuperAdmin) {
-      throw new AppError("Only admin users can view COD settings", 403);
-    }
-    return this.mapCodConfig(await this.paymentMethodConfigRepository.getCodConfig());
-  }
-
-  async updateCodConfig(payload, actor) {
-    if (!["admin", "super-admin"].includes(actor.role) && !actor.isSuperAdmin) {
-      throw new AppError("Only admin users can update COD settings", 403);
-    }
-    if (payload.maxOrderAmount !== null && payload.maxOrderAmount !== undefined && payload.minOrderAmount !== null && payload.minOrderAmount !== undefined && Number(payload.maxOrderAmount) < Number(payload.minOrderAmount)) {
-      throw new AppError("Maximum COD order amount cannot be lower than minimum amount", 400);
-    }
-    return this.mapCodConfig(await this.paymentMethodConfigRepository.upsertCodConfig({
-      ...payload,
-      metadata: {
-        ...(payload.metadata || {}),
-        updatedBy: actor.userId,
-        updatedByRole: actor.role,
-        updatedAt: new Date().toISOString(),
-      },
-    }));
   }
 
   async initiatePayment(payload, actor) {
@@ -348,11 +313,15 @@ class PaymentService {
       if (orderPaymentProvider !== PAYMENT_PROVIDER.COD) {
         throw new AppError("Create this order with Cash on Delivery selected before initiating COD payment", 400);
       }
-      const codConfig = this.mapCodConfig(await this.paymentMethodConfigRepository.getCodConfig());
+      const commerceSettings = await commerceSettingsService.getSettings();
+      const codConfig = {
+        enabled: commerceSettings.cod.enabled !== false,
+        minOrderAmount: commerceSettings.cod.minOrderAmount,
+        maxOrderAmount: commerceSettings.cod.maxOrderAmount,
+      };
       if (!codConfig.enabled) {
         throw new AppError("Cash on Delivery is currently disabled", 400);
       }
-      const commerceSettings = await commerceSettingsService.getSettings();
       const shippingAddress = this.normalizeJson(order.shipping_address, {});
       if (!commerceSettingsService.isCodAllowedForAddress(commerceSettings, shippingAddress)) {
         throw new AppError("Cash on Delivery is not available for this delivery pincode", 400);

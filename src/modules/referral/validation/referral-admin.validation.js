@@ -61,8 +61,6 @@ const distributionTypes = ["fixed_amount", "percentage"];
 const coinUsageModes = ["wallet", "discount", "both"];
 const withdrawalApprovalModes = ["manual", "auto"];
 const withdrawalMethods = ["upi", "bank", "manual"];
-const productPoolTypes = ["fixed_amount", "percentage"];
-const productFundingSources = ["platform", "seller", "shared"];
 
 const newInfluencerBody = {
   userId: Joi.string(),
@@ -118,41 +116,27 @@ const listInfluencersSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
-const listProductConfigsSchema = Joi.object({
+const listProductAmountsSchema = Joi.object({
   body: Joi.object({}).required(),
-  query: Joi.object({
-    ...pagingQuery,
-    productId: Joi.string(),
+  query: Joi.object({ ...pagingQuery, productId: Joi.string(), active: Joi.boolean() }).required(),
+  params: Joi.object({}).required(),
+});
+
+const upsertProductAmountSchema = Joi.object({
+  body: Joi.object({
+    productId: Joi.string().required(),
+    productTitle: Joi.string().trim().max(300).allow(""),
+    amountType: Joi.string().valid("fixed_amount", "percentage").required(),
+    amountValue: Joi.number().min(0).required(),
+    maximumAmount: Joi.number().min(0),
     active: Joi.boolean(),
   }).required(),
-  params: Joi.object({}).required(),
-});
-
-const productConfigBody = {
-  productId: Joi.string().required(),
-  variantId: Joi.string().allow("", null),
-  active: Joi.boolean(),
-  poolType: Joi.string().valid(...productPoolTypes).required(),
-  poolValue: Joi.number().min(0).required(),
-  maximumPoolAmount: Joi.number().min(0),
-  customerSharePercent: Joi.number().min(0).max(100).allow(null),
-  codeOwnerSharePercent: Joi.number().min(0).max(100).allow(null),
-  parentSharePercent: Joi.number().min(0).max(100).allow(null),
-  fundedBy: Joi.string().valid(...productFundingSources),
-  startsAt: Joi.date().iso().allow(null),
-  endsAt: Joi.date().iso().allow(null),
-  metadata: Joi.object().default({}),
-};
-
-const upsertProductConfigSchema = Joi.object({
-  body: Joi.object(productConfigBody).required(),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),
 });
 
-const productConfigIdSchema = Joi.object({
-  body: Joi.object({}).required(),
-  query: Joi.object({}).required(),
+const productAmountIdSchema = Joi.object({
+  body: Joi.object({}).required(), query: Joi.object({}).required(),
   params: Joi.object({ configId: Joi.string().required() }).required(),
 });
 
@@ -305,6 +289,9 @@ const upsertRulesSchema = Joi.object({
     withdrawalKycRequired: Joi.boolean(),
     withdrawalApprovalMode: Joi.string().valid(...withdrawalApprovalModes),
     withdrawalMethods: Joi.array().items(Joi.string().valid(...withdrawalMethods)).min(1),
+    referralCodePrefix: Joi.string().trim().uppercase().pattern(/^[A-Z0-9]*$/).max(8).allow(""),
+    referralCodeRandomLength: Joi.number().integer().min(4).max(16),
+    referralCodeCharacterSet: Joi.string().valid("alphanumeric", "numeric", "alphabetic"),
     minOrderAmount: Joi.number().min(0),
     active: Joi.boolean(),
     effectiveFrom: Joi.date().iso().allow(null),
@@ -419,9 +406,9 @@ const listFraudReviewsSchema = Joi.object({
 
 module.exports = {
   listInfluencersSchema,
-  listProductConfigsSchema,
-  upsertProductConfigSchema,
-  productConfigIdSchema,
+  listProductAmountsSchema,
+  upsertProductAmountSchema,
+  productAmountIdSchema,
   createParentInfluencerSchema,
   createChildInfluencerSchema,
   updateInfluencerStatusSchema,

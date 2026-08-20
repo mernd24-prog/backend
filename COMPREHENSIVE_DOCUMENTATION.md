@@ -229,7 +229,7 @@ approval -> approve
 action -> status_change
 review -> approve
 manage -> status_change
-activate/deactivate/enable/disable/archive -> status_change
+activate/deactivate/enable/disable -> status_change
 recover -> restore
 bulk/bulk-action/bulk action/bulkaction -> bulk_action
 adjustment/stock-adjustment/stock_adjustment -> adjust
@@ -254,7 +254,7 @@ DELETE -> delete
 /approve or /approval -> approve
 /reject -> reject
 /restore or /recover -> restore
-/status, /archive, /activate, /deactivate -> status_change
+/status, /activate, /deactivate -> status_change
 /inventory writes -> adjust
 /bulk writes -> bulk_action
 /import -> import
@@ -559,7 +559,6 @@ active
 change_pending
 inactive
 rejected
-archived
 scheduled
 ```
 
@@ -1018,8 +1017,6 @@ GET    /products/:productId
 PATCH  /products/:productId
 DELETE /products/:productId
 PATCH  /products/:productId/status
-PATCH  /products/:productId/archive
-PATCH  /products/:productId/restore
 POST   /products/:productId/duplicate
 PATCH  /products/:productId/review
 GET    /products/:productId/revisions
@@ -1055,8 +1052,6 @@ GET    /admin/products/analytics/top
 GET    /admin/products/:productId/revisions
 PATCH  /admin/products/:productId/revisions/:revisionId/review
 PATCH  /admin/products/:productId/status
-PATCH  /admin/products/:productId/archive
-PATCH  /admin/products/:productId/restore
 POST   /admin/products/:productId/duplicate
 PATCH  /admin/products/:productId/inventory
 PATCH  /admin/products/:productId/approve
@@ -1329,8 +1324,6 @@ GET  /payments/options
 GET  /payments/me
 GET  /payments/admin
 GET  /payments/admin/:paymentId
-GET  /payments/admin/cod-config
-PUT  /payments/admin/cod-config
 POST /payments/initiate
 POST /payments/verify
 POST /payments/:paymentId/approve
@@ -1351,9 +1344,6 @@ Commerce settings:
 ```txt
 GET /admin/commerce-settings
 PUT /admin/commerce-settings
-GET /admin/commerce-settings/seller-charge-settings
-GET /admin/commerce-settings/seller-charge-settings/:sellerId
-PUT /admin/commerce-settings/seller-charge-settings/:sellerId
 ```
 
 ### Seller Finance And Admin Finance
@@ -1823,8 +1813,6 @@ GET /api/v1/products/seller/me
 DELETE /api/v1/products/:productId
 GET /api/v1/products/prefill
 PATCH /api/v1/products/:productId/status
-PATCH /api/v1/products/:productId/archive
-PATCH /api/v1/products/:productId/restore
 POST /api/v1/products/:productId/duplicate
 GET /api/v1/products/:productId/revisions
 PATCH /api/v1/products/:productId/revisions/:revisionId/review
@@ -1878,8 +1866,6 @@ POST /api/v1/payments/initiate
 POST /api/v1/payments/verify
 GET /api/v1/payments/options
 GET /api/v1/payments/admin
-GET /api/v1/payments/admin/cod-config
-PUT /api/v1/payments/admin/cod-config
 GET /api/v1/payments/admin/:paymentId
 POST /api/v1/payments/:paymentId/approve
 POST /api/v1/payments/:paymentId/reject
@@ -2328,8 +2314,6 @@ GET /api/v1/admin/products/:productId
 PATCH /api/v1/admin/products/:productId
 DELETE /api/v1/admin/products/:productId
 PATCH /api/v1/admin/products/:productId/status
-PATCH /api/v1/admin/products/:productId/archive
-PATCH /api/v1/admin/products/:productId/restore
 POST /api/v1/admin/products/:productId/duplicate
 PATCH /api/v1/admin/products/:productId/inventory
 PATCH /api/v1/admin/products/:productId/approve
@@ -2566,9 +2550,6 @@ DELETE /api/v1/coupons/promotion-banners/:slug
 ```txt
 GET /api/v1/admin/commerce-settings
 PUT /api/v1/admin/commerce-settings
-GET /api/v1/admin/commerce-settings/seller-charge-settings
-GET /api/v1/admin/commerce-settings/seller-charge-settings/:sellerId
-PUT /api/v1/admin/commerce-settings/seller-charge-settings/:sellerId
 ```
 
 ### Admin Finance (10)

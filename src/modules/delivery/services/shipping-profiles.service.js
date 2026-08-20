@@ -16,10 +16,7 @@ const PROFILE_FIELDS = [
   "description",
   "shippingMethod",
   "serviceabilityMode",
-  "allowedStates",
-  "allowedCities",
   "allowedPincodes",
-  "blockedPincodes",
   "codAvailable",
   "shippingCharge",
   "freeShippingThreshold",
@@ -31,8 +28,6 @@ const PROFILE_FIELDS = [
 
 const TEMPLATE_EDITABLE_DEFAULTS = [...PROFILE_FIELDS];
 const SERVICEABILITY_MODES_REQUIRING_COVERAGE = {
-  selected_states: "allowedStates",
-  selected_cities: "allowedCities",
   selected_pincodes: "allowedPincodes",
 };
 
@@ -366,16 +361,8 @@ class ShippingProfilesService {
 
     const mode = profile.serviceabilityMode;
     const pin = String(pincode || "").trim();
-    const cityStr = String(city || "").trim().toLowerCase();
-    const stateStr = String(state || "").trim().toLowerCase();
 
     if (mode === "all_india") return { allowed: true };
-
-    if (mode === "block_pincodes") {
-      const blocked = (profile.blockedPincodes || []).map(String);
-      if (blocked.includes(pin)) return { allowed: false, reason: "Pincode is blocked by seller" };
-      return { allowed: true };
-    }
 
     if (mode === "selected_pincodes") {
       const allowed = (profile.allowedPincodes || []).map(String);
@@ -384,27 +371,7 @@ class ShippingProfilesService {
       return { allowed: true };
     }
 
-    if (mode === "selected_states") {
-      const allowed = (profile.allowedStates || []).map((s) => String(s || "").toLowerCase());
-      if (!allowed.length) return { allowed: false, reason: "Seller profile has no states configured" };
-      if (!allowed.includes(stateStr)) return { allowed: false, reason: "State not in seller's delivery area" };
-      return { allowed: true };
-    }
-
-    if (mode === "selected_cities") {
-      const allowedCities = (profile.allowedCities || []).map((c) => String(c || "").toLowerCase());
-      const allowedStates = (profile.allowedStates || []).map((s) => String(s || "").toLowerCase());
-      if (!allowedCities.length) return { allowed: false, reason: "Seller profile has no cities configured" };
-
-      const cityMatch = allowedCities.includes(cityStr);
-      const stateMatch = !allowedStates.length || allowedStates.includes(stateStr);
-      if (!cityMatch || !stateMatch) {
-        return { allowed: false, reason: "City/State not in seller's delivery area" };
-      }
-      return { allowed: true };
-    }
-
-    return { allowed: true };
+    return { allowed: false, reason: "Shipping profile has an unsupported serviceability mode" };
   }
 
   assertProfileBelongsToSeller(profile, { sellerId, organizationId } = {}) {
@@ -521,10 +488,7 @@ class ShippingProfilesService {
     set("description", payload.description ? String(payload.description).trim() : payload.description || null, null);
     set("shippingMethod", payload.shippingMethod || "standard", "standard");
     set("serviceabilityMode", payload.serviceabilityMode || "all_india", "all_india");
-    if (has("allowedStates") || !partial) normalized.allowedStates = this._normalizeList(payload.allowedStates || []);
-    if (has("allowedCities") || !partial) normalized.allowedCities = this._normalizeList(payload.allowedCities || []);
     if (has("allowedPincodes") || !partial) normalized.allowedPincodes = this._normalizePincodes(payload.allowedPincodes || []);
-    if (has("blockedPincodes") || !partial) normalized.blockedPincodes = this._normalizePincodes(payload.blockedPincodes || []);
     if (has("codAvailable") || !partial) normalized.codAvailable = payload.codAvailable !== false;
     if (has("shippingCharge") || !partial) normalized.shippingCharge = Number(payload.shippingCharge ?? 0);
     if (has("freeShippingThreshold") || !partial) {
@@ -574,7 +538,7 @@ class ShippingProfilesService {
     if (requiredList && !(profile[requiredList] || []).length) {
       throw new AppError(`${requiredList} is required for ${profile.serviceabilityMode}`, 400);
     }
-    const allPins = [...(profile.allowedPincodes || []), ...(profile.blockedPincodes || [])];
+    const allPins = [...(profile.allowedPincodes || [])];
     const invalidPin = allPins.find((pin) => !/^\d{6}$/.test(String(pin || "")));
     if (invalidPin) {
       throw new AppError(`Invalid Indian pincode: ${invalidPin}`, 400);
@@ -619,11 +583,10 @@ class ShippingProfilesService {
       name: p.name,
       description: p.description || null,
       shippingMethod: p.shippingMethod || p.shipping_method || "standard",
-      serviceabilityMode: p.serviceabilityMode || p.serviceability_mode || "all_india",
-      allowedStates: p.allowedStates || p.allowed_states || [],
-      allowedCities: p.allowedCities || p.allowed_cities || [],
+      serviceabilityMode: ["selected_states", "selected_cities"].includes(p.serviceabilityMode || p.serviceability_mode)
+        ? "selected_pincodes"
+        : p.serviceabilityMode || p.serviceability_mode || "all_india",
       allowedPincodes: p.allowedPincodes || p.allowed_pincodes || [],
-      blockedPincodes: p.blockedPincodes || p.blocked_pincodes || [],
       codAvailable: p.codAvailable !== undefined ? p.codAvailable : (p.cod_available !== undefined ? p.cod_available : true),
       shippingCharge: Number(p.shippingCharge ?? p.shipping_charge ?? 0),
       freeShippingThreshold: p.freeShippingThreshold != null ? Number(p.freeShippingThreshold) : (p.free_shipping_threshold != null ? Number(p.free_shipping_threshold) : null),
@@ -650,11 +613,10 @@ class ShippingProfilesService {
       name: t.name,
       description: t.description || null,
       shippingMethod: t.shippingMethod || t.shipping_method || "standard",
-      serviceabilityMode: t.serviceabilityMode || t.serviceability_mode || "all_india",
-      allowedStates: t.allowedStates || t.allowed_states || [],
-      allowedCities: t.allowedCities || t.allowed_cities || [],
+      serviceabilityMode: ["selected_states", "selected_cities"].includes(t.serviceabilityMode || t.serviceability_mode)
+        ? "selected_pincodes"
+        : t.serviceabilityMode || t.serviceability_mode || "all_india",
       allowedPincodes: t.allowedPincodes || t.allowed_pincodes || [],
-      blockedPincodes: t.blockedPincodes || t.blocked_pincodes || [],
       codAvailable: t.codAvailable !== undefined ? t.codAvailable : (t.cod_available !== undefined ? t.cod_available : true),
       shippingCharge: Number(t.shippingCharge ?? t.shipping_charge ?? 0),
       freeShippingThreshold: t.freeShippingThreshold != null ? Number(t.freeShippingThreshold) : (t.free_shipping_threshold != null ? Number(t.free_shipping_threshold) : null),

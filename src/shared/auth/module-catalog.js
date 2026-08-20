@@ -225,18 +225,6 @@ const MODULE_CATALOG = [
     apiPath: "/payments",
   },
   {
-    tab: "Commerce Settings",
-    slug: "cod-config",
-    name: "COD Configuration",
-    description: "Cash on delivery rules, charges, and eligibility settings",
-    icon: "truck",
-    order: 7.1,
-    forPlatform: true,
-    forSeller: true,
-
-    apiPath: "/admin/payments/admin/cod-config",
-  },
-  {
     tab: "Payments & Finance",
     slug: "chargebacks",
     name: "Chargeback Management",
@@ -474,7 +462,6 @@ const MODULE_CATALOG = [
   },
   ...[
     ["referral-overview", "Referral Overview", "/admin/referral/reports/summary"],
-    ["referral-product-distribution", "Referral Product Distribution", "/admin/referral/product-configs"],
     ["referral-codes", "Referral Code Management", "/admin/referral/codes"],
     ["referral-rules", "Referral Rules & Coins", "/admin/referral/rules"],
     ["referral-bonus-rules", "Referral Bonus Rules", "/admin/referral/bonus-rules"],

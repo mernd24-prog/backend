@@ -85,19 +85,6 @@ const paymentOptionsSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
-const codConfigSchema = Joi.object({
-  body: Joi.object({
-    enabled: Joi.boolean().required(),
-    chargeAmount: Joi.number().min(0).required(),
-    minOrderAmount: Joi.number().min(0).allow(null),
-    maxOrderAmount: Joi.number().min(0).allow(null),
-    currency: Joi.string().default("INR"),
-    metadata: Joi.object().default({}),
-  }).required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({}).required(),
-});
-
 const paymentParamSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({}).required(),
@@ -169,7 +156,6 @@ module.exports = {
   verifyPaymentSchema,
   listPaymentsSchema,
   paymentOptionsSchema,
-  codConfigSchema,
   paymentParamSchema,
   manualPaymentApprovalSchema,
   manualPaymentRejectionSchema,

@@ -17,7 +17,7 @@ This checklist records the Admin cleanup pass for backend-supported marketplace 
 | Checkout/admin quote | `/orders/checkout/admin-quote` | `orders` | `/checkout-quote` |
 | Returns and refund workflow | `/returns`, `/returns/:id/*` | `returns`, `orders` | `/returns`, `/refunds` |
 | Cancellations and manual retry/refund | `/cancellations`, `/cancellations/:id/*` | `orders`, `cancellations` | `/cancellations` |
-| Payments and COD config | `/payments/admin`, `/payments/admin/cod-config`, `/payments/:id/approve`, `/payments/:id/reject` | `payments` | `/payments` |
+| Payments | `/payments/admin`, `/payments/:id/approve`, `/payments/:id/reject` | `payments` | `/payments` |
 | Wallet transaction audit | `/wallets/admin/transactions` | `wallets:view` | `/wallet-transactions`, `/wallet-management` |
 | Seller commissions and payouts | `/sellers/commissions`, `/sellers/commissions/payouts`, `/sellers/commissions/process-payouts` | `sellers/commissions` | `/seller-finance` |
 | Payout operations | `/sellers/commissions/payout-ops/queue`, `/payouts/:id/approve`, `/hold`, `/release-hold`, `/retry`, `/process`, `/fail` | `sellers/commissions:update` | `/payout-ops-queue` |

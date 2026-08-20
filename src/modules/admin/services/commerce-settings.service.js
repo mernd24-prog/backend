@@ -38,10 +38,6 @@ const DEFAULT_SETTINGS = {
   },
   cod: {
     enabled: true,
-    availabilityMode: "all_pincodes",
-    allowPincodes: [],
-    blockPincodes: [],
-    collectionPolicy: "platform_or_courier",
     payoutRequiresCapture: true,
     feeAmount: 0,
     minOrderAmount: null,
@@ -137,10 +133,7 @@ const ALLOWED = {
     feeType: ["fixed", "percentage"],
     calculationBase: ["product_price", "order_total", "subtotal"],
   },
-  cod: {
-    availabilityMode: ["all_pincodes", "allowlist", "blocklist", "disabled"],
-    collectionPolicy: ["platform_or_courier", "seller_direct", "hybrid"],
-  },
+  cod: {},
   returns: {},
   wallet: {
     partialPaymentMode: ["user_opt_in", "auto_apply", "disabled"],
@@ -365,18 +358,6 @@ class CommerceSettingsService {
       },
       cod: {
         enabled: bool(source.cod.enabled, true),
-        availabilityMode: pickAllowed(
-          source.cod.availabilityMode,
-          ALLOWED.cod.availabilityMode,
-          DEFAULT_SETTINGS.cod.availabilityMode,
-        ),
-        allowPincodes: uniqueStrings(source.cod.allowPincodes),
-        blockPincodes: uniqueStrings(source.cod.blockPincodes),
-        collectionPolicy: pickAllowed(
-          source.cod.collectionPolicy,
-          ALLOWED.cod.collectionPolicy,
-          DEFAULT_SETTINGS.cod.collectionPolicy,
-        ),
         payoutRequiresCapture: bool(source.cod.payoutRequiresCapture, true),
         feeAmount: Math.max(num(source.cod.feeAmount, 0), 0),
         minOrderAmount: source.cod.minOrderAmount === "" || source.cod.minOrderAmount === undefined || source.cod.minOrderAmount === null
@@ -540,25 +521,7 @@ class CommerceSettingsService {
 
   isCodAllowedForAddress(settings, address = {}) {
     const cod = settings?.cod || DEFAULT_SETTINGS.cod;
-    if (cod.availabilityMode === "disabled") return false;
-    if (cod.availabilityMode === "all_pincodes") return true;
-
-    const pin = String(
-      address.postalCode ||
-      address.postal_code ||
-      address.zip ||
-      address.pincode ||
-      "",
-    ).trim();
-    if (!pin) return cod.availabilityMode !== "allowlist";
-
-    if (cod.availabilityMode === "allowlist") {
-      return (cod.allowPincodes || []).includes(pin);
-    }
-    if (cod.availabilityMode === "blocklist") {
-      return !(cod.blockPincodes || []).includes(pin);
-    }
-    return true;
+    return cod.enabled !== false;
   }
 }
 

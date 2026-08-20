@@ -97,6 +97,7 @@ class AuthService {
     const labels = {
       registration: "Account Registration",
       forgot_password: "Password Reset",
+      influencer_forgot_password: "Influencer Password Reset",
       login: "Seller Login",
       buyer_auth: "Sam Global Login",
 
@@ -1809,7 +1810,7 @@ class AuthService {
 
     const shouldConsumeOtp =
       typeof consumeOtp === "boolean" ? consumeOtp : purpose !== "forgot_password";
-    if (purpose === "forgot_password") {
+    if (["forgot_password", "influencer_forgot_password"].includes(purpose)) {
       await redis.setex(verifiedOtpKey, 600, otp);
     }
     if (shouldConsumeOtp) {
@@ -1847,7 +1848,47 @@ class AuthService {
 
   async forgotPassword(payload, requestContext = {}) {
     const { email } = payload;
-    return this.sendOtp({ email, purpose: "forgot_password" }, requestContext);
+    return this.sendOtp({ email, purpose: "influencer_forgot_password" }, requestContext);
+  }
+
+  async influencerForgotPassword(payload, requestContext = {}) {
+    const email = this.normalizeOtpEmail(payload.email);
+    const account = await this.referralService.referralRepository.findInfluencerAccountByEmail(email);
+    if (!account || account.accountStatus !== "active") {
+      throw new AppError("No active influencer account was found for this email", 404);
+    }
+    return this.sendOtp(
+      { email, purpose: "influencer_forgot_password" },
+      requestContext,
+    );
+  }
+
+  async influencerVerifyResetOtp(payload, requestContext = {}) {
+    const email = this.normalizeOtpEmail(payload.email);
+    const account = await this.referralService.referralRepository.findInfluencerAccountByEmail(email);
+    if (!account) throw new AppError("Influencer account not found", 404);
+    return this.verifyOtp({ email, otp: payload.otp, purpose: "influencer_forgot_password", consumeOtp: false }, requestContext);
+  }
+
+  async influencerResetPassword(payload) {
+    const email = this.normalizeOtpEmail(payload.email);
+    await this.ensureForgotPasswordOtpVerified(email, payload.otp, "influencer_forgot_password");
+    const account = await this.referralService.referralRepository.findInfluencerAccountByEmail(email);
+    if (!account || account.accountStatus !== "active") {
+      throw new AppError("Influencer account not found or inactive", 404);
+    }
+    const passwordHash = await hashText(payload.newPassword);
+    await this.referralService.referralRepository.updateInfluencerAccount(account.id, {
+      $set: {
+        passwordHash,
+        passwordChangedAt: new Date(),
+        refreshSessions: [],
+      },
+      $inc: { tokenVersion: 1, sessionVersion: 1 },
+    });
+    await redis.del(this.makeOtpKey(email, "influencer_forgot_password"));
+    await redis.del(this.makeVerifiedOtpKey(email, "influencer_forgot_password"));
+    return { message: "Influencer password reset successfully" };
   }
 
   async resetPassword(payload, requestContext = {}) {
@@ -1871,9 +1912,9 @@ class AuthService {
     return { message: "Password reset successfully" };
   }
 
-  async ensureForgotPasswordOtpVerified(email, otp) {
-    const otpKey = this.makeOtpKey(email, "forgot_password");
-    const verifiedOtpKey = this.makeVerifiedOtpKey(email, "forgot_password");
+  async ensureForgotPasswordOtpVerified(email, otp, purpose = "forgot_password") {
+    const otpKey = this.makeOtpKey(email, purpose);
+    const verifiedOtpKey = this.makeVerifiedOtpKey(email, purpose);
     const [storedOtp, verifiedOtp] = await Promise.all([
       redis.get(otpKey),
       redis.get(verifiedOtpKey),

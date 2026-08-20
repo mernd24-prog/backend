@@ -114,7 +114,6 @@ Platform modules seeded:
   [platform]  returns                        Return Management
   [platform]  queries                        Support Query Management
   [platform]  payments                       Payment Management
-  [platform]  cod-config                     COD Configuration
   [platform]  chargebacks                    Chargeback Management
   [platform]  wallets                        Wallet Management
   [platform]  wallet-management              Wallet Admin
@@ -1049,7 +1048,6 @@ Platform modules seeded:
   [platform]  returns                        Return Management
   [platform]  queries                        Support Query Management
   [platform]  payments                       Payment Management
-  [platform]  cod-config                     COD Configuration
   [platform]  chargebacks                    Chargeback Management
   [platform]  wallets                        Wallet Management
   [platform]  wallet-management              Wallet Admin

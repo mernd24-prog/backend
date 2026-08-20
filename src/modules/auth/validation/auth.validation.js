@@ -258,6 +258,7 @@ const sendOtpSchema = Joi.object({
       .valid(
         "registration",
         "forgot_password",
+        "influencer_forgot_password",
         "login",
       )
       .default("registration"),
@@ -288,6 +289,7 @@ const verifyOtpSchema = Joi.object({
       .valid(
         "registration",
         "forgot_password",
+        "influencer_forgot_password",
         "login",
       )
       .default("registration"),

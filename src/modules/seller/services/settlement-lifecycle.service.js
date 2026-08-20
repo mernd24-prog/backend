@@ -5,6 +5,7 @@ const { knex } = require("../../../infrastructure/postgres/postgres-client");
 const { AppError } = require("../../../shared/errors/app-error");
 const { ORDER_STATUS, PAYMENT_PROVIDER, PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
+const { sellerChargeSettingsService } = require("./seller-charge-settings.service");
 const { ProductModel } = require("../../product/models/product.model");
 const { ReturnModel } = require("../../returns/models/return.model");
 
@@ -63,7 +64,6 @@ class SettlementLifecycleService {
     return {
       returnWindowDays: Math.max(Number(settings.returns?.defaultWindowDays ?? 0), 0),
       payoutSchedule: settings.finance?.payoutSchedule || "manual",
-      codCollectionMode: settings.cod?.collectionPolicy || "platform_or_courier",
       payoutRequiresCapture: settings.cod?.payoutRequiresCapture !== false,
     };
   }
@@ -218,7 +218,11 @@ class SettlementLifecycleService {
       .reduce((sum, item) => sum + this.number(item.line_total) - this.number(item.discount_amount), 0);
     const shipmentCount = Math.max(Number(sellerShipmentCount?.count || 1), 1);
     const expectedAmount = this.number((this.number(order.payable_amount || order.total_amount) * (sellerBase / Math.max(totalBase, 1))) / shipmentCount);
-    const collectionMode = policy.codCollectionMode;
+    const sellerSettings = await sellerChargeSettingsService.getSettings(
+      shipment.seller_id,
+      shipment.organization_id || null,
+    );
+    const collectionMode = sellerSettings.cod?.collectionPolicy || "platform_or_courier";
 
     const [collection] = await knex("cod_collections").insert({
       id: uuidv4(),
@@ -368,6 +372,9 @@ class SettlementLifecycleService {
       .leftJoin({ s: "shipments" }, "s.id", "c.shipment_id")
       .select("c.*", "o.order_number", "o.status as order_status", "s.awb_number", "s.courier_name");
     if (!this.isAdmin(actor)) builder.where("c.seller_id", sellerId);
+    if (query.sellerActionableOnly === true) {
+      builder.whereIn("c.collection_mode", ["seller_direct", "hybrid"]);
+    }
     if (query.status) builder.where("c.status", query.status);
     if (query.orderId) builder.where("c.order_id", query.orderId);
     if (query.sellerId && this.isAdmin(actor)) builder.where("c.seller_id", query.sellerId);

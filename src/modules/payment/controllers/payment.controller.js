@@ -1,7 +1,6 @@
 const { okResponse } = require("../../../shared/http/reply");
 const { PaymentService } = require("../services/payment.service");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
-const { auditService } = require("../../../shared/logger/audit.service");
 
 class PaymentController {
   constructor({ paymentService = new PaymentService() } = {}) {
@@ -17,25 +16,6 @@ class PaymentController {
   options = async (req, res) => {
     const options = await this.paymentService.getPaymentOptions(req.query);
     res.json(okResponse(options));
-  };
-
-  getCodConfig = async (req, res) => {
-    const actor = getCurrentUser(req);
-    const config = await this.paymentService.getCodConfig(actor);
-    res.json(okResponse(config));
-  };
-
-  updateCodConfig = async (req, res) => {
-    const actor = getCurrentUser(req);
-    const config = await this.paymentService.updateCodConfig(req.body, actor);
-    await auditService.update(req, {
-      module: "payments",
-      entityId: "cod",
-      entityType: "PaymentMethodConfig",
-      newData: config,
-      description: "Updated Cash on Delivery payment settings",
-    });
-    res.json(okResponse(config));
   };
 
   verify = async (req, res) => {

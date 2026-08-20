@@ -271,7 +271,6 @@ function sampleCommerceSettingsBody() {
     cod: {
       availabilityMode: 'all_pincodes',
       allowPincodes: [],
-      blockPincodes: [],
       collectionPolicy: 'platform_or_courier',
       payoutRequiresCapture: true,
     },
@@ -444,8 +443,6 @@ function sampleBodyForRoute(route) {
   if (pathName.includes('/products') && pathName.includes('/status')) {
     return { status: 'active', reason: 'Status updated from Postman' };
   }
-  if (pathName.includes('/products') && pathName.includes('/archive')) return { reason: 'Archived from Postman' };
-  if (pathName.includes('/products') && pathName.includes('/restore')) return { reason: 'Restored from Postman' };
   if (pathName.includes('/products') && pathName.includes('/duplicate')) return { title: 'Duplicated Product', sku: 'SKU-POSTMAN-COPY' };
   if (pathName.includes('/products') && (method === 'POST' || method === 'PATCH')) return sampleProductBody();
 
@@ -506,7 +503,6 @@ function sampleBodyForRoute(route) {
   if (pathName.includes('/payments/verify')) {
     return { provider: 'razorpay', orderId: SAMPLE_IDS.orderId, razorpayOrderId: 'order_xxx', razorpayPaymentId: 'pay_xxx', razorpaySignature: 'signature_xxx' };
   }
-  if (pathName.includes('/payments/admin/cod-config')) return { enabled: true, chargeAmount: 49, minOrderAmount: 0, maxOrderAmount: 10000, currency: 'INR', metadata: {} };
   if (pathName.includes('/payments/') && pathName.includes('/approve')) return { referenceId: 'MANUAL-PAY-001', reason: 'Payment verified manually' };
   if (pathName.includes('/payments/') && pathName.includes('/reject')) return { referenceId: 'MANUAL-PAY-001', reason: 'Payment proof invalid' };
 

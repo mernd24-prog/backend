@@ -79,8 +79,8 @@ const SIDEBAR_MODULES = [
   { moduleName: "Marketing", moduleKey: "marketing", moduleSlug: "marketing", icon: "MdCampaign", moduleType: "group", order: 120, parentModule: null, requiredModule: "pricing" },
   { moduleName: "Referral Commerce", moduleKey: "referral-commerce", moduleSlug: "referral-commerce", icon: "MdShare", moduleType: "group", order: 130, parentModule: "marketing", requiredModule: "referral" },
   { moduleName: "Overview", moduleKey: "referral-overview", moduleSlug: "referral-overview", icon: "MdDashboard", routePath: "/app/referral-commerce/overview", moduleType: "page", order: 131, parentModule: "referral-commerce", requiredModule: "referral-overview" },
-  { moduleName: "Product Distribution", moduleKey: "referral-product-distribution", moduleSlug: "referral-product-distribution", icon: "MdInventory", routePath: "/app/referral-commerce/product-distribution", moduleType: "page", order: 131.5, parentModule: "referral-commerce", requiredModule: "referral-product-distribution" },
   { moduleName: "Referral Partners", moduleKey: "referral-influencers", moduleSlug: "referral-influencers", icon: "MdPeople", routePath: "/app/referral-commerce/influencers", moduleType: "page", order: 132, parentModule: "referral-commerce", requiredModule: "influencer-management" },
+  { moduleName: "Product Referral Amounts", moduleKey: "referral-product-amounts", moduleSlug: "referral-product-amounts", icon: "MdInventory", routePath: "/app/referral-commerce/product-amounts", moduleType: "page", order: 132.1, parentModule: "referral-commerce", requiredModule: "referral" },
   { moduleName: "Referral Codes", moduleKey: "referral-codes", moduleSlug: "referral-codes", icon: "MdShare", routePath: "/app/referral-commerce/codes", moduleType: "page", order: 133, parentModule: "referral-commerce", requiredModule: "referral-codes" },
   { moduleName: "Rules & Coins", moduleKey: "referral-rules", moduleSlug: "referral-rules", icon: "MdSettings", routePath: "/app/referral-commerce/rules", moduleType: "page", order: 134, parentModule: "referral-commerce", requiredModule: "referral-rules" },
   { moduleName: "Bonuses", moduleKey: "referral-bonus-rules", moduleSlug: "referral-bonus-rules", icon: "MdLocalOffer", routePath: "/app/referral-commerce/bonuses", moduleType: "page", order: 135, parentModule: "referral-commerce", requiredModule: "referral-bonus-rules" },
@@ -225,20 +225,12 @@ const ROUTE_METADATA_BY_KEY = {
 	    supportedRoutes: [
 	      "/app/store",
 	      "/app/bar-code",
-	      "/app/product-catalog/archived",
 	      "/app/product-catalog/form/:id?",
 	      "/app/product-catalog/view/:id",
 	    ],
 	  },
-	  "product-archived": {
-	    supportedRoutes: ["/app/product-catalog/archived"],
-	  },
-	  "seller-archived-products": {
-	    supportedRoutes: ["/app/product-catalog/archived"],
-	  },
 	  "seller-add-product": {
 	    supportedRoutes: [
-	      "/app/product-catalog/archived",
 	      "/app/product-catalog/form/:id?",
 	      "/app/product-catalog/view/:id",
 	    ],

@@ -302,6 +302,13 @@ const referralCommissionRuleSchema = new mongoose.Schema(
       enum: ["upi", "bank", "manual"],
       default: ["upi", "bank", "manual"],
     },
+    referralCodePrefix: { type: String, default: "REF", trim: true, uppercase: true, maxlength: 8 },
+    referralCodeRandomLength: { type: Number, default: 6, min: 4, max: 16 },
+    referralCodeCharacterSet: {
+      type: String,
+      enum: ["alphanumeric", "numeric", "alphabetic"],
+      default: "alphanumeric",
+    },
     minOrderAmount: { type: Number, default: 0, min: 0 },
     active: { type: Boolean, default: true, index: true },
     effectiveFrom: { type: Date, default: Date.now },
@@ -311,38 +318,18 @@ const referralCommissionRuleSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-const referralProductConfigSchema = new mongoose.Schema(
+const referralProductAmountSchema = new mongoose.Schema(
   {
-    productId: { type: String, required: true, index: true },
-    variantId: { type: String, default: null, index: true },
+    productId: { type: String, required: true, unique: true, index: true },
+    amountType: { type: String, enum: ["fixed_amount", "percentage"], default: "fixed_amount" },
+    amountValue: { type: Number, required: true, min: 0 },
+    maximumAmount: { type: Number, default: 0, min: 0 },
     active: { type: Boolean, default: true, index: true },
-    poolType: {
-      type: String,
-      enum: ["fixed_amount", "percentage"],
-      default: "fixed_amount",
-    },
-    poolValue: { type: Number, required: true, min: 0 },
-    maximumPoolAmount: { type: Number, default: 0, min: 0 },
-    customerSharePercent: { type: Number, default: null, min: 0, max: 100 },
-    codeOwnerSharePercent: { type: Number, default: null, min: 0, max: 100 },
-    parentSharePercent: { type: Number, default: null, min: 0, max: 100 },
-    fundedBy: {
-      type: String,
-      enum: ["platform", "seller", "shared"],
-      default: "platform",
-    },
-    startsAt: { type: Date, default: null },
-    endsAt: { type: Date, default: null },
+    productTitle: { type: String, default: "" },
     createdBy: { type: String, default: null },
     updatedBy: { type: String, default: null },
-    metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   { timestamps: true },
-);
-
-referralProductConfigSchema.index(
-  { productId: 1, variantId: 1 },
-  { unique: true },
 );
 
 const referralFraudReviewSchema = new mongoose.Schema(
@@ -505,9 +492,9 @@ const ReferralCommissionRuleModel = mongoose.model(
   "ReferralCommissionRule",
   referralCommissionRuleSchema,
 );
-const ReferralProductConfigModel = mongoose.model(
-  "ReferralProductConfig",
-  referralProductConfigSchema,
+const ReferralProductAmountModel = mongoose.model(
+  "ReferralProductAmount",
+  referralProductAmountSchema,
 );
 const ReferralFraudReviewModel = mongoose.model(
   "ReferralFraudReview",
@@ -533,7 +520,7 @@ module.exports = {
   InfluencerWalletModel,
   InfluencerPayoutRequestModel,
   ReferralCommissionRuleModel,
-  ReferralProductConfigModel,
+  ReferralProductAmountModel,
   ReferralFraudReviewModel,
   InfluencerBonusRuleModel,
   InfluencerBonusAchievementModel,

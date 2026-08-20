@@ -5,7 +5,6 @@ const PRODUCT_STATUS = {
   CHANGE_PENDING: "change_pending",
   INACTIVE: "inactive",
   REJECTED: "rejected",
-  ARCHIVED: "archived",
   SCHEDULED: "scheduled",
 };
 

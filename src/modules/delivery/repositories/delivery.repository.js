@@ -23,11 +23,7 @@ class DeliveryRepository {
     const [serviceability] = await knex("pincode_serviceability")
       .where({ pincode })
       .limit(1);
-    const exclusions = await knex("delivery_exclusions")
-      .where({ pincode, active: true })
-      .orderBy("created_at", "desc");
-
-    return { serviceability: serviceability || null, exclusions };
+    return { serviceability: serviceability || null, exclusions: [] };
   }
 
   async calculateShippingRate({ pincode, weightGrams = 0, shippingMode = "standard", cod = false }) {

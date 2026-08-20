@@ -18,24 +18,18 @@ class ReferralAdminController {
     );
   };
 
-  listProductConfigs = async (req, res) => {
-    const result = await this.referralService.listProductDistributionConfigs(req.query);
+  listProductAmounts = async (req, res) => {
+    const result = await this.referralService.listProductAmounts(req.query);
     res.json(okResponse(result.items, { total: result.total, page: result.page, limit: result.limit }));
   };
 
-  upsertProductConfig = async (req, res) => {
-    const config = await this.referralService.upsertProductDistributionConfig(
-      req.body,
-      getCurrentUser(req),
-    );
-    res.json(okResponse(config));
+  upsertProductAmount = async (req, res) => {
+    const result = await this.referralService.upsertProductAmount(req.body, getCurrentUser(req));
+    res.json(okResponse(result));
   };
 
-  deleteProductConfig = async (req, res) => {
-    const config = await this.referralService.deleteProductDistributionConfig(
-      req.params.configId,
-    );
-    res.json(okResponse(config));
+  deleteProductAmount = async (req, res) => {
+    res.json(okResponse(await this.referralService.deleteProductAmount(req.params.configId)));
   };
 
   createParentInfluencer = async (req, res) => {

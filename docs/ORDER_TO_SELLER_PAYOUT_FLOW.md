@@ -346,13 +346,12 @@ There are three related but separate mechanisms:
 
 1. Global PostgreSQL serviceability:
    - `pincode_serviceability` supplies city, state, zone, COD flag, and ETA;
-   - active `delivery_exclusions` can block a pincode;
    - `shipping_rates` calculates base fee + per-kg fee + optional COD fee.
 2. Seller charge settings:
-   - seller/organization allowlist, blocklist, regions, product rules, order rules, charge, ETA, and COD rules;
+   - seller/organization allowlist, regions, product rules, order rules, charge, ETA, and COD rules;
    - this is the mechanism enforced by checkout.
 3. Shipping profiles:
-   - seller/organization profiles with selected states, cities, pincodes, blocklists, charge, COD, and ETA;
+   - seller/organization profiles with all-India or selected-pincode coverage, charge, COD, and ETA;
    - a product may reference `shipping.shippingProfileId`.
 
 `GET /delivery/serviceability` evaluates the global tables and, for a supplied product, its shipping profile or seller settings. `GET /delivery/rates` evaluates the global zone/rate tables.

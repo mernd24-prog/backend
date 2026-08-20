@@ -9,7 +9,6 @@ const {
   verifyPaymentSchema,
   listPaymentsSchema,
   paymentOptionsSchema,
-  codConfigSchema,
   paymentParamSchema,
   manualPaymentApprovalSchema,
   manualPaymentRejectionSchema,
@@ -36,19 +35,6 @@ paymentRoutes.get(
   catchErrors(paymentController.listAdmin),
 );
 paymentRoutes.get(
-  "/admin/cod-config",
-  authenticate,
-  allowPermissions("cod-config:view"),
-  catchErrors(paymentController.getCodConfig),
-);
-paymentRoutes.put(
-  "/admin/cod-config",
-  authenticate,
-  allowPermissions("cod-config:update"),
-  checkInput(codConfigSchema),
-  catchErrors(paymentController.updateCodConfig),
-);
-paymentRoutes.get(
   "/admin/:paymentId",
   authenticate,
   allowPermissions("payments:view"),
@@ -71,7 +57,10 @@ paymentRoutes.get(
   allowPermissions("sellers/commissions:view"),
   checkInput(codCollectionListSchema),
   catchErrors(async (req, res) => {
-    const collections = await settlementLifecycleService.listCodCollections(req.query, req.auth);
+    const collections = await settlementLifecycleService.listCodCollections({
+      ...req.query,
+      sellerActionableOnly: true,
+    }, req.auth);
     res.json({ success: true, data: { items: collections, total: collections.length } });
   }),
 );

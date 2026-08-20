@@ -127,8 +127,6 @@ const MODULE_ALIASES = {
   platform_commission: "admin",
   "seller-tiers": "admin",
   seller_tiers: "admin",
-  "cod-config": "cod-config",
-  cod_config: "cod-config",
   payments: "payments",
   payment: "payments",
   "cod-collections": "payments",
@@ -253,10 +251,6 @@ const MODULE_ALIASES = {
   "subscription-plans": "subscriptions",
   subscription_plans: "subscriptions",
 
-  // Payment sub-modules
-  "cod-config": "cod-config",
-  cod_config: "cod-config",
-
   // Seller payouts (already has "seller-payouts" but adding slug variants)
   "seller-payout": "sellers/commissions",
   seller_payout: "sellers/commissions",
@@ -313,8 +307,8 @@ const MODULE_ALIASES = {
   seller_status: "sellers",
   "seller-sub-admins": "sellers",
   seller_sub_admins: "sellers",
-  "charge-settings": "cod-config",
-  charge_settings: "cod-config",
+  "charge-settings": "sellers",
+  charge_settings: "sellers",
   queries: "queries",
   query: "queries",
   support: "queries",
@@ -455,7 +449,6 @@ function getRequestModule(req) {
     if (second === "referral") {
       const referralModuleMap = {
         influencers: "influencer-management",
-        "product-configs": "referral-product-distribution",
         codes: "referral-codes",
         rules: "referral-rules",
         "bonus-rules": "referral-bonus-rules",
@@ -515,10 +508,7 @@ function getRequestModule(req) {
     return "sellers/commissions";
   }
   if (first === "sellers" && second === "me" && third === "charge-settings") {
-    return "cod-config";
-  }
-  if (first === "payments" && second === "admin" && third === "cod-config") {
-    return "cod-config";
+    return "sellers";
   }
   if (first === "rbac" && second === "modules" && third === "sidebar") {
     return null;

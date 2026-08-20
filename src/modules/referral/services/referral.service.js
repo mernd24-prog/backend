@@ -102,16 +102,40 @@ class ReferralService {
   }
 
   async makeUniqueCode(seed = "REF") {
-    const cleanSeed = this.normalizeCode(seed).replace(/[_-]/g, "").slice(0, 8) || "REF";
+    const rule = await this.referralRepository.getActiveCommissionRule();
+    const configuredPrefix = this.normalizeCode(rule?.referralCodePrefix || "REF").replace(/[_-]/g, "").slice(0, 8);
+    const cleanSeed = configuredPrefix || this.normalizeCode(seed).replace(/[_-]/g, "").slice(0, 8) || "REF";
+    const randomLength = Math.min(Math.max(Number(rule?.referralCodeRandomLength || 6), 4), 16);
+    const characters = rule?.referralCodeCharacterSet === "numeric"
+      ? "0123456789"
+      : rule?.referralCodeCharacterSet === "alphabetic"
+        ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        : "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const makeSuffix = () => Array.from({ length: randomLength }, () => characters[randomBytes(1)[0] % characters.length]).join("");
     for (let attempt = 0; attempt < 10; attempt += 1) {
-      const code = `${cleanSeed}${randomBytes(3).toString("hex").toUpperCase()}`;
+      const code = `${cleanSeed}${makeSuffix()}`;
       const existingCode = await this.referralRepository.getReferralCodeByCode(code);
       const existingUser = await this.referralRepository.findReferrerByCode(code);
       if (!existingCode && !existingUser) return code;
     }
-    return `REF${Date.now().toString(36).toUpperCase()}${randomBytes(2)
-      .toString("hex")
-      .toUpperCase()}`;
+    return `${cleanSeed}${Date.now().toString(36).toUpperCase()}${makeSuffix()}`;
+  }
+
+  async validateConfiguredCode(code) {
+    const normalized = this.normalizeCode(code);
+    const rule = await this.referralRepository.getActiveCommissionRule();
+    const prefix = this.normalizeCode(rule?.referralCodePrefix || "REF").replace(/[_-]/g, "").slice(0, 8);
+    const randomLength = Math.min(Math.max(Number(rule?.referralCodeRandomLength || 6), 4), 16);
+    const suffix = normalized.slice(prefix.length);
+    const suffixPattern = rule?.referralCodeCharacterSet === "numeric"
+      ? /^\d+$/
+      : rule?.referralCodeCharacterSet === "alphabetic"
+        ? /^[A-Z]+$/
+        : /^[A-Z0-9]+$/;
+    if (!normalized.startsWith(prefix) || suffix.length !== randomLength || !suffixPattern.test(suffix)) {
+      throw new AppError(`Referral code must match ${prefix || ""}${rule?.referralCodeCharacterSet === "numeric" ? "0" : "X".repeat(Math.min(randomLength, 8))} (${randomLength} generated characters)`, 400);
+    }
+    return normalized;
   }
 
   makeInfluencerSnapshot(profile) {
@@ -263,7 +287,7 @@ class ReferralService {
       : null;
     const identity = account || user;
     const code = payload.code
-      ? this.normalizeCode(payload.code)
+      ? await this.validateConfiguredCode(payload.code)
       : await this.makeUniqueCode(
           `${identity?.profile?.firstName || identity?.email || "REF"}${profile.level || 1}`,
         );
@@ -472,7 +496,7 @@ class ReferralService {
     }
 
     const code = payload.code
-      ? this.normalizeCode(payload.code)
+      ? await this.validateConfiguredCode(payload.code)
       : await this.makeUniqueCode(payload.influencerId);
     if (!code) throw new AppError("Influencer code is required", 400);
 
@@ -548,31 +572,8 @@ class ReferralService {
     }
   }
 
-  normalizeProductConfigPayload(payload = {}, actor = {}) {
-    const shares = {
-      customer: payload.customerSharePercent,
-      codeOwner: payload.codeOwnerSharePercent,
-      parent: payload.parentSharePercent,
-    };
-    const suppliedShares = Object.values(shares).some((value) => value !== undefined && value !== null);
-    if (suppliedShares) this.validateDistributionShares(shares);
-    if (payload.startsAt && payload.endsAt && new Date(payload.startsAt) >= new Date(payload.endsAt)) {
-      throw new AppError("Product distribution end date must be after its start date", 400);
-    }
-    return {
-      ...payload,
-      productId: String(payload.productId),
-      variantId: payload.variantId ? String(payload.variantId) : null,
-      maximumPoolAmount: Number(payload.maximumPoolAmount || 0),
-      active: payload.active !== false,
-      fundedBy: payload.fundedBy || "platform",
-      updatedBy: actor.userId || null,
-      metadata: payload.metadata || {},
-    };
-  }
-
-  async listProductDistributionConfigs(query = {}) {
-    const result = await this.referralRepository.listProductConfigs({
+  async listProductAmounts(query = {}) {
+    const result = await this.referralRepository.listProductAmounts({
       ...query,
       active: query.active === undefined ? null : String(query.active) === "true",
       page: Number(query.page || 1),
@@ -581,93 +582,45 @@ class ReferralService {
     return { ...result, page: Number(query.page || 1), limit: Number(query.limit || 50) };
   }
 
-  async upsertProductDistributionConfig(payload = {}, actor = {}) {
-    const normalized = this.normalizeProductConfigPayload(payload, actor);
-    const existing = await this.referralRepository.listProductConfigs({
-      productId: normalized.productId,
-      page: 1,
-      limit: 500,
-    });
-    const exact = existing.items.find(
-      (item) => String(item.variantId || "") === String(normalized.variantId || ""),
-    );
-    return this.referralRepository.upsertProductConfig({
-      ...normalized,
-      createdBy: exact?.createdBy || actor.userId || null,
+  async upsertProductAmount(payload = {}, actor = {}) {
+    return this.referralRepository.upsertProductAmount({
+      ...payload,
+      productId: String(payload.productId),
+      amountValue: Number(payload.amountValue || 0),
+      maximumAmount: Number(payload.maximumAmount || 0),
+      active: payload.active !== false,
+      updatedBy: actor.userId || null,
+      createdBy: actor.userId || null,
     });
   }
 
-  async deleteProductDistributionConfig(configId) {
-    const deleted = await this.referralRepository.deleteProductConfig(configId);
-    if (!deleted) throw new AppError("Referral product configuration not found", 404);
+  async deleteProductAmount(configId) {
+    const deleted = await this.referralRepository.deleteProductAmount(configId);
+    if (!deleted) throw new AppError("Product referral amount not found", 404);
     return deleted;
   }
 
-  isProductConfigEffective(config = {}, now = new Date()) {
-    if (config.startsAt && new Date(config.startsAt) > now) return false;
-    if (config.endsAt && new Date(config.endsAt) < now) return false;
-    return true;
-  }
-
-  calculateProductPool(config = {}, item = {}, fallbackRule = {}) {
-    const quantity = Math.max(Number(item.quantity || 1), 1);
-    const lineAmount = Math.max(Number(item.lineTotal || 0), 0);
-    if (config && config.active === false) return 0;
-    if (!config) return this.calculateReferralPool(fallbackRule, lineAmount);
-    const raw = config.poolType === "percentage"
-      ? (lineAmount * Number(config.poolValue || 0)) / 100
-      : Number(config.poolValue || 0) * quantity;
-    const cap = Number(config.maximumPoolAmount || 0) * quantity;
-    return Number(Math.min(Math.max(cap > 0 ? Math.min(raw, cap) : raw, 0), lineAmount).toFixed(2));
-  }
-
-  async calculateProductDistribution(items = [], rule = {}) {
-    const configs = await this.referralRepository.listProductConfigsForItems(
-      items.map((item) => item.productId),
-    );
-    const now = new Date();
-    const snapshots = items.map((item) => {
-      const candidates = configs.filter((config) => String(config.productId) === String(item.productId));
-      const variantConfig = candidates.find(
-        (config) => config.variantId && String(config.variantId) === String(item.variantId || ""),
-      );
-      const productConfig = candidates.find((config) => !config.variantId);
-      const selected = variantConfig || productConfig || null;
-      const effective = selected && this.isProductConfigEffective(selected, now) ? selected : null;
-      const poolAmount = selected && !effective ? 0 : this.calculateProductPool(effective, item, rule);
-      const shares = {
-        customer: effective?.customerSharePercent ?? rule.customerSharePercent,
-        codeOwner: effective?.codeOwnerSharePercent ?? rule.childSharePercent,
-        parent: effective?.parentSharePercent ?? rule.parentSharePercent,
-      };
-      this.validateDistributionShares(shares);
-      return {
-        productId: String(item.productId),
-        variantId: item.variantId ? String(item.variantId) : null,
-        quantity: Number(item.quantity || 1),
-        eligibleAmount: Number(item.lineTotal || 0),
-        configId: effective ? this.getRecordId(effective) : null,
-        source: effective ? (variantConfig ? "variant" : "product") : selected ? "disabled_or_outside_window" : "global",
-        poolType: effective?.poolType || rule.distributionType,
-        poolValue: Number(effective?.poolValue ?? (rule.distributionType === "fixed_amount" ? rule.referralPoolAmount : rule.referralPoolPercent) ?? 0),
-        poolAmount,
-        fundedBy: effective?.fundedBy || "platform",
-        customerSharePercent: Number(shares.customer || 0),
-        codeOwnerSharePercent: Number(shares.codeOwner || 0),
-        parentSharePercent: Number(shares.parent || 0),
-        customerAmount: Number((poolAmount * Number(shares.customer || 0) / 100).toFixed(2)),
-        codeOwnerAmount: Number((poolAmount * Number(shares.codeOwner || 0) / 100).toFixed(2)),
-        parentAmount: Number((poolAmount * Number(shares.parent || 0) / 100).toFixed(2)),
-      };
-    });
-    const sum = (key) => Number(snapshots.reduce((total, item) => total + Number(item[key] || 0), 0).toFixed(2));
-    return {
-      items: snapshots,
-      referralPoolAmount: sum("poolAmount"),
-      customerDiscountAmount: sum("customerAmount"),
-      codeOwnerAmount: sum("codeOwnerAmount"),
-      parentAmount: sum("parentAmount"),
-    };
+  async calculateReferralPoolWithProductAmounts(items = [], rule = {}, eligibleAmount = 0) {
+    if (!items.length) return this.calculateReferralPool(rule, eligibleAmount);
+    const configs = await this.referralRepository.listProductAmountsForItems(items.map((item) => item.productId));
+    const configByProduct = new Map(configs.map((config) => [String(config.productId), config]));
+    let configuredPool = 0;
+    let unconfiguredAmount = 0;
+    for (const item of items) {
+      const lineAmount = Math.max(Number(item.lineTotal || 0), 0);
+      const config = configByProduct.get(String(item.productId));
+      if (!config) {
+        unconfiguredAmount += lineAmount;
+        continue;
+      }
+      const raw = config.amountType === "percentage"
+        ? (lineAmount * Number(config.amountValue || 0)) / 100
+        : Number(config.amountValue || 0) * Math.max(Number(item.quantity || 1), 1);
+      const cap = Number(config.maximumAmount || 0);
+      configuredPool += Math.min(Math.max(cap > 0 ? Math.min(raw, cap) : raw, 0), lineAmount);
+    }
+    const globalPool = unconfiguredAmount > 0 ? this.calculateReferralPool(rule, unconfiguredAmount) : 0;
+    return Number(Math.min(configuredPool + globalPool, Number(eligibleAmount || 0)).toFixed(2));
   }
 
   async resolveInfluencerCodeForCheckout(codeValue, eligibleAmount, customerId = null, items = []) {
@@ -710,13 +663,14 @@ class ReferralService {
       throw new AppError("Order does not meet the influencer code minimum amount", 400);
     }
 
-    const distribution = await this.calculateProductDistribution(items, rule);
-    const referralPoolAmount = items.length
-      ? distribution.referralPoolAmount
-      : this.calculateReferralPool(rule, eligibleAmount);
-    const customerDiscountAmount = items.length
-      ? distribution.customerDiscountAmount
-      : Number(((referralPoolAmount * Number(rule.customerSharePercent || 0)) / 100).toFixed(2));
+    const shares = {
+      customer: rule.customerSharePercent,
+      codeOwner: rule.childSharePercent,
+      parent: rule.parentSharePercent,
+    };
+    this.validateDistributionShares(shares);
+    const referralPoolAmount = await this.calculateReferralPoolWithProductAmounts(items, rule, eligibleAmount);
+    const customerDiscountAmount = Number(((referralPoolAmount * Number(shares.customer || 0)) / 100).toFixed(2));
     return {
       codeId: this.getRecordId(code),
       code: code.code,
@@ -728,9 +682,8 @@ class ReferralService {
       eligibleAmount: Number(Number(eligibleAmount || 0).toFixed(2)),
       referralPoolAmount,
       customerDiscountAmount,
-      codeOwnerAmount: items.length ? distribution.codeOwnerAmount : null,
-      parentAmount: items.length ? distribution.parentAmount : null,
-      itemDistributions: distribution.items,
+      codeOwnerAmount: Number(((referralPoolAmount * Number(shares.codeOwner || 0)) / 100).toFixed(2)),
+      parentAmount: Number(((referralPoolAmount * Number(shares.parent || 0)) / 100).toFixed(2)),
       rule: this.toPlainObject(rule),
     };
   }
@@ -764,9 +717,6 @@ class ReferralService {
         missingParentPolicy: context.parentInfluencerId
           ? "allocated_to_parent"
           : "retain_by_funding_source",
-        itemDistributions: Array.isArray(context.itemDistributions)
-          ? context.itemDistributions
-          : [],
         commissionRuleId: this.getRecordId(rule),
         ruleSnapshot: rule,
       },
@@ -1146,6 +1096,9 @@ class ReferralService {
       withdrawalKycRequired: true,
       withdrawalApprovalMode: "manual",
       withdrawalMethods: ["upi", "bank", "manual"],
+      referralCodePrefix: "REF",
+      referralCodeRandomLength: 6,
+      referralCodeCharacterSet: "alphanumeric",
     });
     const nextRule = {
       ...base,
@@ -2335,7 +2288,13 @@ class ReferralService {
         upiId,
         payoutQrUrl,
         reservationStatus: "reserved",
-        metadata: payload.metadata || {},
+        status: rule?.withdrawalApprovalMode === "auto" ? "approved" : "pending",
+        approvedAt: rule?.withdrawalApprovalMode === "auto" ? new Date() : null,
+        approvedBy: rule?.withdrawalApprovalMode === "auto" ? "system" : null,
+        metadata: {
+          ...(payload.metadata || {}),
+          approvalMode: rule?.withdrawalApprovalMode || "manual",
+        },
       });
       return this.formatWithdrawal(payout);
     } catch (error) {

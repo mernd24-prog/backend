@@ -122,7 +122,6 @@ class AdminService {
       if (second === "referral") {
         const referralModuleMap = {
           influencers: "influencer-management",
-          "product-configs": "referral-product-distribution",
           codes: "referral-codes",
           rules: "referral-rules",
           "bonus-rules": "referral-bonus-rules",

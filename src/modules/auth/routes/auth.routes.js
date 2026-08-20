@@ -26,6 +26,7 @@ const authController = new AuthController();
 authRoutes.use([
   "/register", "/register-otp", "/verify-registration", "/login",
   "/influencer/login", "/social", "/refresh", "/otp-auth", "/send-otp",
+  "/influencer/forgot-password", "/influencer/verify-reset-otp", "/influencer/reset-password",
   "/verify-otp", "/resend-otp", "/forgot-password", "/reset-password",
 ], authRateLimit);
 authRoutes.post("/register", checkInput(registerSchema), catchErrors(authController.register));
@@ -37,6 +38,9 @@ authRoutes.post(
   checkInput(loginSchema),
   catchErrors(authController.influencerLogin),
 );
+authRoutes.post("/influencer/forgot-password", checkInput(forgotPasswordSchema), catchErrors(authController.influencerForgotPassword));
+authRoutes.post("/influencer/verify-reset-otp", checkInput(verifyOtpSchema), catchErrors(authController.influencerVerifyResetOtp));
+authRoutes.post("/influencer/reset-password", checkInput(resetPasswordSchema), catchErrors(authController.influencerResetPassword));
 authRoutes.post("/social", checkInput(socialLoginSchema), catchErrors(authController.socialLogin));
 authRoutes.post("/refresh", checkInput(refreshSchema), catchErrors(authController.refresh));
 authRoutes.post(

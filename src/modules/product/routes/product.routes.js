@@ -101,15 +101,6 @@ productRoutes.patch(
   checkInput(updateProductSchema),
   catchErrors(productController.update),
 );
-// Seller-panel product detail uses the /manage path. Deletion is an archive
-// (soft delete) through the same ownership-aware service as /:productId.
-productRoutes.delete(
-  "/manage/:productId",
-  authenticate,
-  allowActions(ACTIONS.CATALOG_MANAGE),
-  checkInput(productParamSchema),
-  catchErrors(productController.delete),
-);
 productRoutes.post(
   "/",
   authenticate,
@@ -124,33 +115,12 @@ productRoutes.patch(
   checkInput(updateProductSchema),
   catchErrors(productController.update),
 );
-productRoutes.delete(
-  "/:productId",
-  authenticate,
-  allowActions(ACTIONS.CATALOG_MANAGE),
-  checkInput(productParamSchema),
-  catchErrors(productController.delete),
-);
 productRoutes.patch(
   "/:productId/status",
   authenticate,
   allowActions(ACTIONS.CATALOG_MANAGE),
   checkInput(productStatusSchema),
   catchErrors(productController.status),
-);
-productRoutes.patch(
-  "/:productId/archive",
-  authenticate,
-  allowActions(ACTIONS.CATALOG_MANAGE),
-  checkInput(productLifecycleSchema),
-  catchErrors(productController.archive),
-);
-productRoutes.patch(
-  "/:productId/restore",
-  authenticate,
-  allowActions(ACTIONS.CATALOG_MANAGE),
-  checkInput(productLifecycleSchema),
-  catchErrors(productController.restore),
 );
 productRoutes.post(
   "/:productId/duplicate",

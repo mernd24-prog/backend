@@ -9,7 +9,7 @@ const {
   InfluencerWalletModel,
   InfluencerPayoutRequestModel,
   ReferralCommissionRuleModel,
-  ReferralProductConfigModel,
+  ReferralProductAmountModel,
   ReferralFraudReviewModel,
   InfluencerBonusRuleModel,
   InfluencerBonusAchievementModel,
@@ -34,46 +34,34 @@ class ReferralRepository {
     return ReferralModel.findOne({ refereeUserId });
   }
 
-  async listProductConfigs({ q = "", productId = null, active = null, page = 1, limit = 50 } = {}) {
+  async listProductAmounts({ q = "", productId = null, active = null, page = 1, limit = 50 } = {}) {
     const filter = {};
     if (productId) filter.productId = String(productId);
     if (active !== null && active !== undefined) filter.active = active;
-    if (q) {
-      filter.$or = [
-        { productId: { $regex: q, $options: "i" } },
-        { variantId: { $regex: q, $options: "i" } },
-        { "metadata.productTitle": { $regex: q, $options: "i" } },
-        { "metadata.variantTitle": { $regex: q, $options: "i" } },
-      ];
-    }
+    if (q) filter.$or = [{ productId: { $regex: q, $options: "i" } }, { productTitle: { $regex: q, $options: "i" } }];
     const skip = (Number(page) - 1) * Number(limit);
     const [items, total] = await Promise.all([
-      ReferralProductConfigModel.find(filter).sort({ updatedAt: -1 }).skip(skip).limit(Number(limit)),
-      ReferralProductConfigModel.countDocuments(filter),
+      ReferralProductAmountModel.find(filter).sort({ updatedAt: -1 }).skip(skip).limit(Number(limit)),
+      ReferralProductAmountModel.countDocuments(filter),
     ]);
     return { items, total };
   }
 
-  async getProductConfigById(configId) {
-    return ReferralProductConfigModel.findById(configId);
-  }
-
-  async listProductConfigsForItems(productIds = []) {
+  async listProductAmountsForItems(productIds = []) {
     const ids = Array.from(new Set(productIds.map(String).filter(Boolean)));
-    if (!ids.length) return [];
-    return ReferralProductConfigModel.find({ productId: { $in: ids } });
+    return ids.length ? ReferralProductAmountModel.find({ productId: { $in: ids }, active: true }) : [];
   }
 
-  async upsertProductConfig(payload) {
-    return ReferralProductConfigModel.findOneAndUpdate(
-      { productId: String(payload.productId), variantId: payload.variantId ? String(payload.variantId) : null },
+  async upsertProductAmount(payload) {
+    return ReferralProductAmountModel.findOneAndUpdate(
+      { productId: String(payload.productId) },
       { $set: payload },
       { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true },
     );
   }
 
-  async deleteProductConfig(configId) {
-    return ReferralProductConfigModel.findByIdAndDelete(configId);
+  async deleteProductAmount(configId) {
+    return ReferralProductAmountModel.findByIdAndDelete(configId);
   }
 
   async createUser(payload) {

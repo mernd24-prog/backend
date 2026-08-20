@@ -8,13 +8,13 @@ const GLOBAL_ORGANIZATION_KEY = "seller_default";
 const DEFAULT_SELLER_CHARGE_SETTINGS = {
   cod: {
     enabled: true,
+    collectionPolicy: "platform_or_courier",
     chargeMode: "inherit",
     chargeAmount: 0,
     minOrderAmount: null,
     maxOrderAmount: null,
     availabilityMode: "inherit",
     allowPincodes: [],
-    blockPincodes: [],
     notes: "",
   },
   delivery: {
@@ -23,7 +23,6 @@ const DEFAULT_SELLER_CHARGE_SETTINGS = {
     freeDeliveryMinOrderAmount: null,
     serviceabilityMode: "all_pincodes",
     allowPincodes: [],
-    blockPincodes: [],
     regions: [],
     productRules: [],
     orderRules: [],
@@ -42,9 +41,10 @@ const shippingProfilesService = new ShippingProfilesService();
 
 const ALLOWED = {
   codChargeMode: ["inherit", "none", "flat"],
-  codAvailabilityMode: ["inherit", "all_pincodes", "allowlist", "blocklist", "disabled"],
+  codAvailabilityMode: ["inherit", "all_pincodes", "allowlist", "disabled"],
+  codCollectionPolicy: ["platform_or_courier", "seller_direct", "hybrid"],
   deliveryMode: ["none", "flat", "free_over_amount", "product", "order", "region", "rule_based"],
-  deliveryServiceabilityMode: ["all_pincodes", "allowlist", "blocklist", "regions", "disabled"],
+  deliveryServiceabilityMode: ["all_pincodes", "allowlist", "regions", "disabled"],
 };
 
 const isPlainObject = (value) =>
@@ -90,7 +90,6 @@ const normalizeRuleList = (items = []) =>
       minOrderAmount: nullableMoney(item.minOrderAmount),
       maxOrderAmount: nullableMoney(item.maxOrderAmount),
       serviceablePincodes: uniqueStrings(item.serviceablePincodes || item.allowPincodes),
-      blockPincodes: uniqueStrings(item.blockPincodes),
       regions: uniqueStrings(item.regions),
       states: uniqueStrings(item.states),
       cities: uniqueStrings(item.cities),
@@ -160,13 +159,13 @@ class SellerChargeSettingsService {
     return {
       cod: {
         enabled: bool(source.cod.enabled, true),
+        collectionPolicy: pickAllowed(source.cod.collectionPolicy, ALLOWED.codCollectionPolicy, "platform_or_courier"),
         chargeMode: pickAllowed(source.cod.chargeMode, ALLOWED.codChargeMode, "inherit"),
         chargeAmount: Math.max(money(source.cod.chargeAmount), 0),
         minOrderAmount,
         maxOrderAmount,
         availabilityMode: pickAllowed(source.cod.availabilityMode, ALLOWED.codAvailabilityMode, "inherit"),
         allowPincodes: uniqueStrings(source.cod.allowPincodes),
-        blockPincodes: uniqueStrings(source.cod.blockPincodes),
         notes: String(source.cod.notes || ""),
       },
       delivery: {
@@ -179,7 +178,6 @@ class SellerChargeSettingsService {
           "all_pincodes",
         ),
         allowPincodes: uniqueStrings(source.delivery.allowPincodes),
-        blockPincodes: uniqueStrings(source.delivery.blockPincodes),
         regions: uniqueStrings(source.delivery.regions),
         productRules: normalizeRuleList(source.delivery.productRules),
         orderRules: normalizeRuleList(source.delivery.orderRules),
@@ -397,9 +395,6 @@ class SellerChargeSettingsService {
     if (mode === "allowlist") {
       return (settings.cod.allowPincodes || []).includes(pin);
     }
-    if (mode === "blocklist") {
-      return !(settings.cod.blockPincodes || []).includes(pin);
-    }
     return true;
   }
 
@@ -445,9 +440,6 @@ class SellerChargeSettingsService {
   ruleMatchesLocation(rule = {}, address = {}) {
     const parts = this.getAddressParts(address);
     if ((rule.serviceablePincodes || []).length && !this.listHasValue(rule.serviceablePincodes, parts.pincode)) {
-      return false;
-    }
-    if ((rule.blockPincodes || []).length && this.listHasValue(rule.blockPincodes, parts.pincode)) {
       return false;
     }
     if ((rule.states || []).length && !this.listHasValue(rule.states, parts.state)) {
@@ -582,9 +574,6 @@ class SellerChargeSettingsService {
     }
     if (mode === "allowlist" && !this.listHasValue(delivery.allowPincodes, pin)) {
       return { allowed: false, reason: "seller_delivery_pincode_not_allowed" };
-    }
-    if (mode === "blocklist" && this.listHasValue(delivery.blockPincodes, pin)) {
-      return { allowed: false, reason: "seller_delivery_pincode_blocked" };
     }
     if (mode === "regions" && (delivery.regions || []).length) {
       const inRegion = this.listHasValue(delivery.regions, parts.region) ||

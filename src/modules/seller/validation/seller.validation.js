@@ -395,17 +395,14 @@ const updateSellerSettingsSchema = Joi.object({
 const sellerChargeSettingsBodySchema = Joi.object({
   cod: Joi.object({
     enabled: Joi.boolean(),
+    collectionPolicy: Joi.string().valid("platform_or_courier", "seller_direct", "hybrid"),
     chargeMode: Joi.string().valid("inherit", "none", "flat"),
     chargeAmount: Joi.number().min(0),
     minOrderAmount: Joi.number().min(0).allow(null),
     maxOrderAmount: Joi.number().min(0).allow(null),
-    availabilityMode: Joi.string().valid("inherit", "all_pincodes", "allowlist", "blocklist", "disabled"),
+    availabilityMode: Joi.string().valid("inherit", "all_pincodes", "allowlist", "disabled"),
     allowPincodes: Joi.alternatives().try(
-      Joi.array().items(Joi.string().trim()),
-      Joi.string().allow("", null),
-    ),
-    blockPincodes: Joi.alternatives().try(
-      Joi.array().items(Joi.string().trim()),
+      Joi.array().items(Joi.string().trim().pattern(/^\d{6}$/)),
       Joi.string().allow("", null),
     ),
     notes: Joi.string().max(1000).allow("", null),
@@ -414,12 +411,8 @@ const sellerChargeSettingsBodySchema = Joi.object({
     mode: Joi.string().valid("none", "flat", "free_over_amount", "product", "order", "region", "rule_based"),
     chargeAmount: Joi.number().min(0),
     freeDeliveryMinOrderAmount: Joi.number().min(0).allow(null),
-    serviceabilityMode: Joi.string().valid("all_pincodes", "allowlist", "blocklist", "regions", "disabled"),
+    serviceabilityMode: Joi.string().valid("all_pincodes", "allowlist", "regions", "disabled"),
     allowPincodes: Joi.alternatives().try(
-      Joi.array().items(Joi.string().trim()),
-      Joi.string().allow("", null),
-    ),
-    blockPincodes: Joi.alternatives().try(
       Joi.array().items(Joi.string().trim()),
       Joi.string().allow("", null),
     ),

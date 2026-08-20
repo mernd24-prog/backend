@@ -2,17 +2,14 @@
 
 const Joi = require("joi");
 
-const SERVICEABILITY_MODES = ["all_india", "selected_states", "selected_cities", "selected_pincodes", "block_pincodes"];
+const SERVICEABILITY_MODES = ["all_india", "selected_pincodes"];
 const SHIPPING_METHODS = ["standard", "express", "same_day", "hyperlocal"];
 const PROFILE_FIELDS = [
   "name",
   "description",
   "shippingMethod",
   "serviceabilityMode",
-  "allowedStates",
-  "allowedCities",
   "allowedPincodes",
-  "blockedPincodes",
   "codAvailable",
   "shippingCharge",
   "freeShippingThreshold",
@@ -41,10 +38,7 @@ const profileBody = Joi.object({
   description: Joi.string().trim().max(500).allow("", null).optional(),
   shippingMethod: Joi.string().valid(...SHIPPING_METHODS).default("standard"),
   serviceabilityMode: Joi.string().valid(...SERVICEABILITY_MODES).default("all_india"),
-  allowedStates: Joi.array().items(Joi.string().trim()).default([]),
-  allowedCities: Joi.array().items(Joi.string().trim()).default([]),
   allowedPincodes: Joi.array().items(Joi.string().trim().pattern(/^\d{6}$/)).default([]),
-  blockedPincodes: Joi.array().items(Joi.string().trim().pattern(/^\d{6}$/)).default([]),
   codAvailable: Joi.boolean().default(true),
   shippingCharge: Joi.number().min(0).default(0),
   freeShippingThreshold: Joi.number().min(0).allow(null).optional(),

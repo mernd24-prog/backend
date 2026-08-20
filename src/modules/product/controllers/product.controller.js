@@ -206,19 +206,6 @@ class ProductController {
     res.json(okResponse(product));
   };
 
-  delete = async (req, res) => {
-    const actor = getCurrentUser(req);
-    const result = await this.productService.deleteProduct(req.params.productId, actor);
-    await auditService.remove(req, {
-      module: "products",
-      entityId: req.params.productId,
-      entityType: "Product",
-      newData: result,
-      reason: "soft_archived",
-    });
-    res.json(okResponse(result));
-  };
-
   purge = async (req, res) => {
     const actor = getCurrentUser(req);
     const result = await this.productService.permanentlyDeleteProduct(
@@ -231,32 +218,6 @@ class ProductController {
       entityType: "Product",
       newData: result,
       reason: "permanently_deleted",
-    });
-    res.json(okResponse(result));
-  };
-
-  archive = async (req, res) => {
-    const actor = getCurrentUser(req);
-    const result = await this.productService.archiveProduct(req.params.productId, req.body, actor);
-    await auditService.statusChange(req, {
-      module: "products",
-      entityId: req.params.productId,
-      entityType: "Product",
-      newData: result,
-      reason: req.body.reason || "product_archived",
-    });
-    res.json(okResponse(result));
-  };
-
-  restore = async (req, res) => {
-    const actor = getCurrentUser(req);
-    const result = await this.productService.restoreProduct(req.params.productId, req.body, actor);
-    await auditService.statusChange(req, {
-      module: "products",
-      entityId: req.params.productId,
-      entityType: "Product",
-      newData: result,
-      reason: req.body.reason || "product_restored",
     });
     res.json(okResponse(result));
   };
@@ -280,9 +241,7 @@ class ProductController {
     const actor = getCurrentUser(req);
     const { productIds, status, visibility, action } = req.body;
     let result;
-    if (action === "archive") {
-      result = await this.productService.bulkUpdateStatus(productIds, "archived", actor);
-    } else if (action === "permanent_delete") {
+    if (action === "permanent_delete") {
       result = await this.productService.permanentlyDeleteProducts(productIds, actor);
     } else if (status) {
       result = await this.productService.bulkUpdateStatus(productIds, status, actor);

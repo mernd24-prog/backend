@@ -10,7 +10,6 @@ const { PricingRepository } = require("../repositories/pricing.repository");
 const { ProductRepository } = require("../../product/repositories/product.repository");
 const { WalletRepository } = require("../../wallet/repositories/wallet.repository");
 const { PlatformRepository } = require("../../platform/repositories/platform.repository");
-const { PaymentMethodConfigRepository } = require("../../payment/repositories/payment-method-config.repository");
 const { DealService } = require("../../deal/services/deal.service");
 const { PAYMENT_PROVIDER } = require("../../../shared/domain/commerce-constants");
 const { redis } = require("../../../infrastructure/redis/redis-client");
@@ -27,7 +26,6 @@ class PricingService {
     productRepository = new ProductRepository(),
     walletRepository = new WalletRepository(),
     platformRepository = new PlatformRepository(),
-    paymentMethodConfigRepository = new PaymentMethodConfigRepository(),
     dealService = new DealService(),
     redisClient = redis,
     referralService = new ReferralService(),
@@ -36,7 +34,6 @@ class PricingService {
     this.productRepository = productRepository;
     this.walletRepository = walletRepository;
     this.platformRepository = platformRepository;
-    this.paymentMethodConfigRepository = paymentMethodConfigRepository;
     this.dealService = dealService;
     this.redis = redisClient;
     this.referralService = referralService;
@@ -541,8 +538,8 @@ const incomeTaxTdsAmount = Number(
       throw new AppError("Cash on Delivery is not available for this delivery pincode", 400);
     }
 
-    const config = await this.paymentMethodConfigRepository.getCodConfig();
-    if (!config.enabled) {
+    const config = settings.cod || {};
+    if (config.enabled === false) {
       throw new AppError("Cash on Delivery is currently disabled", 400);
     }
 
@@ -570,8 +567,8 @@ const incomeTaxTdsAmount = Number(
     }
 
     const amount = Number(orderAmount || 0);
-    const min = config.min_order_amount === null || config.min_order_amount === undefined ? null : Number(config.min_order_amount);
-    const max = config.max_order_amount === null || config.max_order_amount === undefined ? null : Number(config.max_order_amount);
+    const min = config.minOrderAmount === null || config.minOrderAmount === undefined ? null : Number(config.minOrderAmount);
+    const max = config.maxOrderAmount === null || config.maxOrderAmount === undefined ? null : Number(config.maxOrderAmount);
     if (min !== null && amount < min) {
       throw new AppError(`Cash on Delivery is available for orders above ${min}`, 400);
     }
@@ -579,7 +576,7 @@ const incomeTaxTdsAmount = Number(
       throw new AppError(`Cash on Delivery is available for orders up to ${max}`, 400);
     }
 
-    const platformCharge = Number(Number(config.charge_amount || 0).toFixed(2));
+    const platformCharge = Number(Number(config.feeAmount || 0).toFixed(2));
     const sellerCharge = Number(Number(sellerCod.sellerChargeAmount || 0).toFixed(2));
     const charge = Number((platformCharge + sellerCharge).toFixed(2));
     return {
@@ -593,8 +590,6 @@ const incomeTaxTdsAmount = Number(
         minOrderAmount: min,
         maxOrderAmount: max,
         currency: config.currency || "INR",
-        availabilityMode: settings.cod?.availabilityMode || "all_pincodes",
-        collectionPolicy: settings.cod?.collectionPolicy || "platform_or_courier",
         payoutRequiresCapture: settings.cod?.payoutRequiresCapture !== false,
         sellerRules: sellerCod.sellers,
       },
