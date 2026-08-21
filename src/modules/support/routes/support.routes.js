@@ -6,6 +6,7 @@ const { SupportController } = require("../controllers/support.controller");
 const {
   createSupportQuerySchema,
   listMySupportQueriesSchema,
+  replySupportQuerySchema,
   supportQueryParamSchema,
 } = require("../validation/support.validation");
 
@@ -31,6 +32,13 @@ supportRoutes.get(
   authenticate,
   checkInput(supportQueryParamSchema),
   catchErrors(supportController.getMine),
+);
+
+supportRoutes.post(
+  "/queries/:queryId/replies",
+  authenticate,
+  checkInput(replySupportQuerySchema),
+  catchErrors(supportController.replyMine),
 );
 
 module.exports = { supportRoutes };

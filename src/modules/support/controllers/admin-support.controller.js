@@ -32,6 +32,16 @@ class AdminSupportController {
     const query = await this.supportService.updateStatus(req.params.queryId, req.body, actor);
     res.json(okResponse(query, { message: "Support query status updated successfully" }));
   };
+
+  deleteQuery = async (req, res) => {
+    const result = await this.supportService.deleteForAdmin(req.params.queryId);
+    res.json(okResponse(result, { message: "Support query deleted successfully" }));
+  };
+
+  bulkDeleteQueries = async (req, res) => {
+    const result = await this.supportService.bulkDeleteForAdmin(req.body);
+    res.json(okResponse(result, { message: "Selected support queries deleted successfully" }));
+  };
 }
 
 module.exports = { AdminSupportController };

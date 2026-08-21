@@ -514,6 +514,18 @@ const updateProductReviewSchema = Joi.object({
   }).required(),
 });
 
+const sellerUpdateProductReviewSchema = Joi.object({
+  body: Joi.object({
+    status: Joi.string().valid("pending", "published", "hidden", "rejected").required(),
+    rejectionReason: Joi.string().trim().max(1000).allow("", null),
+    reason: Joi.string().trim().max(1000).allow("", null),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    reviewId: Joi.string().required(),
+  }).required(),
+});
+
 const bulkUpdateProductReviewsSchema = Joi.object({
   body: Joi.object({
     reviewIds: Joi.array().items(Joi.string().required()).min(1).max(100).required(),
@@ -860,6 +872,7 @@ module.exports = {
   listProductReviewsSchema,
   createProductReviewSchema,
   updateProductReviewSchema,
+  sellerUpdateProductReviewSchema,
   bulkUpdateProductReviewsSchema,
   productReviewIdSchema,
   createBrandSchema,

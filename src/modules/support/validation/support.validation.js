@@ -48,6 +48,14 @@ const createSupportQuerySchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
+const replySupportQuerySchema = Joi.object({
+  body: Joi.object({
+    message: Joi.string().trim().min(1).max(5000).required(),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: queryIdParam.required(),
+});
+
 const listMySupportQueriesSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
@@ -90,14 +98,28 @@ const updateSupportQueryStatusSchema = Joi.object({
   params: queryIdParam.required(),
 });
 
+const bulkDeleteSupportQueriesSchema = Joi.object({
+  body: Joi.object({
+    queryIds: Joi.array()
+      .items(Joi.string().trim().min(4).max(60).required())
+      .min(1)
+      .max(200)
+      .required(),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
 module.exports = {
   CUSTOMER_QUERY_CATEGORIES,
   SELLER_QUERY_CATEGORIES,
   SUPPORT_QUERY_STATUSES,
   createSupportQuerySchema,
+  replySupportQuerySchema,
   listMySupportQueriesSchema,
   supportQueryParamSchema,
   adminListSupportQueriesSchema,
   adminSupportQueryParamSchema,
   updateSupportQueryStatusSchema,
+  bulkDeleteSupportQueriesSchema,
 };

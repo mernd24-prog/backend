@@ -27,6 +27,11 @@ class SupportController {
     const query = await this.supportService.getMine(req.params.queryId, req.auth);
     res.json(okResponse(query));
   };
+
+  replyMine = async (req, res) => {
+    const query = await this.supportService.replyMine(req.params.queryId, req.body, req.auth);
+    res.json(okResponse(query, { message: "Reply added successfully" }));
+  };
 }
 
 module.exports = { SupportController };
