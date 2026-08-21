@@ -16,6 +16,7 @@ class SupportRepository {
   rowToQuery(row = {}) {
     if (!row || !row.id) return null;
     const message = row.message || "";
+    const metadata = this.parseJson(row.metadata, {});
     return {
       id: row.id,
       queryId: row.query_id,
@@ -34,7 +35,9 @@ class SupportRepository {
       status: row.status,
       priority: row.priority || "normal",
       attachmentUrls: this.parseJson(row.attachment_urls, []),
-      metadata: this.parseJson(row.metadata, {}),
+      metadata,
+      messages: Array.isArray(metadata.messages) ? metadata.messages : [],
+      statusHistory: Array.isArray(metadata.statusHistory) ? metadata.statusHistory : [],
       lastStatusChangedBy: row.last_status_changed_by || null,
       lastStatusChangedAt: row.last_status_changed_at || null,
       adminNotes: row.admin_notes || null,
@@ -102,6 +105,7 @@ class SupportRepository {
     const [{ count }] = await base.clone().count({ count: "*" });
     const rows = await base
       .clone()
+      .orderBy("updated_at", "desc")
       .orderBy("created_at", "desc")
       .limit(limit)
       .offset(offset);
@@ -121,6 +125,37 @@ class SupportRepository {
     return this.rowToQuery(row);
   }
 
+  async addReply(queryId, payload = {}) {
+    const existing = await this.findByQueryId(queryId);
+    if (!existing) return null;
+
+    const metadata = existing.metadata || {};
+    const messages = Array.isArray(metadata.messages) ? metadata.messages : [];
+    const createdAt = new Date().toISOString();
+    const nextMessages = [
+      ...messages,
+      {
+        message: payload.message,
+        senderType: payload.senderType,
+        senderId: payload.senderId || null,
+        senderName: payload.senderName || null,
+        createdAt,
+      },
+    ];
+
+    const [row] = await knex(TABLE_NAME)
+      .where("query_id", String(queryId || "").trim())
+      .update({
+        metadata: this.jsonb({
+          ...metadata,
+          messages: nextMessages,
+        }, {}),
+        updated_at: knex.fn.now(),
+      })
+      .returning("*");
+    return this.rowToQuery(row);
+  }
+
   async findByQueryIdForUser(queryId, userType, userId) {
     const [row] = await knex(TABLE_NAME)
       .where("query_id", String(queryId || "").trim())
@@ -131,10 +166,30 @@ class SupportRepository {
   }
 
   async updateStatus(queryId, payload = {}) {
+    const existing = await this.findByQueryId(queryId);
+    if (!existing) return null;
+    const metadata = existing.metadata || {};
+    const statusHistory = Array.isArray(metadata.statusHistory)
+      ? metadata.statusHistory
+      : [];
+    const changedAt = new Date().toISOString();
+    const nextHistory = [
+      ...statusHistory,
+      {
+        status: payload.status,
+        note: payload.adminNotes || "",
+        actorId: payload.actorId || null,
+        changedAt,
+      },
+    ];
     const update = {
       status: payload.status,
       last_status_changed_by: payload.actorId || null,
       last_status_changed_at: knex.fn.now(),
+      metadata: this.jsonb({
+        ...metadata,
+        statusHistory: nextHistory,
+      }, {}),
       updated_at: knex.fn.now(),
     };
     if (payload.adminNotes !== undefined) {
@@ -152,6 +207,36 @@ class SupportRepository {
       .update(update)
       .returning("*");
     return this.rowToQuery(row);
+  }
+
+  async deleteByQueryId(queryId) {
+    const [row] = await knex(TABLE_NAME)
+      .where("query_id", String(queryId || "").trim())
+      .del()
+      .returning("*");
+    return this.rowToQuery(row);
+  }
+
+  async deleteManyByQueryIds(queryIds = []) {
+    const normalizedQueryIds = Array.from(new Set(
+      (Array.isArray(queryIds) ? queryIds : [])
+        .map((queryId) => String(queryId || "").trim())
+        .filter(Boolean),
+    ));
+
+    if (!normalizedQueryIds.length) {
+      return { deletedCount: 0, deletedQueryIds: [] };
+    }
+
+    const rows = await knex(TABLE_NAME)
+      .whereIn("query_id", normalizedQueryIds)
+      .del()
+      .returning(["query_id"]);
+
+    return {
+      deletedCount: rows.length,
+      deletedQueryIds: rows.map((row) => row.query_id).filter(Boolean),
+    };
   }
 }
 

@@ -1013,6 +1013,59 @@ class PlatformService {
     return enriched || updated;
   }
 
+  async bulkUpdateSellerProductReviews(payload = {}, actor = {}) {
+    const sellerId = actor.ownerSellerId || actor.userId;
+    if (!sellerId) throw AppError.forbidden("Seller context is required");
+
+    const reviewIds = Array.isArray(payload.reviewIds)
+      ? payload.reviewIds.filter(Boolean)
+      : [];
+    if (!reviewIds.length) throw new AppError("Select at least one review", 400);
+
+    const status = payload.status || (payload.action === "approve" ? "published" : payload.action);
+    if (!["pending", "published", "hidden", "rejected"].includes(status)) {
+      throw new AppError("Invalid review status", 400);
+    }
+
+    const reviews = (await Promise.all(
+      reviewIds.map((reviewId) => this.platformRepository.getProductReview(reviewId)),
+    )).filter(Boolean);
+    if (reviews.length !== reviewIds.length) throw AppError.notFound("Product reviews");
+
+    const productIds = [...new Set(reviews.map((review) => String(review.productId)).filter(Boolean))];
+    const ownedProducts = await ProductModel.find({
+      _id: { $in: productIds },
+      sellerId,
+      ...(actor.organizationId ? { organizationId: actor.organizationId } : {}),
+    }).select("_id").lean();
+    const ownedProductIds = new Set(ownedProducts.map((product) => String(product._id)));
+    const hasOutsideReview = reviews.some((review) => !ownedProductIds.has(String(review.productId)));
+    if (hasOutsideReview) {
+      throw AppError.forbidden("You can only moderate reviews for your own products");
+    }
+
+    const update = {
+      status,
+      moderatedBy: actor.userId || actor.sub || actor.id || null,
+      moderatedAt: new Date(),
+    };
+    if (status === "rejected") {
+      update.rejectionReason = payload.rejectionReason || payload.reason || "";
+    } else if (status === "published") {
+      update.rejectionReason = "";
+    }
+
+    const result = await this.platformRepository.bulkUpdateProductReviews(
+      reviews.map((review) => review._id),
+      update,
+    );
+    productIds.forEach((id) => this._syncProductRating(id).catch(() => {}));
+    return {
+      matchedCount: result.matchedCount ?? result.n ?? reviews.length,
+      modifiedCount: result.modifiedCount ?? result.nModified ?? 0,
+    };
+  }
+
   async bulkUpdateProductReviews(payload = {}, actor = {}) {
     const reviewIds = Array.isArray(payload.reviewIds)
       ? payload.reviewIds.filter(Boolean)

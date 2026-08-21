@@ -39,7 +39,7 @@ const { ROLES } = require("../../../shared/constants/roles");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
 const { okResponse } = require("../../../shared/http/reply");
 const { sellerChargeSettingsService } = require("../services/seller-charge-settings.service");
-const { listProductReviewsSchema, updateProductReviewSchema } = require("../../platform/validation/platform.validation");
+const { listProductReviewsSchema, sellerUpdateProductReviewSchema, bulkUpdateProductReviewsSchema } = require("../../platform/validation/platform.validation");
 
 const sellerRoutes = express.Router();
 const sellerController = new SellerController();
@@ -143,11 +143,18 @@ sellerRoutes.get(
   checkInput(listProductReviewsSchema),
   catchErrors(sellerController.listProductReviews),
 );
+sellerRoutes.post(
+  "/me/product-reviews/bulk-action",
+  authenticate,
+  allowRoles(ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN),
+  checkInput(bulkUpdateProductReviewsSchema),
+  catchErrors(sellerController.bulkUpdateProductReviews),
+);
 sellerRoutes.patch(
   "/me/product-reviews/:reviewId",
   authenticate,
   allowRoles(ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN),
-  checkInput(updateProductReviewSchema),
+  checkInput(sellerUpdateProductReviewSchema),
   catchErrors(sellerController.updateProductReview),
 );
 sellerRoutes.get(

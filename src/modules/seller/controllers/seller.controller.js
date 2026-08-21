@@ -148,6 +148,12 @@ class SellerController {
     res.json(okResponse(review, { message: "Product review updated successfully." }));
   };
 
+  bulkUpdateProductReviews = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.platformService.bulkUpdateSellerProductReviews(req.body, actor);
+    res.json(okResponse(result, { message: "Product reviews updated successfully." }));
+  };
+
   listAccessModules = async (req, res) => {
     const actor = getCurrentUser(req);
     const modules = await this.sellerService.listAccessModules(req.query, actor);

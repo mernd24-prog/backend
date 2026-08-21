@@ -2432,13 +2432,27 @@ renderBoxLabelPdf(document = {}) {
       }]
       : visibleInvoiceItems;
     const invoiceRowsPerPage = 8;
-    const pageItems = this.chunk(receiptItems.length ? receiptItems : [{}], invoiceRowsPerPage);
-    const streams = pageItems.map((pageRows, pageIndex) => {
-      const commands = [];
-      const text = (value, x, y, size = 7, bold = false, align = "left") => {
-        let safe = this.escapePdfText(value);
-        const approximateWidth = safe.length * size * 0.5;
-        const tx = align === "right" ? x - approximateWidth : x;
+      const pageItems = this.chunk(receiptItems.length ? receiptItems : [{}], invoiceRowsPerPage);
+      const streams = pageItems.map((pageRows, pageIndex) => {
+        const commands = [];
+        const pdfTextWidth = (value, size = 7) => {
+          const widths = {
+            " ": 278, "!": 278, "\"": 355, "#": 556, "$": 556, "%": 889, "&": 667, "'": 191,
+            "(": 333, ")": 333, "*": 389, "+": 584, ",": 278, "-": 333, ".": 278, "/": 278,
+            "0": 556, "1": 556, "2": 556, "3": 556, "4": 556, "5": 556, "6": 556, "7": 556, "8": 556, "9": 556,
+            ":": 278, ";": 278, "<": 584, "=": 584, ">": 584, "?": 556, "@": 1015,
+            A: 667, B: 667, C: 722, D: 722, E: 667, F: 611, G: 778, H: 722, I: 278, J: 500, K: 667, L: 556, M: 833,
+            N: 722, O: 778, P: 667, Q: 778, R: 722, S: 667, T: 611, U: 722, V: 667, W: 944, X: 667, Y: 667, Z: 611,
+            "[": 278, "\\": 278, "]": 278, "^": 469, _: 556, "`": 333,
+            a: 556, b: 556, c: 500, d: 556, e: 556, f: 278, g: 556, h: 556, i: 222, j: 222, k: 500, l: 222, m: 833,
+            n: 556, o: 556, p: 556, q: 556, r: 333, s: 500, t: 278, u: 556, v: 500, w: 722, x: 500, y: 500, z: 500,
+          };
+          const total = String(value || "").split("").reduce((sum, char) => sum + (widths[char] || 556), 0);
+          return (total / 1000) * size;
+        };
+        const text = (value, x, y, size = 7, bold = false, align = "left") => {
+          let safe = this.escapePdfText(value);
+        const tx = align === "right" ? x - pdfTextWidth(value, size) : x;
         commands.push(
           "0.10 0.11 0.14 rg",
           "BT",
@@ -2485,10 +2499,68 @@ renderBoxLabelPdf(document = {}) {
           text(`${lineText}${suffix}`, x, y - index * gap, size, bold);
         });
       };
+      const addressLines = (lines = [], x, y, limit = 30, maxLines = 4, size = 7.5, gap = 10) => {
+        const wrapped = lines
+          .filter(Boolean)
+          .flatMap((lineText) => {
+            const raw = String(lineText || "").replace(/\s+/g, " ").trim();
+            const words = raw.split(" ");
+            const output = [];
+            let current = "";
+            words.forEach((word) => {
+              const next = current ? `${current} ${word}` : word;
+              if (next.length > limit && current) {
+                output.push(current);
+                current = word;
+              } else {
+                current = next;
+              }
+            });
+            if (current) output.push(current);
+            return output;
+          });
+        const visible = wrapped.slice(0, maxLines);
+        if (wrapped.length > maxLines && visible.length) {
+          visible[visible.length - 1] = compact(visible[visible.length - 1], Math.max(4, limit - 1));
+        }
+        visible.forEach((lineText, index) => text(lineText, x, y - index * gap, size));
+      };
+      const textBoxLines = (value, x, y, width, size = 8, bold = false, maxLines = 2, gap = 9) => {
+        const raw = String(value || "-").replace(/\s+/g, " ").trim();
+        const words = raw.split(" ");
+        const lines = [];
+        let current = "";
+        words.forEach((word) => {
+          const next = current ? `${current} ${word}` : word;
+          if (pdfTextWidth(next, size) > width && current) {
+            lines.push(current);
+            current = word;
+          } else {
+            current = next;
+          }
+        });
+        if (current) lines.push(current);
+        const visible = lines.slice(0, maxLines);
+        if (lines.length > maxLines && visible.length) {
+          let last = visible[visible.length - 1];
+          while (last.length > 4 && pdfTextWidth(`${last}...`, size) > width) {
+            last = last.slice(0, -1).trim();
+          }
+          visible[visible.length - 1] = `${last}...`;
+        }
+        visible.forEach((lineText, index) => text(lineText, x, y - index * gap, size, bold));
+      };
 
+      const contentLeftEdge = 40;
+      const contentRightEdge = 555;
+      const textLeftEdge = contentLeftEdge;
+      const rightEdge = contentRightEdge;
+      const tableRightEdge = contentRightEdge - 8;
+      const serviceWidth = 145;
+      const serviceX = contentRightEdge - serviceWidth;
       fill(0, 0, 595, 842, 1, 1, 1);
-      fill(36, 765, 523, 4, 0.81, 0.62, 0.18);
-      text(platformName, 40, 808, 16, true);
+      fill(contentLeftEdge, 765, contentRightEdge - contentLeftEdge, 4, 0.81, 0.62, 0.18);
+      text(platformName, textLeftEdge, 808, 16, true);
       const documentTitle = inv.displayTitle || (isCommission
         ? "COMMISSION TAX INVOICE"
         : isCustomerFee
@@ -2498,8 +2570,8 @@ renderBoxLabelPdf(document = {}) {
           : isOrderReceipt
             ? "ORDER RECEIPT"
             : "TAX INVOICE");
-      text(documentTitle, 555, 806, isCreditNote ? 14 : isCommission ? 11 : 15, true, "right");
-      text(isCreditNote ? "Credit Note for Recipient" : "Original for Recipient", 555, 790, 8, false, "right");
+      text(documentTitle, rightEdge, 806, isCreditNote ? 14 : isCommission ? 11 : 15, true, "right");
+      text(isCreditNote ? "Credit Note for Recipient" : "Original for Recipient", rightEdge, 790, 8, false, "right");
       text("PLATFORM DETAILS", 40, 752, 7.5, true);
       text(platformName, 40, 737, 12, true);
       text(`Marketplace / Platform Operator`, 40, 723, 8);
@@ -2507,18 +2579,18 @@ renderBoxLabelPdf(document = {}) {
       text(`Platform GSTIN: ${compact(platformGstin || "Not configured", 34)}`, 40, 688, 7.5, true);
 
       text("Invoice No.", 350, 748, 8);
-      text(compact(inv.number || "-", 30), 555, 748, 9, true, "right");
+      text(compact(inv.number || "-", 28), rightEdge, 748, 9, true, "right");
       text("Invoice Date", 350, 732, 8);
-      text(invoiceDate, 555, 732, 9, true, "right");
+      text(invoiceDate, rightEdge, 732, 9, true, "right");
       text(isCreditNote ? "Against Invoice" : "Order Reference", 350, 716, 8);
-      text(compact(isCreditNote ? inv.parentInvoiceNumber || "-" : orderReference, 30), 555, 716, 9, true, "right");
+      text(compact(isCreditNote ? inv.parentInvoiceNumber || "-" : orderReference, 28), rightEdge, 716, 9, true, "right");
       text(isCreditNote ? "Return / Cancel Ref." : "Place of Supply", 350, 700, 8);
-      text(compact(isCreditNote ? inv.referenceNumber || "-" : inv.placeOfSupply || "-", 30), 555, 700, 9, true, "right");
+      text(compact(isCreditNote ? inv.referenceNumber || "-" : inv.placeOfSupply || "-", 28), rightEdge, 700, 9, true, "right");
       if (isCreditNote) {
         text(`Reason: ${compact(inv.reason || "-", 46)}`, 350, 684, 7.5);
         text(`Source: ${compact(inv.sourceType || "-", 18)} · Mode: ${compact(inv.reversalMode || "-", 18)}`, 350, 672, 7.5);
       }
-      line(36, 666, 559, 666, 0.8);
+      line(contentLeftEdge, 666, contentRightEdge, 666, 0.8);
 
       text(isCommission
         ? "ISSUED BY / SERVICE PROVIDER"
@@ -2531,39 +2603,40 @@ renderBoxLabelPdf(document = {}) {
       const issuerAddress = isCommission || isOrderReceipt || isCustomerFee
         ? [process.env.INVOICE_REGISTERED_OFFICE].filter(Boolean)
         : sellerAddress;
-      issuerAddress.forEach((addressLine, index) => text(addressLine , 40, 622 - index * 10, 7.5));
+      addressLines(issuerAddress, 40, 622, 30, 4, 7.5, 9);
       if (issuerGstin) text(`${isCommission || isCustomerFee || isOrderReceipt ? "Marketplace" : "Supplier"} GSTIN: ${issuerGstin}`, 40, 587, 7.5, true);
 
       text(isCommission ? "BILLED TO / SELLER" : "BILL TO / CUSTOMER", 220, 650, 8, true);
       text(recipientName, 220, 636, 10, true);
-      recipientAddress.slice(0, 3).forEach((addressLine, index) => text(compact(addressLine, 34), 220, 622 - index * 11, 8));
+      addressLines(recipientAddress, 220, 622, 28, 4, 8, 9);
       const recipientGstin = isCommission ? inv.gstinSeller : (buyer.gstin || buyer.gstNumber);
       if (recipientGstin) text(`Recipient GSTIN: ${recipientGstin}`, 220, 576, 8);
 
       if (isCommission || isCustomerFee || isOrderReceipt) {
-        text("SERVICE DETAILS", 400, 650, 8, true);
-        text(isCommission
+        text("SERVICE DETAILS", serviceX, 650, 8, true);
+        textBoxLines(isCommission
           ? "Marketplace commission and related services"
-          : "Customer platform services", 400, 636, 9, true);
-        text(`Related order: ${orderReference}`, 400, 622, 8);
-        text(isCommission
+          : "Customer platform services", serviceX, 636, serviceWidth, 9, true, 1);
+        text("Related order:", serviceX, 622, 8);
+        textBoxLines(orderReference, serviceX, 611, serviceWidth, 8, false, 2, 9);
+        textBoxLines(isCommission
           ? "This document is not a customer product invoice."
-          : "Seller product tax invoices are provided separately.", 400, 611, 8);
+          : "Seller product tax invoices are provided separately.", serviceX, 590, serviceWidth, 8, false, 2, 9);
       } else {
-        text("SHIP TO", 400, 650, 8, true);
-        text(shipping.fullName || shipping.full_name || shipping.name || buyerName, 400, 636, 10, true);
-        shippingAddress.slice(0, 3).forEach((addressLine, index) => text(compact(addressLine, 32), 400, 622 - index * 11, 8));
+        text("SHIP TO", serviceX, 650, 8, true);
+        textBoxLines(shipping.fullName || shipping.full_name || shipping.name || buyerName, serviceX, 636, serviceWidth, 10, true, 1);
+        textBoxLines(shippingAddress.join(" "), serviceX, 622, serviceWidth, 8, false, 4, 9);
       }
-      line(36, 558, 559, 558, 0.8);
+      line(contentLeftEdge, 558, contentRightEdge, 558, 0.8);
 
-      fill(36, 532, 523, 22, 0.95, 0.93, 0.87);
+      fill(contentLeftEdge, 532, contentRightEdge - contentLeftEdge, 22, 0.95, 0.93, 0.87);
       text("#", 43, 540, 8, true);
       text("Description", 62, 540, 8, true);
       text("HSN/SAC", 270, 540, 8, true);
       text("Qty", 326, 540, 8, true);
       text(isCreditNote ? "Taxable" : "Taxable Value", 414, 540, 8, true, "right");
       text(isCreditNote ? "GST" : "GST", 484, 540, 8, true, "right");
-      text(isCreditNote ? "Value Reversed" : "Invoice Value", 553, 540, 8, true, "right");
+      text(isCreditNote ? "Value Reversed" : "Invoice Value", tableRightEdge, 540, 8, true, "right");
 
       let y = 514;
       pageRows.forEach((item, index) => {
@@ -2607,8 +2680,8 @@ renderBoxLabelPdf(document = {}) {
         text(isCreditNote ? reversalQty(qty) : String(qty), 330, y, 8);
         text(isCreditNote ? reversalMoney(taxable) : money(taxable), 414, y, 8, false, "right");
         text(isCreditNote ? reversalMoney(tax) : money(tax), 484, y, 8, false, "right");
-        text(isCreditNote ? reversalMoney(total) : money(total), 553, y, 8, true, "right");
-        line(36, y - 18, 559, y - 18, 0.35, 0.75);
+        text(isCreditNote ? reversalMoney(total) : money(total), tableRightEdge, y, 8, true, "right");
+        line(contentLeftEdge, y - 18, contentRightEdge, y - 18, 0.35, 0.75);
         y -= 34;
       });
 
@@ -2667,10 +2740,10 @@ renderBoxLabelPdf(document = {}) {
         summaryRows.forEach(([label, value, negative], index) => {
           const rowY = summaryTop - index * 16;
           text(label, 355, rowY, 8);
-          text(`${negative ? "- " : ""}${money(value)}`, 553, rowY, 8, false, "right");
+          text(`${negative ? "- " : ""}${money(value)}`, rightEdge, rowY, 8, false, "right");
         });
         const totalY = summaryTop - summaryRows.length * 16 - 4;
-        line(350, totalY + 12, 559, totalY + 12, 0.8);
+        line(350, totalY + 12, contentRightEdge, totalY + 12, 0.8);
         const totalLabel = isCreditNote
           ? "Customer refund / total credit"
           : isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0
@@ -2679,7 +2752,7 @@ renderBoxLabelPdf(document = {}) {
             ? "Total paid"
             : "Grand total";
         text(totalLabel, 355, totalY - 2, isOrderReceipt ? 9 : 10, true);
-        text(isCreditNote ? reversalMoney(amounts.customerRefundAmount) : money(total), 553, totalY - 2, 11, true, "right");
+        text(isCreditNote ? reversalMoney(amounts.customerRefundAmount) : money(total), rightEdge, totalY - 2, 11, true, "right");
         if (isCreditNote) {
           text(`Remaining invoice balance: ${money(amounts.remainingInvoiceBalance || 0)}`, 355, totalY - 16, 7.5);
           text(`Remaining customer-paid balance: ${money(amounts.remainingCustomerBalance || 0)}`, 355, totalY - 29, 7.5);
@@ -2707,7 +2780,7 @@ renderBoxLabelPdf(document = {}) {
         }
         text(isCreditNote ? "Amount in words: As per the customer refund / total credit shown above." : "Amount in words: As per the grand total shown above.", 40, 174, 8);
         text(isCreditNote ? "This document reverses the referenced invoice values only; refund settlement may be processed separately." : "Payment status and transaction reference are available in the order details.", 40, 159, 8);
-        line(36, 138, 559, 138, 0.8);
+        line(contentLeftEdge, 138, contentRightEdge, 138, 0.8);
         text(isCreditNote
           ? "Credit Note Declaration"
           : isCommission || isCustomerFee
@@ -2723,12 +2796,12 @@ renderBoxLabelPdf(document = {}) {
             ? "This receipt is only for the platform fee charged by the marketplace to the customer. Seller product tax invoices are provided separately."
             : "We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.", 40, 108, 7.5);
         text("This is a computer-generated tax invoice and does not require a physical signature.", 40, 96, 7.5);
-        text(`For ${compact(issuerName, 34)}`, 553, 122, 8, true, "right");
-        text(`Electronically issued by the ${isCommission || isOrderReceipt || isCustomerFee ? "platform" : "supplier"}`, 553, 96, 8, false, "right");
+        text(`For ${compact(issuerName, 34)}`, rightEdge, 122, 8, true, "right");
+        text(`Electronically issued by the ${isCommission || isOrderReceipt || isCustomerFee ? "platform" : "supplier"}`, rightEdge, 96, 8, false, "right");
       } else {
-        text("Continued on next page", 553, 100, 8, true, "right");
+        text("Continued on next page", rightEdge, 100, 8, true, "right");
       }
-      text(`Page ${pageIndex + 1} of ${pageItems.length}`, 553, 42, 8, false, "right");
+      text(`Page ${pageIndex + 1} of ${pageItems.length}`, rightEdge, 42, 8, false, "right");
       text(isCreditNote ? "Credit note generated against the referenced invoice." : "Thank you for shopping with us.", 40, 42, 8);
       return commands.join("\n");
     });

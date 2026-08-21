@@ -7,6 +7,7 @@ const { AdminSupportController } = require("../controllers/admin-support.control
 const {
   adminListSupportQueriesSchema,
   adminSupportQueryParamSchema,
+  bulkDeleteSupportQueriesSchema,
   updateSupportQueryStatusSchema,
 } = require("../validation/support.validation");
 
@@ -19,6 +20,14 @@ adminSupportRoutes.get(
   allowPermissions("queries:view"),
   checkInput(adminListSupportQueriesSchema),
   catchErrors(adminSupportController.listQueries),
+);
+
+adminSupportRoutes.delete(
+  "/queries",
+  authenticate,
+  allowPermissions("queries:delete"),
+  checkInput(bulkDeleteSupportQueriesSchema),
+  catchErrors(adminSupportController.bulkDeleteQueries),
 );
 
 adminSupportRoutes.get(
@@ -35,6 +44,14 @@ adminSupportRoutes.patch(
   allowPermissions("queries:status_change"),
   checkInput(updateSupportQueryStatusSchema),
   catchErrors(adminSupportController.updateStatus),
+);
+
+adminSupportRoutes.delete(
+  "/queries/:queryId",
+  authenticate,
+  allowPermissions("queries:delete"),
+  checkInput(adminSupportQueryParamSchema),
+  catchErrors(adminSupportController.deleteQuery),
 );
 
 module.exports = { adminSupportRoutes };
