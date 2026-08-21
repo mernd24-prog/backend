@@ -471,6 +471,15 @@ class DeliveryService {
         409,
       );
     }
+    const automaticEventTime = payload.eventTime || new Date().toISOString();
+    payload.eventTime = automaticEventTime;
+    if (
+      payload.status === DELIVERY_STATUS.IN_TRANSIT &&
+      !payload.shippedAt &&
+      !shipment.shipped_at
+    ) {
+      payload.shippedAt = automaticEventTime;
+    }
     if (payload.status === DELIVERY_STATUS.IN_TRANSIT) {
       if (!String(payload.courierName || shipment.courier_name || "").trim()) throw new AppError("Courier name is required when shipping", 400);
       if (!String(payload.awbNumber || payload.trackingNumber || shipment.awb_number || shipment.tracking_number || "").trim()) {

@@ -6,17 +6,6 @@ const TABLE_NAME = "seller_charge_settings";
 const GLOBAL_ORGANIZATION_KEY = "seller_default";
 
 const DEFAULT_SELLER_CHARGE_SETTINGS = {
-  cod: {
-    enabled: true,
-    collectionPolicy: "platform_or_courier",
-    chargeMode: "inherit",
-    chargeAmount: 0,
-    minOrderAmount: null,
-    maxOrderAmount: null,
-    availabilityMode: "inherit",
-    allowPincodes: [],
-    notes: "",
-  },
   delivery: {
     mode: "none",
     chargeAmount: 0,
@@ -40,9 +29,6 @@ const DEFAULT_SELLER_CHARGE_SETTINGS = {
 const shippingProfilesService = new ShippingProfilesService();
 
 const ALLOWED = {
-  codChargeMode: ["inherit", "none", "flat"],
-  codAvailabilityMode: ["inherit", "all_pincodes", "allowlist", "disabled"],
-  codCollectionPolicy: ["platform_or_courier", "seller_direct", "hybrid"],
   deliveryMode: ["none", "flat", "free_over_amount", "product", "order", "region", "rule_based"],
   deliveryServiceabilityMode: ["all_pincodes", "allowlist", "regions", "disabled"],
 };
@@ -152,22 +138,9 @@ class SellerChargeSettingsService {
 
   normalize(payload = {}) {
     const source = this.mergeRaw(DEFAULT_SELLER_CHARGE_SETTINGS, payload);
-    const minOrderAmount = nullableMoney(source.cod.minOrderAmount);
-    const maxOrderAmount = nullableMoney(source.cod.maxOrderAmount);
     const freeDeliveryMinOrderAmount = nullableMoney(source.delivery.freeDeliveryMinOrderAmount);
 
     return {
-      cod: {
-        enabled: bool(source.cod.enabled, true),
-        collectionPolicy: pickAllowed(source.cod.collectionPolicy, ALLOWED.codCollectionPolicy, "platform_or_courier"),
-        chargeMode: pickAllowed(source.cod.chargeMode, ALLOWED.codChargeMode, "inherit"),
-        chargeAmount: Math.max(money(source.cod.chargeAmount), 0),
-        minOrderAmount,
-        maxOrderAmount,
-        availabilityMode: pickAllowed(source.cod.availabilityMode, ALLOWED.codAvailabilityMode, "inherit"),
-        allowPincodes: uniqueStrings(source.cod.allowPincodes),
-        notes: String(source.cod.notes || ""),
-      },
       delivery: {
         mode: pickAllowed(source.delivery.mode, ALLOWED.deliveryMode, "none"),
         chargeAmount: Math.max(money(source.delivery.chargeAmount), 0),
@@ -384,20 +357,6 @@ class SellerChargeSettingsService {
     ).trim();
   }
 
-  isSellerCodAllowed(settings, address = {}) {
-    const mode = settings?.cod?.availabilityMode || "inherit";
-    if (mode === "inherit" || mode === "all_pincodes") return true;
-    if (mode === "disabled") return false;
-
-    const pin = this.getPostalCode(address);
-    if (!pin) return mode !== "allowlist";
-
-    if (mode === "allowlist") {
-      return (settings.cod.allowPincodes || []).includes(pin);
-    }
-    return true;
-  }
-
   groupItemsBySeller(pricedItems = []) {
     const grouped = new Map();
     for (const item of pricedItems || []) {
@@ -525,12 +484,20 @@ class SellerChargeSettingsService {
 
   productRuleAllowsAddress(rule = {}, address = {}) {
     if (rule.serviceabilityMode === "disabled" || rule.active === false) return false;
-    const pin = this.getPostalCode(address);
-    if (rule.serviceabilityMode === "allowlist" && !this.listHasValue(rule.serviceablePincodes, pin)) return false;
-    if (rule.serviceabilityMode === "regions" && (rule.regions || []).length) {
-      return this.ruleMatchesLocation(rule, address);
+    if (["all_pincodes", "all_india", "all_locations", "inherit"].includes(rule.serviceabilityMode)) {
+      return true;
     }
-    return this.ruleMatchesLocation(rule, address);
+    const pin = this.getPostalCode(address);
+    // An empty manual allowlist means unrestricted/All India. This also keeps
+    // legacy products saved as `allowlist: []` serviceable.
+    if (
+      rule.serviceabilityMode === "allowlist" &&
+      (rule.serviceablePincodes || []).length > 0 &&
+      !this.listHasValue(rule.serviceablePincodes, pin)
+    ) return false;
+    if (rule.serviceabilityMode === "allowlist") return true;
+    if (rule.serviceabilityMode === "regions") return this.ruleMatchesLocation(rule, address);
+    return true;
   }
 
   getProductShippingBlocker(item = {}, address = {}) {
@@ -564,47 +531,11 @@ class SellerChargeSettingsService {
   }
 
   assertDeliveryServiceable(settings = {}, group = {}, address = {}) {
-    const delivery = settings.delivery || {};
-    const mode = delivery.serviceabilityMode || "all_pincodes";
-    const pin = this.getPostalCode(address);
-    const parts = this.getAddressParts(address);
-
-    if (mode === "disabled") {
-      return { allowed: false, reason: "seller_delivery_disabled" };
-    }
-    if (mode === "allowlist" && !this.listHasValue(delivery.allowPincodes, pin)) {
-      return { allowed: false, reason: "seller_delivery_pincode_not_allowed" };
-    }
-    if (mode === "regions" && (delivery.regions || []).length) {
-      const inRegion = this.listHasValue(delivery.regions, parts.region) ||
-        this.listHasValue(delivery.regions, parts.state) ||
-        this.listHasValue(delivery.regions, parts.city) ||
-        this.listHasValue(delivery.regions, parts.pincode);
-      if (!inRegion) return { allowed: false, reason: "seller_delivery_region_not_allowed" };
-    }
-
+    // Serviceability belongs to the product or its selected shipping profile.
+    // Legacy seller-wide pincode and product-rule settings must not override it.
     for (const item of group.items || []) {
       const productShippingBlocker = this.getProductShippingBlocker(item, address);
       if (productShippingBlocker) return productShippingBlocker;
-
-      const productRules = (delivery.productRules || []).filter((rule) => {
-        if (rule.active === false) return false;
-        const productId = String(rule.productId || "").trim();
-        const sku = this.normalizeLocation(rule.productSku);
-        return (productId && productId === String(item.productId || "").trim()) ||
-          (sku && sku === this.normalizeLocation(item.sku || item.variantSku));
-      });
-      if (!productRules.length) continue;
-
-      const matched = productRules.find((rule) => this.ruleMatchesLocation(rule, address));
-      if (!matched) {
-        return {
-          allowed: false,
-          reason: "product_not_deliverable_to_pincode",
-          productId: item.productId,
-          productTitle: item.title,
-        };
-      }
     }
 
     return { allowed: true, reason: null };
@@ -779,28 +710,13 @@ class SellerChargeSettingsService {
     for (const group of groups.values()) {
       const settings = settingsMap.get(this.scopeKey(group.sellerId, group.organizationId)) ||
         this.withSellerId(group.sellerId, {}, group.organizationId);
-      const cod = settings.cod;
       let allowed = true;
       let reason = null;
 
-      if (!cod.enabled) {
+      const profileCodBlocker = this.findProfileCodBlocker(group, profileMap);
+      if (profileCodBlocker) {
         allowed = false;
-        reason = "seller_cod_disabled";
-      } else if (!this.isSellerCodAllowed(settings, address)) {
-        allowed = false;
-        reason = "seller_cod_pincode_restricted";
-      } else if (cod.minOrderAmount !== null && group.amount < cod.minOrderAmount) {
-        allowed = false;
-        reason = "seller_cod_min_order_not_met";
-      } else if (cod.maxOrderAmount !== null && group.amount > cod.maxOrderAmount) {
-        allowed = false;
-        reason = "seller_cod_max_order_exceeded";
-      } else {
-        const profileCodBlocker = this.findProfileCodBlocker(group, profileMap);
-        if (profileCodBlocker) {
-          allowed = false;
-          reason = profileCodBlocker.reason;
-        }
+        reason = profileCodBlocker.reason;
       }
 
       if (allowed) {
@@ -815,7 +731,7 @@ class SellerChargeSettingsService {
         }
       }
 
-      const chargeAmount = allowed && cod.chargeMode === "flat" ? money(cod.chargeAmount) : 0;
+      const chargeAmount = 0;
       sellerChargeAmount += chargeAmount;
       const sellerResult = {
         sellerId: group.sellerId,
@@ -824,9 +740,9 @@ class SellerChargeSettingsService {
         quantity: group.quantity,
         allowed,
         reason,
-        chargeMode: cod.chargeMode,
+        chargeMode: "none",
         chargeAmount,
-        availabilityMode: cod.availabilityMode,
+        availabilityMode: "product",
       };
       sellers.push(sellerResult);
       if (!allowed) blockers.push(sellerResult);

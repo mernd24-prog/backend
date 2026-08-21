@@ -1166,10 +1166,33 @@ class ProductService {
 
   async validateShippingProfileReference(payload = {}, existingProduct = null) {
     const hasShippingPayload = Object.prototype.hasOwnProperty.call(payload, "shipping");
-    const profileId = hasShippingPayload
+    const hasProfileField = hasShippingPayload && Object.prototype.hasOwnProperty.call(
+      payload.shipping || {},
+      "shippingProfileId",
+    );
+    const profileId = hasProfileField
       ? payload.shipping?.shippingProfileId
       : existingProduct?.shipping?.shippingProfileId;
-    if (!profileId) return;
+    if (!profileId) {
+      if (hasShippingPayload) {
+        const shipping = { ...(existingProduct?.shipping || {}), ...(payload.shipping || {}) };
+        const pincodes = Array.from(new Set(
+          (shipping.allowPincodes || shipping.serviceablePincodes || [])
+            .map((value) => String(value || "").trim())
+            .filter(Boolean),
+        ));
+        if (pincodes.some((pincode) => !/^\d{6}$/.test(pincode))) {
+          throw new AppError("Every allowed delivery pincode must be a valid 6-digit pincode", 400);
+        }
+        payload.shipping.serviceabilityMode = pincodes.length ? "allowlist" : "all_pincodes";
+        payload.shipping.allowPincodes = pincodes;
+        payload.shipping.serviceablePincodes = pincodes;
+        payload.shipping.regions = [];
+        payload.shipping.states = [];
+        payload.shipping.cities = [];
+      }
+      return;
+    }
 
     const sellerId = payload.sellerId || existingProduct?.sellerId;
     const organizationId = payload.organizationId || existingProduct?.organizationId || null;
@@ -1181,6 +1204,17 @@ class ProductService {
     });
     if (profile.active === false) {
       throw new AppError("Inactive shipping profiles cannot be assigned to products", 400);
+    }
+
+    // A selected profile is the only delivery-rule source. Keep product-level
+    // serviceability unrestricted and clear stale manual location filters.
+    if (hasShippingPayload) {
+      payload.shipping.serviceabilityMode = "all_pincodes";
+      payload.shipping.allowPincodes = [];
+      payload.shipping.serviceablePincodes = [];
+      payload.shipping.regions = [];
+      payload.shipping.states = [];
+      payload.shipping.cities = [];
     }
   }
 

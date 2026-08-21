@@ -1382,9 +1382,10 @@ const relationSettlements = Array.isArray(
   ? relations.sellerSettlements
   : [];
 
-const settlementSource = snapshotSettlements.length
-  ? snapshotSettlements
-  : relationSettlements;
+// Delivered commission-ledger settlements supersede the checkout estimate.
+const settlementSource = relationSettlements.length
+  ? relationSettlements
+  : snapshotSettlements;
 
 const sellerSettlements = settlementSource.filter(
   (settlement) =>

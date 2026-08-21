@@ -5,7 +5,6 @@ const { knex } = require("../../../infrastructure/postgres/postgres-client");
 const { AppError } = require("../../../shared/errors/app-error");
 const { ORDER_STATUS, PAYMENT_PROVIDER, PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
-const { sellerChargeSettingsService } = require("./seller-charge-settings.service");
 const { ProductModel } = require("../../product/models/product.model");
 const { ReturnModel } = require("../../returns/models/return.model");
 
@@ -218,11 +217,7 @@ class SettlementLifecycleService {
       .reduce((sum, item) => sum + this.number(item.line_total) - this.number(item.discount_amount), 0);
     const shipmentCount = Math.max(Number(sellerShipmentCount?.count || 1), 1);
     const expectedAmount = this.number((this.number(order.payable_amount || order.total_amount) * (sellerBase / Math.max(totalBase, 1))) / shipmentCount);
-    const sellerSettings = await sellerChargeSettingsService.getSettings(
-      shipment.seller_id,
-      shipment.organization_id || null,
-    );
-    const collectionMode = sellerSettings.cod?.collectionPolicy || "platform_or_courier";
+    const collectionMode = "seller_direct";
 
     const [collection] = await knex("cod_collections").insert({
       id: uuidv4(),
@@ -299,7 +294,49 @@ class SettlementLifecycleService {
       updated_at: knex.fn.now(),
     }).returning("*");
     await this.syncSettlementForVerifiedCollection(updated, actor);
+    await this.captureCodPaymentWhenFullyVerified(updated.order_id, actor);
     return updated;
+  }
+
+  async captureCodPaymentWhenFullyVerified(orderId, actor = {}) {
+    const payment = await knex("payments")
+      .where({ order_id: orderId, provider: PAYMENT_PROVIDER.COD })
+      .orderBy("created_at", "desc")
+      .first();
+    if (!payment || payment.status === PAYMENT_STATUS.CAPTURED) return payment || null;
+
+    const collections = await knex("cod_collections").where("order_id", orderId);
+    if (!collections.length || collections.some((row) => !FINAL_COLLECTION_STATUSES.includes(row.status))) {
+      return null;
+    }
+    const collectedTotal = collections.reduce(
+      (total, row) => total + this.number(row.collected_amount),
+      0,
+    );
+    if (collectedTotal + 0.01 < this.number(payment.amount)) return null;
+
+    const capturedAt = new Date();
+    const verificationMetadata = {
+      codCollectionVerified: true,
+      collectedAmount: collectedTotal,
+      capturedBy: actor.userId || actor.sub || "admin",
+      capturedAt: capturedAt.toISOString(),
+    };
+    const [capturedPayment] = await knex("payments").where("id", payment.id).update({
+      status: PAYMENT_STATUS.CAPTURED,
+      verification_method: "seller_cod_collection_verified",
+      verified_at: capturedAt,
+      approved_by: actor.userId || actor.sub || null,
+      approved_at: capturedAt,
+      metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify(verificationMetadata)]),
+      updated_at: capturedAt,
+    }).returning("*");
+    await knex("orders").where("id", orderId).update({
+      payment_status: PAYMENT_STATUS.CAPTURED,
+      metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({ codPaymentCapture: verificationMetadata })]),
+      updated_at: capturedAt,
+    });
+    return capturedPayment;
   }
 
   async verifyPlatformCollectionsForPayment(payment, actor = {}) {
@@ -317,6 +354,9 @@ class SettlementLifecycleService {
 
   async syncSettlementForVerifiedCollection(collection, actor = {}) {
     if (collection.collected_by !== "seller" || !FINAL_COLLECTION_STATUSES.includes(collection.status)) return null;
+    // If the platform has actually received the full remittance, there is no
+    // seller-held cash to recover through payout/negative-balance offset.
+    if (collection.status === "remitted") return null;
     const adjustmentAmount = -Math.abs(this.number(collection.collected_amount));
     const payload = {
       id: uuidv4(), seller_id: collection.seller_id, organization_id: collection.organization_id || null,

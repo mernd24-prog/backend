@@ -1098,10 +1098,6 @@ class OrderRepository {
           ? "pending"
           : "partially_processed";
       const firstMetadata = metadataRows[0] || {};
-      const isFinanciallyLocked = matches.some((commission) =>
-        commission.status === "paid" || commission.status === "refunded" ||
-        Number(commission.refund_amount || 0) > 0 || Boolean(commission.payout_id),
-      );
       const originalCommissionAmount = sum((commission) => commission.commission_amount);
       const originalCommissionTaxAmount = sum((commission) => commission.tax_amount);
       const commissionReversalAmount = reversedSum((commission) => commission.commission_amount);
@@ -1127,21 +1123,13 @@ class OrderRepository {
         payoutReference: payout?.payment_reference || null,
         payoutMethod: payout?.payment_method || null,
         payoutProcessedAt: payout?.processed_at || null,
-        commissionAmount: isFinanciallyLocked
-          ? originalCommissionAmount
-          : settlement.platformFeeAmount,
-        commissionTaxAmount: isFinanciallyLocked
-          ? sum((commission) => commission.tax_amount)
-          : settlement.platformFeeTaxAmount,
+        commissionAmount: originalCommissionAmount,
+        commissionTaxAmount: sum((commission) => commission.tax_amount),
         refundAmount: sum((commission) => commission.refund_amount),
         adjustmentAmount: sum((commission) => commission.adjustment_amount),
         netCommissionAmount: sum((commission) => commission.net_amount),
-        platformFeeAmount: isFinanciallyLocked
-          ? sum((commission) => commission.commission_amount)
-          : settlement.platformFeeAmount,
-        platformFeeTaxAmount: isFinanciallyLocked
-          ? sum((commission) => commission.tax_amount)
-          : settlement.platformFeeTaxAmount,
+        platformFeeAmount: sum((commission) => commission.commission_amount),
+        platformFeeTaxAmount: sum((commission) => commission.tax_amount),
         commissionReversalAmount,
         netPlatformCommissionAmount: this.money(originalCommissionAmount - commissionReversalAmount),
         commissionTaxReversalAmount,
@@ -1164,16 +1152,12 @@ class OrderRepository {
         ),
         netIncomeTaxTdsAmount: this.money(metadataSum("incomeTaxTdsAmount") - incomeTaxTdsReversalAmount),
         sellerPayoutBaseReversalAmount,
-        gstTcsRate: isFinanciallyLocked ? this.money(firstMetadata.gstTcsRate) : settlement.gstTcsRate,
-        gstTcsAmount: isFinanciallyLocked ? metadataSum("gstTcsAmount") : settlement.gstTcsAmount,
-        incomeTaxTdsRate: isFinanciallyLocked ? this.money(firstMetadata.incomeTaxTdsRate) : settlement.incomeTaxTdsRate,
-        incomeTaxTdsAmount: isFinanciallyLocked ? metadataSum("incomeTaxTdsAmount") : settlement.incomeTaxTdsAmount,
-        statutoryDeductionAmount: isFinanciallyLocked
-          ? metadataSum("statutoryDeductionAmount")
-          : settlement.statutoryDeductionAmount,
-        sellerPayoutAmount: isFinanciallyLocked
-          ? sum((commission) => commission.net_amount)
-          : settlement.sellerPayoutAmount,
+        gstTcsRate: this.money(firstMetadata.gstTcsRate),
+        gstTcsAmount: metadataSum("gstTcsAmount"),
+        incomeTaxTdsRate: this.money(firstMetadata.incomeTaxTdsRate),
+        incomeTaxTdsAmount: metadataSum("incomeTaxTdsAmount"),
+        statutoryDeductionAmount: metadataSum("statutoryDeductionAmount"),
+        sellerPayoutAmount: sum((commission) => commission.net_amount),
       };
     });
   }

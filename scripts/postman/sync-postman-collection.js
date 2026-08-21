@@ -458,7 +458,6 @@ function sampleBodyForRoute(route) {
   }
   if (pathName.includes('/sellers/me/charge-settings') || pathName.includes('/seller-charge-settings')) {
     return {
-      cod: { enabled: true, chargeMode: 'flat', chargeAmount: 49, availabilityMode: 'all_pincodes' },
       delivery: { mode: 'free_over_amount', chargeAmount: 40, freeDeliveryMinOrderAmount: 999 },
       metadata: { source: 'postman' },
     };
