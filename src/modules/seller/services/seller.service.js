@@ -73,7 +73,7 @@ class SellerService {
   }
 
   getSellerId(actor) {
-    return actor.ownerSellerId || actor.userId;
+    return actor.ownerSellerId || actor.sellerId || actor.userId || actor.sub;
   }
 
   toPlainObject(value = {}) {
@@ -97,9 +97,67 @@ class SellerService {
     }
   }
 
+  sanitizeSellerKycForSeller(kyc = null) {
+    if (!kyc) return null;
+    const {
+      aadhaar_verification_response,
+      pan_verification_response,
+      gst_verification_response,
+      ...safeKyc
+    } = kyc;
+    return safeKyc;
+  }
+
+  sanitizeSellerProfileForSeller(profile = {}) {
+    const {
+      aadhaarVerification,
+      aadhaarPrefill,
+      panVerification,
+      panPrefill,
+      gstVerification,
+      gstPrefill,
+      ...safeMetadata
+    } = profile?.metadata || {};
+    const {
+      aadhaarVerificationResponse,
+      panVerificationResponse,
+      gstVerificationResponse,
+      gstVerificationProviderReferenceId,
+      gstRegistrationDate,
+      gstStatus,
+      gstRegisteredAddress,
+      gstVerified,
+      gstVerifiedAt,
+      panCategory,
+      panStatus,
+      panNameMatch,
+      panDobMatch,
+      panAadhaarSeedingStatus,
+      aadhaarGender,
+      aadhaarCareOf,
+      aadhaarAddress,
+      aadhaarMaskedNumber,
+      aadhaarHasPhoto,
+      ...safeProfile
+    } = profile || {};
+    if (profile?.metadata) {
+      safeProfile.metadata = safeMetadata;
+    }
+    return safeProfile;
+  }
+
   buildAadhaarProviderSnapshot(existingKyc = {}, phase, response = {}, extra = {}) {
     const previous = this.parseJsonObject(existingKyc?.aadhaar_verification_response);
     const history = Array.isArray(previous.history) ? previous.history : [];
+    const providerResponse = response?.raw || response?.response || response;
+    const data = providerResponse?.data || response?.data || {};
+    const requestId =
+      response?.request_id ||
+      response?.requestId ||
+      providerResponse?.request_id ||
+      providerResponse?.requestId ||
+      extra.requestId ||
+      null;
     const nextEntry = {
       phase,
       provider: response?.provider || "apitxt",
@@ -107,10 +165,47 @@ class SellerService {
         response?.reference_id ||
         response?.referenceId ||
         response?.providerReferenceId ||
+        data.reference_id ||
+        data.referenceId ||
         extra.referenceId ||
+        null,
+      requestId,
+      maskedAadhaar:
+        response?.masked_aadhaar ||
+        response?.maskedAadhaar ||
+        data.masked_aadhaar ||
+        data.maskedAadhaar ||
+        extra.maskedAadhaar ||
         null,
       verified: response?.verified === true,
       message: response?.message || response?.response?.message || null,
+      response,
+      recordedAt: new Date().toISOString(),
+    };
+
+    return {
+      ...previous,
+      provider: "apitxt",
+      latestPhase: phase,
+      latestReferenceId: nextEntry.referenceId,
+      latestRequestId: nextEntry.requestId,
+      latestMaskedAadhaar: nextEntry.maskedAadhaar,
+      latestVerified: nextEntry.verified,
+      latestMessage: nextEntry.message,
+      latestResponse: response,
+      history: [...history, nextEntry].slice(-10),
+    };
+  }
+
+  buildPanProviderSnapshot(existingKyc = {}, phase, response = {}) {
+    const previous = this.parseJsonObject(existingKyc?.pan_verification_response);
+    const history = Array.isArray(previous.history) ? previous.history : [];
+    const nextEntry = {
+      phase,
+      provider: response?.provider || "apitxt",
+      referenceId: response?.providerReferenceId || response?.referenceId || null,
+      verified: response?.verified === true,
+      message: response?.message || null,
       response,
       recordedAt: new Date().toISOString(),
     };
@@ -127,12 +222,58 @@ class SellerService {
     };
   }
 
-  buildPanProviderSnapshot(existingKyc = {}, phase, response = {}) {
-    const previous = this.parseJsonObject(existingKyc?.pan_verification_response);
+  getPanPrefill(verificationResponse = {}) {
+    const response =
+      verificationResponse?.latestResponse ||
+      verificationResponse?.latestVerificationResponse ||
+      verificationResponse;
+    const data = response?.raw?.data || response?.data || {};
+    const pan = sellerOrganizationService.normalizeCode(data.pan || response?.pan);
+    const category = String(data.category || data.pan_category || "").trim();
+    const status = String(data.status || "").trim();
+    const fullName = String(data.full_name || data.fullName || data.name || "").trim();
+    const aadhaarSeedingStatus = String(
+      data.aadhaar_seeding_status || data.aadhaarSeedingStatus || "",
+    ).trim();
+    const nameMatch =
+      data.name_match === undefined || data.name_match === null
+        ? null
+        : data.name_match === true || String(data.name_match).toLowerCase() === "true";
+    const dobMatch =
+      data.dob_match === undefined || data.dob_match === null
+        ? null
+        : data.dob_match === true || String(data.dob_match).toLowerCase() === "true";
+
+    if (
+      !pan &&
+      !category &&
+      !status &&
+      !fullName &&
+      !aadhaarSeedingStatus &&
+      nameMatch === null &&
+      dobMatch === null
+    ) {
+      return null;
+    }
+
+    return {
+      ...(pan ? { pan } : {}),
+      ...(category ? { category } : {}),
+      ...(status ? { status } : {}),
+      ...(fullName ? { fullName, legalName: fullName } : {}),
+      ...(aadhaarSeedingStatus ? { aadhaarSeedingStatus } : {}),
+      ...(nameMatch !== null ? { nameMatch } : {}),
+      ...(dobMatch !== null ? { dobMatch } : {}),
+    };
+  }
+
+  buildGstProviderSnapshot(existingKyc = {}, phase, response = {}) {
+    const previous = this.parseJsonObject(existingKyc?.gst_verification_response);
     const history = Array.isArray(previous.history) ? previous.history : [];
     const nextEntry = {
       phase,
       provider: response?.provider || "apitxt",
+      referenceId: response?.providerReferenceId || response?.referenceId || null,
       verified: response?.verified === true,
       message: response?.message || null,
       response,
@@ -143,6 +284,7 @@ class SellerService {
       ...previous,
       provider: "apitxt",
       latestPhase: phase,
+      latestReferenceId: nextEntry.referenceId,
       latestVerified: nextEntry.verified,
       latestMessage: nextEntry.message,
       latestResponse: response,
@@ -158,19 +300,133 @@ class SellerService {
     );
   }
 
-  getAadhaarPrefill(verificationResponse = {}) {
-    const prefill =
-      verificationResponse?.prefill ||
-      verificationResponse?.aadhaarProfile ||
-      {};
-    const fullName = String(prefill.fullName || prefill.legalName || "").trim();
-    const dateOfBirth = String(prefill.dateOfBirth || "").trim();
+  isGstAlreadyVerified(existingKyc = {}, gstNumber = "") {
+    return (
+      existingKyc?.gst_verified === true &&
+      sellerOrganizationService.normalizeCode(existingKyc.gst_number) ===
+        sellerOrganizationService.normalizeCode(gstNumber)
+    );
+  }
 
-    if (!fullName && !dateOfBirth) return null;
+  getGstPrefill(verificationResponse = {}) {
+    const data = verificationResponse?.raw?.data || verificationResponse?.data || {};
+    const gstin = sellerOrganizationService.normalizeCode(
+      data.gstin || verificationResponse?.gstin,
+    );
+    const legalName = String(data.legal_name || data.legalName || "").trim();
+    const tradeName = String(data.trade_name || data.tradeName || "").trim();
+    const businessType = String(data.business_type || data.businessType || "").trim();
+    const registrationDate = String(data.registration_date || data.registrationDate || "").trim();
+    const status = String(data.status || "").trim();
+    const state = String(data.state || "").trim();
+    const district = String(data.district || "").trim();
+    const pincode = String(data.pincode || "").trim();
+
+    if (
+      !gstin &&
+      !legalName &&
+      !tradeName &&
+      !businessType &&
+      !registrationDate &&
+      !status &&
+      !state &&
+      !district &&
+      !pincode
+    ) {
+      return null;
+    }
+
+    return {
+      ...(gstin ? { gstin } : {}),
+      ...(legalName ? { legalName, legalBusinessName: legalName } : {}),
+      ...(tradeName ? { tradeName, storeDisplayName: tradeName } : {}),
+      ...(businessType ? { businessType } : {}),
+      ...(registrationDate ? { registrationDate } : {}),
+      ...(status ? { status } : {}),
+      ...(state || district || pincode
+        ? {
+            registeredAddress: {
+              ...(state ? { state } : {}),
+              ...(district ? { district, city: district } : {}),
+              ...(pincode ? { pincode, postalCode: pincode } : {}),
+            },
+          }
+        : {}),
+    };
+  }
+
+  getAadhaarPrefill(verificationResponse = {}) {
+    const response =
+      verificationResponse?.latestResponse ||
+      verificationResponse?.latestVerificationResponse ||
+      verificationResponse;
+    const data = response?.raw?.data || response?.data || {};
+    const prefill =
+      response?.prefill ||
+      response?.aadhaarProfile ||
+      {};
+    const fullName = String(
+      prefill.fullName ||
+        prefill.legalName ||
+        data.name ||
+        data.full_name ||
+        data.fullName ||
+        "",
+    ).trim();
+    const dateOfBirth = String(
+      prefill.dateOfBirth ||
+        data.date_of_birth ||
+        data.dateOfBirth ||
+        data.dob ||
+        "",
+    ).trim();
+    const gender = String(prefill.gender || data.gender || "").trim();
+    const careOf = String(prefill.careOf || data.care_of || data.careOf || "").trim();
+    const fullAddress = String(
+      prefill.fullAddress ||
+        prefill.address ||
+        data.full_address ||
+        data.fullAddress ||
+        data.address ||
+        "",
+    ).trim();
+    const maskedAadhaar = String(
+      response?.masked_aadhaar ||
+        response?.maskedAadhaar ||
+        data.masked_aadhaar ||
+        data.maskedAadhaar ||
+        "",
+    ).trim();
+    const hasPhotoValue =
+      prefill.hasPhoto ??
+      data.has_photo ??
+      data.hasPhoto ??
+      null;
+    const hasPhoto =
+      hasPhotoValue === null || hasPhotoValue === undefined
+        ? null
+        : hasPhotoValue === true || String(hasPhotoValue).toLowerCase() === "true";
+
+    if (
+      !fullName &&
+      !dateOfBirth &&
+      !gender &&
+      !careOf &&
+      !fullAddress &&
+      !maskedAadhaar &&
+      hasPhoto === null
+    ) {
+      return null;
+    }
 
     return {
       ...(fullName ? { fullName, legalName: fullName } : {}),
       ...(dateOfBirth ? { dateOfBirth } : {}),
+      ...(gender ? { gender } : {}),
+      ...(careOf ? { careOf } : {}),
+      ...(fullAddress ? { fullAddress, address: fullAddress } : {}),
+      ...(maskedAadhaar ? { maskedAadhaar } : {}),
+      ...(hasPhoto !== null ? { hasPhoto } : {}),
     };
   }
 
@@ -185,34 +441,6 @@ class SellerService {
     if (nextAadhaar) return storedAadhaar === nextAadhaar;
 
     return !nextReferenceId || storedReferenceId === nextReferenceId;
-  }
-
-  async applyAadhaarPrefillToProfile(sellerId, prefill = null, existingKyc = null, actor = {}) {
-    if (!prefill?.fullName && !prefill?.dateOfBirth) return null;
-
-    const seller = await this.sellerRepository.findSellerById(sellerId);
-    if (!seller) return null;
-
-    const currentProfile = this.toPlainObject(seller.sellerProfile || {});
-    const nextProfile = this.mergeSellerProfile(currentProfile, {
-      ...(!currentProfile.legalBusinessName && prefill.legalName
-        ? { legalBusinessName: prefill.legalName }
-        : {}),
-      ...(!currentProfile.businessName && prefill.legalName
-        ? { businessName: prefill.legalName }
-        : {}),
-      ...(!currentProfile.primaryContactName && prefill.fullName
-        ? { primaryContactName: prefill.fullName }
-        : {}),
-      ...(!currentProfile.dateOfBirth && prefill.dateOfBirth
-        ? { dateOfBirth: prefill.dateOfBirth }
-        : {}),
-    });
-
-    const nextProfileWithOnboarding = this.withOnboardingState(nextProfile, existingKyc, seller);
-    const updatedSeller = await this.sellerRepository.updateSellerProfile(sellerId, nextProfileWithOnboarding);
-
-    return updatedSeller?.sellerProfile || nextProfileWithOnboarding;
   }
 
   async assertAadhaarAvailableForSeller(sellerId, aadhaarNumber) {
@@ -410,11 +638,12 @@ class SellerService {
       sellerProfile,
       actor,
     );
+    const { metadata: overrideMetadata, ...statusOverrides } = overrides || {};
 
     const nextStatus = {
       ...(sellerProfile.kycStatus ? { kycStatus: sellerProfile.kycStatus } : {}),
       ...(sellerProfile.bankVerificationStatus ? { bankVerificationStatus: sellerProfile.bankVerificationStatus } : {}),
-      ...overrides,
+      ...statusOverrides,
     };
 
     const isSellerActor = ["seller", "seller-admin", "seller-sub-admin"].includes(actor.role);
@@ -485,6 +714,7 @@ class SellerService {
       },
       metadata: {
         ...(organization.metadata || {}),
+        ...(overrideMetadata || {}),
         source: organization.metadata?.source || "seller_profile_default_bridge",
         syncedFromSellerProfileAt: new Date().toISOString(),
       },
@@ -522,6 +752,12 @@ class SellerService {
       aadhaarNumber: sellerOrganizationService.normalizeDigits(payload.aadhaarNumber),
       bankDetails: sellerOrganizationService.normalizeBankDetails(payload.bankDetails || {}),
     };
+    const currentSellerGstinOrganization = normalizedPayload.gstNumber
+      ? await sellerOrganizationService.organizationRepository.findByGstinForSeller(
+          sellerId,
+          normalizedPayload.gstNumber,
+        )
+      : null;
     await sellerOrganizationService.assertNoIdentityConflicts(
       {
         gstin: normalizedPayload.gstNumber,
@@ -529,6 +765,7 @@ class SellerService {
       },
       {
         sellerId,
+        organizationId: currentSellerGstinOrganization?.id || null,
         panVerifiedOnly: true,
         ignoreMissingSellerConflicts: true,
         fieldMap: {
@@ -559,10 +796,12 @@ class SellerService {
       );
     }
     const panAlreadyVerified = this.isPanAlreadyVerified(existingKyc, normalizedPayload.panNumber);
+    const gstAlreadyVerified = this.isGstAlreadyVerified(existingKyc, normalizedPayload.gstNumber);
     const shouldVerifyGst =
       this.kycVerificationService.enabled &&
       this.kycVerificationService.verifyGst &&
-      Boolean(normalizedPayload.gstNumber);
+      Boolean(normalizedPayload.gstNumber) &&
+      !gstAlreadyVerified;
 
     logger.info(
       {
@@ -572,6 +811,7 @@ class SellerService {
         verifyGst: this.kycVerificationService.verifyGst,
         hasGstNumber: Boolean(normalizedPayload.gstNumber),
         panAlreadyVerified,
+        gstAlreadyVerified,
         shouldVerifyGst,
       },
       "Seller KYC submit verification flags resolved",
@@ -582,6 +822,7 @@ class SellerService {
       verifyGst: this.kycVerificationService.verifyGst,
       hasGstNumber: Boolean(normalizedPayload.gstNumber),
       panAlreadyVerified,
+      gstAlreadyVerified,
       shouldVerifyGst,
     });
 
@@ -633,14 +874,28 @@ class SellerService {
         panVerified: true,
         panResult: this.parseJsonObject(existingKyc?.pan_verification_response),
         cached: true,
-        gstVerified: gstResult?.verified === true,
-        gstResult,
+        gstVerified: gstAlreadyVerified || gstResult?.verified === true,
+        gstResult: gstAlreadyVerified
+          ? this.parseJsonObject(existingKyc?.gst_verification_response)
+          : gstResult,
       };
     } else {
-      verificationResult = await this.kycVerificationService.verifyForOnboarding(normalizedPayload, {
+      verificationResult = await this.kycVerificationService.verifyForOnboarding(
+        gstAlreadyVerified
+          ? { ...normalizedPayload, gstNumber: null }
+          : normalizedPayload,
+        {
         sellerId,
         actor,
-      });
+        },
+      );
+      if (gstAlreadyVerified) {
+        verificationResult = {
+          ...verificationResult,
+          gstVerified: true,
+          gstResult: this.parseJsonObject(existingKyc?.gst_verification_response),
+        };
+      }
       logger.info(
         {
           sellerId,
@@ -658,6 +913,40 @@ class SellerService {
         gstMessage: verificationResult?.gstResult?.message || null,
       });
     }
+    const panVerificationSnapshot = verificationResult?.cached
+      ? this.parseJsonObject(existingKyc?.pan_verification_response)
+      : verificationResult?.panResult
+        ? this.buildPanProviderSnapshot(
+            existingKyc,
+            "kyc_submit",
+            verificationResult.panResult,
+          )
+        : null;
+    const panPrefill =
+      verificationResult?.panVerified === true
+        ? this.getPanPrefill(panVerificationSnapshot || verificationResult.panResult)
+        : null;
+    const aadhaarVerificationSnapshot = existingKyc?.aadhaar_verification_response
+      ? this.parseJsonObject(existingKyc.aadhaar_verification_response)
+      : null;
+    const aadhaarPrefill =
+      existingKyc?.aadhaar_verified === true
+        ? this.getAadhaarPrefill(aadhaarVerificationSnapshot)
+        : null;
+    const gstVerificationSnapshot = gstAlreadyVerified
+      ? this.parseJsonObject(existingKyc?.gst_verification_response)
+      : verificationResult?.gstResult
+        ? this.buildGstProviderSnapshot(
+            existingKyc,
+            verificationResult.cached ? "kyc_submit_pan_cached" : "kyc_submit",
+            verificationResult.gstResult,
+          )
+        : null;
+    const gstPrefill =
+      verificationResult?.gstVerified === true
+        ? this.getGstPrefill(verificationResult.gstResult)
+        : null;
+    const verifiedAt = new Date();
     const documents = await this.uploadKycDocuments(payload.documents || {}, actor);
     const record = await this.sellerRepository.upsertKyc({
       ...normalizedPayload,
@@ -665,8 +954,11 @@ class SellerService {
       sellerId,
       verificationStatus: KYC_STATUS.SUBMITTED,
       panVerified: verificationResult?.panVerified === true,
-      panVerifiedAt: verificationResult?.panVerified ? new Date() : null,
-      panVerificationResponse: verificationResult?.panResult || null,
+      panVerifiedAt: verificationResult?.panVerified ? verifiedAt : null,
+      panVerificationResponse: panVerificationSnapshot || verificationResult?.panResult || null,
+      gstVerified: verificationResult?.gstVerified === true,
+      gstVerifiedAt: verificationResult?.gstVerified ? verifiedAt : null,
+      gstVerificationResponse: gstVerificationSnapshot,
     });
 
     const seller = await this.sellerRepository.findSellerById(sellerId);
@@ -676,13 +968,12 @@ class SellerService {
         {
           bankDetails: normalizedPayload.bankDetails || {},
           ...(normalizedPayload.dateOfBirth ? { dateOfBirth: normalizedPayload.dateOfBirth } : {}),
-          ...(verificationResult?.gstVerified
+          kycStatus: KYC_STATUS.SUBMITTED,
+          verificationStatus: KYC_STATUS.SUBMITTED,
+          ...(verificationResult?.panVerified
             ? {
-                gstVerified: true,
-                gstVerifiedAt: new Date().toISOString(),
-                gstVerificationResponse: verificationResult.gstResult || null,
-                kycStatus: KYC_STATUS.VERIFIED,
-                verificationStatus: KYC_STATUS.VERIFIED,
+                panVerified: true,
+                panVerifiedAt: verifiedAt.toISOString(),
               }
             : {}),
         },
@@ -700,6 +991,30 @@ class SellerService {
           legalBusinessName: normalizedPayload.legalName,
           gstin: normalizedPayload.gstNumber || existingProfile.gstNumber || null,
           pan: normalizedPayload.panNumber || existingProfile.panNumber || null,
+          ...(aadhaarVerificationSnapshot || panVerificationSnapshot || gstVerificationSnapshot
+            ? {
+                metadata: {
+                  ...(aadhaarVerificationSnapshot
+                    ? {
+                        aadhaarVerification: aadhaarVerificationSnapshot,
+                        aadhaarPrefill,
+                      }
+                    : {}),
+                  ...(panVerificationSnapshot
+                    ? {
+                        panVerification: panVerificationSnapshot,
+                        panPrefill,
+                      }
+                    : {}),
+                  ...(gstVerificationSnapshot
+                    ? {
+                        gstVerification: gstVerificationSnapshot,
+                        gstPrefill,
+                      }
+                    : {}),
+                },
+              }
+            : {}),
           documents,
           kycStatus: KYC_STATUS.SUBMITTED,
           bankVerificationStatus: this.hasCompleteBankDetails(normalizedPayload.bankDetails || {})
@@ -724,7 +1039,7 @@ class SellerService {
         },
       ),
     );
-    return record;
+    return this.sanitizeSellerKycForSeller(record);
   }
 
   async sendAadhaarOtp(payload = {}, actor) {
@@ -749,7 +1064,6 @@ class SellerService {
         aadhaarVerified: true,
         reference_id: existingKyc.aadhaar_reference_id || null,
         aadhaarVerifiedAt: existingKyc.aadhaar_verified_at || null,
-        response: this.parseJsonObject(existingKyc.aadhaar_verification_response),
         message: "Aadhaar is already verified.",
       };
     }
@@ -808,7 +1122,14 @@ class SellerService {
       ),
     });
 
-    return response;
+    return {
+      skipped: response?.skipped === true,
+      testMode: response?.testMode === true,
+      verificationMode: response?.verificationMode || null,
+      provider: response?.provider || "apitxt",
+      reference_id: referenceId || null,
+      message: response?.message || "Aadhaar OTP sent successfully",
+    };
   }
 
   async precheckAadhaar(payload = {}, actor) {
@@ -824,13 +1145,6 @@ class SellerService {
 
     const existingKyc = await this.sellerRepository.findKycBySellerId(sellerId);
     if (this.isAadhaarAlreadyVerified(existingKyc, { aadhaarNumber, referenceId })) {
-      const cachedResponse = this.parseJsonObject(existingKyc.aadhaar_verification_response);
-      const latestResponse =
-        cachedResponse.latestResponse ||
-        cachedResponse.latestVerificationResponse ||
-        cachedResponse;
-      const prefill = this.getAadhaarPrefill(latestResponse);
-
       return {
         canProceed: false,
         skipped: true,
@@ -839,8 +1153,6 @@ class SellerService {
         aadhaarVerified: true,
         aadhaarReferenceId: existingKyc.aadhaar_reference_id || referenceId || null,
         aadhaarVerifiedAt: existingKyc.aadhaar_verified_at || null,
-        ...(prefill ? { prefill, aadhaarProfile: prefill } : {}),
-        verificationResponse: latestResponse,
         message: "Aadhaar is already verified.",
       };
     }
@@ -922,7 +1234,6 @@ class SellerService {
         reason: "pan_already_verified",
         panVerified: true,
         panVerifiedAt: existingKyc.pan_verified_at || null,
-        response: this.parseJsonObject(existingKyc.pan_verification_response),
         message: "PAN is already verified.",
       };
     }
@@ -957,13 +1268,6 @@ class SellerService {
     try {
       const existingKyc = await this.sellerRepository.findKycBySellerId(sellerId);
       if (this.isAadhaarAlreadyVerified(existingKyc, { aadhaarNumber, referenceId })) {
-        const cachedResponse = this.parseJsonObject(existingKyc.aadhaar_verification_response);
-        const prefill = this.getAadhaarPrefill(
-          cachedResponse.latestResponse ||
-            cachedResponse.latestVerificationResponse ||
-            cachedResponse,
-        );
-
         return {
           skipped: true,
           cached: true,
@@ -971,11 +1275,6 @@ class SellerService {
           aadhaarVerified: true,
           aadhaarReferenceId: existingKyc.aadhaar_reference_id || referenceId,
           aadhaarVerifiedAt: existingKyc.aadhaar_verified_at || null,
-          ...(prefill ? { prefill, aadhaarProfile: prefill } : {}),
-          verificationResponse:
-            cachedResponse.latestResponse ||
-            cachedResponse.latestVerificationResponse ||
-            cachedResponse,
           message: "Aadhaar is already verified.",
         };
       }
@@ -1017,21 +1316,11 @@ class SellerService {
         "Invalid Aadhaar OTP. Please check the OTP and try again.",
       );
 
-      const prefill = this.getAadhaarPrefill(verificationResponse);
-      const profile = await this.applyAadhaarPrefillToProfile(
-        sellerId,
-        prefill,
-        await this.sellerRepository.findKycBySellerId(sellerId),
-        actor,
-      );
-
       return {
         aadhaarVerified: true,
         aadhaarReferenceId: referenceId,
         aadhaarVerifiedAt: verifiedAt,
-        ...(prefill ? { prefill, aadhaarProfile: prefill } : {}),
-        ...(profile ? { profile } : {}),
-        verificationResponse,
+        message: "Aadhaar verified successfully.",
       };
     } catch (error) {
       if (
@@ -1100,7 +1389,6 @@ class SellerService {
         reason: "pan_already_verified",
         panVerified: true,
         panVerifiedAt: existingKyc.pan_verified_at || null,
-        response: this.parseJsonObject(existingKyc.pan_verification_response),
         message: "PAN is already verified.",
       };
     }
@@ -1149,7 +1437,6 @@ class SellerService {
     return {
       panVerified: true,
       panVerifiedAt: verifiedAt,
-      verificationResponse,
       message: "PAN verified successfully.",
     };
   }
@@ -1214,9 +1501,11 @@ class SellerService {
       organization,
     );
     return {
-      profile: this.withOnboardingState(organizationBackedProfile, kyc, seller),
+      profile: this.sanitizeSellerProfileForSeller(
+        this.withOnboardingState(organizationBackedProfile, kyc, seller),
+      ),
       settings: seller.sellerSettings || null,
-      kyc,
+      kyc: this.sanitizeSellerKycForSeller(kyc),
       organization: sellerOrganizationService.buildPublicSummary(organization),
     };
   }

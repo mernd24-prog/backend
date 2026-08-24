@@ -317,8 +317,62 @@ class AdminService {
     }
   }
 
+  parseKycJson(value) {
+    if (!value) return {};
+    if (typeof value === "object") return value;
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  getVerificationReference(snapshotValue, fallbackReferenceId = null) {
+    const snapshot = this.parseKycJson(snapshotValue);
+    const latestResponse =
+      snapshot.latestResponse ||
+      snapshot.latestVerificationResponse ||
+      snapshot.response ||
+      {};
+    const raw = latestResponse.raw || latestResponse.response || {};
+    const data = raw.data || latestResponse.data || {};
+
+    return {
+      provider: snapshot.provider || latestResponse.provider || "apitxt",
+      referenceId:
+        snapshot.latestReferenceId ||
+        latestResponse.providerReferenceId ||
+        latestResponse.referenceId ||
+        latestResponse.reference_id ||
+        raw.request_id ||
+        raw.requestId ||
+        data.request_id ||
+        data.requestId ||
+        fallbackReferenceId ||
+        null,
+      requestId:
+        snapshot.latestRequestId ||
+        latestResponse.requestId ||
+        latestResponse.request_id ||
+        raw.request_id ||
+        raw.requestId ||
+        data.request_id ||
+        data.requestId ||
+        null,
+      message: snapshot.latestMessage || latestResponse.message || raw.message || null,
+      verified: snapshot.latestVerified ?? latestResponse.verified ?? null,
+    };
+  }
+
   formatKycForAdmin(kyc) {
     if (!kyc) return null;
+    const aadhaarReference = this.getVerificationReference(
+      kyc.aadhaar_verification_response,
+      kyc.aadhaar_reference_id,
+    );
+    const panReference = this.getVerificationReference(kyc.pan_verification_response);
+    const gstReference = this.getVerificationReference(kyc.gst_verification_response);
     return {
       verificationStatus: kyc.verification_status,
       legalName: kyc.legal_name,
@@ -330,6 +384,11 @@ class AdminService {
       reviewedBy: kyc.reviewed_by || null,
       submittedAt: kyc.submitted_at || null,
       reviewedAt: kyc.reviewed_at || null,
+      verificationReferences: {
+        aadhaar: aadhaarReference,
+        pan: panReference,
+        gst: gstReference,
+      },
       documents: this.formatKycDocuments(kyc.documents),
     };
   }

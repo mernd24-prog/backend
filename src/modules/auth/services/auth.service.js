@@ -236,6 +236,44 @@ class AuthService {
     };
   }
 
+  sanitizeSellerProfileForStatus(profile = {}) {
+    const {
+      aadhaarVerification,
+      aadhaarPrefill,
+      panVerification,
+      panPrefill,
+      gstVerification,
+      gstPrefill,
+      ...safeMetadata
+    } = profile?.metadata || {};
+    const {
+      aadhaarVerificationResponse,
+      panVerificationResponse,
+      gstVerificationResponse,
+      gstVerificationProviderReferenceId,
+      gstRegistrationDate,
+      gstStatus,
+      gstRegisteredAddress,
+      gstVerified,
+      gstVerifiedAt,
+      panCategory,
+      panStatus,
+      panNameMatch,
+      panDobMatch,
+      panAadhaarSeedingStatus,
+      aadhaarGender,
+      aadhaarCareOf,
+      aadhaarAddress,
+      aadhaarMaskedNumber,
+      aadhaarHasPhoto,
+      ...safeProfile
+    } = profile || {};
+    if (profile?.metadata) {
+      safeProfile.metadata = safeMetadata;
+    }
+    return safeProfile;
+  }
+
   async makeOnboardingResponse(user) {
     const flowState = await this.getAuthStatus(user.id);
     const onboardingToken = makeOnboardingToken({
@@ -654,7 +692,7 @@ class AuthService {
         incompleteOrganizationIds: [],
       },
       organizationApproved,
-      sellerProfile: isSeller ? sellerProfile : null,
+      sellerProfile: isSeller ? this.sanitizeSellerProfileForStatus(sellerProfile) : null,
       kyc: isSeller ? this.formatSellerKycForStatus(kyc) : null,
       requirements: onboardingState?.requirements || {},
       hasApprovedOrganization: organizationSummary?.hasApprovedOrganization || false,

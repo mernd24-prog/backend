@@ -43,6 +43,11 @@ class SellerRepository {
         pan_verification_response: payload.panVerificationResponse
           ? JSON.stringify(payload.panVerificationResponse)
           : null,
+        gst_verified: payload.gstVerified === true,
+        gst_verified_at: payload.gstVerifiedAt || null,
+        gst_verification_response: payload.gstVerificationResponse
+          ? JSON.stringify(payload.gstVerificationResponse)
+          : null,
         rejection_reason: payload.rejectionReason || null,
         submitted_at: knex.fn.now(),
       })
@@ -59,6 +64,11 @@ class SellerRepository {
         pan_verified_at: payload.panVerifiedAt || null,
         pan_verification_response: payload.panVerificationResponse
           ? JSON.stringify(payload.panVerificationResponse)
+          : null,
+        gst_verified: payload.gstVerified === true,
+        gst_verified_at: payload.gstVerifiedAt || null,
+        gst_verification_response: payload.gstVerificationResponse
+          ? JSON.stringify(payload.gstVerificationResponse)
           : null,
         rejection_reason: payload.rejectionReason || null,
         submitted_at: knex.fn.now(),
