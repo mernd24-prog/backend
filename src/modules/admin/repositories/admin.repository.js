@@ -474,6 +474,10 @@ class AdminRepository {
          pan_number,
          gst_number,
          aadhaar_number,
+         aadhaar_reference_id,
+         aadhaar_verification_response,
+         pan_verification_response,
+         gst_verification_response,
          documents
        FROM seller_kyc
        WHERE seller_id = ANY($1::text[])`,

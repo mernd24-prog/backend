@@ -177,6 +177,9 @@ ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS aadhaar_verification_response JS
 ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS pan_verified BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS pan_verified_at TIMESTAMPTZ;
 ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS pan_verification_response JSONB;
+ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS gst_verified BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS gst_verified_at TIMESTAMPTZ;
+ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS gst_verification_response JSONB;
 ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS business_type VARCHAR(64);
 ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS verification_status VARCHAR(64);
 ALTER TABLE seller_kyc ADD COLUMN IF NOT EXISTS documents JSONB NOT NULL DEFAULT '{}'::jsonb;

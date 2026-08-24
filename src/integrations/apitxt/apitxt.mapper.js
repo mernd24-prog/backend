@@ -146,11 +146,60 @@ function extractAadhaarProfile(response = {}) {
     ),
   );
 
-  if (!fullName && !dateOfBirth) return null;
+  const gender = firstNonEmpty(
+    response.gender,
+    data.gender,
+    result.gender,
+    user.gender,
+  );
+  const careOf = firstNonEmpty(
+    response.care_of,
+    response.careOf,
+    data.care_of,
+    data.careOf,
+    result.care_of,
+    result.careOf,
+  );
+  const fullAddress = firstNonEmpty(
+    response.full_address,
+    response.fullAddress,
+    response.address,
+    data.full_address,
+    data.fullAddress,
+    data.address,
+    result.full_address,
+    result.fullAddress,
+    result.address,
+  );
+  const hasPhoto =
+    response.has_photo ??
+    response.hasPhoto ??
+    data.has_photo ??
+    data.hasPhoto ??
+    result.has_photo ??
+    result.hasPhoto ??
+    null;
+
+  if (
+    !fullName &&
+    !dateOfBirth &&
+    !gender &&
+    !careOf &&
+    !fullAddress &&
+    (hasPhoto === null || hasPhoto === undefined)
+  ) {
+    return null;
+  }
 
   return {
     ...(fullName ? { fullName, legalName: fullName } : {}),
     ...(dateOfBirth ? { dateOfBirth } : {}),
+    ...(gender ? { gender } : {}),
+    ...(careOf ? { careOf } : {}),
+    ...(fullAddress ? { fullAddress, address: fullAddress } : {}),
+    ...(hasPhoto !== null && hasPhoto !== undefined
+      ? { hasPhoto: hasPhoto === true || String(hasPhoto).toLowerCase() === "true" }
+      : {}),
   };
 }
 
