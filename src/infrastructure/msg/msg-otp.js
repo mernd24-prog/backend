@@ -19,6 +19,9 @@ const maskMobile = (mobile = "") => {
 const makeDailyLimitKey = (mobile, purpose) =>
   `apitxt:sms-otp:daily:${purpose}:${mobile}`;
 
+const makeWhatsappDailyLimitKey = (mobile, purpose) =>
+  `apitxt:whatsapp-otp:daily:${purpose}:${mobile}`;
+
 const sendSmsOtp = async ({
   mobile,
   otp,
@@ -177,6 +180,155 @@ const sendSmsOtp = async ({
   };
 };
 
+const sendWhatsappOtp = async ({
+  mobile,
+  otp,
+  purpose = "seller_registration",
+} = {}) => {
+  const mobileNumber = normalizeMobile(mobile);
+
+  if (!mobileNumber) {
+    throw new AppError("Mobile number is required for WhatsApp OTP", 400);
+  }
+
+  if (!env.apitxt.whatsappOtpEnabled) {
+    logger.info(
+      {
+        provider: "static",
+        purpose,
+        mobile: maskMobile(mobileNumber),
+        reason: "apitxt_whatsapp_otp_disabled",
+      },
+      "APITXT WhatsApp OTP disabled; OTP will be verified from local store",
+    );
+
+    return {
+      success: true,
+      skipped: true,
+      testMode: true,
+      provider: "static",
+      requestId: null,
+      providerResponse: {
+        status: "skipped",
+        reason: "apitxt_whatsapp_otp_disabled",
+        message: "APITXT WhatsApp OTP is disabled. OTP is stored locally for testing.",
+      },
+      purpose,
+    };
+  }
+
+  if (!env.apitxt.enabled || !env.apitxt.authKey) {
+    logger.warn(
+      {
+        provider: "apitxt",
+        channel: "whatsapp",
+        purpose,
+        mobile: maskMobile(mobileNumber),
+        apitxtEnabled: env.apitxt.enabled,
+        hasAuthKey: Boolean(env.apitxt.authKey),
+      },
+      "APITXT WhatsApp OTP provider is not configured",
+    );
+
+    throw new AppError("APITXT WhatsApp OTP provider is not configured", 503);
+  }
+
+  const { redis } = require("../redis/redis-client");
+  const limitKey = makeWhatsappDailyLimitKey(mobileNumber, purpose);
+  const nextCount = await redis.incr(limitKey);
+  if (nextCount === 1) {
+    await redis.expire(limitKey, DAILY_TTL_SECONDS);
+  }
+  if (nextCount > env.apitxt.whatsappOtpDailyLimit) {
+    logger.warn(
+      {
+        provider: "apitxt",
+        channel: "whatsapp",
+        purpose,
+        mobile: maskMobile(mobileNumber),
+        nextCount,
+        limit: env.apitxt.whatsappOtpDailyLimit,
+      },
+      "APITXT WhatsApp OTP daily provider limit reached",
+    );
+
+    throw new AppError(
+      "WhatsApp OTP daily provider limit reached for this user. Try again tomorrow.",
+      429,
+    );
+  }
+
+  let responseData;
+
+  try {
+    logger.info(
+      {
+        provider: "apitxt",
+        channel: "whatsapp",
+        purpose,
+        mobile: maskMobile(mobileNumber),
+        dailyCount: nextCount,
+        dailyLimit: env.apitxt.whatsappOtpDailyLimit,
+      },
+      "Sending WhatsApp OTP through APITXT",
+    );
+
+    responseData = await apitxtService.sendSmsOtp({
+      url: env.apitxt.whatsappOtpUrl,
+      mobile: mobileNumber,
+      otp: String(otp),
+      channel: env.apitxt.whatsappOtpChannel,
+      templateId: env.apitxt.whatsappOtpTemplateId,
+      country: env.apitxt.whatsappOtpCountry,
+      templateName: env.apitxt.whatsappOtpTemplateName,
+      projectRefId: env.apitxt.whatsappOtpProjectRefId,
+    });
+  } catch (error) {
+    logger.error(
+      {
+        err: error,
+        provider: "apitxt",
+        channel: "whatsapp",
+        purpose,
+        mobile: maskMobile(mobileNumber),
+      },
+      "APITXT WhatsApp OTP send failed",
+    );
+
+    throw error;
+  }
+
+  logger.info(
+    {
+      provider: "apitxt",
+      channel: "whatsapp",
+      purpose,
+      mobile: maskMobile(mobileNumber),
+      requestId:
+        responseData.requestId ||
+        responseData.request_id ||
+        responseData.id ||
+        null,
+      cost: responseData.cost || null,
+    },
+    "APITXT WhatsApp OTP sent successfully",
+  );
+
+  return {
+    success: true,
+    requestId:
+      responseData.requestId ||
+      responseData.request_id ||
+      responseData.id ||
+      null,
+    provider: "apitxt",
+    channel: "whatsapp",
+    providerResponse: responseData.providerResponse || responseData,
+    purpose,
+  };
+};
+
 module.exports = {
   sendSmsOtp,
+  sendWhatsappOtp,
 };

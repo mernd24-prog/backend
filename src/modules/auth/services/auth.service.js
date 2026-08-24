@@ -31,6 +31,7 @@ const {
 
 const {
   sendSmsOtp,
+  sendWhatsappOtp,
 } = require("../../../infrastructure/msg/msg-otp");
 const {
   SELLER_ONBOARDING_STATUS,
@@ -457,17 +458,28 @@ class AuthService {
     const regKey = `registration:${payload.email}`;
     await redis.setex(regKey, 600, JSON.stringify(registrationData)); // 10 minutes
 
-    return this.sendOtp(
-      {
-        email: payload.email,
-        mobile: payload.phone,
-        purpose: "registration",
-      },
-      requestContext,
-    ).then((result) => ({
-      ...result,
-      message: this.getRegistrationOtpMessage(payload.role),
-    }));
+    try {
+      const result = await this.sendOtp(
+        {
+          email: payload.email,
+          mobile: payload.phone,
+          role: payload.role,
+          purpose: "registration",
+        },
+        requestContext,
+      );
+
+      return {
+        ...result,
+        message: result?.deliveryMode === "third_party_whatsapp"
+          ? `${this.getSignupRoleLabel(payload.role)} registration OTP sent successfully on WhatsApp.`
+          : this.getRegistrationOtpMessage(payload.role),
+      };
+    } catch (error) {
+      await redis.del(regKey).catch(() => {});
+      await redis.del(this.makeOtpKey(payload.email, "registration")).catch(() => {});
+      throw error;
+    }
   }
 
   async verifyRegistration(payload, requestContext = {}) {
@@ -1676,17 +1688,18 @@ class AuthService {
     };
   }
   async sendOtp(payload, requestContext = {}) {
-    const { email, mobile, purpose = "registration" } = payload;
+    const { email, mobile, purpose = "registration", role } = payload;
 
     const existingUser = await this.authRepository.findUserByEmail(email);
+    const roleLabel = this.getSignupRoleLabel(role);
     if (purpose === "registration" && existingUser) {
-      throw new AppError("Customer email already exists. Please login or use another email.", 409);
+      throw new AppError(`${roleLabel} email already exists. Please login or use another email.`, 409);
     }
     const mobileNumber = String(mobile || existingUser?.phone || "").trim();
     if (purpose === "registration" && mobileNumber) {
       const existingByPhone = await this.authRepository.findUserByPhone(mobileNumber);
       if (existingByPhone) {
-        throw new AppError("Customer phone number already exists. Please login or use another phone number.", 409);
+        throw new AppError(`${roleLabel} phone number already exists. Please login or use another phone number.`, 409);
       }
     }
     if (purpose === "forgot_password" && !existingUser) {
@@ -1710,7 +1723,13 @@ class AuthService {
       );
     }
 
-    const isStaticOtp = env.auth.otpMode === "static" || (mobileNumber && !env.apitxt.smsOtpEnabled);
+    const useSellerRegistrationWhatsapp =
+      purpose === "registration" &&
+      role === ROLES.SELLER &&
+      Boolean(mobileNumber) &&
+      env.apitxt.whatsappOtpEnabled;
+    const isStaticOtp = !useSellerRegistrationWhatsapp &&
+      (env.auth.otpMode === "static" || (mobileNumber && !env.apitxt.smsOtpEnabled));
     const otp = isStaticOtp ? env.auth.staticOtp : createOtp();
     const otpKey = this.makeOtpKey(email, purpose);
 
@@ -1729,7 +1748,23 @@ class AuthService {
       "Auth OTP generated and stored locally",
     );
 
-    if (!isStaticOtp && mobileNumber) {
+    if (useSellerRegistrationWhatsapp) {
+      logger.info(
+        {
+          purpose,
+          role,
+          deliveryMode: "third_party_whatsapp",
+        },
+        "Seller registration OTP WhatsApp delivery selected",
+      );
+
+      delivery = await sendWhatsappOtp({
+        mobile: mobileNumber,
+        otp,
+        purpose: "seller_registration",
+      });
+      deliveryMode = delivery?.skipped ? "static_whatsapp" : "third_party_whatsapp";
+    } else if (!isStaticOtp && mobileNumber) {
       logger.info(
         {
           purpose,
@@ -1790,8 +1825,11 @@ class AuthService {
     );
 
     return {
-      message: isStaticOtp ? "Static OTP ready" : "OTP sent successfully",
+      message: deliveryMode === "third_party_whatsapp"
+        ? "OTP sent successfully on WhatsApp"
+        : isStaticOtp ? "Static OTP ready" : "OTP sent successfully",
       deliveryMode,
+      ...(deliveryMode === "third_party_whatsapp" ? { whatsappSent: true } : {}),
       ...(isStaticOtp && env.auth.exposeStaticOtp ? { otp } : {}),
       ...(delivery?.requestId ? { requestId: delivery.requestId } : {}),
       ...(delivery?.testMode ? { testMode: true } : {}),

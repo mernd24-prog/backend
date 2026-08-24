@@ -3277,8 +3277,10 @@ renderBoxLabelPdf(document = {}) {
   </style>
 </head>
 
+
 <body>
   <main class="label">
+
     <header class="header">
       <div class="brand">
         ${
@@ -3288,10 +3290,15 @@ renderBoxLabelPdf(document = {}) {
         }
 
         <div>
-          <div class="brand-name">${this.escapeHtml(label.brandName)}</div>
+          <div class="brand-name">
+            ${this.escapeHtml(label.brandName)}
+          </div>
+
           ${
             label.support
-              ? `<div class="brand-sub">${this.escapeHtml(label.support)}</div>`
+              ? `<div class="brand-sub">
+                  ${this.escapeHtml(label.support)}
+                </div>`
               : ""
           }
         </div>
@@ -3303,8 +3310,10 @@ renderBoxLabelPdf(document = {}) {
       </div>
     </header>
 
+
     <section class="destination">
-      <div class="section-label">Deliver To</div>
+      <div class="section-label">DELIVER TO</div>
+
       <div class="recipient-name">
         ${this.escapeHtml(label.recipientName)}
       </div>
@@ -3313,63 +3322,86 @@ renderBoxLabelPdf(document = {}) {
 
       ${
         label.recipientPhone
-          ? `<div class="phone">Phone: ${this.escapeHtml(label.recipientPhone)}</div>`
+          ? `<div class="phone">
+              Phone: ${this.escapeHtml(label.recipientPhone)}
+            </div>`
           : ""
       }
 
       <div class="pincode">
-        <span>Destination</span>
+        <span>DESTINATION</span>
         <strong>${this.escapeHtml(label.destinationPincode)}</strong>
       </div>
     </section>
 
+
     <section class="tracking">
-      <div class="section-label">Tracking Number / AWB</div>
+      <div class="section-label">
+        TRACKING NUMBER / AWB
+      </div>
+
       <div class="tracking-number">
         ${this.escapeHtml(label.trackingNumber)}
       </div>
 
       <div class="carrier">
-        <span>Carrier: ${this.escapeHtml(label.carrier)}</span>
-        <span>Shipment: ${this.escapeHtml(label.shipmentNumber)}</span>
+        <span>
+          Carrier: ${this.escapeHtml(label.carrier)}
+        </span>
+
+        <span>
+          Shipment: ${this.escapeHtml(label.shipmentNumber)}
+        </span>
       </div>
     </section>
 
-    <div class="payment-banner">${this.escapeHtml(paymentText)}</div>
+
+    <div class="payment-banner">
+      ${this.escapeHtml(paymentText)}
+    </div>
+
 
     <section class="details-grid">
-      <div class="detail">
-        <span>Order Number</span>
-        <strong>${this.escapeHtml(label.orderNumber)}</strong>
-      </div>
 
       <div class="detail">
-        <span>Order Date</span>
-        <strong>${this.escapeHtml(label.orderDate)}</strong>
-      </div>
-
-      <div class="detail">
-        <span>Package Weight</span>
-        <strong>${this.escapeHtml(label.weight)}</strong>
-      </div>
-
-      <div class="detail">
-        <span>Pieces / Dimensions</span>
+        <span>ORDER</span>
         <strong>
-          ${this.escapeHtml(label.itemCount)} pc ·
-          ${this.escapeHtml(label.dimensions)}
+          ${this.escapeHtml(label.orderNumber)}
         </strong>
       </div>
+
+      <div class="detail">
+        <span>ORDER DATE</span>
+        <strong>
+          ${this.escapeHtml(label.orderDate)}
+        </strong>
+      </div>
+
+      <div class="detail">
+        <span>PACKAGE</span>
+        <strong>
+          ${this.escapeHtml(label.itemCount)} pc /
+          ${this.escapeHtml(label.weight)}
+        </strong>
+      </div>
+
     </section>
 
+
     <section class="items">
+
+      <div class="section-label">
+        PACKAGE CONTENTS
+      </div>
+
       <table>
         <thead>
           <tr>
-            <th>Package Contents</th>
-            <th class="qty">Qty</th>
+            <th>Product</th>
+            <th class="qty">QTY</th>
           </tr>
         </thead>
+
         <tbody>
           ${itemRows}
         </tbody>
@@ -3377,27 +3409,45 @@ renderBoxLabelPdf(document = {}) {
 
       ${
         remainingItems
-          ? `<div class="more-items">+ ${remainingItems} additional product(s)</div>`
+          ? `<div class="more-items">
+              + ${remainingItems} additional product(s)
+            </div>`
           : ""
       }
+
     </section>
+
 
     <section class="sender">
-      <strong>Shipped By: ${this.escapeHtml(label.senderName)}</strong>
+      <strong>
+        Shipped by: ${this.escapeHtml(label.senderName)}
+      </strong>
+
       ${senderAddress}
+
       ${
         label.senderPhone
-          ? `<div>Phone: ${this.escapeHtml(label.senderPhone)}</div>`
+          ? `<div>
+              Phone: ${this.escapeHtml(label.senderPhone)}
+            </div>`
           : ""
       }
     </section>
 
+
     <footer class="footer">
-      <span>Handle package carefully.</span>
-      <span>Generated: ${this.escapeHtml(label.generatedAt)}</span>
+      <span>
+        Handle package carefully.
+      </span>
+
+      <span>
+        Generated: ${this.escapeHtml(label.generatedAt)}
+      </span>
     </footer>
+
   </main>
 </body>
+
 </html>`;
 }
 }
