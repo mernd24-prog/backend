@@ -12,6 +12,18 @@ const {
   CACHE_TTL,
 } = require("../../../infrastructure/cache/redis-client");
 
+// Shared by recommendation carousels. It intentionally contains everything a
+// product card and its add-to-cart action need, while excluding descriptions,
+// SEO content, audit history, and other product-detail-only fields.
+const PRODUCT_CARD_FIELDS = [
+  "title", "slug", "brand", "category", "images", "commonImages",
+  "price", "mrp", "salePrice", "currency", "rating", "reviewCount",
+  "ratingCount", "stock", "reservedStock", "availableStock", "inStock",
+  "variants", "options", "shipping", "metadata", "deal", "sellerId",
+  "organizationId", "storeId", "warehouseId", "sku", "status",
+  "approvalStatus", "visibility",
+].join(" ");
+
 /**
  * Recommendation Engine
  */
@@ -58,7 +70,7 @@ class RecommendationService {
     const products = await ProductModel.find({
       _id: { $in: ids },
       ...this.productFilter(options.category),
-    }).lean();
+    }).select(PRODUCT_CARD_FIELDS).lean();
 
     const byId = new Map(products.map((product) => [String(product._id), product]));
     return ids.map((id) => byId.get(id)).filter(Boolean);
@@ -71,12 +83,14 @@ class RecommendationService {
     if (exclude.length) filter._id = { $nin: exclude };
 
     let products = await ProductModel.find(filter)
+      .select(PRODUCT_CARD_FIELDS)
       .sort(this.productSort(period))
       .limit(normalizedLimit)
       .lean();
 
     if (!products.length && category) {
       products = await ProductModel.find(this.productFilter())
+        .select(PRODUCT_CARD_FIELDS)
         .sort(this.productSort(period))
         .limit(normalizedLimit)
         .lean();

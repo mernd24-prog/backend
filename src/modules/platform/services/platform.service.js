@@ -1501,12 +1501,18 @@ class PlatformService {
     return normalized;
   }
 
-  async decorateProductOptionValues(items = []) {
+  async decorateProductOptionValues(items = [], suppliedOptions = null) {
     if (!Array.isArray(items) || !items.length) return items;
     const optionIds = Array.from(new Set(items.map((item) => String(item.optionId || "")).filter(Boolean)));
     if (!optionIds.length) return items;
 
-    const options = await Promise.all(optionIds.map((id) => this.platformRepository.getProductOption(id)));
+    const supplied = Array.isArray(suppliedOptions) ? suppliedOptions : [];
+    const suppliedIds = new Set(supplied.map((option) => String(option?._id || option?.id || "")));
+    const missingIds = optionIds.filter((id) => !suppliedIds.has(id));
+    const missingOptions = missingIds.length
+      ? await Promise.all(missingIds.map((id) => this.platformRepository.getProductOption(id)))
+      : [];
+    const options = [...supplied, ...missingOptions];
     const optionMap = new Map(options.filter(Boolean).map((opt) => [String(opt._id), opt]));
 
     return items.map((item) => {
@@ -1521,22 +1527,39 @@ class PlatformService {
   }
 
   async getCatalogPrefillData(query = {}) {
-    const categories = (await this.platformRepository.listCategories({}, { skip: 0, limit: 5000 })).items || [];
     const brandFilter = query.includeInactive
       ? {}
       : { active: true, approvalStatus: { $nin: ["pending", "rejected"] } };
-    const brands = (await this.platformRepository.listBrands(brandFilter, { skip: 0, limit: 500 })).items || [];
-    const families = (await this.platformRepository.listProductFamilies({}, { skip: 0, limit: 500 })).items || [];
-    const variants = (await this.platformRepository.listProductVariants({}, { skip: 0, limit: 500 })).items || [];
-    const hsnCodes = (await this.platformRepository.listHsnCodes({ active: true }, { skip: 0, limit: 1000 })).items || [];
-    const options = await this.platformRepository.listAllProductOptions(query.includeInactive ? {} : { active: true });
-    const optionValuesRaw = await this.platformRepository.listAllProductOptionValues(query.includeInactive ? {} : { active: true });
-    const optionValues = await this.decorateProductOptionValues(optionValuesRaw);
-    const [taxes, subTaxes, taxRules] = await Promise.all([
+    const activeFilter = query.includeInactive ? {} : { active: true };
+    const [
+      categoryResult,
+      brandResult,
+      familyResult,
+      variantResult,
+      hsnResult,
+      options,
+      optionValuesRaw,
+      taxes,
+      subTaxes,
+      taxRules,
+    ] = await Promise.all([
+      this.platformRepository.listCategories({}, { skip: 0, limit: 5000 }),
+      this.platformRepository.listBrands(brandFilter, { skip: 0, limit: 500 }),
+      this.platformRepository.listProductFamilies({}, { skip: 0, limit: 500 }),
+      this.platformRepository.listProductVariants({}, { skip: 0, limit: 500 }),
+      this.platformRepository.listHsnCodes({ active: true }, { skip: 0, limit: 1000 }),
+      this.platformRepository.listAllProductOptions(activeFilter),
+      this.platformRepository.listAllProductOptionValues(activeFilter),
       AdminTaxModel.find(query.includeInactive ? {} : { active: true }).sort({ name: 1 }),
       AdminSubTaxModel.find(query.includeInactive ? {} : { active: true }).sort({ name: 1 }),
       AdminTaxRuleModel.find(query.includeInactive ? {} : { active: true }).sort({ createdAt: -1 }),
     ]);
+    const categories = categoryResult?.items || [];
+    const brands = brandResult?.items || [];
+    const families = familyResult?.items || [];
+    const variants = variantResult?.items || [];
+    const hsnCodes = hsnResult?.items || [];
+    const optionValues = await this.decorateProductOptionValues(optionValuesRaw, options);
 
     return {
       categories,

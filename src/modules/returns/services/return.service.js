@@ -186,6 +186,9 @@ class ReturnServiceClass {
     return {
       ...response,
       orderNumber: response.orderNumber || order?.order_number || order?.orderNumber || null,
+      paymentProvider: response.paymentProvider || order?.payment_provider || order?.paymentProvider || null,
+      paymentStatus: response.paymentStatus || order?.payment_status || order?.paymentStatus || null,
+      isCod: String(response.paymentProvider || order?.payment_provider || order?.paymentProvider || "").toLowerCase() === "cod",
       buyer,
       buyerName: this.snapshotDisplayName(buyer),
       buyerEmail: buyer?.email || buyerSnapshot.email || null,

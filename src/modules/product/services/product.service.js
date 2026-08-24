@@ -1,6 +1,7 @@
 const slugify = require("slugify");
 const { getPage } = require("../../../shared/tools/page");
 const { ProductRepository } = require("../repositories/product.repository");
+const { ProductModel } = require("../models/product.model");
 const {
   CategoryTreeModel,
 } = require("../../platform/models/category-tree.model");
@@ -3789,9 +3790,13 @@ async getProduct(productId) {
   }
 
 async getRelatedProducts(productId, { limit = 8 } = {}) {
+  const normalizedLimit = Math.min(Math.max(Number(limit) || 8, 1), 20);
+  return remember(`products:related:${productId}:${normalizedLimit}`, 300, async () => {
   try {
     const product =
-      await this.productRepository.findById(productId);
+      await ProductModel.findById(productId)
+        .select("categoryId category brand tags")
+        .lean();
 
     if (!product) {
       return [];
@@ -3859,7 +3864,10 @@ async getRelatedProducts(productId, { limit = 8 } = {}) {
     const allCategories =
       await CategoryTreeModel.find({
         active: true,
-      }).lean();
+      }).select("categoryKey parentKey").lean();
+    const categoryByKey = new Map(
+      allCategories.map((category) => [String(category.categoryKey), category]),
+    );
 
     const matchingCategoryKeys = [];
 
@@ -3875,11 +3883,7 @@ async getRelatedProducts(productId, { limit = 8 } = {}) {
       ) {
         categoryVisited.add(categoryParentKey);
 
-        const parentCategory =
-          allCategories.find(
-            (item) =>
-              item.categoryKey === categoryParentKey
-          );
+        const parentCategory = categoryByKey.get(String(categoryParentKey));
 
         if (!parentCategory) {
           break;
@@ -3972,11 +3976,11 @@ async getRelatedProducts(productId, { limit = 8 } = {}) {
     // ---------------------------------------------------------
 
     const results =
-      await this.productRepository.paginate(
+      await this.productRepository.list(
         relatedFilter,
         {
           page: 1,
-          limit: Math.max(limit * 5, 30),
+          limit: Math.max(normalizedLimit * 5, 30),
           skip: 0,
           sortBy: "rating",
         },
@@ -4049,8 +4053,7 @@ async getRelatedProducts(productId, { limit = 8 } = {}) {
         }
       );
 
-    const items =
-      results?.items || [];
+    const items = Array.isArray(results) ? results : results?.items || [];
 
     // ---------------------------------------------------------
     // 7. REMOVE DUPLICATES
@@ -4079,18 +4082,23 @@ async getRelatedProducts(productId, { limit = 8 } = {}) {
     // ---------------------------------------------------------
 
     return uniqueProducts
-      .slice(0, limit)
+      .slice(0, normalizedLimit)
       .map((item) =>
         this.withPrimaryImageAlias(item)
       );
   } catch (error) {
     return [];
   }
+  });
 }
 
 async getCrossSellProducts(productId, { limit = 6 } = {}) {
+  const normalizedLimit = Math.min(Math.max(Number(limit) || 6, 1), 12);
+  return remember(`products:cross-sell:${productId}:${normalizedLimit}`, 300, async () => {
   try {
-    const product = await this.productRepository.findById(productId);
+    const product = await ProductModel.findById(productId)
+      .select("categoryId category brand")
+      .lean();
 
     if (!product) {
       return [];
@@ -4145,7 +4153,10 @@ async getCrossSellProducts(productId, { limit = 6 } = {}) {
     const allRootCategories =
       await CategoryTreeModel.find({
         active: true,
-      }).lean();
+      }).select("categoryKey parentKey").lean();
+    const categoryByKey = new Map(
+      allRootCategories.map((category) => [String(category.categoryKey), category]),
+    );
 
     const matchingCategoryKeys = [];
 
@@ -4161,11 +4172,7 @@ async getCrossSellProducts(productId, { limit = 6 } = {}) {
       ) {
         categoryVisited.add(categoryParentKey);
 
-        const parentCategory =
-          allRootCategories.find(
-            (item) =>
-              item.categoryKey === categoryParentKey
-          );
+        const parentCategory = categoryByKey.get(String(categoryParentKey));
 
         if (!parentCategory) {
           break;
@@ -4281,11 +4288,11 @@ async getCrossSellProducts(productId, { limit = 6 } = {}) {
     };
 
     const rootCategoryResults =
-      await this.productRepository.paginate(
+      await this.productRepository.list(
         rootCategoryFilter,
         {
           page: 1,
-          limit: Math.max(limit * 5, 30),
+          limit: Math.max(normalizedLimit * 5, 30),
           skip: 0,
           sortBy: "newest",
         },
@@ -4295,8 +4302,9 @@ async getCrossSellProducts(productId, { limit = 6 } = {}) {
         }
       );
 
-    let matchedProducts =
-      rootCategoryResults?.items || [];
+    let matchedProducts = Array.isArray(rootCategoryResults)
+      ? rootCategoryResults
+      : rootCategoryResults?.items || [];
 
     // 5. Fallback: same brand
     if (
@@ -4313,11 +4321,11 @@ async getCrossSellProducts(productId, { limit = 6 } = {}) {
         });
 
       const brandResults =
-        await this.productRepository.paginate(
+        await this.productRepository.list(
           brandFilter,
           {
             page: 1,
-            limit: Math.max(limit * 5, 30),
+            limit: Math.max(normalizedLimit * 5, 30),
             skip: 0,
             sortBy: "newest",
           },
@@ -4327,8 +4335,9 @@ async getCrossSellProducts(productId, { limit = 6 } = {}) {
           }
         );
 
-      matchedProducts =
-        brandResults?.items || [];
+      matchedProducts = Array.isArray(brandResults)
+        ? brandResults
+        : brandResults?.items || [];
     }
 
     // 6. Remove duplicates and current product
@@ -4352,13 +4361,14 @@ async getCrossSellProducts(productId, { limit = 6 } = {}) {
 
     // 7. Return final products
     return uniqueProducts
-      .slice(0, limit)
+      .slice(0, normalizedLimit)
       .map((item) =>
         this.withPrimaryImageAlias(item)
       );
   } catch (error) {
     return [];
   }
+  });
 }
 
   async getUpSellProducts(productId, { limit = 4 } = {}) {

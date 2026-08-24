@@ -50,7 +50,7 @@ class PricingService {
     const productMap = new Map(products.map((product) => [String(product.id), product]));
 
     const pricedItems = await Promise.all(
-      items.map(async (item) => {
+      items.map(async (item, itemIndex) => {
         const product = productMap.get(item.productId);
         if (!product) {
           throw new AppError(`Product ${item.productId} not found`, 404);
@@ -126,6 +126,7 @@ class PricingService {
         };
 
         return {
+          pricingLineId: `${String(product.id)}:${String(variant?._id || variant?.id || item.variantId || variant?.sku || item.variantSku || "default")}:${itemIndex}`,
           productId: String(product.id),
           title: product.title,
           slug: product.slug,
@@ -232,8 +233,12 @@ class PricingService {
       totalAmount: Number((subtotalAmount - discount.discountAmount + taxBreakup.taxPayableAmount).toFixed(2)),
       commerceSettings,
     });
-    for (const item of pricedItems) {
-      const fee = platformFee.breakup.find((entry) => entry.productId === item.productId);
+    for (const [itemIndex, item] of pricedItems.entries()) {
+      const fee = item.pricingLineId
+        ? platformFee.breakup.find(
+            (entry) => entry.pricingLineId === item.pricingLineId,
+          )
+        : platformFee.breakup[itemIndex];
       const platformFeeAmount = Number(fee?.sellerFeeTotal ?? fee?.totalFee ?? 0);
       const platformFeeTaxAmount = commerceSettings.finance.chargePlatformFeeTaxToSeller
         ? Number(((platformFeeAmount * Number(commerceSettings.finance.platformFeeTaxRate || 0)) / 100).toFixed(2))
@@ -672,7 +677,10 @@ const incomeTaxTdsAmount = Number(
       allocatedCustomerFee += customerPlatformFee;
 
       breakup.push({
+        pricingLineId: item.pricingLineId,
         productId: item.productId,
+        variantId: item.variantId || "",
+        variantSku: item.variantSku || item.sku || "",
         sellerId: item.sellerId,
         organizationId: item.organizationId || null,
         dealId: item.dealId || null,
@@ -895,8 +903,11 @@ const incomeTaxTdsAmount = Number(
         result.taxMode = itemTaxMode;
       }
 
-      result.items.push({
+      const itemTaxBreakup = {
+        pricingLineId: item.pricingLineId,
         productId: item.productId,
+        variantId: item.variantId || "",
+        variantSku: item.variantSku || item.sku || "",
         lineTotal: item.lineTotal,
         discountedLineTotal,
         customerDiscountedLineTotal,
@@ -912,19 +923,18 @@ const incomeTaxTdsAmount = Number(
         cessAmount: itemCess,
         taxIncludedAmount: item.gstInclusive ? itemTax + itemCess : 0,
         taxPayableAmount: item.gstInclusive ? 0 : itemTax + itemCess,
-      });
-    }
+      };
+      result.items.push(itemTaxBreakup);
 
-    for (const item of pricedItems) {
-      const itemTax = result.items.find((taxItem) => taxItem.productId === item.productId);
-      if (itemTax) {
-        item.taxAmount = itemTax.taxAmount + itemTax.cessAmount;
-        item.taxableAmount = itemTax.taxableAmount;
-        item.taxableAmountBeforeDiscount = itemTax.taxableAmountBeforeDiscount;
-        item.taxIncludedAmount = itemTax.taxIncludedAmount;
-        item.taxPayableAmount = itemTax.taxPayableAmount;
-        item.taxBreakup = itemTax;
-      }
+      // Assign the calculation to the exact priced line while it is being
+      // calculated. Matching later by productId is ambiguous when a cart has
+      // two variants of the same product.
+      item.taxAmount = itemTaxBreakup.taxAmount + itemTaxBreakup.cessAmount;
+      item.taxableAmount = itemTaxBreakup.taxableAmount;
+      item.taxableAmountBeforeDiscount = itemTaxBreakup.taxableAmountBeforeDiscount;
+      item.taxIncludedAmount = itemTaxBreakup.taxIncludedAmount;
+      item.taxPayableAmount = itemTaxBreakup.taxPayableAmount;
+      item.taxBreakup = itemTaxBreakup;
     }
 
     result.cgstAmount = Number(cgstAmount.toFixed(2));
