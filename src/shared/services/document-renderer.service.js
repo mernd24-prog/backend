@@ -1793,6 +1793,7 @@ renderBoxLabelPdf(document = {}) {
   // 4 x 6 inch page at 72 PDF points per inch.
   const PAGE_WIDTH = 288;
   const PAGE_HEIGHT = 432;
+  const HEADER_HEIGHT = 50;
 
   const commands = [];
 
@@ -1806,7 +1807,8 @@ renderBoxLabelPdf(document = {}) {
     color = "0.10 0.11 0.14",
   ) => {
     const safe = this.escapePdfText(value);
-    const approximateWidth = safe.length * size * 0.48;
+    const widthFactor = bold ? 0.62 : 0.52;
+    const approximateWidth = safe.length * size * widthFactor;
 
     let tx = x;
 
@@ -1845,21 +1847,6 @@ renderBoxLabelPdf(document = {}) {
       `${gray} G`,
       `${width} w`,
       `${x1} ${y1} m ${x2} ${y2} l S`,
-    );
-  };
-
-  const strokeRect = (
-    x,
-    y,
-    width,
-    height,
-    lineWidth = 0.8,
-    gray = 0.25,
-  ) => {
-    commands.push(
-      `${gray} G`,
-      `${lineWidth} w`,
-      `${x} ${y} ${width} ${height} re S`,
     );
   };
 
@@ -1930,17 +1917,18 @@ renderBoxLabelPdf(document = {}) {
     return visible;
   };
 
-  // White background and outer border.
+  // White background — flush to the page, no outer border.
   fill(0, 0, PAGE_WIDTH, PAGE_HEIGHT, 1, 1, 1);
-  strokeRect(7, 7, PAGE_WIDTH - 14, PAGE_HEIGHT - 14, 1.2, 0.11);
 
-  // Gold brand header.
-  fill(8, 374, 272, 50, 0.81, 0.62, 0.18);
+  // Gold brand header — pinned to the very top of the page, no gap.
+  const headerTop = PAGE_HEIGHT;
+  const headerBottom = PAGE_HEIGHT - HEADER_HEIGHT;
+  fill(0, headerBottom, PAGE_WIDTH, HEADER_HEIGHT, 0.81, 0.62, 0.18);
 
   text(
-    compact(label.brandName, 22),
+    compact(label.brandName, 20),
     16,
-    404,
+    headerTop - 20,
     15,
     true,
     "left",
@@ -1949,9 +1937,9 @@ renderBoxLabelPdf(document = {}) {
 
   if (label.support) {
     text(
-      compact(label.support, 34),
+      compact(label.support, 30),
       16,
-      388,
+      headerTop - 36,
       6.5,
       false,
       "left",
@@ -1961,8 +1949,8 @@ renderBoxLabelPdf(document = {}) {
 
   text(
     "BOX LABEL",
-    272,
-    405,
+    264,
+    headerTop - 19,
     11,
     true,
     "right",
@@ -1970,9 +1958,9 @@ renderBoxLabelPdf(document = {}) {
   );
 
   text(
-    compact(label.service, 23),
-    272,
-    389,
+    compact(label.service, 18),
+    264,
+    headerTop - 35,
     6.5,
     false,
     "right",
@@ -2002,7 +1990,7 @@ renderBoxLabelPdf(document = {}) {
 
   text(
     "DESTINATION",
-    272,
+    264,
     358,
     6,
     true,
@@ -2012,7 +2000,7 @@ renderBoxLabelPdf(document = {}) {
 
   text(
     compact(label.destinationPincode, 10),
-    272,
+    264,
     338,
     16,
     true,
@@ -2071,46 +2059,54 @@ renderBoxLabelPdf(document = {}) {
     );
   });
 
+  const trackingBottom = 248 - (trackingLines.length - 1) * 14;
+  const carrierY = trackingBottom - 22;
+  const shipmentY = carrierY - 11;
+
   text(
-    `Carrier: ${compact(label.carrier, 24)}`,
+    `Carrier: ${compact(label.carrier, 30)}`,
     16,
-    220,
+    carrierY,
     7.5,
   );
 
   text(
-    `Shipment: ${compact(label.shipmentNumber, 22)}`,
-    272,
-    220,
-    7.5,
+    `Shipment: ${compact(label.shipmentNumber, 34)}`,
+    16,
+    shipmentY,
+    7,
     false,
-    "right",
+    "left",
+    "0.40 0.42 0.48",
   );
 
   // Payment banner.
+  const bannerTop = shipmentY - 12;
+  const bannerHeight = 26;
+  const bannerBottomY = bannerTop - bannerHeight;
+  const bannerTextY = bannerBottomY + (bannerHeight / 2) - 3.5;
+
   if (label.isCod) {
-    fill(12, 184, 264, 26, 1, 0.97, 0.88);
-    strokeRect(12, 184, 264, 26, 0.8, 0.70);
+    fill(12, bannerBottomY, 264, bannerHeight, 1, 0.97, 0.88);
 
     text(
       label.amountToCollect > 0
         ? `COD - COLLECT ${this.money(label.amountToCollect)}`
         : "CASH ON DELIVERY",
       144,
-      193,
+      bannerTextY,
       10,
       true,
       "center",
       "0.48 0.32 0.06",
     );
   } else {
-    fill(12, 184, 264, 26, 0.94, 0.99, 0.95);
-    strokeRect(12, 184, 264, 26, 0.8, 0.55);
+    fill(12, bannerBottomY, 264, bannerHeight, 0.94, 0.99, 0.95);
 
     text(
       "PREPAID",
       144,
-      193,
+      bannerTextY,
       10,
       true,
       "center",
@@ -2119,11 +2115,15 @@ renderBoxLabelPdf(document = {}) {
   }
 
   // Package details.
-  text("ORDER", 16, 168, 6.5, true, "left", "0.40 0.42 0.48");
+  const orderLabelY = bannerBottomY - 16;
+  const orderValueY = orderLabelY - 13;
+  const orderDateY = orderValueY - 12;
+
+  text("ORDER", 16, orderLabelY, 6.5, true, "left", "0.40 0.42 0.48");
   text(
     compact(label.orderNumber, 26),
     16,
-    155,
+    orderValueY,
     9,
     true,
     "left",
@@ -2131,28 +2131,9 @@ renderBoxLabelPdf(document = {}) {
   );
 
   text(
-    "ORDER DATE",
-    144,
-    168,
-    6.5,
-    true,
-    "center",
-    "0.40 0.42 0.48",
-  );
-
-  text(
-    compact(label.orderDate, 18),
-    144,
-    155,
-    8,
-    true,
-    "center",
-  );
-
-  text(
     "PACKAGE",
-    272,
-    168,
+    264,
+    orderLabelY,
     6.5,
     true,
     "right",
@@ -2161,27 +2142,42 @@ renderBoxLabelPdf(document = {}) {
 
   text(
     `${label.itemCount} pc / ${compact(label.weight, 12)}`,
-    272,
-    155,
+    264,
+    orderValueY,
     8,
     true,
     "right",
   );
 
   text(
-    `Dimensions: ${compact(label.dimensions, 34)}`,
+    `Order Date: ${compact(label.orderDate, 18)}`,
     16,
-    141,
+    orderDateY,
     7,
+    false,
+    "left",
+    "0.40 0.42 0.48",
   );
 
-  line(12, 132, 276, 132, 0.8, 0.55);
+  text(
+    `Dimensions: ${compact(label.dimensions, 30)}`,
+    264,
+    orderDateY,
+    7,
+    false,
+    "right",
+    "0.40 0.42 0.48",
+  );
+
+  const contentsDividerY = orderDateY - 11;
+  line(12, contentsDividerY, 276, contentsDividerY, 0.8, 0.55);
 
   // Package contents.
+  const contentsLabelY = contentsDividerY - 14;
   text(
     "PACKAGE CONTENTS",
     16,
-    118,
+    contentsLabelY,
     7,
     true,
     "left",
@@ -2190,8 +2186,8 @@ renderBoxLabelPdf(document = {}) {
 
   text(
     "QTY",
-    272,
-    118,
+    264,
+    contentsLabelY,
     7,
     true,
     "right",
@@ -2199,7 +2195,7 @@ renderBoxLabelPdf(document = {}) {
   );
 
   const visibleItems = label.items.slice(0, 4);
-  let itemY = 104;
+  let itemY = contentsLabelY - 14;
 
   if (!visibleItems.length) {
     text(
@@ -2223,7 +2219,7 @@ renderBoxLabelPdf(document = {}) {
 
       text(
         String(item.quantity || 0),
-        272,
+        264,
         itemY,
         8,
         true,
@@ -2273,7 +2269,7 @@ renderBoxLabelPdf(document = {}) {
 
   text(
     `Generated: ${compact(label.generatedAt, 18)}`,
-    272,
+    264,
     34,
     6,
     false,
@@ -3281,8 +3277,10 @@ renderBoxLabelPdf(document = {}) {
   </style>
 </head>
 
+
 <body>
   <main class="label">
+
     <header class="header">
       <div class="brand">
         ${
@@ -3292,10 +3290,15 @@ renderBoxLabelPdf(document = {}) {
         }
 
         <div>
-          <div class="brand-name">${this.escapeHtml(label.brandName)}</div>
+          <div class="brand-name">
+            ${this.escapeHtml(label.brandName)}
+          </div>
+
           ${
             label.support
-              ? `<div class="brand-sub">${this.escapeHtml(label.support)}</div>`
+              ? `<div class="brand-sub">
+                  ${this.escapeHtml(label.support)}
+                </div>`
               : ""
           }
         </div>
@@ -3307,8 +3310,10 @@ renderBoxLabelPdf(document = {}) {
       </div>
     </header>
 
+
     <section class="destination">
-      <div class="section-label">Deliver To</div>
+      <div class="section-label">DELIVER TO</div>
+
       <div class="recipient-name">
         ${this.escapeHtml(label.recipientName)}
       </div>
@@ -3317,63 +3322,86 @@ renderBoxLabelPdf(document = {}) {
 
       ${
         label.recipientPhone
-          ? `<div class="phone">Phone: ${this.escapeHtml(label.recipientPhone)}</div>`
+          ? `<div class="phone">
+              Phone: ${this.escapeHtml(label.recipientPhone)}
+            </div>`
           : ""
       }
 
       <div class="pincode">
-        <span>Destination</span>
+        <span>DESTINATION</span>
         <strong>${this.escapeHtml(label.destinationPincode)}</strong>
       </div>
     </section>
 
+
     <section class="tracking">
-      <div class="section-label">Tracking Number / AWB</div>
+      <div class="section-label">
+        TRACKING NUMBER / AWB
+      </div>
+
       <div class="tracking-number">
         ${this.escapeHtml(label.trackingNumber)}
       </div>
 
       <div class="carrier">
-        <span>Carrier: ${this.escapeHtml(label.carrier)}</span>
-        <span>Shipment: ${this.escapeHtml(label.shipmentNumber)}</span>
+        <span>
+          Carrier: ${this.escapeHtml(label.carrier)}
+        </span>
+
+        <span>
+          Shipment: ${this.escapeHtml(label.shipmentNumber)}
+        </span>
       </div>
     </section>
 
-    <div class="payment-banner">${this.escapeHtml(paymentText)}</div>
+
+    <div class="payment-banner">
+      ${this.escapeHtml(paymentText)}
+    </div>
+
 
     <section class="details-grid">
-      <div class="detail">
-        <span>Order Number</span>
-        <strong>${this.escapeHtml(label.orderNumber)}</strong>
-      </div>
 
       <div class="detail">
-        <span>Order Date</span>
-        <strong>${this.escapeHtml(label.orderDate)}</strong>
-      </div>
-
-      <div class="detail">
-        <span>Package Weight</span>
-        <strong>${this.escapeHtml(label.weight)}</strong>
-      </div>
-
-      <div class="detail">
-        <span>Pieces / Dimensions</span>
+        <span>ORDER</span>
         <strong>
-          ${this.escapeHtml(label.itemCount)} pc ·
-          ${this.escapeHtml(label.dimensions)}
+          ${this.escapeHtml(label.orderNumber)}
         </strong>
       </div>
+
+      <div class="detail">
+        <span>ORDER DATE</span>
+        <strong>
+          ${this.escapeHtml(label.orderDate)}
+        </strong>
+      </div>
+
+      <div class="detail">
+        <span>PACKAGE</span>
+        <strong>
+          ${this.escapeHtml(label.itemCount)} pc /
+          ${this.escapeHtml(label.weight)}
+        </strong>
+      </div>
+
     </section>
 
+
     <section class="items">
+
+      <div class="section-label">
+        PACKAGE CONTENTS
+      </div>
+
       <table>
         <thead>
           <tr>
-            <th>Package Contents</th>
-            <th class="qty">Qty</th>
+            <th>Product</th>
+            <th class="qty">QTY</th>
           </tr>
         </thead>
+
         <tbody>
           ${itemRows}
         </tbody>
@@ -3381,27 +3409,45 @@ renderBoxLabelPdf(document = {}) {
 
       ${
         remainingItems
-          ? `<div class="more-items">+ ${remainingItems} additional product(s)</div>`
+          ? `<div class="more-items">
+              + ${remainingItems} additional product(s)
+            </div>`
           : ""
       }
+
     </section>
+
 
     <section class="sender">
-      <strong>Shipped By: ${this.escapeHtml(label.senderName)}</strong>
+      <strong>
+        Shipped by: ${this.escapeHtml(label.senderName)}
+      </strong>
+
       ${senderAddress}
+
       ${
         label.senderPhone
-          ? `<div>Phone: ${this.escapeHtml(label.senderPhone)}</div>`
+          ? `<div>
+              Phone: ${this.escapeHtml(label.senderPhone)}
+            </div>`
           : ""
       }
     </section>
 
+
     <footer class="footer">
-      <span>Handle package carefully.</span>
-      <span>Generated: ${this.escapeHtml(label.generatedAt)}</span>
+      <span>
+        Handle package carefully.
+      </span>
+
+      <span>
+        Generated: ${this.escapeHtml(label.generatedAt)}
+      </span>
     </footer>
+
   </main>
 </body>
+
 </html>`;
 }
 }
