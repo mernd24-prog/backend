@@ -951,9 +951,16 @@ class ProductService {
 
   async getProductPrefillBasic(query = {}, actor = {}) {
     const includeInactive = query.includeInactive === true || query.includeInactive === "true";
-    const cacheKey = `products:prefill:basic:${JSON.stringify({ includeInactive })}`;
+    const includeOptionValues = query.includeOptionValues !== false && query.includeOptionValues !== "false";
+    const includeCategoryAttributes =
+      query.includeCategoryAttributes !== false && query.includeCategoryAttributes !== "false";
+    const cacheKey = `products:prefill:basic:${JSON.stringify({ includeInactive, includeOptionValues, includeCategoryAttributes })}`;
     return remember(cacheKey, 300, async () => {
-      const catalog = await this.platformService.getCatalogPrefillData({ includeInactive });
+      const catalog = await this.platformService.getCatalogPrefillData({
+        includeInactive,
+        includeOptionValues,
+        includeCategoryAttributes,
+      });
       const optionValuesByOptionId = (catalog.optionValues || []).reduce((acc, item) => {
         const optionId = String(item.optionId || item.option_id || "");
         if (!optionId) return acc;
@@ -1016,6 +1023,7 @@ class ProductService {
           : sellerOrganizationService.organizationRepository.list({ limit: 500 }),
         UserModel.find({
           role: { $in: ["seller"] },
+          ...(sellerId ? { _id: sellerId } : {}),
           ...(includeInactive ? {} : { accountStatus: "active" }),
         })
           .select("email phone profile sellerProfile accountStatus role")
@@ -1059,13 +1067,19 @@ class ProductService {
 
   async getProductPrefillLocations(query = {}, actor = {}) {
     const includeInactive = query.includeInactive === true || query.includeInactive === "true";
-    const cacheKey = `products:prefill:locations:${JSON.stringify({ includeInactive })}`;
+    const includeStates = query.includeStates !== false && query.includeStates !== "false";
+    const includeCities = query.includeCities !== false && query.includeCities !== "false";
+    const cacheKey = `products:prefill:locations:${JSON.stringify({ includeInactive, includeStates, includeCities })}`;
     return remember(cacheKey, 300, async () => {
       const [warehouses, countries, states, cities] = await Promise.all([
         WarehouseModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(500).lean(),
         AdminCountryModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(500).lean(),
-        AdminStateModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(2000).lean(),
-        AdminCityModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(5000).lean(),
+        includeStates
+          ? AdminStateModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(2000).lean()
+          : Promise.resolve([]),
+        includeCities
+          ? AdminCityModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(5000).lean()
+          : Promise.resolve([]),
       ]);
 
       return {

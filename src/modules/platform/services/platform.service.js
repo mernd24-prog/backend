@@ -1527,6 +1527,9 @@ class PlatformService {
   }
 
   async getCatalogPrefillData(query = {}) {
+    const includeOptionValues = query.includeOptionValues !== false && query.includeOptionValues !== "false";
+    const includeCategoryAttributes =
+      query.includeCategoryAttributes !== false && query.includeCategoryAttributes !== "false";
     const brandFilter = query.includeInactive
       ? {}
       : { active: true, approvalStatus: { $nin: ["pending", "rejected"] } };
@@ -1549,7 +1552,9 @@ class PlatformService {
       this.platformRepository.listProductVariants({}, { skip: 0, limit: 500 }),
       this.platformRepository.listHsnCodes({ active: true }, { skip: 0, limit: 1000 }),
       this.platformRepository.listAllProductOptions(activeFilter),
-      this.platformRepository.listAllProductOptionValues(activeFilter),
+      includeOptionValues
+        ? this.platformRepository.listAllProductOptionValues(activeFilter)
+        : Promise.resolve([]),
       AdminTaxModel.find(query.includeInactive ? {} : { active: true }).sort({ name: 1 }),
       AdminSubTaxModel.find(query.includeInactive ? {} : { active: true }).sort({ name: 1 }),
       AdminTaxRuleModel.find(query.includeInactive ? {} : { active: true }).sort({ createdAt: -1 }),
@@ -1559,15 +1564,19 @@ class PlatformService {
     const families = familyResult?.items || [];
     const variants = variantResult?.items || [];
     const hsnCodes = hsnResult?.items || [];
-    const optionValues = await this.decorateProductOptionValues(optionValuesRaw, options);
+    const optionValues = includeOptionValues
+      ? await this.decorateProductOptionValues(optionValuesRaw, options)
+      : [];
 
     return {
       categories,
-      categoryAttributes: categories.map((category) => ({
-        categoryKey: category.categoryKey,
-        title: category.title,
-        attributeSchema: this.normalizeCategoryAttributes(category),
-      })),
+      categoryAttributes: includeCategoryAttributes
+        ? categories.map((category) => ({
+            categoryKey: category.categoryKey,
+            title: category.title,
+            attributeSchema: this.normalizeCategoryAttributes(category),
+          }))
+        : [],
       brands,
       families,
       variants,

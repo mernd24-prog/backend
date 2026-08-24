@@ -526,6 +526,10 @@ const productPrefillSchema = Joi.object({
   query: Joi.object({
     includeInactive: Joi.boolean(),
     includeProducts: Joi.boolean(),
+    includeOptionValues: Joi.boolean(),
+    includeCategoryAttributes: Joi.boolean(),
+    includeStates: Joi.boolean(),
+    includeCities: Joi.boolean(),
     sellerId: Joi.string().allow("", null),
     organizationId: Joi.string().allow("", null),
     limit: Joi.number().integer().min(1).max(200),
