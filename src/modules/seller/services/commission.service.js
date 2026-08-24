@@ -330,20 +330,13 @@ class SellerCommissionService {
     await this.ensureSellerPayoutProfilesTable();
     const existing = await this.getSellerPayoutProfile(sellerId, organizationId);
     const now = new Date().toISOString();
-    const bankDetails = payload.bankDetails !== undefined
-      ? {
-        accountHolderName: String(payload.bankDetails?.accountHolderName || "").trim(),
-        accountNumber: String(payload.bankDetails?.accountNumber || "").replace(/\D/g, ""),
-        ifscCode: String(payload.bankDetails?.ifscCode || "").trim().toUpperCase(),
-        bankName: String(payload.bankDetails?.bankName || "").trim(),
-        branchName: String(payload.bankDetails?.branchName || "").trim(),
-      }
-      : this.parseJson(existing?.bank_details, {});
     const destination = this.normalizePayoutDestination(payload.payoutDestination || payload.destination || existing?.payout_destination);
     const data = {
       payout_destination: destination,
-      bank_details: this.jsonb(bankDetails),
-      bank_verification_status: payload.bankDetails !== undefined ? "submitted" : existing?.bank_verification_status || "submitted",
+      // Bank details belong to the seller organization/onboarding record. The
+      // payout profile stores only destination choice and RazorpayX metadata.
+      bank_details: this.jsonb({}),
+      bank_verification_status: existing?.bank_verification_status || "submitted",
       metadata: this.jsonb({
         ...this.parseJson(existing?.metadata, {}),
         updatedBy: actor.userId || actor.sub || sellerId,
@@ -397,8 +390,8 @@ class SellerCommissionService {
       sellerChoice: sellerChoice ? this.normalizePayoutDestination(sellerChoice) : null,
       platformDefault: this.normalizePayoutDestination(finance.defaultPayoutDestination),
       sellerCanChoose: finance.allowSellerPayoutDestinationChoice !== false,
-      bankDetails: this.parseJson(payoutProfile?.bank_details, {}),
-      bankVerificationStatus: payoutProfile?.bank_verification_status || null,
+      bankDetails: this.parseJson(organization?.bank_details, {}),
+      bankVerificationStatus: organization?.bank_verification_status || null,
     };
   }
 
@@ -419,7 +412,6 @@ class SellerCommissionService {
     const payoutOrganizationId = organization?.id || null;
     const updated = await this.saveSellerPayoutProfile(sellerId, payoutOrganizationId, {
       payoutDestination: destination,
-      bankDetails: payload.bankDetails,
     }, actor);
     return {
       sellerId,
@@ -427,8 +419,8 @@ class SellerCommissionService {
       destination,
       payoutSettings: {
         payoutDestination: destination,
-        bankVerificationStatus: updated.bank_verification_status,
-        bankDetails: this.parseJson(updated.bank_details, {}),
+        bankVerificationStatus: organization?.bank_verification_status || null,
+        bankDetails: this.parseJson(organization?.bank_details, {}),
       },
       updatedAt: updated?.updated_at || new Date().toISOString(),
     };
@@ -441,21 +433,17 @@ class SellerCommissionService {
     }
     const seller = await UserModel.findById(payout.seller_id).lean().catch(() => null);
     const payoutProfile = await this.findSellerPayoutProfile(payout.seller_id, payout.organization_id || null);
-    const orgBank = this.parseJson(payoutProfile?.bank_details, {});
     const organizationBank = this.parseJson(organization?.bank_details, {});
     const profileBank = seller?.sellerProfile?.bankDetails || {};
-    const bank = Object.keys(orgBank || {}).length
-      ? orgBank
-      : Object.keys(organizationBank || {}).length
-        ? organizationBank
-        : profileBank;
+    const bank = Object.keys(organizationBank || {}).length
+      ? organizationBank
+      : profileBank;
     const accountHolderName = bank.accountHolderName || bank.holderName || bank.account_holder_name;
     const accountNumber = bank.accountNumber || bank.account_number;
     const ifscCode = bank.ifscCode || bank.ifsc || bank.ifsc_code;
     const bankName = bank.bankName || bank.bank_name;
     const bankVerificationStatus = String(
-      payoutProfile?.bank_verification_status ||
-        organization?.bank_verification_status ||
+      organization?.bank_verification_status ||
         seller?.sellerProfile?.bankVerificationStatus ||
         "",
     ).toLowerCase();
@@ -603,7 +591,7 @@ class SellerCommissionService {
           seller_id: payout.seller_id,
           organization_id: payout.organization_id || null,
           payout_destination: "razorpayx",
-          bank_details: this.jsonb(bank),
+          bank_details: this.jsonb({}),
           bank_verification_status: validationStatus === "completed" ? "verified" : validationStatus,
           metadata: this.jsonb(validationMetadata),
           created_at: knex.fn.now(),

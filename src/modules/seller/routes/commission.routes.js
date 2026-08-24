@@ -199,7 +199,6 @@ router.patch("/my-payout-preference", authenticate, financeView, async (req, res
     const result = await CommissionService.updateSellerPayoutPreference(userId, {
       organizationId: req.body?.organizationId || req.auth?.selectedOrganizationId || undefined,
       payoutDestination: req.body?.payoutDestination || req.body?.destination,
-      bankDetails: req.body?.bankDetails,
     }, req.auth);
 
     return res.status(200).json({

@@ -1145,6 +1145,41 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
       };
     };
     const orderTimeline = Array.isArray(order.timeline) ? order.timeline : [];
+    const sharedItemOrderStatuses = new Set([
+      "initiated",
+      "pending_payment",
+      "payment_failed",
+      "confirmed",
+      "processing",
+      "on_hold",
+    ]);
+    const forwardItemStatusRank = {
+      initiated: 0,
+      pending_payment: 1,
+      paid: 2,
+      confirmed: 3,
+      processing: 4,
+      packed: 5,
+      ready_to_ship: 6,
+      manifested: 6,
+      shipped: 7,
+      in_transit: 8,
+      out_for_delivery: 9,
+      delivered: 10,
+      fulfilled: 11,
+    };
+    const mostAdvancedForwardStatus = (statuses = []) =>
+      statuses
+        .map((status) => String(status || "").toLowerCase())
+        .filter((status) => Object.prototype.hasOwnProperty.call(forwardItemStatusRank, status))
+        .reduce(
+          (latest, status) =>
+            forwardItemStatusRank[status] > forwardItemStatusRank[latest] ? status : latest,
+          "initiated",
+        );
+    const sharedItemTimelineStatuses = orderTimeline
+      .map((entry) => entry.to_status || entry.status)
+      .filter((status) => sharedItemOrderStatuses.has(String(status || "").toLowerCase()));
     const cancellationMatchesItem = (cancellation = {}, itemId) =>
       (Array.isArray(cancellation.items) ? cancellation.items : []).some((entry) =>
         String(entry.orderItemId || entry.order_item_id || entry.id || "") === String(itemId),
@@ -1221,8 +1256,20 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
       );
       const itemReturn = returnRequests.find((returnRequest) => returnMatchesItem(returnRequest, item));
       const itemReturnStatus = itemReturn ? resolveReturnDisplayStatus(itemReturn) : null;
+      const forwardItemStatus = mostAdvancedForwardStatus([
+        ...sharedItemTimelineStatuses,
+        item.delivery_status,
+        ...itemShipments.map((shipment) => shipment.status),
+        ...itemShipments.flatMap((shipment) =>
+          (shipment.trackingEvents || []).map((entry) => entry.status),
+        ),
+      ]);
       const itemTimeline = [
-        ...orderTimeline.map((entry) => ({ ...entry, source: entry.source || "order" })),
+        // Only payment/confirmation milestones are shared by every item. Later
+        // order statuses can be aggregate values from another item/package.
+        ...orderTimeline
+          .filter((entry) => sharedItemOrderStatuses.has(String(entry.to_status || entry.status || "").toLowerCase()))
+          .map((entry) => ({ ...entry, source: entry.source || "order" })),
         ...itemShipments.flatMap((shipment) =>
           (shipment.trackingEvents || []).map((entry) => ({
             ...sanitizeTrackingEvent(entry),
@@ -1284,9 +1331,7 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
           item.cancellation_status ||
           itemReturnStatus ||
           item.return_status ||
-          item.delivery_status ||
-          itemShipments[0]?.status ||
-          order.status,
+          forwardItemStatus,
         timeline: itemTimeline,
         seller: {
           name: sellerSnapshot.displayName || sellerSnapshot.businessName || organizationSnapshot.storeDisplayName || "Seller",
