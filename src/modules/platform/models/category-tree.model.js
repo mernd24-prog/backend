@@ -35,6 +35,9 @@ const categoryTreeSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+categoryTreeSchema.index({ active: 1, isDashboardVisible: 1, sortOrder: 1, title: 1 });
+categoryTreeSchema.index({ parentKey: 1, active: 1, categoryKey: 1 });
+
 const CategoryTreeModel = mongoose.model("CategoryTree", categoryTreeSchema);
 
 module.exports = { CategoryTreeModel };

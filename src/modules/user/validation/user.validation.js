@@ -13,14 +13,20 @@ const userKycDocumentKeys = [
   "addressProofUrl",
 ];
 
+const userProfileFieldsSchema = {
+  firstName: Joi.string().trim().min(2).max(50),
+  lastName: Joi.string().trim().min(2).max(50),
+  avatarUrl: Joi.string().trim().uri().allow("", null),
+  description: Joi.string().trim().max(2000).allow("", null),
+};
+
 const updateProfileSchema = Joi.object({
   body: Joi.object({
-    profile: Joi.object({
-      firstName: Joi.string().min(2).max(50).required(),
-      lastName: Joi.string().min(2).max(50).required(),
-      avatarUrl: Joi.string().uri().allow("", null),
-    }).required(),
-  }).required(),
+    profile: Joi.object(userProfileFieldsSchema).min(1),
+    ...userProfileFieldsSchema,
+  })
+    .or("profile", "firstName", "lastName", "avatarUrl", "description")
+    .required(),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),
 });

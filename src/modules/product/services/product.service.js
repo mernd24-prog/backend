@@ -1,5 +1,6 @@
 const slugify = require("slugify");
 const { getPage } = require("../../../shared/tools/page");
+const { decodeProductRouteToken } = require("../../../shared/tools/route-token");
 const { ProductRepository } = require("../repositories/product.repository");
 const { ProductModel } = require("../models/product.model");
 const {
@@ -2741,9 +2742,32 @@ class ProductService {
 
 // ─── Get single ───────────────────────────────────────────────────────────
 
+resolveProductRouteIdentifier(productId, { allowRawObjectId = false } = {}) {
+  const rawIdentifier = String(productId || "").trim();
+  const tokenPayload = decodeProductRouteToken(rawIdentifier);
+  const productIdentifier = String(tokenPayload?.p || rawIdentifier).trim();
+
+  if (
+    productIdentifier &&
+    productIdentifier === rawIdentifier &&
+    mongoose.Types.ObjectId.isValid(productIdentifier) &&
+    !allowRawObjectId
+  ) {
+    throw new AppError("Product not found", 404);
+  }
+
+  return productIdentifier;
+}
+
 async getProduct(productId) {
+  const productIdentifier = this.resolveProductRouteIdentifier(productId);
+  const productLookup = mongoose.Types.ObjectId.isValid(productIdentifier)
+    ? { _id: productIdentifier }
+    : {
+        slug: productIdentifier,
+      };
   const product = await this.productRepository.findOne(
-    applyPublicProductFilter({ _id: productId }),
+    applyPublicProductFilter(productLookup),
   );
 
   if (!product) {
@@ -3756,10 +3780,11 @@ async getProduct(productId) {
 
   async submitReview(productId, payload, actor) {
     const buyerId = actor.userId || actor.sub || actor.id;
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId);
     const orderRepo = new OrderRepository();
     const reviewableItem = await orderRepo.findReviewableOrderItem({
       buyerId,
-      productId,
+      productId: resolvedProductId,
       orderId: payload.orderId,
       orderItemId: payload.orderItemId,
     });
@@ -3767,12 +3792,13 @@ async getProduct(productId) {
       throw AppError.validation("You can review this product only after this item is delivered.");
     }
     const platformService = new PlatformService();
-    return platformService.createProductReview(productId, payload, actor);
+    return platformService.createProductReview(resolvedProductId, payload, actor);
   }
 
   async listReviews(productId, query = {}) {
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId);
     const platformService = new PlatformService();
-    return platformService.listPublicProductReviews(productId, query);
+    return platformService.listPublicProductReviews(resolvedProductId, query);
   }
 
   async markReviewHelpful(productId, reviewId, actor) {
@@ -3789,9 +3815,10 @@ async getProduct(productId) {
 
   async getMyReviewForProduct(productId, actor, query = {}) {
     const buyerId = actor.userId || actor.sub || actor.id;
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId);
     const platformRepo = new PlatformRepository();
     const filter = {
-      productId,
+      productId: resolvedProductId,
       buyerId,
       ...(query.orderId ? { orderId: query.orderId } : {}),
       ...(query.orderItemId ? { orderItemId: query.orderItemId } : {}),
@@ -3804,11 +3831,12 @@ async getProduct(productId) {
   }
 
 async getRelatedProducts(productId, { limit = 8 } = {}) {
+  const resolvedProductId = this.resolveProductRouteIdentifier(productId);
   const normalizedLimit = Math.min(Math.max(Number(limit) || 8, 1), 20);
-  return remember(`products:related:${productId}:${normalizedLimit}`, 300, async () => {
+  return remember(`products:related:${resolvedProductId}:${normalizedLimit}`, 300, async () => {
   try {
     const product =
-      await ProductModel.findById(productId)
+      await ProductModel.findById(resolvedProductId)
         .select("categoryId category brand tags")
         .lean();
 
@@ -4107,10 +4135,11 @@ async getRelatedProducts(productId, { limit = 8 } = {}) {
 }
 
 async getCrossSellProducts(productId, { limit = 6 } = {}) {
+  const resolvedProductId = this.resolveProductRouteIdentifier(productId);
   const normalizedLimit = Math.min(Math.max(Number(limit) || 6, 1), 12);
-  return remember(`products:cross-sell:${productId}:${normalizedLimit}`, 300, async () => {
+  return remember(`products:cross-sell:${resolvedProductId}:${normalizedLimit}`, 300, async () => {
   try {
-    const product = await ProductModel.findById(productId)
+    const product = await ProductModel.findById(resolvedProductId)
       .select("categoryId category brand")
       .lean();
 
@@ -4386,7 +4415,8 @@ async getCrossSellProducts(productId, { limit = 6 } = {}) {
 }
 
   async getUpSellProducts(productId, { limit = 4 } = {}) {
-    const product = await this.productRepository.findById(productId);
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId);
+    const product = await this.productRepository.findById(resolvedProductId);
     if (!product) return [];
 
     const basePrice = Number(product.salePrice || product.price || 0);

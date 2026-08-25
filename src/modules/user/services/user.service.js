@@ -126,20 +126,68 @@ class UserService {
       throw new AppError("User not found", 404);
     }
 
+    const {
+      description: nestedDescription,
+      ...nestedProfilePayload
+    } = payload.profile || {};
+    const profilePayload = {
+      ...nestedProfilePayload,
+      ...(payload.firstName !== undefined ? { firstName: payload.firstName } : {}),
+      ...(payload.lastName !== undefined ? { lastName: payload.lastName } : {}),
+      ...(payload.avatarUrl !== undefined ? { avatarUrl: payload.avatarUrl } : {}),
+    };
+    const hasDescription = Object.prototype.hasOwnProperty.call(payload, "description") ||
+      Object.prototype.hasOwnProperty.call(payload.profile || {}, "description");
+    const description = Object.prototype.hasOwnProperty.call(payload, "description")
+      ? payload.description
+      : nestedDescription;
+    const isSeller = [
+      ROLES.SELLER,
+      ROLES.SELLER_ADMIN,
+      ROLES.SELLER_SUB_ADMIN,
+    ].includes(existingUser.role);
+    const existingProfile = existingUser.profile?.toObject?.() || existingUser.profile || {};
+    const existingSellerProfile =
+      existingUser.sellerProfile?.toObject?.() || existingUser.sellerProfile || {};
+    const setPayload = {};
+
+    if (Object.keys(profilePayload).length) {
+      setPayload.profile = {
+        ...existingProfile,
+        ...profilePayload,
+      };
+    }
+
+    if (isSeller && hasDescription) {
+      setPayload.sellerProfile = {
+        ...existingSellerProfile,
+        description,
+      };
+    }
+
+    if (!Object.keys(setPayload).length) {
+      return this.withSellerProfileState(existingUser);
+    }
+
     const updatedUser = await this.userRepository.updateById(userId, {
-      $set: {
-        profile: {
-          ...(existingUser.profile?.toObject?.() || existingUser.profile || {}),
-          ...payload.profile,
-        },
-      },
+      $set: setPayload,
     });
 
     if (!updatedUser) {
       throw new AppError("User not found", 404);
     }
 
-    return updatedUser;
+    if (isSeller && hasDescription) {
+      const organization = await sellerOrganizationService.getDefaultOrOnlyOrganization(userId);
+      if (organization?.id) {
+        await sellerOrganizationService.organizationRepository.update(organization.id, {
+          description,
+          updatedBy: userId,
+        });
+      }
+    }
+
+    return this.withSellerProfileState(updatedUser);
   }
 
   async addAddress(userId, payload) {

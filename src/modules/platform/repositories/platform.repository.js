@@ -89,9 +89,20 @@ class PlatformRepository {
     return (result?.keys || []).filter(Boolean);
   }
 
-  async listCategories(filter = {}, pagination = {}) {
+  async listCategories(filter = {}, pagination = {}, options = {}) {
+    const itemsQuery = CategoryTreeModel.find(filter)
+      .sort({ sortOrder: 1, title: 1 })
+      .skip(pagination.skip)
+      .limit(pagination.limit)
+      .lean();
+
+    if (options.includeTotal === false) {
+      const items = await itemsQuery;
+      return { items, total: items.length };
+    }
+
     const [items, total] = await Promise.all([
-      CategoryTreeModel.find(filter).sort({ sortOrder: 1, title: 1 }).skip(pagination.skip).limit(pagination.limit).lean(),
+      itemsQuery,
       CategoryTreeModel.countDocuments(filter),
     ]);
     return { items, total };
