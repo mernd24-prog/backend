@@ -151,7 +151,11 @@ class HomeService {
     const keys = [...candidateKeys];
     const categoryDocs = keys.length
       ? await this.platformRepository
-        .listCategories({ categoryKey: { $in: keys } }, { skip: 0, limit: Math.max(keys.length, 1) })
+        .listCategories(
+          { categoryKey: { $in: keys } },
+          { skip: 0, limit: Math.max(keys.length, 1) },
+          { includeTotal: false },
+        )
         .then((result) => result.items || [])
         .catch(() => [])
       : [];
@@ -172,7 +176,7 @@ class HomeService {
     if (this.activeCategoryCandidatesCache) return this.activeCategoryCandidatesCache;
 
     const categories = await this.platformRepository
-      .listCategories({ active: true }, { skip: 0, limit: 5000 })
+      .listCategories({ active: true }, { skip: 0, limit: 5000 }, { includeTotal: false })
       .then((result) => result.items || [])
       .catch(() => []);
 
@@ -194,6 +198,7 @@ class HomeService {
       .listCategories(
         { active: true, isDashboardVisible: true },
         { skip: 0, limit: Math.max(limit * 4, 16) },
+        { includeTotal: false },
       )
       .then((result) => result.items || [])
       .catch(() => []);

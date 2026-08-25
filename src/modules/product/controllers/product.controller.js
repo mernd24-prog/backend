@@ -119,7 +119,8 @@ class ProductController {
       : await this.productService.getProduct(req.params.productId);
     if (!req.auth) {
       // Track customer views only for public product reads.
-      this.productService.trackView(req.params.productId).catch(() => {});
+      const resolvedProductId = product?._id || product?.id || req.params.productId;
+      this.productService.trackView(resolvedProductId).catch(() => {});
     }
     res.json(okResponse(product));
   };

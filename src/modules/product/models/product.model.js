@@ -469,6 +469,10 @@ productSchema.index({ status: 1, visibility: 1, price: 1, rating: 1 });
 productSchema.index({ status: 1, approvalStatus: 1, visibility: 1, category: 1, "analytics.purchases": -1 });
 productSchema.index({ status: 1, approvalStatus: 1, visibility: 1, createdAt: -1 });
 productSchema.index({ status: 1, approvalStatus: 1, visibility: 1, "analytics.purchases": -1 });
+productSchema.index({ status: 1, approvalStatus: 1, visibility: 1, categoryKey: 1, "analytics.purchases": -1 });
+productSchema.index({ status: 1, approvalStatus: 1, visibility: 1, categoryKey: 1, createdAt: -1 });
+productSchema.index({ status: 1, approvalStatus: 1, visibility: 1, categorySlug: 1, "analytics.purchases": -1 });
+productSchema.index({ status: 1, approvalStatus: 1, visibility: 1, categoryId: 1, "analytics.purchases": -1 });
 productSchema.index({ "seo.keywords": 1 });
 productSchema.index({ scheduledAt: 1, status: 1 });
 
