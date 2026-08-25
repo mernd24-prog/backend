@@ -1880,10 +1880,10 @@ resolveSellerFeeTaxAmount(
       const grossSellerInvoiceAmount = this.round(grossAfterDiscount);
 
       // Keep this separately because commission may be calculated excluding GST.
-     const commissionBaseAmount = this.firstNumber(
-  pricing.sellerCommissionBaseAmount,
-  productTaxableAmount,
-);
+      const commissionBaseAmount = this.firstNumber(
+        pricing.sellerCommissionBaseAmount,
+        productTaxableAmount,
+      );
       const sellerFeeAmount = this.resolveSellerFeeAmount(row, pricing);
       const sellerFeeTaxAmount = this.resolveSellerFeeTaxAmount(row, pricing, financeSnapshot);
       const customerFeeAmount = this.firstNumber(
@@ -1927,9 +1927,9 @@ resolveSellerFeeTaxAmount(
         productId: row.product_id,
         variantId: row.variant_id,
         variantSku: row.variant_sku,
-       amount: grossSellerInvoiceAmount,
-grossSellerInvoiceAmount,
-commissionBaseAmount,
+        amount: grossSellerInvoiceAmount,
+        grossSellerInvoiceAmount,
+        commissionBaseAmount,
         grossAfterDiscount: this.round(grossAfterDiscount),
         discountAmount: this.round(discountAmount),
         discountFundingType: pricing.discountFundingType || "marketplace",
@@ -3382,6 +3382,36 @@ gstTcsAmount,
     }
   }
 
+  authoritativeCommissionAmountSql() {
+    return `CASE
+      WHEN seller_commissions.status IN ('paid', 'refunded')
+        OR seller_commissions.payout_id IS NOT NULL
+      THEN seller_commissions.amount
+      ELSE COALESCE(
+        (
+          SELECT GREATEST(
+            COALESCE(oi.line_total, 0) - COALESCE(oi.discount_amount, 0),
+            0
+          )
+          FROM order_items oi
+          WHERE oi.id = seller_commissions.order_item_id
+        ),
+        seller_commissions.amount
+      )
+    END`;
+  }
+
+  authoritativeCommissionNetSql() {
+    const grossSql = this.authoritativeCommissionAmountSql();
+    return `CASE
+      WHEN seller_commissions.status IN ('paid', 'refunded')
+        OR seller_commissions.payout_id IS NOT NULL
+      THEN COALESCE(seller_commissions.net_amount, 0)
+      ELSE COALESCE(seller_commissions.net_amount, 0)
+        + ((${grossSql}) - COALESCE(seller_commissions.amount, 0))
+    END`;
+  }
+
   async listSellerCommissions(filters = {}) {
     const { limit, offset } = this.normalizePagination(filters);
     const buildBase = () => {
@@ -3394,11 +3424,11 @@ gstTcsAmount,
       buildBase().orderBy("created_at", "desc").limit(limit).offset(offset),
       buildBase().count({ total: "*" }),
       buildBase()
-        .sum({ total_amount: "amount" })
+        .sum({ total_amount: knex.raw(this.authoritativeCommissionAmountSql()) })
         .sum({ commission_amount: "commission_amount" })
         .sum({ tax_amount: "tax_amount" })
         .sum({ refund_amount: "refund_amount" })
-        .sum({ net_amount: "net_amount" })
+        .sum({ net_amount: knex.raw(this.authoritativeCommissionNetSql()) })
         .first(),
     ]);
 
@@ -3409,14 +3439,25 @@ gstTcsAmount,
     const orderItems = orderItemIds.length
       ? await knex("order_items")
         .whereIn("id", orderItemIds)
-        .select("id", "delivered_at", "return_eligible_until", "payout_eligible_at", "payout_status", "payout_hold_reason")
+        .select("id", "line_total", "discount_amount", "delivered_at", "return_eligible_until", "payout_eligible_at", "payout_status", "payout_hold_reason")
       : [];
     const orderItemsById = new Map(orderItems.map((item) => [String(item.id), item]));
     const enrichedItems = (await this.enrichFinanceRecords(items)).map((item) => {
       const release = releaseById.get(String(item.id)) || {};
       const orderItem = orderItemsById.get(String(item.order_item_id || "")) || {};
+      const isImmutable = ["paid", "refunded"].includes(String(item.status || "")) || Boolean(item.payout_id);
+      const authoritativeAmount = this.round(
+        Math.max(Number(orderItem.line_total || 0) - Number(orderItem.discount_amount || 0), 0),
+      );
+      const amount = !isImmutable && orderItem.id ? authoritativeAmount : this.round(item.amount || 0);
+      const amountCorrection = this.round(amount - Number(item.amount || 0));
       return {
         ...item,
+        amount,
+        net_amount: isImmutable
+          ? this.round(item.net_amount || 0)
+          : this.round(Number(item.net_amount || 0) + amountCorrection),
+        storedAmount: amountCorrection ? this.round(item.amount || 0) : undefined,
         deliveredAt: orderItem.delivered_at || null,
         returnWindowStartsAt: orderItem.delivered_at || null,
         returnWindowEndsAt: orderItem.return_eligible_until || orderItem.payout_eligible_at || null,
@@ -4276,14 +4317,14 @@ gstTcsAmount,
     const [commissionSummary, payoutSummary, orderSummary, paymentSummary] = await Promise.all([
       knex("seller_commissions")
         .modify((builder) => applyFinanceFilters(builder))
-        .sum({ gross_amount: "amount" })
+        .sum({ gross_amount: knex.raw(this.authoritativeCommissionAmountSql()) })
         .sum({ commission_amount: "commission_amount" })
         .sum({ commission_tax_amount: "tax_amount" })
         .sum({ refund_amount: "refund_amount" })
         .sum({ gst_tcs_amount: knex.raw("COALESCE((metadata->>'gstTcsAmount')::numeric, 0)") })
         .sum({ income_tax_tds_amount: knex.raw("COALESCE((metadata->>'incomeTaxTdsAmount')::numeric, 0)") })
         .sum({ shipping_deduction_amount: knex.raw("COALESCE((metadata->>'shippingDeductionAmount')::numeric, 0)") })
-        .sum({ payable_amount: "net_amount" })
+        .sum({ payable_amount: knex.raw(this.authoritativeCommissionNetSql()) })
         .count({ count: "*" })
         .first(),
       knex("seller_payouts")
