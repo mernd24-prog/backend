@@ -371,6 +371,9 @@ class ProductService {
     if (plain.attributes instanceof Map) {
       plain.attributes = Object.fromEntries(plain.attributes);
     }
+    if (plain.specifications instanceof Map) {
+      plain.specifications = Object.fromEntries(plain.specifications);
+    }
     return plain;
   }
 

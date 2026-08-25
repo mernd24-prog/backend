@@ -1874,11 +1874,10 @@ resolveSellerFeeTaxAmount(
         Math.max(0, grossAfterDiscount - productTaxableAmount),
       );
 
-      // Seller's complete product invoice amount, including GST.
-      // The seller payout must start from this amount.
-      const grossSellerInvoiceAmount = this.round(
-        productTaxableAmount + productTaxAmount,
-      );
+      // The order line total is the authoritative customer-facing amount.
+      // Never rebuild gross from independently rounded taxable and GST
+      // components: doing that can introduce one-paise drift per line.
+      const grossSellerInvoiceAmount = this.round(grossAfterDiscount);
 
       // Keep this separately because commission may be calculated excluding GST.
      const commissionBaseAmount = this.firstNumber(
@@ -2579,6 +2578,8 @@ gstTcsAmount,
               source: "negative_balance_offset",
               offsetPayoutId: payoutId,
               offsetAmount: -consumed,
+              originalLiabilityAmount: Number(recoveryMetadata.originalLiabilityAmount || outstanding),
+              recoveredAmount: this.round(Number(recoveryMetadata.recoveredAmount || 0) + consumed),
               remainingAmount: 0,
               updatedBy: options.actor?.userId || options.actor?.sub || null,
               updatedAt: new Date().toISOString(),
@@ -3318,7 +3319,7 @@ gstTcsAmount,
         })),
       },
       nextEligibleAt,
-      canRequestPayout: balances.availableBalance > 0 && minimumPayoutShortfall === 0,
+      canRequestPayout: balances.effectiveAvailablePayout > 0 && minimumPayoutShortfall === 0,
       minimumPayoutShortfall,
       payouts: {
         paidCount: Number(paidPayoutRow?.count || 0),
@@ -3847,7 +3848,7 @@ gstTcsAmount,
   }
 
   async resolveNegativeBalanceRecovery(settlementId, payload = {}, actor = {}) {
-    const action = payload.action || "offset_future_payout";
+    const action = payload.action;
     const validActions = ["offset_future_payout", "collected_from_seller", "platform_write_off"];
     if (!validActions.includes(action)) {
       throw new AppError("Invalid negative balance recovery action", 400);
@@ -3859,17 +3860,41 @@ gstTcsAmount,
       if (Number(settlement.net_amount || 0) >= 0) {
         throw new AppError("Settlement is not a negative balance recovery item", 400);
       }
+      if (settlement.status === "completed") {
+        throw new AppError("This recovery item is already closed", 409);
+      }
+      if (["collected_from_seller", "platform_write_off"].includes(action) && !String(payload.note || "").trim()) {
+        throw new AppError("A recovery note is required", 400);
+      }
+
+      const existingMetadata = this.parseJson(settlement.metadata, {});
+      const remainingAmount = this.round(
+        Number(existingMetadata.remainingAmount ?? Math.abs(Number(settlement.net_amount || 0))),
+      );
+      if (action === "collected_from_seller" && !(payload.referenceId || payload.reference)) {
+        throw new AppError("Payment reference ID is required when recording an external seller payment", 400);
+      }
 
       const nextStatus = action === "offset_future_payout" ? "pending" : "completed";
+      const completedRecoveryMetadata = action === "collected_from_seller"
+        ? {
+          recoveredAmount: this.round(Number(existingMetadata.recoveredAmount || 0) + remainingAmount),
+          externallyCollectedAmount: remainingAmount,
+          remainingAmount: 0,
+        }
+        : action === "platform_write_off"
+          ? { writtenOffAmount: remainingAmount, remainingAmount: 0 }
+          : {};
       const [updated] = await trx("seller_settlements")
         .where("id", settlementId)
         .update({
           status: nextStatus,
           notes: payload.note || settlement.notes || this.recoveryActionLabel(action),
           metadata: this.jsonb({
-            ...this.parseJson(settlement.metadata, {}),
+            ...existingMetadata,
+            ...completedRecoveryMetadata,
             recoveryAction: action,
-            recoveryAmount: this.round(Math.abs(Number(settlement.net_amount || 0))),
+            recoveryAmount: remainingAmount,
             recoveryReference: payload.referenceId || payload.reference || null,
             recoveryNote: payload.note || null,
             resolvedBy: actor.userId || actor.sub || null,

@@ -15,6 +15,8 @@ const variantSchema = new mongoose.Schema(
   {
     sku: { type: String, trim: true, required: true },
     title: { type: String, trim: true },
+    description: { type: String },
+    shortDescription: { type: String, trim: true, maxlength: 500 },
     price: { type: Number, min: 0 },
     mrp: { type: Number, min: 0 },
     salePrice: { type: Number, min: 0 },
@@ -31,6 +33,7 @@ const variantSchema = new mongoose.Schema(
       unit: { type: String, default: "cm" },
     },
     attributes: { type: Map, of: mongoose.Schema.Types.Mixed, default: {} },
+    specifications: { type: Map, of: mongoose.Schema.Types.Mixed, default: {} },
     images: [{ type: String }],
     status: {
       type: String,

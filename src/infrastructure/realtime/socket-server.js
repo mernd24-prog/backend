@@ -15,7 +15,10 @@ function attachSocketServer(httpServer) {
     cors: {
       origin: env.socket.corsOrigin,
       methods: ["GET", "POST"],
+      allowedHeaders: ["Authorization", "Content-Type"],
+      credentials: true,
     },
+    allowEIO3: false,
   });
 
   io.use(async (socket, next) => {
@@ -92,6 +95,12 @@ function emitToRole(role, eventName, payload) {
   io?.to(`role:${role}`).emit(eventName, payload);
 }
 
+function emitToRoles(roles = [], eventName, payload) {
+  [...new Set(roles.filter(Boolean))].forEach((role) =>
+    emitToRole(role, eventName, payload),
+  );
+}
+
 function emitToOrder(orderId, eventName, payload) {
   io?.to(`order:${orderId}`).emit(eventName, payload);
 }
@@ -102,5 +111,6 @@ module.exports = {
   getSocketServer,
   emitToUser,
   emitToRole,
+  emitToRoles,
   emitToOrder,
 };

@@ -22,6 +22,8 @@ const deprecatedRootVariantField = () => Joi.any().strip();
 const variantSchema = Joi.object({
   sku: Joi.string().trim().required(),
   title: optionalString(),
+  description: Joi.string().min(10).allow("", null),
+  shortDescription: Joi.string().trim().max(500).allow("", null),
   price: optionalNonNegativeNumber(),
   mrp: optionalNonNegativeNumber(),
   salePrice: optionalNonNegativeNumber(),
@@ -37,6 +39,7 @@ const variantSchema = Joi.object({
     unit: optionalString(),
   }),
   attributes: Joi.object().default({}),
+  specifications: Joi.object().default({}),
   images: Joi.array().items(Joi.string().uri()).default([]),
   status: Joi.string().valid("active", "inactive", "out_of_stock").default("active"),
   isDefault: Joi.boolean().default(false),

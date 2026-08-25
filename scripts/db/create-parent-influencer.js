@@ -34,7 +34,7 @@ Optional:
 function parseArguments(argv = []) {
   const result = { canCreateChildren: true };
   const keyMap = {
-    "--email": "email",
+    "A": "email",
     "--password": "password",
     "--first-name": "firstName",
     "--last-name": "lastName",

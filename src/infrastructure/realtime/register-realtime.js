@@ -1,6 +1,11 @@
 const { eventBus } = require("../events/event-bus");
 const { DOMAIN_EVENTS } = require("../../contracts/events/domain-events");
-const { emitToOrder, emitToRole, emitToUser } = require("./socket-server");
+const {
+  emitToOrder,
+  emitToRole,
+  emitToRoles,
+  emitToUser,
+} = require("./socket-server");
 const { ROLES } = require("../../shared/constants/roles");
 
 let realtimeRegistered = false;
@@ -100,6 +105,39 @@ function registerRealtimeSubscribers() {
     const targetUserId = event.payload.userId || event.payload.sellerId;
     emitToUser(targetUserId, "kyc:status", event.payload);
     emitToRole(ROLES.ADMIN, "admin:kyc:update", event.payload);
+  });
+
+  const adminRoles = [ROLES.ADMIN, ROLES.SUB_ADMIN, ROLES.SUPER_ADMIN];
+  Object.values(DOMAIN_EVENTS).forEach((eventName) => {
+    eventBus.subscribe(eventName, async (event) => {
+      const payload = event?.payload || {};
+      const orderId = payload.orderId || payload.order_id ||
+        (String(eventName).startsWith("order.") ? event.aggregateId : null);
+      const envelope = {
+        id: event.id || event.eventId || null,
+        eventName,
+        aggregateId: event.aggregateId || null,
+        occurredAt: event.occurredAt || event.createdAt || new Date().toISOString(),
+        payload,
+      };
+
+      emitToRoles(adminRoles, "realtime:update", envelope);
+      if (orderId) emitToOrder(orderId, "realtime:update", envelope);
+
+      const targetUserIds = new Set([
+        payload.userId,
+        payload.user_id,
+        payload.buyerId,
+        payload.buyer_id,
+        payload.sellerUserId,
+        payload.seller_user_id,
+        payload.influencerId,
+        payload.influencer_id,
+      ].filter(Boolean).map(String));
+      targetUserIds.forEach((userId) =>
+        emitToUser(userId, "realtime:update", envelope),
+      );
+    });
   });
 }
 

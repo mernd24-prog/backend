@@ -203,8 +203,15 @@ class OrderRepository {
   }
 
   generateOrderNumber(date = new Date()) {
-    const datePart = date.toISOString().slice(0, 10).replace(/-/g, "");
-    const randomPart = uuidv4().replace(/-/g, "").slice(0, 10).toUpperCase();
+    // Keep the public reference compact while preserving the previous
+    // generator's 40 bits of randomness. The database UUID remains the
+    // canonical internal identifier.
+    const datePart = date.toISOString().slice(2, 10).replace(/-/g, "");
+    const randomHex = uuidv4().replace(/-/g, "").slice(0, 10);
+    const randomPart = BigInt(`0x${randomHex}`)
+      .toString(36)
+      .toUpperCase()
+      .padStart(8, "0");
     return `ORD-${datePart}-${randomPart}`;
   }
 
@@ -687,6 +694,7 @@ class OrderRepository {
     const {
       status = null,
       paymentStatus = null,
+      paymentProvider = null,
       deliveryStatus = null,
       buyerId = null,
       organizationId = null,
@@ -702,6 +710,10 @@ class OrderRepository {
     if (paymentStatus) {
       clauses.push(`o.payment_status = $${nextIndex()}`);
       values.push(paymentStatus);
+    }
+    if (paymentProvider) {
+      clauses.push(`o.payment_provider = $${nextIndex()}`);
+      values.push(paymentProvider);
     }
     if (deliveryStatus) {
       clauses.push(`o.delivery_status = $${nextIndex()}`);

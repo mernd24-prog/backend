@@ -6,6 +6,7 @@ const objectId = Joi.string().hex().length(24);
 const orderFilterQuerySchema = Joi.object({
   status: Joi.string().valid(...Object.values(ORDER_STATUS)),
   paymentStatus: Joi.string().valid("initiated", "authorized", "captured", "failed", "partially_refunded", "refunded", "cancelled"),
+  paymentProvider: Joi.string().valid(...Object.values(PAYMENT_PROVIDER)),
   deliveryStatus: Joi.string().max(64),
   sellerId: Joi.string().max(128),
   organizationId: Joi.string().guid({ version: "uuidv4" }),
