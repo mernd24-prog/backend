@@ -5,6 +5,25 @@ Development URL: `http://192.168.16.47:4000/api/v1`
 
 Influencer accounts are separate from the main user model. Admin creates the account, login email, referral identity/code, type, hierarchy and initial password. The influencer can update personal, address, KYC-document and payout details. Email, referral code, hierarchy, type and approval statuses remain Admin-controlled.
 
+## Web and native invitation links
+
+One invitation works across web and native clients. Session and invitation responses return:
+
+- `registrationUrl` / `universalLink`: `https://influencer.example.com/register?invite=...`
+- `nativeDeepLink`: `samglobalinfluencer://register?invite=...`
+
+Use the HTTPS URL in the QR. When Android App Links and iOS Universal Links are associated with the production domain, it opens the native app when installed and otherwise remains on the web registration page. The web page also exposes `nativeDeepLink` as an **Open in app** fallback.
+
+Configure the backend with `INFLUENCER_PORTAL_URL` and `INFLUENCER_NATIVE_SCHEME`. React Native must register the same scheme and map both URL forms to its Registration screen. Store access and refresh tokens in Keychain/Keystore-backed secure storage.
+
+Production domain association (replace the placeholders with the real native identifiers):
+
+- Android serves `https://influencer.example.com/.well-known/assetlinks.json` with `package_name` and the Play signing SHA-256 fingerprint.
+- iOS serves `https://influencer.example.com/.well-known/apple-app-site-association` with `TEAM_ID.BUNDLE_ID` and `/register*` in its allowed paths/components.
+- React Navigation maps both `https://influencer.example.com/register` and `samglobalinfluencer://register` to `Registration`, with `invite` as a route parameter.
+
+Do not publish placeholder association files: Android and iOS will reject them. The package name, Apple Team ID, bundle ID, signing fingerprint and final HTTPS domain must come from the actual React Native project and release accounts.
+
 ## Quick start
 
 1. Import `influencer_postman_collection.json` and `influencer_postman_environment.json`.
@@ -14,6 +33,29 @@ Influencer accounts are separate from the main user model. Admin creates the acc
 5. Use the Parent or Child folder for the selected account type.
 
 ## Authentication
+
+### Resolve an associate invitation (public)
+
+`GET /auth/influencer/invites/:inviteCode`
+
+Returns the parent display identity and web/native links. A revoked child-creation permission makes this endpoint return `400`, so clients must validate again before submitting.
+
+### Register through an invitation (public)
+
+`POST /auth/influencer/register`
+
+```json
+{
+  "inviteCode": "invite-code-from-the-link",
+  "firstName": "Asha",
+  "lastName": "Sharma",
+  "email": "asha@example.com",
+  "phone": "+919876543210",
+  "password": "StrongPassword123!"
+}
+```
+
+The account is linked to the invitation owner with `pending_approval` status. Do not issue or store tokens after registration. Show a pending-approval screen. Login remains blocked until Admin changes the influencer status to `active`.
 
 ### Login
 
@@ -52,7 +94,7 @@ Replace both locally stored tokens if the response rotates them. A `401 TOKEN_IN
 | Withdrawals | Yes | Yes | Actor requests only |
 | Bonus progress | Yes | Yes | Actor-scoped eligible bonus rules |
 | Profile read/update | Yes | Yes | Cannot change email/code/type/hierarchy/status |
-| Network/My Children | Parent only | No | Requires `canCreateChildren=true` |
+| Network/My Children | With permission | With permission | Requires current `canCreateChildren=true`; revocation disables sharing and creation |
 | Child analytics | Parent only | No | Returned through Analytics/Network |
 
 Inactive influencers receive only the Profile module in Session. Active-only endpoints return `403` for pending, suspended or rejected profiles.
@@ -202,6 +244,7 @@ Common responses:
 
 - Never expose one influencer's IDs as filters for another influencer; scoping comes from the token.
 - Never calculate wallet balances, commissions or analytics totals on the client.
-- Never show Network/Child Analytics unless present in Session `allowedModules`.
+- Never show Network/Child Analytics or a registration QR unless present in Session `allowedModules` and `canCreateChildren=true`.
+- Treat `childRegistration.shareable` as display state only; the server rechecks permission for invitation resolution and registration.
 - Never permit email, referral code, type, parent, status, KYC approval or payout approval updates from the influencer client.
 - Store tokens in secure device storage for mobile apps, not plain AsyncStorage.

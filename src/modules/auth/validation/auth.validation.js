@@ -94,6 +94,25 @@ const loginSchema = Joi.object({
   params: emptyParamsSchema,
 });
 
+const influencerRegistrationSchema = Joi.object({
+  body: Joi.object({
+    inviteCode: Joi.string().trim().min(10).max(200).required(),
+    email: Joi.string().trim().lowercase().email().required(),
+    phone: Joi.string().trim().min(10).max(15).required(),
+    password: Joi.string().min(8).max(64).required(),
+    firstName: Joi.string().trim().min(2).max(50).required(),
+    lastName: Joi.string().trim().max(50).allow(""),
+  }).required(),
+  query: emptyQuerySchema,
+  params: emptyParamsSchema,
+});
+
+const influencerInviteSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: emptyQuerySchema,
+  params: Joi.object({ inviteCode: Joi.string().trim().min(10).max(200).required() }).required(),
+});
+
 const refreshSchema = Joi.object({
   body: Joi.object({
     refreshToken: Joi.string()
@@ -361,6 +380,8 @@ module.exports = {
   registerWithOtpSchema,
   verifyRegistrationSchema,
   loginSchema,
+  influencerRegistrationSchema,
+  influencerInviteSchema,
   refreshSchema,
   socialLoginSchema,
 

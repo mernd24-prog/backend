@@ -47,6 +47,16 @@ class AuthController {
     res.json(okResponse(result));
   };
 
+  influencerRegistrationInvite = async (req, res) => {
+    const result = await this.authService.getInfluencerRegistrationInvite(req.params.inviteCode);
+    res.json(okResponse(result));
+  };
+
+  influencerRegister = async (req, res) => {
+    const result = await this.authService.registerInfluencerAssociate(req.body);
+    res.status(201).json(okResponse(result, { message: result.message }));
+  };
+
   influencerForgotPassword = async (req, res) => {
     const result = await this.authService.influencerForgotPassword(req.body, getRequestInfo(req));
     res.json(okResponse(result));

@@ -54,6 +54,8 @@ const PUBLIC_ENDPOINTS = new Set([
   'POST /api/v1/auth/register-otp',
   'POST /api/v1/auth/verify-registration',
   'POST /api/v1/auth/login',
+  'GET /api/v1/auth/influencer/invites/:inviteCode',
+  'POST /api/v1/auth/influencer/register',
   'POST /api/v1/auth/social',
   'POST /api/v1/auth/refresh',
   'POST /api/v1/auth/send-otp',
@@ -76,6 +78,7 @@ const COLLECTION_VARIABLES = [
   ['baseUrl', 'http://localhost:4000'],
   ['accessToken', ''],
   ['refreshToken', ''],
+  ['influencerInviteCode', 'replace-with-invite-code'],
   ['userId', ''],
   ['sellerId', ''],
   ['productId', ''],
@@ -408,6 +411,16 @@ function sampleBodyForRoute(route) {
   }
   if (pathName.endsWith('/auth/verify-registration')) return { email: '{{userEmail}}', otp: '123456' };
   if (pathName.endsWith('/auth/login')) return { email: '{{userEmail}}', password: '{{userPassword}}' };
+  if (pathName.endsWith('/auth/influencer/register')) {
+    return {
+      inviteCode: '{{influencerInviteCode}}',
+      firstName: 'Postman',
+      lastName: 'Associate',
+      email: 'associate@example.com',
+      phone: '9876543210',
+      password: 'StrongPassword123!',
+    };
+  }
   if (pathName.endsWith('/auth/social')) {
     return { provider: 'google', idToken: 'google-or-firebase-id-token', email: '{{userEmail}}', role: 'buyer' };
   }
@@ -419,6 +432,9 @@ function sampleBodyForRoute(route) {
   if (pathName.endsWith('/auth/forgot-password')) return { email: '{{userEmail}}' };
   if (pathName.endsWith('/auth/reset-password')) return { email: '{{userEmail}}', otp: '123456', newPassword: 'NewPassword@123' };
   if (pathName.endsWith('/auth/change-password')) return { currentPassword: '{{userPassword}}', newPassword: 'NewPassword@123' };
+  if (pathName.endsWith('/admin/referral/influencers/:influencerId/child-permission')) {
+    return { canCreateChildren: true, reason: 'Granted by Admin from Postman' };
+  }
 
   if (pathName.endsWith('/users/me')) return { profile: { firstName: 'Postman', lastName: 'Buyer', avatarUrl: '' } };
   if (pathName.endsWith('/users/me/kyc')) return sampleUserKycBody();

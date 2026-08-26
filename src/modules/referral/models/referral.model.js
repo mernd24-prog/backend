@@ -78,6 +78,8 @@ const influencerProfileSchema = new mongoose.Schema(
       index: true,
     },
     canCreateChildren: { type: Boolean, default: false, index: true },
+    childRegistrationCode: { type: String, unique: true, sparse: true, index: true },
+    childRegistrationCodeCreatedAt: { type: Date },
     promotedAt: { type: Date, default: null },
     onboardingStatus: { type: String, default: "approved", index: true },
     kycStatus: { type: String, default: "pending", index: true },

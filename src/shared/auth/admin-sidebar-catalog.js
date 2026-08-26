@@ -60,8 +60,8 @@ const SIDEBAR_MODULES = [
   { moduleName: "Negative Balances", moduleKey: "negative-balances", moduleSlug: "negative-balances", icon: "MdMoneyOff", routePath: "/app/negative-balances", moduleType: "page", order: 99.7, parentModule: "seller-finance-payouts", requiredModule: "sellers/commissions" },
 
   { moduleName: "Commerce Settings", moduleKey: "commerce-settings-menu", moduleSlug: "commerce-settings-menu", icon: "MdSettings", moduleType: "group", order: 99.8, parentModule: null, requiredModule: "admin" },
-  // { moduleName: "Platform Commission", moduleKey: "platform-commission", moduleSlug: "platform-commission", icon: "MdStorefront", routePath: "/app/platform-commission", moduleType: "page", order: 99.811, parentModule: "commerce-settings-menu", requiredModule: "admin" },
-  // { moduleName: "Coupons & Discounts", moduleKey: "discount-coupons", moduleSlug: "discount-coupons", icon: "MdConfirmationNumber", routePath: "/app/discount-coupons", moduleType: "page", order: 99.82, parentModule: "commerce-settings-menu", requiredModule: "coupons" },
+  { moduleName: "Platform Commission", moduleKey: "platform-commission", moduleSlug: "platform-commission", icon: "MdStorefront", routePath: "/app/platform-commission", moduleType: "page", order: 99.811, parentModule: "commerce-settings-menu", requiredModule: "admin" },
+  { moduleName: "Coupons & Discounts", moduleKey: "discount-coupons", moduleSlug: "discount-coupons", icon: "MdConfirmationNumber", routePath: "/app/discount-coupons", moduleType: "page", order: 99.82, parentModule: "commerce-settings-menu", requiredModule: "coupons" },
   // { moduleName: "Subscription Plans", moduleKey: "subscription-plans", moduleSlug: "subscription-plans", icon: "MdSubscriptions", routePath: "/app/subscription-plans", moduleType: "page", order: 99.86, parentModule: "commerce-settings-menu", requiredModule: "subscriptions" },
 
   { moduleName: "Users & Access", moduleKey: "users-access", moduleSlug: "users-access", icon: "MdPeople", moduleType: "group", order: 100, parentModule: null, requiredModule: "users" },

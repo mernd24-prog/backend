@@ -126,6 +126,10 @@ class ReferralRepository {
     return InfluencerProfileModel.findById(influencerId);
   }
 
+  async getInfluencerProfileByChildRegistrationCode(code) {
+    return InfluencerProfileModel.findOne({ childRegistrationCode: String(code || "").trim() });
+  }
+
   async getInfluencerProfileByUserId(userId) {
     return InfluencerProfileModel.findOne({ userId: String(userId) });
   }

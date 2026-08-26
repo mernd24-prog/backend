@@ -16,6 +16,52 @@
   ],
   "item": [
     {
+      "name": "00 - Public QR Associate Registration",
+      "description": "Client-neutral web/native registration flow. The QR contains the HTTPS universalLink; nativeDeepLink is available as an app fallback. Registration creates a pending account and never returns login tokens.",
+      "item": [
+        {
+          "name": "Resolve QR Invitation",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/auth/influencer/invites/{{influencerInviteCode}}",
+            "description": "Validates the current parent permission and returns parent, universalLink, nativeDeepLink and shareable state."
+          }
+        },
+        {
+          "name": "Register Brand Associate - Pending Admin Approval",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"inviteCode\": \"{{influencerInviteCode}}\",\n  \"firstName\": \"Invited\",\n  \"lastName\": \"Associate\",\n  \"email\": \"{{associateRegistrationEmail}}\",\n  \"phone\": \"9876543210\",\n  \"password\": \"{{associateRegistrationPassword}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/v1/auth/influencer/register",
+            "description": "Creates a parent-linked account in pending_approval. Login must remain blocked until Admin approval."
+          }
+        },
+        {
+          "name": "Pending Associate Login - Expect 403",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{associateRegistrationEmail}}\",\n  \"password\": \"{{associateRegistrationPassword}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{baseUrl}}/api/v1/auth/influencer/login",
+            "description": "Expected to return 403 until Admin approves the account."
+          }
+        }
+      ]
+    },
+    {
       "name": "00 - Influencer Authentication",
       "description": "Influencer accounts use /auth/influencer/login. Parent and child access/refresh tokens are captured automatically.",
       "item": [

@@ -151,6 +151,15 @@ const updateInfluencerStatusSchema = Joi.object({
   }).required(),
 });
 
+const updateInfluencerChildPermissionSchema = Joi.object({
+  body: Joi.object({
+    canCreateChildren: Joi.boolean().required(),
+    reason: Joi.string().trim().max(500).allow("", null),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({ influencerId: Joi.string().required() }).required(),
+});
+
 const promoteInfluencerSchema = Joi.object({
   body: Joi.object({
     canCreateChildren: Joi.boolean().default(true),
@@ -412,6 +421,7 @@ module.exports = {
   createParentInfluencerSchema,
   createChildInfluencerSchema,
   updateInfluencerStatusSchema,
+  updateInfluencerChildPermissionSchema,
   promoteInfluencerSchema,
   listCodesSchema,
   createCodeSchema,

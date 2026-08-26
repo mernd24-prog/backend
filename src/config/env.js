@@ -97,15 +97,40 @@ const razorpayMode = razorpayLiveRequested && razorpayConfigured
     ? "mock"
     : "disabled";
 
+const razorpayKeyId = cleanEnvValue(process.env.RAZORPAY_KEY_ID);
+const razorpayKeySecret = cleanEnvValue(process.env.RAZORPAY_KEY_SECRET);
+const explicitRazorpayXKeyId = cleanEnvValue(process.env.RAZORPAYX_KEY_ID);
+const explicitRazorpayXKeySecret = cleanEnvValue(process.env.RAZORPAYX_KEY_SECRET);
+// A key id and secret are an inseparable credential pair. A common setup error is
+// to paste a separate RazorpayX key id while leaving the Gateway secret in place.
+// Existing Razorpay merchants can use their Gateway API pair for RazorpayX, so
+// recover that safe pairing instead of sending a mixed pair that always returns
+// an authentication error. Genuinely separate RazorpayX pairs remain supported.
+const razorpayXHasMixedCredentialPair = Boolean(
+  explicitRazorpayXKeyId &&
+  explicitRazorpayXKeySecret &&
+  razorpayKeyId &&
+  razorpayKeySecret &&
+  explicitRazorpayXKeyId !== razorpayKeyId &&
+  explicitRazorpayXKeySecret === razorpayKeySecret,
+);
+const razorpayXKeyId = razorpayXHasMixedCredentialPair
+  ? razorpayKeyId
+  : explicitRazorpayXKeyId || razorpayKeyId;
+const razorpayXKeySecret = razorpayXHasMixedCredentialPair
+  ? razorpayKeySecret
+  : explicitRazorpayXKeySecret || razorpayKeySecret;
+const razorpayXCredentialSource = razorpayXHasMixedCredentialPair || !explicitRazorpayXKeyId
+  ? "razorpay"
+  : "razorpayx";
 const razorpayXMissingKeys = findMissingConfig([
-  { key: "RAZORPAYX_KEY_ID", value: process.env.RAZORPAYX_KEY_ID || process.env.RAZORPAY_KEY_ID },
-  { key: "RAZORPAYX_KEY_SECRET", value: process.env.RAZORPAYX_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET },
+  { key: "RAZORPAYX_KEY_ID or RAZORPAY_KEY_ID", value: razorpayXKeyId },
+  { key: "RAZORPAYX_KEY_SECRET or RAZORPAY_KEY_SECRET", value: razorpayXKeySecret },
   { key: "RAZORPAYX_ACCOUNT_NUMBER", value: process.env.RAZORPAYX_ACCOUNT_NUMBER },
 ]);
 const razorpayXConfigured = razorpayXMissingKeys.length === 0;
 const razorpayXLiveRequested = readBooleanFlag(["ENABLE_RAZORPAYX_PAYOUTS", "USE_LIVE_RAZORPAYX"], false);
 const razorpayXMockEnabled = readBooleanFlag(["ENABLE_RAZORPAYX_MOCK", "USE_MOCK_RAZORPAYX"], false);
-const razorpayXKeyId = cleanEnvValue(process.env.RAZORPAYX_KEY_ID || process.env.RAZORPAY_KEY_ID);
 const razorpayXTestKey = razorpayXKeyId.startsWith("rzp_test_");
 const razorpayXMode = razorpayXLiveRequested && razorpayXConfigured
   ? (razorpayXTestKey ? "test" : "live")
@@ -201,6 +226,8 @@ const env = {
   appName: process.env.APP_NAME || "ecommerce",
   apiPrefix: process.env.API_PREFIX || "/api/v1",
   publicBaseUrl: hasEnvValue(publicBaseUrl) ? cleanEnvValue(publicBaseUrl).replace(/\/+$/, "") : "",
+  influencerPortalUrl: cleanEnvValue(process.env.INFLUENCER_PORTAL_URL || "http://localhost:5173").replace(/\/+$/, ""),
+  influencerNativeScheme: cleanEnvValue(process.env.INFLUENCER_NATIVE_SCHEME || "samglobalinfluencer"),
   cors: {
     origin: parseOriginList(process.env.CORS_ORIGIN || process.env.CORS_ORIGINS),
   },
@@ -268,7 +295,7 @@ const env = {
   },
   razorpayX: {
     keyId: razorpayXKeyId,
-    keySecret: cleanEnvValue(process.env.RAZORPAYX_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET),
+    keySecret: razorpayXKeySecret,
     accountNumber: cleanEnvValue(process.env.RAZORPAYX_ACCOUNT_NUMBER),
     webhookSecret: cleanEnvValue(process.env.RAZORPAYX_WEBHOOK_SECRET),
     configured: razorpayXConfigured,
@@ -279,6 +306,8 @@ const env = {
     mode: razorpayXMode,
     liveRequested: razorpayXLiveRequested,
     missingKeys: razorpayXMissingKeys,
+    credentialSource: razorpayXCredentialSource,
+    mixedCredentialPairRecovered: razorpayXHasMixedCredentialPair,
   },
   apitxt: {
     baseUrl: process.env.APITXT_BASE_URL || "",

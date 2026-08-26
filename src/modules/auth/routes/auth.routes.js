@@ -18,6 +18,8 @@ const {
   resetPasswordSchema,
   changePasswordSchema,
   buyerOtpAuthSchema,
+  influencerRegistrationSchema,
+  influencerInviteSchema,
 } = require("../validation/auth.validation");
 
 const authRoutes = express.Router();
@@ -25,7 +27,7 @@ const authController = new AuthController();
 
 authRoutes.use([
   "/register", "/register-otp", "/verify-registration", "/login",
-  "/influencer/login", "/social", "/refresh", "/otp-auth", "/send-otp",
+  "/influencer/login", "/influencer/register", "/influencer/invites", "/social", "/refresh", "/otp-auth", "/send-otp",
   "/influencer/forgot-password", "/influencer/verify-reset-otp", "/influencer/reset-password",
   "/verify-otp", "/resend-otp", "/forgot-password", "/reset-password",
 ], authRateLimit);
@@ -37,6 +39,16 @@ authRoutes.post(
   "/influencer/login",
   checkInput(loginSchema),
   catchErrors(authController.influencerLogin),
+);
+authRoutes.get(
+  "/influencer/invites/:inviteCode",
+  checkInput(influencerInviteSchema),
+  catchErrors(authController.influencerRegistrationInvite),
+);
+authRoutes.post(
+  "/influencer/register",
+  checkInput(influencerRegistrationSchema),
+  catchErrors(authController.influencerRegister),
 );
 authRoutes.post("/influencer/forgot-password", checkInput(forgotPasswordSchema), catchErrors(authController.influencerForgotPassword));
 authRoutes.post("/influencer/verify-reset-otp", checkInput(verifyOtpSchema), catchErrors(authController.influencerVerifyResetOtp));

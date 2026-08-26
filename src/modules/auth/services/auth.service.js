@@ -769,6 +769,20 @@ class AuthService {
     return influencerSession ? { ...result, influencer: influencerSession } : result;
   }
 
+  async getInfluencerRegistrationInvite(inviteCode) {
+    return this.referralService.resolveChildRegistrationInvite(inviteCode);
+  }
+
+  async registerInfluencerAssociate(payload) {
+    const result = await this.referralService.registerChildFromInvite(payload);
+    return {
+      influencerId: result.id || result.influencerId,
+      status: "pending_approval",
+      message: "Registration submitted. You can log in after an Admin approves your account.",
+      parent: result.parentInfluencerId || null,
+    };
+  }
+
   async loginInfluencer(payload, requestContext = {}) {
     const account = await this.referralService.getInfluencerAccountForLogin(payload.email);
     if (!account) {
@@ -783,7 +797,12 @@ class AuthService {
         ...requestContext,
         metadata: { reason: "account_not_active", role: ROLES.INFLUENCER },
       });
-      throw new AppError("Influencer account is not active", 403);
+      throw new AppError(
+        account.accountStatus === "pending_approval"
+          ? "Your registration is awaiting Admin approval"
+          : "Influencer account is not active",
+        403,
+      );
     }
 
     if (!account.passwordHash) {

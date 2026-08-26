@@ -510,6 +510,8 @@ class CommerceSettingsService {
           mode: env.razorpayX.mode,
           liveRequested: env.razorpayX.liveRequested,
           missingKeys: env.razorpayX.missingKeys,
+          credentialSource: env.razorpayX.credentialSource,
+          mixedCredentialPairRecovered: env.razorpayX.mixedCredentialPairRecovered,
         },
         commerce: {
           businessState: env.commerce.businessState,

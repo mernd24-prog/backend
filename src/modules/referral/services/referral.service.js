@@ -1,5 +1,6 @@
 const { env } = require("../../../config/env");
 const { randomBytes } = require("crypto");
+const QRCode = require("qrcode");
 const { AppError } = require("../../../shared/errors/app-error");
 const { hashText } = require("../../../shared/tools/hash");
 const { makeEvent } = require("../../../contracts/events/event");
@@ -121,6 +122,41 @@ class ReferralService {
     return `${cleanSeed}${Date.now().toString(36).toUpperCase()}${makeSuffix()}`;
   }
 
+  async makeUniqueChildRegistrationCode() {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const code = randomBytes(18).toString("base64url");
+      const existing = await this.referralRepository.getInfluencerProfileByChildRegistrationCode(code);
+      if (!existing) return code;
+    }
+    throw new AppError("Unable to create a unique associate registration invitation", 503);
+  }
+
+  async ensureChildRegistrationCode(profile) {
+    if (profile.childRegistrationCode) return profile;
+    return this.referralRepository.updateInfluencerProfile(this.getRecordId(profile), {
+      childRegistrationCode: await this.makeUniqueChildRegistrationCode(),
+      childRegistrationCodeCreatedAt: new Date(),
+    });
+  }
+
+  async buildChildRegistrationInvite(profile, { includeQr = false } = {}) {
+    const ensured = await this.ensureChildRegistrationCode(profile);
+    const shareable = ensured.status === "active" && ensured.canCreateChildren === true;
+    const registrationUrl = `${env.influencerPortalUrl}/register?invite=${encodeURIComponent(ensured.childRegistrationCode)}`;
+    const nativeDeepLink = `${env.influencerNativeScheme}://register?invite=${encodeURIComponent(ensured.childRegistrationCode)}`;
+    return {
+      code: ensured.childRegistrationCode,
+      registrationUrl,
+      universalLink: registrationUrl,
+      nativeDeepLink,
+      shareable,
+      disabledReason: shareable ? null : "Admin permission to create child accounts is required",
+      qrDataUrl: includeQr && shareable
+        ? await QRCode.toDataURL(registrationUrl, { errorCorrectionLevel: "M", margin: 2, width: 320 })
+        : null,
+    };
+  }
+
   async validateConfiguredCode(code) {
     const normalized = this.normalizeCode(code);
     const rule = await this.referralRepository.getActiveCommissionRule();
@@ -179,6 +215,7 @@ class ReferralService {
       legacyUser: legacyUser ? this.toPlainObject(legacyUser) : null,
       primaryCode: primaryCode ? this.toPlainObject(primaryCode) : null,
       wallet: wallet ? this.toPlainObject(wallet) : null,
+      childRegistration: await this.buildChildRegistrationInvite(profile),
     };
   }
 
@@ -229,6 +266,7 @@ class ReferralService {
         this.getRecordId(existingAccount),
         {
           $set: {
+            accountStatus: payload.accountStatus || existingAccount.accountStatus || "active",
             phone: payload.phone || existingAccount.phone || null,
             passwordHash: await hashText(recoveryPassword),
             profile: {
@@ -360,11 +398,13 @@ class ReferralService {
       },
     );
 
+    const profileWithInvite = await this.ensureChildRegistrationCode(profile);
     await this.referralRepository.ensureWallet(influencerId);
-    await this.ensureDefaultCode(profile, actor, payload);
+    await this.ensureDefaultCode(profileWithInvite, actor, payload);
 
     return {
-      ...(await this.enrichInfluencer(profile)),
+      ...(await this.enrichInfluencer(profileWithInvite)),
+      childRegistration: await this.buildChildRegistrationInvite(profileWithInvite),
       temporaryPassword,
     };
   }
@@ -412,11 +452,13 @@ class ReferralService {
       path: [...parentPath, childId],
     });
 
+    const profileWithInvite = await this.ensureChildRegistrationCode(profile);
     await this.referralRepository.ensureWallet(childId);
-    await this.ensureDefaultCode(profile, actor, payload);
+    await this.ensureDefaultCode(profileWithInvite, actor, payload);
 
     return {
-      ...(await this.enrichInfluencer(profile)),
+      ...(await this.enrichInfluencer(profileWithInvite)),
+      childRegistration: await this.buildChildRegistrationInvite(profileWithInvite),
       temporaryPassword,
     };
   }
@@ -424,15 +466,53 @@ class ReferralService {
   async createMyChildInfluencer(actor = {}, payload = {}) {
     const parent = await this.getInfluencerProfileByActorId(actor.userId);
     if (!parent) throw new AppError("Influencer profile not found", 404);
-    if (parent.influencerType !== "parent" || parent.canCreateChildren !== true) {
+    if (parent.canCreateChildren !== true) {
       throw new AppError("You do not have permission to create brand associates", 403);
     }
     return this.createChildInfluencer(this.getRecordId(parent), {
       ...payload,
-      status: "active",
+      accountStatus: "pending_approval",
+      status: "pending",
       canCreateChildren: false,
-      onboardingStatus: "approved",
+      onboardingStatus: "pending_admin_approval",
+      codeStatus: "suspended",
     }, actor);
+  }
+
+  async resolveChildRegistrationInvite(code, { includeQr = false } = {}) {
+    const parent = await this.referralRepository.getInfluencerProfileByChildRegistrationCode(code);
+    if (!parent || parent.status !== "active" || parent.canCreateChildren !== true) {
+      throw new AppError("This associate registration invitation is invalid or disabled", 400);
+    }
+    const enriched = await this.enrichInfluencer(parent);
+    return {
+      parent: {
+        influencerId: this.getRecordId(parent),
+        displayName: [enriched.account?.profile?.firstName, enriched.account?.profile?.lastName].filter(Boolean).join(" ") || enriched.account?.email || "Growth Partner",
+        influencerType: parent.influencerType,
+      },
+      invitation: await this.buildChildRegistrationInvite(parent, { includeQr }),
+    };
+  }
+
+  async registerChildFromInvite(payload = {}) {
+    const parent = await this.referralRepository.getInfluencerProfileByChildRegistrationCode(payload.inviteCode);
+    if (!parent || parent.status !== "active" || parent.canCreateChildren !== true) {
+      throw new AppError("This associate registration invitation is invalid or disabled", 400);
+    }
+    return this.createChildInfluencer(this.getRecordId(parent), {
+      email: payload.email,
+      phone: payload.phone,
+      password: payload.password,
+      firstName: payload.firstName,
+      lastName: payload.lastName,
+      accountStatus: "pending_approval",
+      status: "pending",
+      onboardingStatus: "pending_admin_approval",
+      canCreateChildren: false,
+      codeStatus: "suspended",
+      metadata: { registrationSource: "parent_qr", inviteCode: payload.inviteCode },
+    }, { userId: this.getRecordId(parent), role: "influencer" });
   }
 
   async updateInfluencerStatus(influencerId, payload = {}) {
@@ -441,18 +521,42 @@ class ReferralService {
       this.getRecordId(influencer),
       {
         status: payload.status,
+        onboardingStatus: payload.status === "active" ? "approved" : payload.status === "pending" ? "pending_admin_approval" : payload.status,
         ...(payload.reason ? { "metadata.statusReason": payload.reason } : {}),
       },
     );
 
-    if (["suspended", "rejected"].includes(payload.status)) {
+    if (profile.accountId) {
+      await this.referralRepository.updateInfluencerAccount(String(profile.accountId), {
+        $set: { accountStatus: payload.status === "active" ? "active" : payload.status === "pending" ? "pending_approval" : payload.status },
+        $inc: { sessionVersion: 1 },
+      });
+    }
+
+    if (["suspended", "rejected", "pending"].includes(payload.status)) {
       await this.referralRepository.updateReferralCodesByInfluencer(
         this.getRecordId(profile),
         { status: "suspended" },
       );
+    } else if (payload.status === "active") {
+      await this.referralRepository.updateReferralCodesByInfluencer(this.getRecordId(profile), { status: "active" });
     }
 
     return this.enrichInfluencer(profile);
+  }
+
+  async updateInfluencerChildPermission(influencerId, payload = {}) {
+    const influencer = await this.getInfluencerOrThrow(influencerId);
+    const profile = await this.referralRepository.updateInfluencerProfile(this.getRecordId(influencer), {
+      canCreateChildren: payload.canCreateChildren === true,
+      "metadata.childPermissionUpdatedAt": new Date().toISOString(),
+      "metadata.childPermissionReason": payload.reason || null,
+    });
+    const withInvite = await this.ensureChildRegistrationCode(profile);
+    return {
+      ...(await this.enrichInfluencer(withInvite)),
+      childRegistration: await this.buildChildRegistrationInvite(withInvite),
+    };
   }
 
   async promoteInfluencer(influencerId, payload = {}) {
@@ -1612,7 +1716,7 @@ class ReferralService {
     const allowedModules = status === "active"
       ? [
           ...commonModules,
-          ...(profile.influencerType === "parent" && profile.canCreateChildren
+          ...(profile.canCreateChildren
             ? parentModules
             : []),
         ]
@@ -1629,6 +1733,12 @@ class ReferralService {
       payoutProfileStatus: profile.payoutProfileStatus || "pending",
       influencerType: profile.influencerType,
       canCreateChildren: Boolean(profile.canCreateChildren),
+      childRegistration: {
+        ...enriched.childRegistration,
+        qrDataUrl: enriched.childRegistration?.shareable
+          ? await QRCode.toDataURL(enriched.childRegistration.registrationUrl, { errorCorrectionLevel: "M", margin: 2, width: 320 })
+          : null,
+      },
       parentInfluencerId: profile.parentInfluencerId || null,
       allowedModules,
       primaryCode: enriched.primaryCode
@@ -2305,8 +2415,8 @@ class ReferralService {
 
   async getMyInfluencerNetwork(actor = {}, query = {}) {
     const profile = await this.getMyInfluencerProfileOrThrow(actor);
-    if (profile.influencerType !== "parent" || profile.canCreateChildren !== true) {
-      throw new AppError("Child network is available only to eligible parent influencers", 403);
+    if (profile.canCreateChildren !== true) {
+      throw new AppError("Admin permission to create child accounts is required", 403);
     }
     const influencerId = this.getRecordId(profile);
     const code = query.code ? this.normalizeCode(query.code) : null;
@@ -2396,8 +2506,8 @@ class ReferralService {
 
   async getMyChildInfluencerDetail(actor = {}, childId, query = {}) {
     const parent = await this.getMyInfluencerProfileOrThrow(actor);
-    if (parent.influencerType !== "parent" || parent.canCreateChildren !== true) {
-      throw new AppError("Associate details are available only to eligible parent influencers", 403);
+    if (parent.canCreateChildren !== true) {
+      throw new AppError("Admin permission to view child accounts is required", 403);
     }
     const child = await this.referralRepository.getInfluencerProfileById(childId);
     if (!child || String(child.parentInfluencerId || "") !== this.getRecordId(parent)) {
