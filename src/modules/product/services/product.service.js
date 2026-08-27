@@ -3795,7 +3795,7 @@ async getProduct(productId) {
 
   async submitReview(productId, payload, actor) {
     const buyerId = actor.userId || actor.sub || actor.id;
-    const resolvedProductId = this.resolveProductRouteIdentifier(productId);
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
     const orderRepo = new OrderRepository();
     const reviewableItem = await orderRepo.findReviewableOrderItem({
       buyerId,
@@ -3811,7 +3811,7 @@ async getProduct(productId) {
   }
 
   async listReviews(productId, query = {}) {
-    const resolvedProductId = this.resolveProductRouteIdentifier(productId);
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
     const platformService = new PlatformService();
     return platformService.listPublicProductReviews(resolvedProductId, query);
   }
@@ -3830,7 +3830,7 @@ async getProduct(productId) {
 
   async getMyReviewForProduct(productId, actor, query = {}) {
     const buyerId = actor.userId || actor.sub || actor.id;
-    const resolvedProductId = this.resolveProductRouteIdentifier(productId);
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
     const platformRepo = new PlatformRepository();
     const filter = {
       productId: resolvedProductId,
@@ -3846,7 +3846,7 @@ async getProduct(productId) {
   }
 
 async getRelatedProducts(productId, { limit = 8 } = {}) {
-  const resolvedProductId = this.resolveProductRouteIdentifier(productId);
+  const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
   const normalizedLimit = Math.min(Math.max(Number(limit) || 8, 1), 20);
   return remember(`products:related:${resolvedProductId}:${normalizedLimit}`, 300, async () => {
   try {
@@ -3886,12 +3886,11 @@ async getRelatedProducts(productId, { limit = 8 } = {}) {
     // 2. FIND SAME CATEGORY / SUBCATEGORY MATCHES
     // ---------------------------------------------------------
 
-    const categoryScopeKey = currentCategory.parentKey || currentCategoryKey;
     const descendantKeys = await this.platformRepository
-      .getCategoryDescendantKeys(categoryScopeKey)
+      .getCategoryDescendantKeys(currentCategoryKey)
       .catch(() => []);
     const matchingCategoryKeys = [
-      ...new Set([categoryScopeKey, currentCategoryKey, ...descendantKeys].filter(Boolean)),
+      ...new Set([currentCategoryKey, ...descendantKeys].filter(Boolean)),
     ];
 
     // ---------------------------------------------------------
@@ -3911,25 +3910,6 @@ async getRelatedProducts(productId, { limit = 8 } = {}) {
       relatedConditions.push({
         category: {
           $in: matchingCategoryKeys,
-        },
-      });
-    }
-
-    // Same brand
-    if (product.brand) {
-      relatedConditions.push({
-        brand: product.brand,
-      });
-    }
-
-    // Same tags
-    if (
-      Array.isArray(product.tags) &&
-      product.tags.length > 0
-    ) {
-      relatedConditions.push({
-        tags: {
-          $in: product.tags,
         },
       });
     }
@@ -4073,7 +4053,7 @@ async getRelatedProducts(productId, { limit = 8 } = {}) {
 }
 
 async getCrossSellProducts(productId, { limit = 6 } = {}) {
-  const resolvedProductId = this.resolveProductRouteIdentifier(productId);
+  const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
   const normalizedLimit = Math.min(Math.max(Number(limit) || 6, 1), 12);
   return remember(`products:cross-sell:${resolvedProductId}:${normalizedLimit}`, 300, async () => {
   try {
@@ -4353,7 +4333,7 @@ async getCrossSellProducts(productId, { limit = 6 } = {}) {
 }
 
   async getUpSellProducts(productId, { limit = 4 } = {}) {
-    const resolvedProductId = this.resolveProductRouteIdentifier(productId);
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
     const product = await this.productRepository.findById(resolvedProductId);
     if (!product) return [];
 
