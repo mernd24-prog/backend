@@ -438,4 +438,30 @@ async function authenticateForStatus(req, res, next) {
   }
 }
 
-module.exports = { authenticate, authenticatePendingSeller, authenticateForStatus };
+async function authenticateOptional(req, res, next) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader?.startsWith("Bearer ")) {
+    req.auth = null;
+    return next();
+  }
+
+  const token = authHeader.replace("Bearer ", "");
+
+  try {
+    const payload = jwt.verify(token, env.jwtAccessSecret);
+    req.auth = await attachOrganizationContext(req, await hydrateAuthPermissions(payload));
+    setOrganizationContextHeaders(res, req.auth);
+    return next();
+  } catch (error) {
+    req.auth = null;
+    return next();
+  }
+}
+
+module.exports = {
+  authenticate,
+  authenticateOptional,
+  authenticatePendingSeller,
+  authenticateForStatus,
+};

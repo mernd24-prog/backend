@@ -110,6 +110,24 @@ const bulkDeleteSupportQueriesSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
+const aiSupportChatSchema = Joi.object({
+  body: Joi.object({
+    message: Joi.string().trim().min(1).max(2000).required(),
+    history: Joi.array()
+      .items(
+        Joi.object({
+          role: Joi.string().valid("user", "model", "assistant", "system").required(),
+          content: Joi.string().trim().max(4000).allow(""),
+          text: Joi.string().trim().max(4000).allow(""),
+        }),
+      )
+      .max(20)
+      .default([]),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
 module.exports = {
   CUSTOMER_QUERY_CATEGORIES,
   SELLER_QUERY_CATEGORIES,
@@ -122,4 +140,5 @@ module.exports = {
   adminSupportQueryParamSchema,
   updateSupportQueryStatusSchema,
   bulkDeleteSupportQueriesSchema,
+  aiSupportChatSchema,
 };

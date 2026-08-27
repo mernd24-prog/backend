@@ -392,6 +392,11 @@ const env = {
       firebase: firebaseConfigured,
     },
   },
+  ai: {
+    geminiApiKey: cleanEnvValue(process.env.GEMINI_API_KEY || process.env.AI_API_KEY || ""),
+    geminiModel: cleanEnvValue(process.env.GEMINI_MODEL || process.env.AI_MODEL || "gemini-2.5-flash"),
+    enabled: Boolean(cleanEnvValue(process.env.GEMINI_API_KEY || process.env.AI_API_KEY || "")),
+  },
   enableCron: String(process.env.ENABLE_CRON || "true") === "true",
   production: isProductionMode,
 };
