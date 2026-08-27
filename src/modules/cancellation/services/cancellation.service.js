@@ -136,6 +136,14 @@ class CancellationService {
           409,
         );
       }
+      if (quantity !== remaining) {
+        throw new AppError(
+          `Partial quantity cancellation is not supported. Cancel all ${remaining} remaining unit${remaining === 1 ? "" : "s"} of ${itemLabel}`,
+          400,
+          null,
+          "FULL_PRODUCT_CANCELLATION_REQUIRED",
+        );
+      }
       const itemAmount = prorateMoney(orderItem.line_total, quantity, orderItem.quantity);
       const discountAmount = prorateMoney(orderItem.discount_amount, quantity, orderItem.quantity);
       const taxAmount = prorateMoney(orderItem.tax_amount, quantity, orderItem.quantity);

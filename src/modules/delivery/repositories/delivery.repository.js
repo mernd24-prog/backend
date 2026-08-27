@@ -287,6 +287,9 @@ class DeliveryRepository {
           tracking_url: payload.trackingUrl || shipment.tracking_url,
           shipped_at: payload.status === "in_transit" ? (payload.shippedAt || shipment.shipped_at || new Date()) : shipment.shipped_at,
           delivered_at: payload.status === "delivered" ? (payload.eventTime || shipment.delivered_at || new Date()) : shipment.delivered_at,
+          expected_delivery_at: payload.expectedDeliveryAt !== undefined
+            ? payload.expectedDeliveryAt
+            : shipment.expected_delivery_at,
           delivery_exception: payload.deliveryException || shipment.delivery_exception,
           updated_by: payload.actorId || shipment.updated_by,
           updated_at: knex.fn.now(),

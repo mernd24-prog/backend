@@ -41,7 +41,7 @@ class CancellationController {
       entityType: "OrderCancellation",
       newData: result,
       reason: req.body.note || "cancellation_approved",
-      description: "Item and quantity cancellation approved",
+      description: "Product cancellation approved",
     });
     res.json(okResponse(result, "Cancellation approved; refund processing is now awaiting admin action where required"));
   };
@@ -55,7 +55,7 @@ class CancellationController {
       entityType: "OrderCancellation",
       newData: result,
       reason: req.body.reason,
-      description: "Item and quantity cancellation rejected",
+      description: "Product cancellation rejected",
     });
     res.json(okResponse(result, "Cancellation request rejected"));
   };

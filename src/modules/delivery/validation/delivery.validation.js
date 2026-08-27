@@ -113,6 +113,7 @@ const trackingEventBody = {
   trackingNumber: Joi.string().trim().max(160).allow("", null),
   trackingUrl: Joi.string().uri().max(1000).allow("", null),
   shippedAt: Joi.date().iso().allow(null),
+  expectedDeliveryAt: Joi.date().iso().allow(null),
   rawPayload: Joi.object().default({}),
   eventId: Joi.string().trim().max(180).allow("", null),
   source: Joi.string().valid("seller_panel", "admin_panel", "manual").default("manual"),

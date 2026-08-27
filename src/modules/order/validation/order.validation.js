@@ -134,7 +134,7 @@ const cancelOrderSchema = Joi.object({
     idempotencyKey: Joi.string().trim().max(180).allow("", null),
     items: Joi.array().items(Joi.object({
       orderItemId: Joi.string().uuid().required(),
-      quantity: Joi.number().integer().min(1).required(),
+      quantity: Joi.number().integer().min(1),
     })).min(1),
   }).required(),
   query: Joi.object({}).required(),
