@@ -470,6 +470,7 @@ const sellerDashboardSchema = Joi.object({
   query: Joi.object({
     fromDate: Joi.date().iso(),
     toDate: Joi.date().iso(),
+    granularity: Joi.string().valid("hour", "day", "week", "month"),
     organizationId: Joi.string().guid({ version: "uuidv4" }),
   }).required(),
   params: Joi.object({}).required(),

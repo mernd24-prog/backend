@@ -819,42 +819,53 @@ class ProductRepository {
 
   async getTopProducts(limit = 10, metric = "purchases", filter = {}, range = {}) {
     const safeLimit = Math.min(Math.max(Number(limit) || 10, 1), 50);
-    const products = await ProductModel.find({ status: "active", ...filter })
-      .select("title sku sellerId price analytics status")
-      .lean();
-    const productIds = products.map((product) => String(product._id || product.id || "")).filter(Boolean);
+    const metricKey = metric === "revenue"
+      ? "revenue"
+      : metric === "views"
+        ? "views"
+        : metric === "orderCount"
+          ? "orderCount"
+          : "purchases";
 
-    if (!productIds.length) {
-      return [];
-    }
+    if (metricKey === "views") {
+      const products = await ProductModel.find({ status: "active", ...filter })
+        .select("title sku sellerId price analytics status")
+        .sort({
+          "analytics.views": -1,
+          "analytics.cartAdds": -1,
+          "analytics.wishlistAdds": -1,
+          createdAt: -1,
+        })
+        .limit(safeLimit)
+        .lean();
+      const productIds = products.map((product) => String(product._id || product.id || "")).filter(Boolean);
 
-    const salesRows = await knex("order_items as oi")
-      .join("orders as o", "o.id", "oi.order_id")
-      .whereIn("oi.product_id", productIds)
-      .modify((builder) => {
-        if (filter.sellerId) builder.where("oi.seller_id", String(filter.sellerId));
-        if (range.fromDate) builder.where("o.created_at", ">=", range.fromDate);
-        if (range.toDate) builder.where("o.created_at", "<=", `${range.toDate} 23:59:59`);
-      })
-      .select("oi.product_id")
-      .sum({ purchases: "oi.quantity" })
-      .sum({ revenue: "oi.line_total" })
-      .countDistinct({ orderCount: "o.id" })
-      .groupBy("oi.product_id");
+      if (!productIds.length) return [];
 
-    const salesByProduct = new Map(salesRows.map((row) => [
-      String(row.product_id),
-      {
-        purchases: Number(row.purchases || 0),
-        revenue: Number(row.revenue || 0),
-        orderCount: Number(row.orderCount || row.order_count || 0),
-      },
-    ]));
+      const salesRows = await knex("order_items as oi")
+        .join("orders as o", "o.id", "oi.order_id")
+        .whereIn("oi.product_id", productIds)
+        .modify((builder) => {
+          if (filter.sellerId) builder.where("oi.seller_id", String(filter.sellerId));
+          if (range.fromDate) builder.where("o.created_at", ">=", this.normalizeDateRangeStart(range.fromDate));
+          if (range.toDate) builder.where("o.created_at", "<=", this.normalizeDateRangeEnd(range.toDate));
+        })
+        .select("oi.product_id")
+        .sum({ purchases: "oi.quantity" })
+        .sum({ revenue: "oi.line_total" })
+        .countDistinct({ order_count: "o.id" })
+        .groupBy("oi.product_id");
+      const salesByProduct = new Map(salesRows.map((row) => [
+        String(row.product_id),
+        {
+          purchases: Number(row.purchases || 0),
+          revenue: Number(row.revenue || 0),
+          orderCount: Number(row.order_count || 0),
+        },
+      ]));
 
-    return products
-      .map((product) => {
-        const productId = String(product._id || product.id || "");
-        const sales = salesByProduct.get(productId) || {};
+      return products.map((product) => {
+        const sales = salesByProduct.get(String(product._id || product.id || "")) || {};
         return {
           ...product,
           analytics: {
@@ -864,19 +875,72 @@ class ProductRepository {
             orderCount: Number(sales.orderCount || 0),
           },
         };
-      })
-      .sort((a, b) => {
-        const key = metric === "revenue" ? "revenue" : metric === "views" ? "views" : "purchases";
-        const primaryDiff = Number(b.analytics?.[key] || 0) - Number(a.analytics?.[key] || 0);
-        if (primaryDiff) return primaryDiff;
+      });
+    }
 
-        return (
-          Number(b.analytics?.views || 0) - Number(a.analytics?.views || 0) ||
-          Number(b.analytics?.cartAdds || 0) - Number(a.analytics?.cartAdds || 0) ||
-          Number(b.analytics?.wishlistAdds || 0) - Number(a.analytics?.wishlistAdds || 0)
-        );
+    const sortColumn = metricKey === "revenue"
+      ? "revenue"
+      : metricKey === "orderCount"
+        ? "order_count"
+        : "purchases";
+    const salesRows = await knex("order_items as oi")
+      .join("orders as o", "o.id", "oi.order_id")
+      .modify((builder) => {
+        if (filter.sellerId) builder.where("oi.seller_id", String(filter.sellerId));
+        if (range.fromDate) builder.where("o.created_at", ">=", this.normalizeDateRangeStart(range.fromDate));
+        if (range.toDate) builder.where("o.created_at", "<=", this.normalizeDateRangeEnd(range.toDate));
       })
+      .select("oi.product_id")
+      .sum({ purchases: "oi.quantity" })
+      .sum({ revenue: "oi.line_total" })
+      .countDistinct({ order_count: "o.id" })
+      .groupBy("oi.product_id")
+      .orderBy(sortColumn, "desc")
+      .limit(safeLimit * 5);
+
+    const productIds = salesRows.map((row) => String(row.product_id || "")).filter(Boolean);
+    if (!productIds.length) return [];
+
+    const products = await ProductModel.find({
+      status: "active",
+      ...filter,
+      _id: { $in: productIds },
+    })
+      .select("title sku sellerId price analytics status")
+      .lean();
+    const productById = new Map(products.map((product) => [
+      String(product._id || product.id || ""),
+      product,
+    ]));
+
+    return salesRows
+      .map((row) => {
+        const product = productById.get(String(row.product_id));
+        if (!product) return null;
+        return {
+          ...product,
+          analytics: {
+            ...(product.analytics || {}),
+            purchases: Number(row.purchases || 0),
+            revenue: Number(row.revenue || 0),
+            orderCount: Number(row.order_count || 0),
+          },
+        };
+      })
+      .filter(Boolean)
       .slice(0, safeLimit);
+  }
+
+  normalizeDateRangeStart(value) {
+    return this.isDateOnly(value) ? `${value} 00:00:00` : value;
+  }
+
+  normalizeDateRangeEnd(value) {
+    return this.isDateOnly(value) ? `${value} 23:59:59.999` : value;
+  }
+
+  isDateOnly(value) {
+    return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
   }
 }
 

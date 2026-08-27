@@ -76,6 +76,21 @@ class SellerService {
     return actor.ownerSellerId || actor.sellerId || actor.userId || actor.sub;
   }
 
+  normalizeDashboardGranularity(granularity, fromDate, toDate) {
+    const requested = String(granularity || "").toLowerCase();
+    if (["hour", "day", "week", "month"].includes(requested)) {
+      return requested;
+    }
+
+    const days = Math.max(
+      1,
+      Math.ceil((toDate.getTime() - fromDate.getTime()) / (24 * 60 * 60 * 1000)) + 1,
+    );
+    if (days > 93) return "month";
+    if (days > 31) return "week";
+    return "day";
+  }
+
   toPlainObject(value = {}) {
     if (!value) {
       return {};
@@ -1899,12 +1914,13 @@ class SellerService {
     const organizationId = query.organizationId || actor.organizationId || null;
     const fromDate = query.fromDate ? new Date(query.fromDate) : this.getDateBeforeDays(30);
     const toDate = query.toDate ? new Date(query.toDate) : new Date();
+    const granularity = this.normalizeDashboardGranularity(query.granularity, fromDate, toDate);
 
     const [summary, topProducts, recentOrdersRaw, orderPerformance, orderStatusRows, seller, kyc, organization] = await Promise.all([
       this.sellerRepository.fetchDashboardSummary(sellerId, fromDate, toDate, organizationId),
       this.sellerRepository.fetchTopProducts(sellerId, fromDate, toDate, 5, organizationId),
       this.sellerRepository.fetchRecentOrders(sellerId, 10, organizationId),
-      this.sellerRepository.fetchOrderPerformance(sellerId, fromDate, toDate, organizationId),
+      this.sellerRepository.fetchOrderPerformance(sellerId, fromDate, toDate, organizationId, granularity),
       this.sellerRepository.fetchOrderStatusBreakdown(sellerId, fromDate, toDate, organizationId),
       this.sellerRepository.findSellerById(sellerId),
       this.sellerRepository.findKycBySellerId(sellerId),

@@ -69,24 +69,34 @@ const PRODUCT_LIST_PROJECTION = {
   organizationSnapshot: 1,
   title: 1,
   slug: 1,
+  description: 1,
   shortDescription: 1,
   categoryId: 1,
   category: 1,
   brand: 1,
   productFamilyCode: 1,
   tags: 1,
+  badges: 1,
   price: 1,
   mrp: 1,
   salePrice: 1,
   currency: 1,
   gstRate: 1,
+  gstInclusive: 1,
   hsnCode: 1,
   sku: 1,
   color: 1,
+  attributes: 1,
+  specifications: 1,
   images: 1,
+  videos: 1,
   stock: 1,
   reservedStock: 1,
   inventorySettings: 1,
+  dimensions: 1,
+  weight: 1,
+  weightUnit: 1,
+  warranty: 1,
   "shipping.codAvailable": 1,
   "shipping.freeShipping": 1,
   "shipping.shippingCharge": 1,
@@ -101,6 +111,8 @@ const PRODUCT_LIST_PROJECTION = {
   "shipping.estimatedDaysMax": 1,
   "shipping.processingDays": 1,
   origin: 1,
+  options: 1,
+  defaultVariantId: 1,
   status: 1,
   approvalStatus: 1,
   approvedAt: 1,
@@ -3871,101 +3883,24 @@ async getRelatedProducts(productId, { limit = 8 } = {}) {
     }
 
     // ---------------------------------------------------------
-    // 2. FIND ROOT CATEGORY
+    // 2. FIND SAME CATEGORY / SUBCATEGORY MATCHES
     // ---------------------------------------------------------
 
-    let rootCategory = currentCategory;
-    let parentKey = currentCategory.parentKey;
-
-    const visited = new Set();
-
-    while (
-      parentKey &&
-      !visited.has(parentKey)
-    ) {
-      visited.add(parentKey);
-
-      const parentCategory =
-        await CategoryTreeModel.findOne({
-          categoryKey: parentKey,
-          active: true,
-        }).lean();
-
-      if (!parentCategory) {
-        break;
-      }
-
-      rootCategory = parentCategory;
-      parentKey = parentCategory.parentKey;
-    }
-
-    const rootCategoryKey =
-      rootCategory.categoryKey;
+    const categoryScopeKey = currentCategory.parentKey || currentCategoryKey;
+    const descendantKeys = await this.platformRepository
+      .getCategoryDescendantKeys(categoryScopeKey)
+      .catch(() => []);
+    const matchingCategoryKeys = [
+      ...new Set([categoryScopeKey, currentCategoryKey, ...descendantKeys].filter(Boolean)),
+    ];
 
     // ---------------------------------------------------------
-    // 3. FIND ALL CATEGORIES UNDER SAME ROOT
-    // ---------------------------------------------------------
-
-    const allCategories =
-      await CategoryTreeModel.find({
-        active: true,
-      }).select("categoryKey parentKey").lean();
-    const categoryByKey = new Map(
-      allCategories.map((category) => [String(category.categoryKey), category]),
-    );
-
-    const matchingCategoryKeys = [];
-
-    for (const category of allCategories) {
-      let categoryRoot = category;
-      let categoryParentKey = category.parentKey;
-
-      const categoryVisited = new Set();
-
-      while (
-        categoryParentKey &&
-        !categoryVisited.has(categoryParentKey)
-      ) {
-        categoryVisited.add(categoryParentKey);
-
-        const parentCategory = categoryByKey.get(String(categoryParentKey));
-
-        if (!parentCategory) {
-          break;
-        }
-
-        categoryRoot = parentCategory;
-        categoryParentKey =
-          parentCategory.parentKey;
-      }
-
-      if (
-        categoryRoot.categoryKey ===
-        rootCategoryKey
-      ) {
-        matchingCategoryKeys.push(
-          category.categoryKey
-        );
-      }
-    }
-
-    if (
-      !matchingCategoryKeys.includes(
-        currentCategoryKey
-      )
-    ) {
-      matchingCategoryKeys.push(
-        currentCategoryKey
-      );
-    }
-
-    // ---------------------------------------------------------
-    // 4. BUILD RELATED PRODUCT CONDITIONS
+    // 3. BUILD RELATED PRODUCT CONDITIONS
     // ---------------------------------------------------------
 
     const relatedConditions = [];
 
-    // Same category / parent category
+    // Same category / subcategory
     if (matchingCategoryKeys.length > 0) {
       relatedConditions.push({
         categoryId: {

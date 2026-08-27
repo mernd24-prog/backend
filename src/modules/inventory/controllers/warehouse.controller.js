@@ -171,6 +171,7 @@ class WarehouseController {
         ...req.query,
         stockStatus: "low_stock",
         includeAllStatuses: true,
+        status: req.query.status || "active",
         ...(sellerId ? { sellerId } : {}),
         page: pagination.page,
         limit: pagination.limit,
