@@ -69,24 +69,34 @@ const PRODUCT_LIST_PROJECTION = {
   organizationSnapshot: 1,
   title: 1,
   slug: 1,
+  description: 1,
   shortDescription: 1,
   categoryId: 1,
   category: 1,
   brand: 1,
   productFamilyCode: 1,
   tags: 1,
+  badges: 1,
   price: 1,
   mrp: 1,
   salePrice: 1,
   currency: 1,
   gstRate: 1,
+  gstInclusive: 1,
   hsnCode: 1,
   sku: 1,
   color: 1,
+  attributes: 1,
+  specifications: 1,
   images: 1,
+  videos: 1,
   stock: 1,
   reservedStock: 1,
   inventorySettings: 1,
+  dimensions: 1,
+  weight: 1,
+  weightUnit: 1,
+  warranty: 1,
   "shipping.codAvailable": 1,
   "shipping.freeShipping": 1,
   "shipping.shippingCharge": 1,
@@ -101,6 +111,8 @@ const PRODUCT_LIST_PROJECTION = {
   "shipping.estimatedDaysMax": 1,
   "shipping.processingDays": 1,
   origin: 1,
+  options: 1,
+  defaultVariantId: 1,
   status: 1,
   approvalStatus: 1,
   approvedAt: 1,
@@ -3783,7 +3795,7 @@ async getProduct(productId) {
 
   async submitReview(productId, payload, actor) {
     const buyerId = actor.userId || actor.sub || actor.id;
-    const resolvedProductId = this.resolveProductRouteIdentifier(productId);
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
     const orderRepo = new OrderRepository();
     const reviewableItem = await orderRepo.findReviewableOrderItem({
       buyerId,
@@ -3799,7 +3811,7 @@ async getProduct(productId) {
   }
 
   async listReviews(productId, query = {}) {
-    const resolvedProductId = this.resolveProductRouteIdentifier(productId);
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
     const platformService = new PlatformService();
     return platformService.listPublicProductReviews(resolvedProductId, query);
   }
@@ -3818,7 +3830,7 @@ async getProduct(productId) {
 
   async getMyReviewForProduct(productId, actor, query = {}) {
     const buyerId = actor.userId || actor.sub || actor.id;
-    const resolvedProductId = this.resolveProductRouteIdentifier(productId);
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
     const platformRepo = new PlatformRepository();
     const filter = {
       productId: resolvedProductId,
@@ -3834,7 +3846,7 @@ async getProduct(productId) {
   }
 
 async getRelatedProducts(productId, { limit = 8 } = {}) {
-  const resolvedProductId = this.resolveProductRouteIdentifier(productId);
+  const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
   const normalizedLimit = Math.min(Math.max(Number(limit) || 8, 1), 20);
   return remember(`products:related:${resolvedProductId}:${normalizedLimit}`, 300, async () => {
   try {
@@ -3871,101 +3883,23 @@ async getRelatedProducts(productId, { limit = 8 } = {}) {
     }
 
     // ---------------------------------------------------------
-    // 2. FIND ROOT CATEGORY
+    // 2. FIND SAME CATEGORY / SUBCATEGORY MATCHES
     // ---------------------------------------------------------
 
-    let rootCategory = currentCategory;
-    let parentKey = currentCategory.parentKey;
-
-    const visited = new Set();
-
-    while (
-      parentKey &&
-      !visited.has(parentKey)
-    ) {
-      visited.add(parentKey);
-
-      const parentCategory =
-        await CategoryTreeModel.findOne({
-          categoryKey: parentKey,
-          active: true,
-        }).lean();
-
-      if (!parentCategory) {
-        break;
-      }
-
-      rootCategory = parentCategory;
-      parentKey = parentCategory.parentKey;
-    }
-
-    const rootCategoryKey =
-      rootCategory.categoryKey;
+    const descendantKeys = await this.platformRepository
+      .getCategoryDescendantKeys(currentCategoryKey)
+      .catch(() => []);
+    const matchingCategoryKeys = [
+      ...new Set([currentCategoryKey, ...descendantKeys].filter(Boolean)),
+    ];
 
     // ---------------------------------------------------------
-    // 3. FIND ALL CATEGORIES UNDER SAME ROOT
-    // ---------------------------------------------------------
-
-    const allCategories =
-      await CategoryTreeModel.find({
-        active: true,
-      }).select("categoryKey parentKey").lean();
-    const categoryByKey = new Map(
-      allCategories.map((category) => [String(category.categoryKey), category]),
-    );
-
-    const matchingCategoryKeys = [];
-
-    for (const category of allCategories) {
-      let categoryRoot = category;
-      let categoryParentKey = category.parentKey;
-
-      const categoryVisited = new Set();
-
-      while (
-        categoryParentKey &&
-        !categoryVisited.has(categoryParentKey)
-      ) {
-        categoryVisited.add(categoryParentKey);
-
-        const parentCategory = categoryByKey.get(String(categoryParentKey));
-
-        if (!parentCategory) {
-          break;
-        }
-
-        categoryRoot = parentCategory;
-        categoryParentKey =
-          parentCategory.parentKey;
-      }
-
-      if (
-        categoryRoot.categoryKey ===
-        rootCategoryKey
-      ) {
-        matchingCategoryKeys.push(
-          category.categoryKey
-        );
-      }
-    }
-
-    if (
-      !matchingCategoryKeys.includes(
-        currentCategoryKey
-      )
-    ) {
-      matchingCategoryKeys.push(
-        currentCategoryKey
-      );
-    }
-
-    // ---------------------------------------------------------
-    // 4. BUILD RELATED PRODUCT CONDITIONS
+    // 3. BUILD RELATED PRODUCT CONDITIONS
     // ---------------------------------------------------------
 
     const relatedConditions = [];
 
-    // Same category / parent category
+    // Same category / subcategory
     if (matchingCategoryKeys.length > 0) {
       relatedConditions.push({
         categoryId: {
@@ -3976,25 +3910,6 @@ async getRelatedProducts(productId, { limit = 8 } = {}) {
       relatedConditions.push({
         category: {
           $in: matchingCategoryKeys,
-        },
-      });
-    }
-
-    // Same brand
-    if (product.brand) {
-      relatedConditions.push({
-        brand: product.brand,
-      });
-    }
-
-    // Same tags
-    if (
-      Array.isArray(product.tags) &&
-      product.tags.length > 0
-    ) {
-      relatedConditions.push({
-        tags: {
-          $in: product.tags,
         },
       });
     }
@@ -4138,7 +4053,7 @@ async getRelatedProducts(productId, { limit = 8 } = {}) {
 }
 
 async getCrossSellProducts(productId, { limit = 6 } = {}) {
-  const resolvedProductId = this.resolveProductRouteIdentifier(productId);
+  const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
   const normalizedLimit = Math.min(Math.max(Number(limit) || 6, 1), 12);
   return remember(`products:cross-sell:${resolvedProductId}:${normalizedLimit}`, 300, async () => {
   try {
@@ -4418,7 +4333,7 @@ async getCrossSellProducts(productId, { limit = 6 } = {}) {
 }
 
   async getUpSellProducts(productId, { limit = 4 } = {}) {
-    const resolvedProductId = this.resolveProductRouteIdentifier(productId);
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
     const product = await this.productRepository.findById(resolvedProductId);
     if (!product) return [];
 

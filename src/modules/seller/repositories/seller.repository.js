@@ -25,6 +25,43 @@ class SellerRepository {
     this.userRepository = userRepository;
   }
 
+  dashboardBucketConfig(granularity = "day") {
+    switch (granularity) {
+      case "hour":
+        return {
+          endExpression: "date_trunc('hour', $3::date + INTERVAL '1 day' - INTERVAL '1 hour')",
+          interval: "1 hour",
+          labelFormat: "HH24:00",
+          startExpression: "date_trunc('hour', $2::date)",
+          trunc: "hour",
+        };
+      case "week":
+        return {
+          endExpression: "date_trunc('week', $3::date)",
+          interval: "1 week",
+          labelFormat: "DD Mon",
+          startExpression: "date_trunc('week', $2::date)",
+          trunc: "week",
+        };
+      case "month":
+        return {
+          endExpression: "date_trunc('month', $3::date)",
+          interval: "1 month",
+          labelFormat: "Mon",
+          startExpression: "date_trunc('month', $2::date)",
+          trunc: "month",
+        };
+      default:
+        return {
+          endExpression: "$3::date",
+          interval: "1 day",
+          labelFormat: "Dy",
+          startExpression: "$2::date",
+          trunc: "day",
+        };
+    }
+  }
+
   async upsertKyc(payload) {
     const id = uuidv4();
     const [record] = await knex("seller_kyc")
@@ -377,21 +414,26 @@ class SellerRepository {
     return rows;
   }
 
-  async fetchOrderPerformance(sellerId, fromDate, toDate, organizationId = null) {
+  async fetchOrderPerformance(sellerId, fromDate, toDate, organizationId = null, granularity = "day") {
     const values = [sellerId, fromDate, toDate];
     const orgSql = organizationId ? "AND oi.organization_id = $4::uuid" : "";
     if (organizationId) values.push(organizationId);
+    const bucket = this.dashboardBucketConfig(granularity);
     const { rows } = await postgresPool.query(
       `SELECT
-         TO_CHAR(day_bucket, 'Dy') AS label,
+         TO_CHAR(buckets.bucket_start, '${bucket.labelFormat}') AS label,
          COALESCE(order_count, 0)::INT AS value,
          COALESCE(revenue, 0)::NUMERIC AS revenue
        FROM (
-         SELECT generate_series($2::date, $3::date, INTERVAL '1 day')::DATE AS day_bucket
-       ) days
+         SELECT generate_series(
+           ${bucket.startExpression},
+           ${bucket.endExpression},
+           INTERVAL '${bucket.interval}'
+         ) AS bucket_start
+       ) buckets
        LEFT JOIN (
          SELECT
-           o.created_at::DATE AS order_day,
+           date_trunc('${bucket.trunc}', o.created_at) AS bucket_start,
            COUNT(DISTINCT o.id)::INT AS order_count,
            COALESCE(SUM(oi.line_total), 0)::NUMERIC AS revenue
          FROM orders o
@@ -400,9 +442,9 @@ class SellerRepository {
            AND o.created_at >= $2::date
            AND o.created_at < ($3::date + INTERVAL '1 day')
            ${orgSql}
-         GROUP BY o.created_at::DATE
-       ) orders_by_day ON orders_by_day.order_day = days.day_bucket
-       ORDER BY day_bucket`,
+         GROUP BY date_trunc('${bucket.trunc}', o.created_at)
+       ) orders_by_bucket ON orders_by_bucket.bucket_start = buckets.bucket_start
+       ORDER BY buckets.bucket_start`,
       values,
     );
     return rows;

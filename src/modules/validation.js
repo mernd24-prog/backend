@@ -21,6 +21,7 @@ const loyaltyValidation = {
 const recommendationValidation = {
   getRecommendations: Joi.object({
     category: Joi.string().allow("", null).optional(),
+    productId: Joi.string().allow("", null).optional(),
     period: Joi.string().valid("today", "week", "month").default("week"),
     limit: Joi.number().integer().min(1).default(10).max(50),
   }),

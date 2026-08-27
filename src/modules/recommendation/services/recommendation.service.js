@@ -106,12 +106,14 @@ class RecommendationService {
     const limit = this.normalizeLimit(options.limit);
     const category = options.category ? String(options.category).trim().toLowerCase() : "all";
     const period = options.period || "week";
+    const contextProductId = options.productId ? String(options.productId).trim() : "";
+    const excludeIds = contextProductId ? [contextProductId] : [];
 
     if (!userId) {
-      return this.getTrendingProducts(options.category, options.period, { limit });
+      return this.getTrendingProducts(options.category, options.period, { limit, excludeIds });
     }
 
-    const cacheKey = `${cacheKeys.recommendations(userId)}:${category}:${period}:${limit}`;
+    const cacheKey = `${cacheKeys.recommendations(userId)}:${category}:${period}:${limit}:${contextProductId || "none"}`;
 
     let recs = await getCached(cacheKey);
 
@@ -132,6 +134,7 @@ class RecommendationService {
     }
 
     const ranked = (recs.recommendedProducts || [])
+      .filter((item) => !contextProductId || String(item.productId) !== contextProductId)
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
     const recommended = await this.findPublicProductsByIds(
@@ -146,7 +149,7 @@ class RecommendationService {
       category: options.category,
       period: options.period,
       limit: limit - recommended.length,
-      excludeIds: recommended.map((product) => product._id),
+      excludeIds: [...excludeIds, ...recommended.map((product) => product._id)],
     });
 
     return [...recommended, ...fallback].slice(0, limit);
@@ -230,25 +233,60 @@ class RecommendationService {
   // ==============================
   async getTrendingProducts(category = null, period = "week", options = {}) {
     const limit = this.normalizeLimit(options.limit);
-    const cacheKey = `trending:${category || "all"}:${period}:${limit}`;
+    const excludeIds = [...new Set((options.excludeIds || []).filter(Boolean).map(String))];
+    const cacheLimit = excludeIds.length ? Math.min(limit + excludeIds.length, 50) : limit;
+    const cacheKey = `trending:${category || "all"}:${period}:${cacheLimit}`;
 
     let trending = await getCached(cacheKey);
     if (trending) {
       // Cached product snapshots may have been approved when cached and later
       // rejected/deactivated. Re-read by id so customer responses always honor
       // the current public approval state.
-      return this.findPublicProductsByIds(
+      const cachedProducts = await this.findPublicProductsByIds(
         trending.map((product) => product?._id || product?.id),
-        limit,
+        cacheLimit,
         { category },
       );
+      const filteredProducts = cachedProducts
+        .filter((product) => !excludeIds.includes(String(product._id || product.id)))
+        .slice(0, limit);
+
+      if (filteredProducts.length >= limit || !category) {
+        return filteredProducts;
+      }
+
+      const fallback = await this.getFallbackProducts({
+        period,
+        limit: limit - filteredProducts.length,
+        excludeIds: [
+          ...excludeIds,
+          ...filteredProducts.map((product) => product._id || product.id),
+        ],
+      });
+      return [...filteredProducts, ...fallback].slice(0, limit);
     }
 
-    trending = await this.getFallbackProducts({ category, period, limit });
+    trending = await this.getFallbackProducts({ category, period, limit: cacheLimit });
 
     await setCached(cacheKey, trending, CACHE_TTL.RECOMMENDATION);
 
-    return trending;
+    const filteredProducts = trending
+      .filter((product) => !excludeIds.includes(String(product._id || product.id)))
+      .slice(0, limit);
+
+    if (filteredProducts.length >= limit || !category) {
+      return filteredProducts;
+    }
+
+    const fallback = await this.getFallbackProducts({
+      period,
+      limit: limit - filteredProducts.length,
+      excludeIds: [
+        ...excludeIds,
+        ...filteredProducts.map((product) => product._id || product.id),
+      ],
+    });
+    return [...filteredProducts, ...fallback].slice(0, limit);
   }
 
   // ==============================
