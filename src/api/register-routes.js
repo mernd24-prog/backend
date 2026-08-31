@@ -37,6 +37,7 @@ const { commerceSettingsRoutes } = require("../modules/admin/routes/commerce-set
 const { supportRoutes } = require("../modules/support/routes/support.routes");
 const { adminSupportRoutes } = require("../modules/support/routes/admin-support.routes");
 const { referralMobileRoutes } = require("../modules/referral/routes/referral-mobile.routes");
+const { whatsappSupportRoutes } = require("../modules/whatsapp-support/routes/whatsapp-support.routes");
 
 function registerRoutes(app) {
   app.use(`${env.apiPrefix}/auth`, authRoutes);
@@ -51,6 +52,7 @@ function registerRoutes(app) {
   app.use(`${env.apiPrefix}/admin/platform`, platformRoutes);
   app.use(`${env.apiPrefix}/cms`, cmsRoutes);
   app.use(`${env.apiPrefix}/support`, supportRoutes);
+  app.use(`${env.apiPrefix}/whatsapp-support`, whatsappSupportRoutes);
   app.use(`${env.apiPrefix}/influencer/referral`, referralMobileRoutes);
   app.use(`${env.apiPrefix}/sellers`, sellerRoutes);
   app.use(`${env.apiPrefix}/notifications`, notificationRoutes);
