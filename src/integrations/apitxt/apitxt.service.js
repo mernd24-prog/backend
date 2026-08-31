@@ -271,6 +271,83 @@ class ApitxtService {
     };
   }
 
+  async sendWhatsappMessage({
+    to,
+    message,
+    from,
+    url,
+    templateName,
+    projectRefId,
+  } = {}) {
+    if (!this.authKey) {
+      throw new ApitxtError("APITXT auth key is not configured.", {
+        statusCode: 503,
+        retryable: false,
+      });
+    }
+
+    const recipient = String(to || "").trim();
+    const text = String(message || "").trim();
+    if (!recipient || !text) {
+      throw new ApitxtError("WhatsApp recipient and message are required.", {
+        statusCode: 422,
+        retryable: false,
+      });
+    }
+
+    logger.debug(
+      {
+        provider: "apitxt",
+        to: maskMobile(recipient),
+        from: from ? maskMobile(from) : null,
+        hasTemplateName: Boolean(templateName),
+        hasProjectRefId: Boolean(projectRefId),
+      },
+      "APITXT WhatsApp message request prepared",
+    );
+
+    const response = await this.client.post(
+      url || process.env.APITXT_WHATSAPP_SEND_URL || APITXT_ENDPOINTS.SEND_WHATSAPP_MESSAGE,
+      {
+        authkey: this.authKey,
+        from: from || process.env.APITXT_WHATSAPP_NUMBER || undefined,
+        to: recipient,
+        mobile: recipient,
+        message: text,
+        text,
+        channel: "whatsapp",
+        template_name: templateName || undefined,
+        project_ref_id: projectRefId || undefined,
+      },
+    );
+
+    if (
+      String(response?.status || response?.data?.status || "").toLowerCase() === "failed" ||
+      response?.success === false ||
+      response?.data?.success === false
+    ) {
+      throw new ApitxtError(response?.message || "APITXT WhatsApp send failed.", {
+        statusCode: 502,
+        providerCode: response?.code || response?.status || null,
+        response,
+        retryable: true,
+      });
+    }
+
+    return {
+      success: true,
+      requestId:
+        response?.data?.request_id ||
+        response?.data?.message_id ||
+        response?.request_id ||
+        response?.message_id ||
+        response?.requestId ||
+        response?.messageId ||
+        null,
+      providerResponse: response,
+    };
+  }
+
 
 
   // STEP 2: Verify Aadhaar OTP

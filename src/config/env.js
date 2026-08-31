@@ -313,6 +313,13 @@ const env = {
     baseUrl: process.env.APITXT_BASE_URL || "",
     apiKey: process.env.APITXT_API_KEY || "",
     authKey: process.env.APITXT_AUTH_KEY || process.env.APITXT_API_KEY || "",
+    webhookSecret: cleanEnvValue(process.env.APITXT_WEBHOOK_SECRET || ""),
+    whatsappNumber: cleanEnvValue(process.env.APITXT_WHATSAPP_NUMBER || ""),
+    whatsappSendUrl: cleanEnvValue(process.env.APITXT_WHATSAPP_SEND_URL || "/whatsapp/send-message"),
+    whatsappFaqFallbackMessage: cleanEnvValue(
+      process.env.WHATSAPP_FAQ_FALLBACK_MESSAGE ||
+      "Sorry, I don't have enough information to answer that. Please contact our support team for assistance.",
+    ),
     panVerifyUrl: process.env.APITXT_PAN_VERIFY_URL || "",
     smsOtpUrl: process.env.APITXT_SMS_OTP_URL || process.env.APITXT_OTP_URL || "https://apitxt.com/api/sendOTP",
     smsOtpEnabled: readBooleanFlag(["APITXT_SMS_OTP_ENABLED", "ENABLE_APITXT_SMS_OTP"], false),

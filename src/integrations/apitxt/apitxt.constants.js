@@ -9,6 +9,8 @@ const APITXT_ENDPOINTS = {
 
   SEND_SMS_OTP: "/sendOTP",
 
+  SEND_WHATSAPP_MESSAGE: "/whatsapp/send-message",
+
 
   VERIFY_PAN: "/panVerify",
 

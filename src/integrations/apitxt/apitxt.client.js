@@ -4,9 +4,15 @@ const SENSITIVE_QUERY_KEYS = new Set([
   "authkey",
   "otp",
   "mobile",
+  "phone",
+  "from",
+  "to",
   "aadhaar_number",
   "pan",
   "pan_number",
+  "message",
+  "text",
+  "body",
 ]);
 
 const maskMobile = (value = "") => {
@@ -19,6 +25,8 @@ const maskValue = (key, value) => {
   const normalizedKey = String(key || "").toLowerCase();
   if (value === undefined || value === null || value === "") return value;
   if (normalizedKey === "mobile") return maskMobile(value);
+  if (["phone", "from", "to", "wa_id", "customer_phone"].includes(normalizedKey)) return maskMobile(value);
+  if (["message", "text", "body"].includes(normalizedKey)) return "[REDACTED_MESSAGE]";
   if (normalizedKey === "otp") return "******";
   if (normalizedKey === "authkey") return "***redacted***";
   if (normalizedKey.includes("aadhaar")) return "************";
