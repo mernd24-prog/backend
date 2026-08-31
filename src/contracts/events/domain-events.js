@@ -30,6 +30,7 @@ const DOMAIN_EVENTS = {
   SELLER_KYC_SUBMITTED_V1: "seller.kyc_submitted.v1",
   USER_KYC_SUBMITTED_V1: "user.kyc_submitted.v1",
   KYC_STATUS_UPDATED_V1: "kyc.status_updated.v1",
+  SELLER_ORGANIZATION_CREATED_V1: "seller.organization_created.v1",
   SELLER_ORGANIZATION_STATUS_UPDATED_V1: "seller.organization_status_updated.v1",
   NOTIFICATION_CREATED_V1: "notification.created.v1",
   SELLER_PAYOUT_STATUS_UPDATED_V1: "seller.payout_status_updated.v1",

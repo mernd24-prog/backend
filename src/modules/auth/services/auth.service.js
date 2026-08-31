@@ -138,6 +138,28 @@ class AuthService {
     return `${this.getSignupRoleLabel(role)} registration OTP sent successfully.`;
   }
 
+  async publishUserRegisteredEvent(user, requestContext = {}) {
+    await eventPublisher.publish(
+      makeEvent(
+        DOMAIN_EVENTS.AUTH_USER_REGISTERED_V1,
+        {
+          userId: String(user.id || user._id),
+          email: user.email,
+          phone: user.phone || null,
+          role: user.role,
+          accountStatus: user.accountStatus,
+          profile: user.profile || {},
+          sellerProfile: user.sellerProfile || {},
+          registeredBy: requestContext.userId || requestContext.actorId || null,
+        },
+        {
+          source: "auth-module",
+          aggregateId: String(user.id || user._id),
+        },
+      ),
+    );
+  }
+
   async assertSignupIdentityAvailable(payload = {}, requestContext = {}) {
     const roleLabel = this.getSignupRoleLabel(payload.role);
     const email = this.normalizeOtpEmail(payload.email);
@@ -463,6 +485,7 @@ class AuthService {
     await this.walletService.ensureWallet(user.id);
     await this.assignDefaultRbacRole(user);
     await this.referralService.rewardReferral(payload.referralCode, user);
+    await this.publishUserRegisteredEvent(user, requestContext);
 
     if (isSeller) {
       const result = await this.makeOnboardingResponse(user);
@@ -558,6 +581,7 @@ class AuthService {
     await this.walletService.ensureWallet(user.id);
     await this.assignDefaultRbacRole(user);
     await this.referralService.rewardReferral(registrationData.referralCode, user);
+    await this.publishUserRegisteredEvent(user, requestContext);
 
     if (isSeller) {
       const result = await this.makeOnboardingResponse(user);

@@ -381,6 +381,8 @@ const env = {
       concurrency: parsePositiveInteger(process.env.EMAIL_QUEUE_CONCURRENCY, 1),
       intervalMs: parsePositiveInteger(process.env.EMAIL_QUEUE_INTERVAL_MS, 30000),
       maxPerInterval: parsePositiveInteger(process.env.EMAIL_QUEUE_MAX_PER_INTERVAL, 1),
+      initialDelayMs: parsePositiveInteger(process.env.EMAIL_QUEUE_INITIAL_DELAY_MS, 45000),
+      retryBackoffMs: parsePositiveInteger(process.env.EMAIL_QUEUE_RETRY_BACKOFF_MS, 60000),
     },
   },
   defaultFromEmail,

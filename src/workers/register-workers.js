@@ -22,8 +22,38 @@ function registerWorkers() {
         if (job.name === "welcome-email") {
           await sendMail({
             to: job.data.email,
-            subject: "Welcome to ecommerce",
-            html: "<p>Your account is ready. Start shopping or selling.</p>",
+            subject: "Welcome to Sam Global",
+            text: "Welcome to Sam Global. Your account is ready, and you can now continue shopping or selling.",
+            html: `<!doctype html>
+              <html>
+                <body style="margin:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f8;padding:30px 12px;">
+                    <tr>
+                      <td align="center">
+                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;background:#ffffff;border:1px solid #d9dee8;border-radius:8px;overflow:hidden;">
+                          <tr>
+                            <td style="background:#ffffff;border-top:4px solid #1b1d60;border-bottom:1px solid #eef0f4;padding:22px 28px;">
+                              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                  <td style="font-size:18px;font-weight:800;color:#1b1d60;">Sam Global</td>
+                                  <td align="right" style="font-size:12px;color:#667085;text-transform:uppercase;letter-spacing:.04em;">Official Notification</td>
+                                </tr>
+                              </table>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style="padding:28px;">
+                              <h1 style="margin:0 0 12px;font-size:24px;line-height:1.25;color:#111827;">Welcome to Sam Global</h1>
+                              <p style="margin:0;font-size:15px;line-height:1.7;color:#344054;">Your account is ready, and you can now continue shopping or selling.</p>
+                              <p style="margin:26px 0 0;border-top:1px solid #eef0f4;padding-top:16px;font-size:12px;line-height:1.6;color:#667085;">This is an automated account notification from Sam Global.</p>
+                            </td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+                  </table>
+                </body>
+              </html>`,
           });
         }
         if (job.name === "templated-email") {

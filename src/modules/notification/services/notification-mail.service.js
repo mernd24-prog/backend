@@ -8,6 +8,8 @@ const {
 } = require("./order-email-template.service");
 
 const { escapeHtml, humanize, formatMoney, toAbsoluteUrl, row } = helpers;
+const brandName = process.env.BRAND_NAME || process.env.APP_NAME || "Sam Global";
+const supportEmail = process.env.SUPPORT_EMAIL || process.env.REPLY_TO_EMAIL || "";
 
 const referenceOf = (payload = {}) =>
   payload.orderNumber ||
@@ -140,8 +142,14 @@ const payoutRows = (payload = {}) => {
 };
 
 const onboardingRows = (payload = {}) => [
+  row("Seller", payload.sellerName || payload.legalName || payload.legalBusinessName || payload.storeDisplayName),
+  row("Email", payload.email || payload.sellerEmail || payload.seller_email),
+  row("Phone", payload.phone || payload.sellerPhone || payload.seller_phone),
+  row("Organization", payload.legalBusinessName || payload.storeDisplayName),
   row("Status", humanize(payload.status || payload.verificationStatus || payload.approvalStatus)),
-  row("Business", payload.legalName || payload.legalBusinessName || payload.storeDisplayName),
+  row("KYC status", humanize(payload.kycStatus)),
+  row("Bank status", humanize(payload.bankVerificationStatus)),
+  row("Go-live status", humanize(payload.goLiveStatus)),
   row("Reason", payload.rejectionReason || payload.reason),
 ].filter(Boolean);
 
@@ -166,6 +174,27 @@ const eventCopy = ({ eventName, subject, message, payload = {}, recipientType = 
   const payoutRef = payload.payoutId || "your payout";
 
   const copy = {
+    [DOMAIN_EVENTS.AUTH_USER_REGISTERED_V1]: {
+      title: recipientType === "admin" ? "New Seller Account Created" : "Welcome to Sam Global",
+      intro:
+        recipientType === "admin"
+          ? `${payload.sellerName || payload.email || "A seller"} created a seller account. Please review the seller onboarding status in the admin panel.`
+          : "Your account has been created successfully.",
+      rows: onboardingRows(payload),
+      ctaText: recipientType === "admin" ? "Review seller" : "Open account",
+    },
+    [DOMAIN_EVENTS.SELLER_KYC_SUBMITTED_V1]: {
+      title: "Seller Onboarding Submitted",
+      intro: `${payload.legalName || payload.sellerName || "A seller"} has submitted onboarding details and is ready for review.`,
+      rows: onboardingRows(payload),
+      ctaText: "Review onboarding",
+    },
+    [DOMAIN_EVENTS.SELLER_ORGANIZATION_CREATED_V1]: {
+      title: "Seller Organization Submitted",
+      intro: `${payload.legalBusinessName || payload.storeDisplayName || "A seller organization"} has been submitted for review.`,
+      rows: onboardingRows(payload),
+      ctaText: "Review organization",
+    },
     [DOMAIN_EVENTS.ORDER_CREATED_V1]: {
       title: recipientType === "seller" ? "New Order Received" : "Order Received",
       intro:
@@ -248,14 +277,18 @@ const eventCopy = ({ eventName, subject, message, payload = {}, recipientType = 
       ctaText: "View details",
     },
     [DOMAIN_EVENTS.SELLER_ORGANIZATION_STATUS_UPDATED_V1]: {
-      title: subject || "Seller Onboarding Update",
-      intro: message || "There is an update on your seller onboarding status.",
+      title: subject || (String(payload.status || "") === "rejected" ? "Seller Onboarding Rejected" : "Seller Onboarding Approved"),
+      intro: message || (String(payload.status || "") === "rejected"
+        ? "Your seller onboarding was not approved. Please review the details and resubmit the requested information."
+        : "Your seller onboarding has been approved. You can continue with your seller account setup."),
       rows: onboardingRows(payload),
       ctaText: "View status",
     },
     [DOMAIN_EVENTS.KYC_STATUS_UPDATED_V1]: {
-      title: subject || "Seller Verification Update",
-      intro: message || "There is an update on your seller verification status.",
+      title: subject || (String(payload.verificationStatus || payload.status || "") === "rejected" ? "Seller Verification Rejected" : "Seller Verification Approved"),
+      intro: message || (String(payload.verificationStatus || payload.status || "") === "rejected"
+        ? "Your seller verification was not approved. Please review the reason below and submit the requested changes."
+        : "Your seller verification has been approved."),
       rows: onboardingRows(payload),
       ctaText: "View status",
     },
@@ -293,16 +326,21 @@ const wrapEmail = ({ title, intro, rows = [], ctaText = "View details", ctaUrl =
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f6f7fb;padding:28px 12px;">
         <tr>
           <td align="center">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;background:#ffffff;border:1px solid #d9dee8;border-radius:8px;overflow:hidden;">
               <tr>
-                <td style="background:#1b1d60;color:#ffffff;padding:22px 26px;">
-                  <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#f3c950;">Sam Global</div>
-                  <h1 style="margin:8px 0 0;font-size:22px;line-height:1.25;">${escapeHtml(title)}</h1>
+                <td style="background:#ffffff;border-top:4px solid #1b1d60;border-bottom:1px solid #eef0f4;padding:22px 26px;">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td style="font-size:18px;font-weight:800;color:#1b1d60;">${escapeHtml(brandName)}</td>
+                      <td align="right" style="font-size:12px;color:#667085;text-transform:uppercase;letter-spacing:.04em;">Official Notification</td>
+                    </tr>
+                  </table>
                 </td>
               </tr>
               <tr>
                 <td style="padding:24px 26px;">
-                  <p style="margin:0 0 18px;font-size:15px;line-height:1.6;color:#374151;">${escapeHtml(intro)}</p>
+                  <h1 style="margin:0 0 12px;font-size:23px;line-height:1.25;color:#111827;">${escapeHtml(title)}</h1>
+                  <p style="margin:0 0 18px;font-size:15px;line-height:1.7;color:#344054;">${escapeHtml(intro)}</p>
                   ${
                     detailRows
                       ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eef0f4;border-bottom:1px solid #eef0f4;margin:18px 0;">${detailRows}</table>`
@@ -310,10 +348,13 @@ const wrapEmail = ({ title, intro, rows = [], ctaText = "View details", ctaUrl =
                   }
                   ${
                     ctaUrl
-                      ? `<p style="margin:22px 0 0;"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;background:#d8a820;color:#111827;text-decoration:none;border-radius:8px;padding:11px 16px;font-weight:700;font-size:14px;">${escapeHtml(ctaText)}</a></p>`
+                      ? `<p style="margin:22px 0 0;"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;background:#1b1d60;color:#ffffff;text-decoration:none;border-radius:6px;padding:12px 18px;font-weight:700;font-size:14px;">${escapeHtml(ctaText)}</a></p>`
                       : ""
                   }
-                  <p style="margin:24px 0 0;font-size:12px;line-height:1.5;color:#6b7280;">This is an automated update from Sam Global. Please do not reply to this email.</p>
+                  <p style="margin:24px 0 0;border-top:1px solid #eef0f4;padding-top:16px;font-size:12px;line-height:1.6;color:#667085;">
+                    This is an automated transactional email from ${escapeHtml(brandName)}.
+                    ${supportEmail ? `For assistance, contact ${escapeHtml(supportEmail)}.` : "Please contact support if you need assistance."}
+                  </p>
                 </td>
               </tr>
             </table>

@@ -28,6 +28,13 @@ const formatMoney = (value, currency = "INR") => {
 
 const trimTrailingSlash = (value = "") => String(value || "").replace(/\/+$/, "");
 const absoluteUrlPattern = /^https?:\/\//i;
+const brandName = process.env.BRAND_NAME || process.env.APP_NAME || "Sam Global";
+const supportEmail = process.env.SUPPORT_EMAIL || process.env.REPLY_TO_EMAIL || "";
+
+const hiddenPreheader = (text = "") => `
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;line-height:1px;font-size:1px;">
+    ${escapeHtml(text)}
+  </div>`;
 
 const getBaseUrl = (recipientType = "customer") => {
   if (recipientType === "admin") {
@@ -178,8 +185,8 @@ const resolveOrderEmailCopy = ({ eventName, subject, message, payload = {}, reci
       };
     }
     return {
-      title: "Thank you for your order",
-      intro: `We have received your order ${orderRef}${productText}, and it is now being processed.`,
+      title: "Order Confirmed",
+      intro: `Your order ${orderRef}${productText} has been confirmed. We will notify you again when it moves to the next stage.`,
     };
   }
 
@@ -197,8 +204,8 @@ const resolveOrderEmailCopy = ({ eventName, subject, message, payload = {}, reci
       };
     }
     return {
-      title: "Thank you for your order",
-      intro: `We have received your order ${orderRef}${productText}.`,
+      title: "Order Received",
+      intro: `Your order ${orderRef}${productText} has been received. We are reviewing the details and will share further updates by email.`,
     };
   }
 
@@ -245,38 +252,38 @@ const resolveOrderEmailCopy = ({ eventName, subject, message, payload = {}, reci
 
 const renderSectionTitle = (title) => `
   <tr>
-    <td style="padding:22px 0 8px;font-size:16px;font-weight:700;color:#111827;">${escapeHtml(title)}</td>
+    <td style="padding:22px 0 10px;font-size:15px;font-weight:700;color:#111827;">${escapeHtml(title)}</td>
   </tr>`;
 
 const renderKeyValueRows = (rows = []) => {
   const html = compactRows(rows)
     .map((item) => `
       <tr>
-        <td style="padding:7px 0;color:#6b7280;font-size:13px;">${escapeHtml(item.label)}</td>
-        <td style="padding:7px 0;color:#111827;font-size:13px;font-weight:600;text-align:right;">${escapeHtml(item.value)}</td>
+        <td style="padding:9px 0;color:#667085;font-size:13px;border-bottom:1px solid #eef0f4;">${escapeHtml(item.label)}</td>
+        <td style="padding:9px 0;color:#111827;font-size:13px;font-weight:600;text-align:right;border-bottom:1px solid #eef0f4;">${escapeHtml(item.value)}</td>
       </tr>`)
     .join("");
   if (!html) return "";
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eef0f4;border-bottom:1px solid #eef0f4;">${html}</table>`;
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eef0f4;">${html}</table>`;
 };
 
 const renderProductsTable = (items = []) => {
   if (!items.length) return "";
   const rows = items.map((item) => `
     <tr>
-      <td style="padding:10px 0;border-top:1px solid #eef0f4;">
-        <div style="font-size:14px;font-weight:700;color:#111827;">${escapeHtml(item.name)}</div>
+      <td style="padding:12px 0;border-top:1px solid #eef0f4;">
+        <div style="font-size:14px;font-weight:700;color:#111827;line-height:1.4;">${escapeHtml(item.name)}</div>
         ${item.meta ? `<div style="margin-top:3px;font-size:12px;color:#6b7280;">${escapeHtml(item.meta)}</div>` : ""}
       </td>
-      <td style="padding:10px 0;border-top:1px solid #eef0f4;text-align:center;font-size:13px;color:#111827;">${escapeHtml(item.quantity)}</td>
-      <td style="padding:10px 0;border-top:1px solid #eef0f4;text-align:right;font-size:13px;color:#111827;font-weight:600;">${escapeHtml(item.price)}</td>
+      <td style="padding:12px 0;border-top:1px solid #eef0f4;text-align:center;font-size:13px;color:#111827;">${escapeHtml(item.quantity)}</td>
+      <td style="padding:12px 0;border-top:1px solid #eef0f4;text-align:right;font-size:13px;color:#111827;font-weight:700;">${escapeHtml(item.price)}</td>
     </tr>`).join("");
   return `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
       <tr>
-        <th align="left" style="padding:6px 0;color:#6b7280;font-size:12px;font-weight:700;">Product</th>
-        <th align="center" style="padding:6px 0;color:#6b7280;font-size:12px;font-weight:700;">Quantity</th>
-        <th align="right" style="padding:6px 0;color:#6b7280;font-size:12px;font-weight:700;">Price</th>
+        <th align="left" style="padding:8px 0;color:#667085;font-size:12px;font-weight:700;text-transform:uppercase;">Product</th>
+        <th align="center" style="padding:8px 0;color:#667085;font-size:12px;font-weight:700;text-transform:uppercase;">Qty</th>
+        <th align="right" style="padding:8px 0;color:#667085;font-size:12px;font-weight:700;text-transform:uppercase;">Amount</th>
       </tr>
       ${rows}
     </table>`;
@@ -289,7 +296,7 @@ const renderAddress = (title, address = {}) => {
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
       ${renderSectionTitle(title)}
       <tr>
-        <td style="font-size:13px;line-height:1.65;color:#374151;">${lines.map(escapeHtml).join("<br>")}</td>
+        <td style="font-size:13px;line-height:1.7;color:#374151;background:#f9fafb;border:1px solid #eef0f4;border-radius:8px;padding:14px 16px;">${lines.map(escapeHtml).join("<br>")}</td>
       </tr>
     </table>`;
 };
@@ -351,25 +358,43 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
     orderReferenceOf(payload) ? `Order ${orderReferenceOf(payload)}` : "",
     orderDateOf(payload) ? `(${orderDateOf(payload)})` : "",
   ].filter(Boolean).join(" ");
+  const orderRef = orderReferenceOf(payload);
+  const preheader = [
+    copy.title,
+    orderRef ? `Order ${orderRef}` : "",
+    moneyOf(payload, "payableAmount", "payable_amount", "totalAmount", "total_amount", "amount"),
+  ].filter(Boolean).join(" - ");
 
   const html = `<!doctype html>
   <html>
-    <body style="margin:0;background:#f6f7fb;font-family:Arial,Helvetica,sans-serif;color:#111827;">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f6f7fb;padding:28px 12px;">
+    <head>
+      <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${escapeHtml(copy.title)}</title>
+    </head>
+    <body style="margin:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+      ${hiddenPreheader(preheader)}
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f8;padding:30px 12px;">
         <tr>
           <td align="center">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:680px;background:#ffffff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:680px;background:#ffffff;border:1px solid #d9dee8;border-radius:8px;overflow:hidden;">
               <tr>
-                <td style="background:#1b1d60;color:#ffffff;padding:22px 26px;">
-                  <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#f3c950;">Sam Global</div>
-                  <h1 style="margin:8px 0 0;font-size:22px;line-height:1.25;">${escapeHtml(copy.title)}</h1>
+                <td style="background:#ffffff;border-top:4px solid #1b1d60;border-bottom:1px solid #eef0f4;padding:22px 28px;">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td style="font-size:18px;font-weight:800;color:#1b1d60;">${escapeHtml(brandName)}</td>
+                      <td align="right" style="font-size:12px;color:#667085;text-transform:uppercase;letter-spacing:.04em;">Official Notification</td>
+                    </tr>
+                  </table>
                 </td>
               </tr>
               <tr>
-                <td style="padding:24px 26px;">
-                  ${greeting ? `<p style="margin:0 0 10px;font-size:15px;color:#374151;">${escapeHtml(greeting)}</p>` : ""}
-                  <p style="margin:0 0 18px;font-size:15px;line-height:1.6;color:#374151;">${escapeHtml(copy.intro)}</p>
-                  ${items.length ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${renderSectionTitle("Here is what was ordered")}<tr><td>${renderProductsTable(items)}</td></tr></table>` : ""}
+                <td style="padding:28px;">
+                  <h1 style="margin:0 0 10px;font-size:24px;line-height:1.25;color:#111827;">${escapeHtml(copy.title)}</h1>
+                  ${orderRef ? `<p style="margin:0 0 20px;"><span style="display:inline-block;background:#f4f6fb;border:1px solid #d9dee8;border-radius:999px;padding:7px 12px;font-size:12px;font-weight:700;color:#1b1d60;">Order Reference: ${escapeHtml(orderRef)}</span></p>` : ""}
+                  ${greeting ? `<p style="margin:0 0 10px;font-size:15px;color:#344054;">${escapeHtml(greeting)}</p>` : ""}
+                  <p style="margin:0 0 20px;font-size:15px;line-height:1.7;color:#344054;">${escapeHtml(copy.intro)}</p>
+                  ${items.length ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${renderSectionTitle("Items in this order")}<tr><td>${renderProductsTable(items)}</td></tr></table>` : ""}
                   ${summaryRows.length ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${renderSectionTitle(orderHeading || "Order summary")}<tr><td>${renderKeyValueRows(summaryRows)}</td></tr></table>` : ""}
                   ${refundRows.length ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${renderSectionTitle("Refund details")}<tr><td>${renderKeyValueRows(refundRows)}</td></tr></table>` : ""}
                   ${orderRows.length ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${renderSectionTitle("Order details")}<tr><td>${renderKeyValueRows(orderRows)}</td></tr></table>` : ""}
@@ -378,13 +403,23 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
                   ${renderAddress("Shipping address", shippingAddress)}
                   ${
                     ctaUrl
-                      ? `<p style="margin:22px 0 0;"><a href="${escapeHtml(ctaUrl)}" style="color:#2563eb;text-decoration:underline;font-weight:600;font-size:14px;">${escapeHtml(ctaText)}</a></p>`
+                      ? `<p style="margin:24px 0 0;"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;background:#1b1d60;color:#ffffff;text-decoration:none;border-radius:6px;padding:12px 18px;font-weight:700;font-size:14px;">${escapeHtml(ctaText)}</a></p>`
                       : ""
                   }
-                  <p style="margin:24px 0 0;font-size:12px;line-height:1.5;color:#6b7280;">Thanks again. This is an automated update from Sam Global.</p>
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:26px;border-top:1px solid #eef0f4;">
+                    <tr>
+                      <td style="padding-top:16px;font-size:12px;line-height:1.6;color:#667085;">
+                        This is an automated transactional email from ${escapeHtml(brandName)}.
+                        ${supportEmail ? `For assistance, contact ${escapeHtml(supportEmail)}.` : "Please contact customer support if you need assistance."}
+                      </td>
+                    </tr>
+                  </table>
                 </td>
               </tr>
             </table>
+            <p style="max-width:680px;margin:14px auto 0;font-size:11px;line-height:1.5;color:#98a2b3;text-align:center;">
+              Please do not share order or payment information with anyone claiming to represent ${escapeHtml(brandName)} outside official support channels.
+            </p>
           </td>
         </tr>
       </table>

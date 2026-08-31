@@ -4,6 +4,7 @@ const { AppError } = require("../../shared/errors/app-error");
 const { logger } = require("../../shared/logger/logger");
 
 const thirdPartyMailEnabled = env.smtp.live;
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const transporter = thirdPartyMailEnabled
   ? nodemailer.createTransport({
       host: env.smtp.host,
@@ -26,9 +27,14 @@ function buildStaticMailResult({ to, subject, html, text, from, reason }) {
 }
 
 async function sendMail({ to, subject, html, text, from = env.defaultFromEmail }) {
+  const recipient = String(to || "").trim();
+  if (!emailPattern.test(recipient)) {
+    throw new AppError("A valid recipient email address is required.", 400);
+  }
+
   if (!thirdPartyMailEnabled) {
     logger.warn({
-      to,
+      to: recipient,
       subject,
       from,
       smtpMode: env.smtp.mode,
@@ -37,7 +43,7 @@ async function sendMail({ to, subject, html, text, from = env.defaultFromEmail }
       missingKeys: env.smtp.missingKeys,
     }, "Email delivery skipped by SMTP configuration");
     return buildStaticMailResult({
-      to,
+      to: recipient,
       subject,
       html,
       text,
@@ -51,7 +57,7 @@ async function sendMail({ to, subject, html, text, from = env.defaultFromEmail }
 
   try {
     logger.warn({
-      to,
+      to: recipient,
       subject,
       from,
       smtpHost: env.smtp.host,
@@ -61,13 +67,19 @@ async function sendMail({ to, subject, html, text, from = env.defaultFromEmail }
     }, "Sending email through SMTP");
     return await transporter.sendMail({
       from,
-      to,
+      to: recipient,
       subject,
       text,
       html,
+      headers: {
+        "Auto-Submitted": "auto-generated",
+        "X-Auto-Response-Suppress": "All",
+        "X-Entity-Ref-ID": subject,
+      },
+      replyTo: process.env.REPLY_TO_EMAIL || process.env.SUPPORT_EMAIL || from,
     });
   } catch (error) {
-    logger.error({ err: error, to, subject }, "Email delivery failed");
+    logger.error({ err: error, to: recipient, subject }, "Email delivery failed");
     throw new AppError("Email delivery failed. Please try again later.", 503);
   }
 }

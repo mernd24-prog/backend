@@ -1240,6 +1240,26 @@ class SellerOrganizationService {
       ...organizationPayload,
       ...lifecyclePatch,
     });
+    await eventPublisher.publish(
+      makeEvent(
+        DOMAIN_EVENTS.SELLER_ORGANIZATION_CREATED_V1,
+        {
+          sellerId,
+          organizationId: organization.id,
+          legalBusinessName: organization.legalBusinessName || organization.storeDisplayName || "",
+          storeDisplayName: organization.storeDisplayName || "",
+          approvalStatus: organization.approvalStatus,
+          kycStatus: organization.kycStatus,
+          bankVerificationStatus: organization.bankVerificationStatus,
+          goLiveStatus: organization.goLiveStatus,
+          createdBy: actor.userId || actor.sub || sellerId,
+        },
+        {
+          source: "seller-organization-module",
+          aggregateId: organization.id,
+        },
+      ),
+    );
     if (shouldSetDefault && !organization.isDefault) {
       const defaultOrganization = await this.organizationRepository.setDefault(
         sellerId,
