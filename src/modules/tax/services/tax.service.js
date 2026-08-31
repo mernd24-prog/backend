@@ -522,13 +522,19 @@ class TaxService {
 
       const sellerInvoiceMetadata = this.normalizeJson(sellerInvoice.metadata, {});
       const sellerInvoiceAmounts = sellerInvoiceMetadata.amounts || {};
+      const sellerShippingAmount = this.money(
+        sellerInvoiceAmounts.deliveryChargeAmount ||
+        sellerInvoiceAmounts.shippingCollectedForSellerAmount ||
+        payload.metadata?.shippingRefundAmount ||
+        0,
+      );
       const reversesSellerShipping =
         referenceType === "cancellation" &&
         (
           payload.metadata?.cancellationScope === "full" ||
           payload.metadata?.reverseSellerShipping === true
         ) &&
-        Number(sellerInvoiceAmounts.deliveryChargeAmount || 0) > 0;
+        sellerShippingAmount > 0;
       const shippingCreditItem = reversesSellerShipping
         ? {
           description: "Delivery / shipping charge reversal",
@@ -540,8 +546,8 @@ class TaxService {
           cgstAmount: this.money(sellerInvoiceAmounts.shippingCgstAmount),
           sgstAmount: this.money(sellerInvoiceAmounts.shippingSgstAmount),
           igstAmount: this.money(sellerInvoiceAmounts.shippingIgstAmount),
-          totalAmount: this.money(sellerInvoiceAmounts.deliveryChargeAmount),
-          customerRefundAmount: this.money(sellerInvoiceAmounts.deliveryChargeAmount),
+          totalAmount: sellerShippingAmount,
+          customerRefundAmount: sellerShippingAmount,
         }
         : null;
       const sellerCreditAmounts = {
@@ -624,11 +630,11 @@ class TaxService {
       platformCommissionCreditNotes.push(commissionCreditNote);
     }
 
-    const reversesCustomerFee = payload.refundCustomerPlatformFee === true ||
-      (
-        referenceType === "cancellation" &&
-        payload.metadata?.cancellationScope === "full"
-      );
+    // A full cancellation does not automatically make the customer platform
+    // fee refundable. The captured Commerce Settings scenario is authoritative.
+    // Creating a credit note without returning the fee makes tax documents
+    // contradict the actual gateway refund.
+    const reversesCustomerFee = payload.refundCustomerPlatformFee === true;
     if (reversesCustomerFee) {
       const orderInvoices = await this.taxRepository.findInvoicesByOrderId(orderId);
       const customerFeeInvoice = orderInvoices.find((invoice) =>
@@ -1974,7 +1980,7 @@ class TaxService {
 
   isOrderInvoiceReadyForBuyer(order = {}) {
     if (
-      ["delivered", CUSTOMER_INVOICE_READY_STATUS, "completed"].includes(
+      ["delivered", CUSTOMER_INVOICE_READY_STATUS, "completed", "cancelled", "canceled", "partially_cancelled", "partially_canceled", "returned", "partially_returned"].includes(
         String(order.status || "").toLowerCase(),
       )
     ) {
@@ -1985,7 +1991,7 @@ class TaxService {
   }
 
   isPlatformCustomerFeeReadyForBuyer(order = {}) {
-    return ["captured", "paid", "completed"].includes(
+    return ["captured", "paid", "completed", "refunded", "partially_refunded"].includes(
       String(order.payment_status || order.paymentStatus || "").toLowerCase(),
     );
   }

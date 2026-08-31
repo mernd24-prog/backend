@@ -5,13 +5,11 @@ const { knex } = require("../../../infrastructure/postgres/postgres-client");
 const { AppError } = require("../../../shared/errors/app-error");
 const { ORDER_STATUS, PAYMENT_PROVIDER, PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
-const { ProductModel } = require("../../product/models/product.model");
 const { ReturnModel } = require("../../returns/models/return.model");
 
 const ADMIN_ROLES = new Set(["admin", "sub-admin", "super-admin"]);
 const OPEN_RETURN_STATUSES = ["requested", "approved", "picked_up", "received", "qc_pending", "refund_pending"];
 const FINAL_COLLECTION_STATUSES = ["verified", "remitted"];
-const mongooseIdLike = (value) => /^[a-f\d]{24}$/i.test(String(value || ""));
 
 class SettlementLifecycleService {
   isAdmin(actor = {}) {
@@ -42,20 +40,12 @@ class SettlementLifecycleService {
   }
 
   resolveReturnWindowDays(policy = {}, item = {}, fallbackDays = 0) {
-    if (this.isNonReturnablePolicy(policy) || item.returnable === false) return 0;
+    const snapshotDefinesEligibility = Object.prototype.hasOwnProperty.call(policy, "returnable") ||
+      Object.prototype.hasOwnProperty.call(policy, "eligible");
+    if (this.isNonReturnablePolicy(policy) || (!snapshotDefinesEligibility && item.returnable === false)) return 0;
     const rawDays = policy.returnWindowDays ?? policy.days ?? item.return_window_days ?? fallbackDays;
     const parsed = Number(rawDays);
     return Number.isFinite(parsed) ? Math.max(parsed, 0) : 0;
-  }
-
-  policyHasExplicitWindow(policy = {}) {
-    return Object.prototype.hasOwnProperty.call(policy, "returnWindowDays") ||
-      Object.prototype.hasOwnProperty.call(policy, "days");
-  }
-
-  isLegacyOneDayDefault(policy = {}, item = {}) {
-    const days = Number(policy.returnWindowDays ?? policy.days ?? item.return_window_days);
-    return days === 1 && !this.isNonReturnablePolicy(policy);
   }
 
   async getPolicy() {
@@ -83,35 +73,26 @@ class SettlementLifecycleService {
       })
       : allOrderItems;
     if (!orderItems.length) return null;
-    const productIds = [...new Set(orderItems.map((item) => String(item.product_id || "")).filter(mongooseIdLike))];
-    const currentProducts = productIds.length
-      ? await ProductModel.find({ _id: { $in: productIds } }).select("warranty").lean().catch(() => [])
-      : [];
-    const currentProductMap = new Map(currentProducts.map((product) => [String(product._id), product]));
     const itemSnapshots = orderItems.map((item) => {
       const productSnapshot = this.parseJson(item.product_snapshot, {});
       const existingSnapshot = this.parseJson(item.return_policy_snapshot, {});
-      const currentProductPolicy = currentProductMap.get(String(item.product_id || ""))?.warranty?.returnPolicy || {};
+      // The checkout snapshot is the commercial promise made to the buyer.
+      // Never replace it with the product's current catalog policy: doing so
+      // can shorten an already purchased return window and release its payout
+      // early when a seller edits the product after the order was placed.
       const productPolicy = productSnapshot.returnPolicy || productSnapshot.return_policy ||
         productSnapshot.commercialPolicy?.returnPolicy || existingSnapshot;
-      const hasCurrentExplicitPolicy = this.isNonReturnablePolicy(currentProductPolicy) ||
-        this.policyHasExplicitWindow(currentProductPolicy);
-      const effectivePolicy = hasCurrentExplicitPolicy
-        ? currentProductPolicy
-        : policy.returnWindowDays === 0 && this.isLegacyOneDayDefault(productPolicy, item)
-          ? { ...productPolicy, returnWindowDays: 0, days: 0, source: "legacy_default_zero_window_refresh" }
-          : productPolicy;
-      const returnable = this.isNonReturnablePolicy(effectivePolicy) || item.returnable === false
+      const effectivePolicy = productPolicy;
+      const snapshotDefinesEligibility = Object.prototype.hasOwnProperty.call(effectivePolicy, "returnable") ||
+        Object.prototype.hasOwnProperty.call(effectivePolicy, "eligible");
+      const returnable = this.isNonReturnablePolicy(effectivePolicy) ||
+        (!snapshotDefinesEligibility && item.returnable === false)
         ? false
         : effectivePolicy.returnable ?? effectivePolicy.eligible ?? item.returnable ?? true;
       const returnWindowDays = this.resolveReturnWindowDays(effectivePolicy, item, policy.returnWindowDays);
       const itemDeliveredAt = item.delivered_at ? new Date(item.delivered_at) : new Date(deliveredAt);
       const calculatedEligibleUntil = this.addDays(itemDeliveredAt, returnWindowDays);
-      const returnEligibleUntil = returnWindowDays === 0
-        ? itemDeliveredAt
-        : item.return_eligible_until
-          ? new Date(item.return_eligible_until)
-          : calculatedEligibleUntil;
+      const returnEligibleUntil = returnWindowDays === 0 ? itemDeliveredAt : calculatedEligibleUntil;
       return {
         item,
         returnable: Boolean(returnable),

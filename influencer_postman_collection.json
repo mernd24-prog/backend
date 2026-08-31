@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Ecommerce Influencer API — Complete Parent, Child, Wallet & Payout Flow",
-    "description": "Route-complete collection generated from referral-mobile.routes.js, referral-mobile.validation.js, auth.routes.js and file-uploader.routes.js.\n\nRun Parent/Child Login first. Protected folders inherit the correct bearer token.\n\nLedger status: pending, locked, available, payout_requested, paid, reversed, expired, plus payout request statuses.\n\ncommissionType: code_owner_base, code_owner_bonus, direct_parent, lifetime_override, performance_bonus, reversal, withdrawal, coin_expiry, manual_adjustment.\n\ntransactionType: credit_coins, debit_coins, locked_coins, released_coins, reversed_coins, withdrawal_coins, expired_coins.\n\nPayout state: available coins → requested/reserved → approved/awaiting transfer → Admin transfer + UTR + proof → paid coins.",
+    "description": "Route-complete collection generated from referral-mobile.routes.js, referral-mobile.validation.js, auth.routes.js and file-uploader.routes.js.\n\nQR / React Native contract: the QR always contains the HTTPS universalLink. Android App Links and iOS Universal Links open the native Registration screen when installed; otherwise the same URL opens web registration. nativeDeepLink is the custom-scheme fallback. Both forms carry the same invite query parameter.\n\nRun Parent/Child Login first. Protected folders inherit the correct bearer token.\n\nLedger status: pending, locked, available, payout_requested, paid, reversed, expired, plus payout request statuses.\n\ncommissionType: code_owner_base, code_owner_bonus, direct_parent, lifetime_override, performance_bonus, reversal, withdrawal, coin_expiry, manual_adjustment.\n\ntransactionType: credit_coins, debit_coins, locked_coins, released_coins, reversed_coins, withdrawal_coins, expired_coins.\n\nPayout state: available coins → requested/reserved → approved/awaiting transfer → Admin transfer + UTR + proof → paid coins.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "event": [
@@ -21,6 +21,26 @@
       "item": [
         {
           "name": "Resolve QR Invitation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Invitation resolves', () => pm.expect(pm.response.code).to.equal(200));",
+                  "const json = pm.response.json();",
+                  "const data = json.data || {};",
+                  "const invitation = data.invitation || data;",
+                  "pm.test('Invite is shareable', () => pm.expect(invitation.shareable).to.equal(true));",
+                  "pm.test('HTTPS universal link is returned', () => pm.expect(invitation.universalLink || invitation.registrationUrl).to.match(/^https?:\\/\\//));",
+                  "pm.test('Native custom-scheme fallback is returned', () => pm.expect(invitation.nativeDeepLink).to.match(/^[a-z][a-z0-9+.-]*:\\/\\/register\\?invite=/i));",
+                  "const universal = invitation.universalLink || invitation.registrationUrl;",
+                  "if (universal) pm.environment.set('capturedUniversalLink', universal);",
+                  "if (invitation.nativeDeepLink) pm.environment.set('capturedNativeDeepLink', invitation.nativeDeepLink);",
+                  "if (invitation.code) pm.environment.set('influencerInviteCode', invitation.code);"
+                ]
+              }
+            }
+          ],
           "request": {
             "auth": { "type": "noauth" },
             "method": "GET",
@@ -31,6 +51,20 @@
         },
         {
           "name": "Register Brand Associate - Pending Admin Approval",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Registration submitted', () => pm.expect(pm.response.code).to.be.oneOf([200, 201]));",
+                  "const data = (pm.response.json().data || {});",
+                  "pm.test('Account requires Admin approval', () => pm.expect(data.status).to.equal('pending_approval'));",
+                  "pm.test('Registration does not issue tokens', () => pm.expect(data.tokens).to.equal(undefined));",
+                  "pm.test('Parent was linked', () => pm.expect(data.parent).to.exist);"
+                ]
+              }
+            }
+          ],
           "request": {
             "auth": { "type": "noauth" },
             "method": "POST",
@@ -46,6 +80,16 @@
         },
         {
           "name": "Pending Associate Login - Expect 403",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Pending account cannot log in', () => pm.expect(pm.response.code).to.equal(403));"
+                ]
+              }
+            }
+          ],
           "request": {
             "auth": { "type": "noauth" },
             "method": "POST",
@@ -57,6 +101,108 @@
             },
             "url": "{{baseUrl}}/api/v1/auth/influencer/login",
             "description": "Expected to return 403 until Admin approves the account."
+          }
+        }
+      ]
+    },
+    {
+      "name": "00A - React Native Deep Linking",
+      "description": "Executable checks for the mobile link contract. Configure influencerPortalOrigin to the production HTTPS origin. The app must map /register and the custom scheme to the same Registration screen and read route.params.invite.",
+      "item": [
+        {
+          "name": "Resolve and Capture Mobile Link Contract",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Invitation resolves', () => pm.expect(pm.response.code).to.equal(200));",
+                  "const data = pm.response.json().data || {};",
+                  "const invitation = data.invitation || data;",
+                  "const universal = new URL(invitation.universalLink || invitation.registrationUrl);",
+                  "const native = new URL(invitation.nativeDeepLink);",
+                  "pm.test('Universal route is /register', () => pm.expect(universal.pathname).to.equal('/register'));",
+                  "pm.test('Universal invite matches response code', () => pm.expect(universal.searchParams.get('invite')).to.equal(invitation.code));",
+                  "pm.test('Native route is register', () => pm.expect(native.hostname || native.pathname.replace(/^\\//, '')).to.equal('register'));",
+                  "pm.test('Native invite matches universal invite', () => pm.expect(native.searchParams.get('invite')).to.equal(universal.searchParams.get('invite')));",
+                  "pm.environment.set('capturedUniversalLink', universal.toString());",
+                  "pm.environment.set('capturedNativeDeepLink', invitation.nativeDeepLink);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/auth/influencer/invites/{{influencerInviteCode}}",
+            "description": "React Native routes both returned URLs to Registration and passes the invite value unchanged to the registration API. Never infer the parent locally."
+          }
+        },
+        {
+          "name": "Android App Links Association",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('assetlinks.json is public', () => pm.expect(pm.response.code).to.equal(200));",
+                  "pm.test('Response is JSON', () => pm.expect(pm.response.headers.get('Content-Type') || '').to.include('application/json'));",
+                  "const rows = pm.response.json();",
+                  "pm.test('Configured Android package is associated', () => pm.expect(JSON.stringify(rows)).to.include(pm.environment.get('androidPackageName')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{influencerPortalOrigin}}/.well-known/assetlinks.json",
+            "description": "Run against the production HTTPS domain. It must contain the actual Android package and Play/release SHA-256 certificate fingerprint. Redirects are not recommended."
+          }
+        },
+        {
+          "name": "iOS Universal Links Association",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('apple-app-site-association is public', () => pm.expect(pm.response.code).to.equal(200));",
+                  "const body = pm.response.text();",
+                  "pm.test('Configured iOS app identifier is associated', () => pm.expect(body).to.include(pm.environment.get('appleTeamId') + '.' + pm.environment.get('iosBundleId')));",
+                  "pm.test('/register is allowed', () => pm.expect(body).to.include('/register'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{influencerPortalOrigin}}/.well-known/apple-app-site-association",
+            "description": "Run against the production HTTPS domain. Serve without a file extension and include the real TEAM_ID.BUNDLE_ID plus /register* components."
+          }
+        },
+        {
+          "name": "Revoked Child Permission - Expect 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Revoked invite is rejected by backend', () => pm.expect(pm.response.code).to.equal(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/auth/influencer/invites/{{revokedInfluencerInviteCode}}",
+            "description": "Set revokedInfluencerInviteCode to an account whose canCreateChildren permission was revoked. Mobile must show an invalid/disabled invitation screen."
           }
         }
       ]
@@ -257,7 +403,13 @@
               "script": {
                 "exec": [
                   "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
-                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                  "pm.test('JSON response', () => pm.response.to.be.json);",
+                  "const data = pm.response.json().data || {};",
+                  "const invitation = data.childRegistration || {};",
+                  "if (invitation.code) pm.environment.set('influencerInviteCode', invitation.code);",
+                  "if (invitation.universalLink || invitation.registrationUrl) pm.environment.set('capturedUniversalLink', invitation.universalLink || invitation.registrationUrl);",
+                  "if (invitation.nativeDeepLink) pm.environment.set('capturedNativeDeepLink', invitation.nativeDeepLink);",
+                  "if (data.canCreateChildren === true) pm.test('Permitted parent receives a shareable registration link', () => pm.expect(invitation.shareable).to.equal(true));"
                 ]
               }
             }
@@ -1080,7 +1232,10 @@
               "script": {
                 "exec": [
                   "pm.test('Successful response', () => pm.expect(pm.response.code).to.be.within(200, 299));",
-                  "pm.test('JSON response', () => pm.response.to.be.json);"
+                  "pm.test('JSON response', () => pm.response.to.be.json);",
+                  "const data = pm.response.json().data || {};",
+                  "const invitation = data.childRegistration || {};",
+                  "if (data.canCreateChildren !== true) pm.test('Child QR sharing is disabled by default', () => pm.expect(invitation.shareable).to.not.equal(true));"
                 ]
               }
             }

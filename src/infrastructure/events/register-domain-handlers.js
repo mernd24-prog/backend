@@ -46,6 +46,14 @@ function registerDomainHandlers() {
         organizationId: payload.organizationId || null,
         reasonCode: "shipment_rto",
         reason: "Shipment returned to origin",
+        // A seller-initiated RTO is a seller cancellation for customer refund
+        // policy purposes. Courier/customer delivery failures retain the
+        // separately configured rtoDeliveryFailed policy.
+        refundPolicyScenario: ["seller", "seller-admin", "seller-sub-admin"].includes(payload.actorRole)
+          ? "sellerCancellation"
+          : "rtoDeliveryFailed",
+        sourceActorId: payload.updatedBy || null,
+        sourceActorRole: payload.actorRole || null,
         idempotencyKey: `shipment-rto:${payload.shipmentId}`,
       }, {
         userId: "shipment-rto-handler",

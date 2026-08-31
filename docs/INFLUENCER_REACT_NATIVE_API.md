@@ -24,6 +24,71 @@ Production domain association (replace the placeholders with the real native ide
 
 Do not publish placeholder association files: Android and iOS will reject them. The package name, Apple Team ID, bundle ID, signing fingerprint and final HTTPS domain must come from the actual React Native project and release accounts.
 
+### React Native linking contract
+
+The QR scanner or gallery decoder returns a string such as:
+
+```text
+https://influencer.example.com/register?invite=abc123
+```
+
+Do not treat the complete scanned URL as the invite code. Parse it, require the
+`/register` route, extract `invite`, and resolve it with the public API before
+showing the registration form. The backend—not the app—decides which parent is
+linked and whether child creation is still allowed.
+
+React Navigation configuration:
+
+```js
+const linking = {
+  prefixes: [
+    "https://influencer.example.com",
+    "samglobalinfluencer://",
+  ],
+  config: {
+    screens: {
+      Registration: {
+        path: "register",
+        parse: { invite: String },
+      },
+    },
+  },
+};
+```
+
+Registration screen flow:
+
+```js
+const inviteCode = route.params?.invite;
+
+// 1. Validate the scanned/opened link against the backend.
+await api.get(`/auth/influencer/invites/${encodeURIComponent(inviteCode)}`);
+
+// 2. Submit the same opaque invite code with the form.
+await api.post("/auth/influencer/register", {
+  inviteCode,
+  firstName,
+  lastName,
+  email,
+  phone,
+  password,
+});
+
+// 3. Do not store a token. Registration returns pending_approval.
+navigation.replace("PendingApproval");
+```
+
+Handle links from all three entry points:
+
+- App closed: React Navigation reads the initial universal/deep link.
+- App backgrounded: React Navigation handles the incoming link event.
+- Camera/gallery QR: decode the image, parse the URL, then navigate explicitly
+  with `navigation.navigate("Registration", { invite })`.
+
+Always call the resolve endpoint again immediately before registration. If an
+Admin revoked `canCreateChildren`, both invite resolution and registration are
+rejected even if the QR image was saved earlier.
+
 ## Quick start
 
 1. Import `influencer_postman_collection.json` and `influencer_postman_environment.json`.

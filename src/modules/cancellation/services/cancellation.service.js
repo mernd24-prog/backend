@@ -323,8 +323,14 @@ class CancellationService {
     const payment = await this.orderRepository.findRefundablePaymentByOrderId(orderId);
     const commerceSettings = await commerceSettingsService.getSettings();
     const componentPolicies = commerceSettings.returns?.refundPolicy || {};
+    const allowedRefundScenarios = new Set([
+      "fullCancellation", "itemCancellation", "sellerCancellation", "rtoDeliveryFailed",
+    ]);
+    const requestedRefundScenario = allowedRefundScenarios.has(payload.refundPolicyScenario)
+      ? payload.refundPolicyScenario
+      : null;
     const scenario = rtoSettlement
-      ? "rtoDeliveryFailed"
+      ? requestedRefundScenario || "rtoDeliveryFailed"
       : this.isSeller(actor)
         ? "sellerCancellation"
         : fullCancellation
@@ -400,6 +406,8 @@ class CancellationService {
         shippingRefundAmount,
         platformFeeRefundAmount,
         refundPolicyScenario: scenario,
+        sourceActorId: payload.sourceActorId || null,
+        sourceActorRole: payload.sourceActorRole || null,
         refundDestination,
         refundPolicySnapshot: componentPolicies,
         requestedAt: new Date().toISOString(),
@@ -876,11 +884,15 @@ class CancellationService {
       taxableAmount: this.round(itemSubtotal),
       taxAmount: this.round(taxAmount),
       totalAmount: Number(cancellation.refund_amount || 0),
+      refundCustomerPlatformFee: Number(cancellation.metadata?.platformFeeRefundAmount || 0) > 0,
       reason: cancellation.reason,
       metadata: {
         cancellationNumber: cancellation.cancellation_number,
         cancellationScope: cancellation.scope,
         reverseSellerShipping: Boolean(cancellation.metadata?.reverseSellerShipping),
+        shippingRefundAmount: Number(cancellation.metadata?.shippingRefundAmount || 0),
+        platformFeeRefundAmount: Number(cancellation.metadata?.platformFeeRefundAmount || 0),
+        refundPolicyScenario: cancellation.metadata?.refundPolicyScenario || null,
       },
     }, actor);
   }
