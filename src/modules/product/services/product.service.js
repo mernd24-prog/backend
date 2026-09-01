@@ -3644,8 +3644,30 @@ async getProduct(productId) {
   getDisplayVariant(product = {}) {
     const variants = Array.isArray(product?.variants) ? product.variants : [];
     if (!variants.length) return null;
-    return variants.find((variant) => variant?.isDefault === true) ||
-      variants.find((variant) => variant?.status !== "inactive") ||
+    const activeVariants = variants.filter((variant) =>
+      variant?.status !== "inactive" && variant?.status !== "out_of_stock",
+    );
+    const inStockVariants = activeVariants.filter((variant) => {
+      const available = variant.availableStock ?? variant.available_stock;
+      const availableStock = available !== undefined && available !== null && available !== ""
+        ? this.toVariantNumber(available, 0)
+        : this.toVariantNumber(variant.stock, 0) - this.toVariantNumber(variant.reservedStock, 0);
+      return availableStock > 0;
+    });
+    const lowestPricedVariant = (items = []) => [...items].sort((left, right) => {
+      const leftPrice = this.hasPayloadValue(left, "salePrice")
+        ? this.toVariantNumber(left.salePrice, Infinity)
+        : this.toVariantNumber(left.price, Infinity);
+      const rightPrice = this.hasPayloadValue(right, "salePrice")
+        ? this.toVariantNumber(right.salePrice, Infinity)
+        : this.toVariantNumber(right.price, Infinity);
+      return leftPrice - rightPrice;
+    })[0];
+
+    return inStockVariants.find((variant) => variant?.isDefault === true) ||
+      lowestPricedVariant(inStockVariants) ||
+      activeVariants.find((variant) => variant?.isDefault === true) ||
+      activeVariants[0] ||
       variants[0] ||
       null;
   }
@@ -3662,6 +3684,27 @@ async getProduct(productId) {
     const variantStock = this.toVariantNumber(variant.stock, 0);
     const variantReservedStock = this.toVariantNumber(variant.reservedStock, 0);
     const variantImages = this.normalizeImages(variant.images || []);
+    const variantId = String(variant._id || variant.id || "");
+    const variantSku = String(variant.sku || "");
+    const selectedVariant = {
+      ...variant,
+      availableStock: Math.max(0, variantStock - variantReservedStock),
+      inStock: Math.max(0, variantStock - variantReservedStock) > 0,
+    };
+    const variants = Array.isArray(product.variants)
+      ? [
+          selectedVariant,
+          ...product.variants.filter((item) => {
+            const itemId = String(item?._id || item?.id || "");
+            const itemSku = String(item?.sku || "");
+            return (
+              (variantId && itemId !== variantId) ||
+              (!variantId && variantSku && itemSku !== variantSku) ||
+              (!variantId && !variantSku && item !== variant)
+            );
+          }),
+        ]
+      : product.variants;
 
     return {
       ...product,
@@ -3672,6 +3715,9 @@ async getProduct(productId) {
       stock: variantStock,
       reservedStock: variantReservedStock,
       availableStock: Math.max(0, variantStock - variantReservedStock),
+      selectedVariant,
+      displayVariant: selectedVariant,
+      variants,
       images: variantImages,
       image: variantImages[0] || "",
       color: variant.attributes?.color || variant.attributes?.Color || product.color,
