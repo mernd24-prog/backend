@@ -320,38 +320,37 @@ class PlatformController {
     res.json(okResponse(result));
   };
 
-  // ── Badges ─────────────────────────────────────────────────────────────────
-
-  createBadge = async (req, res) => {
-    const item = await this.platformService.createBadge(req.body, req);
-    res.status(201).json(okResponse(item, { message: "Badge created successfully." }));
+  createCollection = async (req, res) => {
+    const item = await this.platformService.createCollection(req.body, req);
+    res.status(201).json(okResponse(item, { message: "Collection created successfully." }));
   };
 
-  updateBadge = async (req, res) => {
-    const item = await this.platformService.updateBadge(req.params.badgeId, req.body, req);
-    res.json(okResponse(item, { message: "Badge updated successfully." }));
+  updateCollection = async (req, res) => {
+    const item = await this.platformService.updateCollection(req.params.collectionId, req.body, req);
+    res.json(okResponse(item, { message: "Collection updated successfully." }));
   };
 
-  getBadge = async (req, res) => {
-    const item = await this.platformService.getBadge(req.params.badgeId);
-    res.json(okResponse(item));
+  getCollection = async (req, res) => {
+    res.json(okResponse(await this.platformService.getCollection(req.params.collectionId)));
   };
 
-  listBadges = async (req, res) => {
+  listCollections = async (req, res) => {
     const { page, limit } = getPage(req.query);
-    const result = await this.platformService.listBadges(req.query);
+    const result = await this.platformService.listCollections(req.query);
     res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
   };
 
-  deleteBadge = async (req, res) => {
-    await this.platformService.deleteBadge(req.params.badgeId, req);
-    res.json(okResponse(null, { message: "Badge deleted successfully." }));
+  listPublicCollections = async (req, res) => {
+    const { page, limit } = getPage(req.query);
+    const result = await this.platformService.listCollections(req.query, { publicOnly: true });
+    res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
   };
 
-  listActiveBadges = async (req, res) => {
-    const items = await this.platformService.listActiveBadges();
-    res.json(okResponse(items));
+  deleteCollection = async (req, res) => {
+    await this.platformService.deleteCollection(req.params.collectionId, req);
+    res.json(okResponse(null, { message: "Collection deleted successfully." }));
   };
+
 }
 
 module.exports = { PlatformController };

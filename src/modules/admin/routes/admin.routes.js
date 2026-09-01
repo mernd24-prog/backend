@@ -57,7 +57,6 @@ const {
   updateSellerBankStatusSchema,
   updateSellerOnboardingStatusSchema,
   updateSellerGoLiveSchema,
-  moderationQueueSchema,
   moderateProductSchema,
   listOrdersSchema,
   listPaymentsSchema,
@@ -128,10 +127,6 @@ const {
   reviewBrandSubmissionSchema,
   reviewBrandSubmissionsSchema,
   brandIdSchema,
-  createBadgeSchema,
-  updateBadgeSchema,
-  listBadgesSchema,
-  badgeIdSchema,
   createBatchSchema,
   updateBatchSchema,
   listBatchesSchema,
@@ -144,6 +139,10 @@ const {
   updateProductOptionValueSchema,
   listProductOptionValuesSchema,
   productOptionValueIdSchema,
+  createCollectionSchema,
+  updateCollectionSchema,
+  listCollectionsSchema,
+  collectionIdSchema,
 } = require("../../platform/validation/platform.validation");
 const {
   createProductSchema,
@@ -254,46 +253,6 @@ adminRoutes.delete(
   allowActions(ACTIONS.CATALOG_MANAGE),
   checkInput(brandIdSchema),
   catchErrors(platformController.deleteBrand),
-);
-
-// ── Badges ────────────────────────────────────────────────────────────────────
-adminRoutes.get(
-  "/platform/badges",
-  authenticate,
-  checkInput(listBadgesSchema),
-  catchErrors(platformController.listBadges),
-);
-adminRoutes.get(
-  "/platform/badges/active",
-  authenticate,
-  catchErrors(platformController.listActiveBadges),
-);
-adminRoutes.get(
-  "/platform/badges/:badgeId",
-  authenticate,
-  checkInput(badgeIdSchema),
-  catchErrors(platformController.getBadge),
-);
-adminRoutes.post(
-  "/platform/badges",
-  authenticate,
-  allowActions(ACTIONS.CATALOG_MANAGE),
-  checkInput(createBadgeSchema),
-  catchErrors(platformController.createBadge),
-);
-adminRoutes.patch(
-  "/platform/badges/:badgeId",
-  authenticate,
-  allowActions(ACTIONS.CATALOG_MANAGE),
-  checkInput(updateBadgeSchema),
-  catchErrors(platformController.updateBadge),
-);
-adminRoutes.delete(
-  "/platform/badges/:badgeId",
-  authenticate,
-  allowActions(ACTIONS.CATALOG_MANAGE),
-  checkInput(badgeIdSchema),
-  catchErrors(platformController.deleteBadge),
 );
 
 adminRoutes.get(
@@ -582,11 +541,6 @@ adminRoutes.patch(
   "/sellers/:sellerId/go-live",
   checkInput(updateSellerGoLiveSchema),
   catchErrors(adminController.updateSellerGoLiveStatus),
-);
-adminRoutes.get(
-  "/products/moderation-queue",
-  checkInput(moderationQueueSchema),
-  catchErrors(adminController.moderationQueue),
 );
 adminRoutes.get(
   "/products/prefill",
@@ -1060,6 +1014,12 @@ adminRoutes.post("/platform/product-option-values", checkInput(createProductOpti
 adminRoutes.get("/platform/product-option-values", checkInput(listProductOptionValuesSchema), catchErrors(platformController.listProductOptionValues));
 adminRoutes.patch("/platform/product-option-values/:optionValueId", checkInput(updateProductOptionValueSchema), catchErrors(platformController.updateProductOptionValue));
 adminRoutes.delete("/platform/product-option-values/:optionValueId", checkInput(productOptionValueIdSchema), catchErrors(platformController.deleteProductOptionValue));
+
+adminRoutes.get("/platform/collections", checkInput(listCollectionsSchema), catchErrors(platformController.listCollections));
+adminRoutes.get("/platform/collections/:collectionId", checkInput(collectionIdSchema), catchErrors(platformController.getCollection));
+adminRoutes.post("/platform/collections", checkInput(createCollectionSchema), catchErrors(platformController.createCollection));
+adminRoutes.patch("/platform/collections/:collectionId", checkInput(updateCollectionSchema), catchErrors(platformController.updateCollection));
+adminRoutes.delete("/platform/collections/:collectionId", checkInput(collectionIdSchema), catchErrors(platformController.deleteCollection));
 
 // CMS Routes
 adminRoutes.get("/cms", checkInput(cmsListSchema), catchErrors(cmsController.listPages));

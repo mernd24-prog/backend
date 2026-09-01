@@ -73,6 +73,7 @@ class CollectionsSeed {
       brandKey: c.brandKey || null,
       sortOrder: c.sortOrder,
       featured: c.featured,
+      active: true,
       isActive: true,
       productCount: 0,
       bannerImage: `https://images.unsplash.com/photo-${1472851294608 + c.sortOrder}-062f824d29cc?w=1200`,

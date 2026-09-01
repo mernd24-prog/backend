@@ -76,7 +76,6 @@ const PRODUCT_LIST_PROJECTION = {
   brand: 1,
   productFamilyCode: 1,
   tags: 1,
-  badges: 1,
   price: 1,
   mrp: 1,
   salePrice: 1,
@@ -806,7 +805,6 @@ class ProductService {
         catalog,
         collections,
         tags,
-        badges,
         warehouses,
         organizationsResult,
         sellers,
@@ -817,7 +815,6 @@ class ProductService {
         this.platformService.getCatalogPrefillData({ includeInactive }),
         this.listRawMasterCollection("collections", rawActiveFilter, { sort: { sortOrder: 1, name: 1 } }),
         this.listRawMasterCollection("tags", activeFilter, { sort: { group: 1, name: 1 }, limit: 1000 }),
-        this.listRawMasterCollection("badges", activeFilter, { sort: { type: 1, priority: 1, name: 1 } }),
         WarehouseModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(500).lean(),
         sellerId
           ? sellerOrganizationService.organizationRepository.listBySeller(sellerId)
@@ -928,7 +925,6 @@ class ProductService {
         taxClasses: catalog.taxes || [],
         collections,
         tags,
-        badges,
         warehouses,
         organizations: Array.isArray(organizationsResult)
           ? organizationsResult
@@ -1030,10 +1026,9 @@ class ProductService {
         ? {}
         : { $or: [{ active: true }, { isActive: true }, { active: { $exists: false }, isActive: { $exists: false } }] };
 
-      const [collections, tags, badges, organizationsResult, sellers] = await Promise.all([
+      const [collections, tags, organizationsResult, sellers] = await Promise.all([
         this.listRawMasterCollection("collections", rawActiveFilter, { sort: { sortOrder: 1, name: 1 } }),
         this.listRawMasterCollection("tags", activeFilter, { sort: { group: 1, name: 1 }, limit: 1000 }),
-        this.listRawMasterCollection("badges", activeFilter, { sort: { type: 1, priority: 1, name: 1 } }),
         sellerId
           ? sellerOrganizationService.organizationRepository.listBySeller(sellerId)
           : sellerOrganizationService.organizationRepository.list({ limit: 500 }),
@@ -1051,7 +1046,6 @@ class ProductService {
       return {
         collections,
         tags,
-        badges,
         organizations: Array.isArray(organizationsResult) ? organizationsResult : organizationsResult.items || [],
         sellers: sellers.map((seller) => ({
           ...seller,
@@ -1579,6 +1573,7 @@ class ProductService {
       ),
     };
     payload = await this.normalizeProductCompliance(payload, actor, existingProduct);
+    await this.validateProductReferences(payload, actor, existingProduct);
 
     const categoryKey =
       payload.categoryId || payload.category || existingProduct.categoryId || existingProduct.category;
@@ -2243,6 +2238,9 @@ class ProductService {
 
     if (query.approvalStatus) {
       filter.approvalStatus = query.approvalStatus;
+    }
+    if (query.revisionStatus) {
+      filter.revisionStatus = query.revisionStatus;
     }
 
     this.applyAttributeFilters(filter, query);

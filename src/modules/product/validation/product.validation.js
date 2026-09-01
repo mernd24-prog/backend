@@ -107,15 +107,6 @@ const bundleItemSchema = Joi.object({
   title: optionalString(),
 });
 
-const badgeSchema = Joi.object({
-  type: optionalString(),
-  label: Joi.string().trim().required(),
-  color: optionalString(),
-  bgColor: optionalString(),
-  validFrom: Joi.date().allow(null),
-  validTo: Joi.date().allow(null),
-});
-
 const dimensionsSchema = Joi.object({
   length: optionalPositiveNumber(),
   width: optionalPositiveNumber(),
@@ -225,7 +216,6 @@ const productBodyBase = {
   brand: optionalString(),
   productFamilyCode: optionalString(),
   tags: Joi.array().items(Joi.string().trim()).default([]),
-  badges: Joi.array().items(badgeSchema).default([]),
 
   // Identifiers
   sku: deprecatedRootVariantField(),
@@ -327,6 +317,7 @@ const listProductSchema = Joi.object({
     category_id: Joi.string(),
     status: Joi.string(),
     approvalStatus: Joi.string().valid(...Object.values(PRODUCT_APPROVAL_STATUS)),
+    revisionStatus: Joi.string().valid(...Object.values(PRODUCT_REVISION_STATUS)),
     stockStatus: Joi.string().valid("in_stock", "low_stock", "out_of_stock", "all", ""),
     productType: Joi.string().valid(...Object.values(PRODUCT_TYPE)),
     hasVariants: Joi.boolean(),

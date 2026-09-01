@@ -319,6 +319,12 @@ class OrderRepository {
     return rows;
   }
 
+  async listCancellationsByOrderId(orderId) {
+    return this.optionalTableRows("order_cancellations", (query) =>
+      query.where("order_id", orderId).orderBy("created_at", "desc"),
+    );
+  }
+
   async findByIdAndBuyer(orderId, buyerId) {
     const [order] = await knex("orders")
       .where({ id: orderId, buyer_id: buyerId })
@@ -485,6 +491,9 @@ class OrderRepository {
             awb_number: trackingNumber || existing.awb_number,
             tracking_number: trackingNumber || existing.tracking_number,
             ship_to_snapshot: payload.shipToSnapshot || existing.ship_to_snapshot || {},
+            package_snapshot: payload.packageSnapshot
+              ? knex.raw("COALESCE(package_snapshot, '{}'::jsonb) || ?::jsonb", [JSON.stringify(payload.packageSnapshot)])
+              : existing.package_snapshot || {},
             metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [
               JSON.stringify({
                 ...(payload.metadata || {}),

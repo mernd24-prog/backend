@@ -182,13 +182,6 @@ class AdminController {
     res.json(okResponse(seller));
   };
 
-  moderationQueue = async (req, res) => {
-    const result = await this.adminService.listProductModerationQueue(
-      req.query,
-    );
-    res.json(okResponse(result.items, { total: result.total }));
-  };
-
   moderateProduct = async (req, res) => {
     const actor = getCurrentUser(req);
     const product = await this.adminService.moderateProduct(

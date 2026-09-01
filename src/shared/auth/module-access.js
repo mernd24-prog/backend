@@ -287,7 +287,6 @@ const MODULE_ALIASES = {
   preferences: "admin",
 
   // Platform settings
-  badges: "platform",
   "api-keys": "admin",
   api_keys: "admin",
   "feature-flags": "admin",

@@ -786,64 +786,37 @@ const productOptionValueIdSchema = Joi.object({
 
 // ── Badge Schemas ─────────────────────────────────────────────────────────────
 
-const hexColor = () =>
-  Joi.string()
-    .trim()
-    .pattern(/^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/)
-    .optional()
-    .allow("")
-    .messages({ "string.pattern.base": "Must be a valid hex color (e.g. #FF0000)." });
+const collectionBody = {
+  name: Joi.string().trim().min(2).max(120).required(),
+  slug: Joi.string().trim().lowercase().pattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).allow(""),
+  type: Joi.string().trim().max(60).default("custom"),
+  description: Joi.string().trim().max(1000).allow(""),
+  bannerImage: Joi.string().trim().allow(""),
+  thumbnailImage: Joi.string().trim().allow(""),
+  categories: Joi.array().items(Joi.string().trim()).default([]),
+  tags: Joi.array().items(Joi.string().trim()).default([]),
+  brandKey: Joi.string().trim().allow("", null),
+  sortOrder: Joi.number().integer().min(0).default(0),
+  featured: Joi.boolean().default(false),
+  active: Joi.boolean().default(true),
+  startsAt: Joi.date().iso().allow(null, ""),
+  endsAt: Joi.date().iso().allow(null, ""),
+};
 
-const createBadgeSchema = Joi.object({
-  body: Joi.object({
-    name: v.name({ label: "Badge name", max: 100 }),
-    label: Joi.string().trim().min(1).max(100).required(),
-    type: Joi.string().valid("product", "seller", "buyer", "custom").default("product"),
-    icon: Joi.string().trim().max(100).optional().allow(""),
-    color: hexColor(),
-    bgColor: hexColor(),
-    description: v.text({ max: 500 }),
-    priority: Joi.number().integer().min(0).default(0),
-    active: Joi.boolean().default(true),
-    validFrom: Joi.date().iso().allow(null).optional(),
-    validTo: Joi.date().iso().allow(null).optional(),
-  }).required(),
-  query: Joi.object({}).required(),
+const createCollectionSchema = Joi.object({
+  body: Joi.object(collectionBody).required(), query: Joi.object({}).required(), params: Joi.object({}).required(),
+});
+const updateCollectionSchema = Joi.object({
+  body: Joi.object(Object.fromEntries(Object.entries(collectionBody).map(([key, schema]) => [key, schema.optional()]))).min(1).required(),
+  query: Joi.object({}).required(), params: Joi.object({ collectionId: Joi.string().required() }).required(),
+});
+const listCollectionsSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: listQuery.concat(Joi.object({ type: Joi.string(), featured: Joi.boolean(), active: Joi.boolean() })),
   params: Joi.object({}).required(),
 });
-
-const updateBadgeSchema = Joi.object({
-  body: Joi.object({
-    name: Joi.string().trim().min(1).max(100),
-    label: Joi.string().trim().min(1).max(100),
-    type: Joi.string().valid("product", "seller", "buyer", "custom"),
-    icon: Joi.string().trim().max(100).allow(""),
-    color: hexColor(),
-    bgColor: hexColor(),
-    description: Joi.string().trim().max(500).allow(""),
-    priority: Joi.number().integer().min(0),
-    active: Joi.boolean(),
-    validFrom: Joi.date().iso().allow(null),
-    validTo: Joi.date().iso().allow(null),
-  }).required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({ badgeId: Joi.string().required() }).required(),
-});
-
-const listBadgesSchema = Joi.object({
-  body: Joi.object({}).required(),
-  query: listQuery.concat(
-    Joi.object({
-      type: Joi.string().valid("product", "seller", "buyer", "custom").optional(),
-    }),
-  ),
-  params: Joi.object({}).required(),
-});
-
-const badgeIdSchema = Joi.object({
-  body: Joi.object({}).required(),
-  query: Joi.object({}).required(),
-  params: Joi.object({ badgeId: Joi.string().required() }).required(),
+const collectionIdSchema = Joi.object({
+  body: Joi.object({}).required(), query: Joi.object({}).required(), params: Joi.object({ collectionId: Joi.string().required() }).required(),
 });
 
 module.exports = {
@@ -895,8 +868,8 @@ module.exports = {
   updateProductOptionValueSchema,
   listProductOptionValuesSchema,
   productOptionValueIdSchema,
-  createBadgeSchema,
-  updateBadgeSchema,
-  listBadgesSchema,
-  badgeIdSchema,
+  createCollectionSchema,
+  updateCollectionSchema,
+  listCollectionsSchema,
+  collectionIdSchema,
 };

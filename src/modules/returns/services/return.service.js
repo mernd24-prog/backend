@@ -2531,7 +2531,24 @@ class ReturnServiceClass {
       ReturnModel.find(filter).sort({ [sortKey]: sortDir }).skip(offset).limit(limit).lean(),
       ReturnModel.countDocuments(filter),
     ]);
-    return { items, total, limit, offset };
+
+    const orderIds = [...new Set((items || []).map((it) => it.orderId).filter(Boolean))];
+    let orderNumberMap = new Map();
+    if (orderIds.length) {
+      const rows = await this.orderRepository.findOrderNumbersByIds(orderIds);
+      orderNumberMap = new Map((rows || []).map((r) => [String(r.id), r.order_number]));
+    }
+
+    const enrichedItems = (items || []).map((item) => {
+      const resolvedOrderNumber = item.order_number || orderNumberMap.get(String(item.orderId)) || item.orderNumber || null;
+      return {
+        ...item,
+        order_number: resolvedOrderNumber,
+        orderNumber: resolvedOrderNumber,
+      };
+    });
+
+    return { items: enrichedItems, total, limit, offset };
   }
 
   async publishReturnEvent(eventName, returnRequest, actor = {}, extra = {}) {

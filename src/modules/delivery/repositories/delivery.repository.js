@@ -243,6 +243,17 @@ class DeliveryRepository {
     return { ...shipment, trackingEvents };
   }
 
+  async updateShipmentFulfillmentSnapshot(shipmentId, fulfillmentItems = []) {
+    const shippableItems = fulfillmentItems.filter((item) => Number(item.quantity || 0) > 0);
+    const excludedItems = fulfillmentItems.filter((item) => Number(item.excludedQuantity || 0) > 0);
+    const [updated] = await knex("shipments").where("id", shipmentId).update({
+      package_snapshot: knex.raw("COALESCE(package_snapshot, '{}'::jsonb) || ?::jsonb", [JSON.stringify({ items: shippableItems })]),
+      metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({ fulfillmentItems, excludedRequestedQuantities: excludedItems })]),
+      updated_at: knex.fn.now(),
+    }).returning("*");
+    return updated || null;
+  }
+
   async findOrderDeliveryProgress(orderId) {
     const [order, items, shipments] = await Promise.all([
       knex("orders").where("id", orderId).first(),

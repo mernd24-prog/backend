@@ -223,12 +223,18 @@ class OrderService {
     const metadata = this.normalizeJson(order.metadata, {});
     const tracking = trackingInfo || metadata.tracking || {};
     const itemsBySeller = this.groupOrderItemsBySeller(order.items || []);
+    const fulfillmentItems = await this.getRequestAwareFulfillmentItems(order);
+    const fulfillmentById = new Map(fulfillmentItems.map((item) => [String(item.orderItemId), item]));
     const actorIsSeller = ["seller", "seller-admin", "seller-sub-admin"].includes(actor.role);
     const actorSellerId = String(actor.ownerSellerId || actor.sellerId || actor.userId || "");
 
     for (const group of itemsBySeller.values()) {
       const { sellerId, organizationId, items: sellerItems } = group;
       if (actorIsSeller && String(sellerId) !== actorSellerId) continue;
+      const shippableItems = sellerItems
+        .map((item) => fulfillmentById.get(String(item.id)))
+        .filter((item) => item && item.quantity > 0);
+      if (!shippableItems.length) continue;
       const fulfillment = this.getFulfillmentSnapshotForItems(sellerItems);
       await this.orderRepository.createShipment({
         orderId,
@@ -241,6 +247,7 @@ class OrderService {
         cod: order.payment_provider === PAYMENT_PROVIDER.COD,
         provider: tracking.carrierName ? "manual" : undefined,
         shipToSnapshot: this.normalizeJson(order.shipping_address, {}),
+        packageSnapshot: { items: shippableItems },
         labelData: {
           type: "packing_box_label",
           orderId,
@@ -254,6 +261,8 @@ class OrderService {
           orderStatus: nextStatus,
           organizationId: organizationId || null,
           orderItemIds: sellerItems.map((item) => item.id).filter(Boolean),
+          fulfillmentItems: sellerItems.map((item) => fulfillmentById.get(String(item.id))).filter(Boolean),
+          excludedRequestedQuantities: sellerItems.map((item) => fulfillmentById.get(String(item.id))).filter((item) => item?.excludedQuantity > 0),
         },
         idempotencyKey: `order-status:${orderId}:${sellerId}:${organizationId || "default"}`,
         createdBy: actor.userId || null,
@@ -261,6 +270,51 @@ class OrderService {
         note: `Order moved to ${nextStatus}`,
       });
     }
+  }
+
+  async getRequestAwareFulfillmentItems(order) {
+    const [cancellations, returns] = await Promise.all([
+      this.orderRepository.listCancellationsByOrderId(order.id),
+      ReturnModel.find({ orderId: String(order.id), status: { $nin: ["rejected", "qc_failure_upheld"] } }).lean(),
+    ]);
+    const blocked = new Map();
+    const add = (itemId, quantity) => {
+      const key = String(itemId || "");
+      if (key) blocked.set(key, (blocked.get(key) || 0) + Math.max(Number(quantity || 0), 0));
+    };
+    cancellations
+      .filter((request) => !["completed", "failed", "rejected"].includes(String(request.status || "").toLowerCase()))
+      .forEach((request) => (request.items || []).forEach((item) => add(item.orderItemId || item.order_item_id, item.requestedQuantity || item.requested_quantity || item.quantity)));
+    returns.forEach((request) => {
+      const status = String(request.status || "").toLowerCase();
+      const refundStatus = String(request.refund?.status || "").toLowerCase();
+      if (status === "closed" && !["completed", "not_required"].includes(refundStatus)) return;
+      const decided = !["requested", "pending", "under_review"].includes(status);
+      (request.items || []).forEach((item) => add(item.orderItemId, decided && item.approvedQuantity !== undefined ? item.approvedQuantity : item.requestedQuantity ?? item.quantity));
+    });
+    return (order.items || []).map((item) => {
+      const ordered = Math.max(Number(item.quantity || 0), 0);
+      const cancelled = Math.max(Number(item.cancelled_quantity || item.cancelledQuantity || 0), 0);
+      const requested = Math.max(Number(blocked.get(String(item.id)) || 0), 0);
+      return {
+        orderItemId: item.id,
+        productId: item.product_id || item.productId,
+        variantId: item.variant_id || item.variantId || null,
+        orderedQuantity: ordered,
+        excludedQuantity: Math.min(cancelled + requested, ordered),
+        quantity: Math.max(ordered - cancelled - requested, 0),
+      };
+    });
+  }
+
+  async hasPendingFulfillmentRequests(orderId) {
+    const [cancellations, returns] = await Promise.all([
+      this.orderRepository.listCancellationsByOrderId(orderId),
+      ReturnModel.find({ orderId: String(orderId), status: { $in: ["requested", "pending", "under_review"] } }).select("_id").lean(),
+    ]);
+    return cancellations.some((request) =>
+      !["completed", "failed", "rejected"].includes(String(request.status || "").toLowerCase()),
+    ) || returns.length > 0;
   }
 
   async ensureShipmentsForOrder(orderId, actor = {}, reason = "order_created") {
@@ -1229,6 +1283,18 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
     });
     const shipmentMatchesItem = (shipment = {}, item = {}) => {
       const shipmentMetadata = this.normalizeJson(shipment.metadata, {});
+      const packageSnapshot = this.normalizeJson(shipment.package_snapshot || shipment.packageSnapshot, {});
+      const fulfillmentItems = Array.isArray(shipmentMetadata.fulfillmentItems)
+        ? shipmentMetadata.fulfillmentItems
+        : Array.isArray(packageSnapshot.items)
+          ? packageSnapshot.items
+          : [];
+      if (fulfillmentItems.length) {
+        const manifestItem = fulfillmentItems.find((entry) =>
+          String(entry.orderItemId || entry.order_item_id || "") === String(item.id),
+        );
+        return Boolean(manifestItem && Number(manifestItem.quantity || 0) > 0);
+      }
       const shipmentItemIds = Array.isArray(shipmentMetadata.orderItemIds)
         ? shipmentMetadata.orderItemIds.map(String)
         : [];
@@ -1254,6 +1320,16 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
       const itemCancellations = (relations.cancellations || []).filter((cancellation) =>
         cancellationMatchesItem(cancellation, item.id),
       );
+      const latestCancellation = itemCancellations[0] || null;
+      const itemCancellationStatus = latestCancellation
+        ? latestCancellation.status === "requested"
+          ? "cancellation_requested"
+          : latestCancellation.status === "rejected"
+            ? null
+            : latestCancellation.status === "completed"
+              ? (item.cancellation_status || "cancelled")
+              : "cancellation_approved"
+        : null;
       const itemReturn = returnRequests.find((returnRequest) => returnMatchesItem(returnRequest, item));
       const itemReturnStatus = itemReturn ? resolveReturnDisplayStatus(itemReturn) : null;
       const forwardItemStatus = mostAdvancedForwardStatus([
@@ -1329,6 +1405,7 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
         } : null,
         effective_status:
           item.cancellation_status ||
+          itemCancellationStatus ||
           itemReturnStatus ||
           item.return_status ||
           forwardItemStatus,
@@ -1596,6 +1673,23 @@ const sellerPayoutAmount = Number(
       (order.payment_provider === PAYMENT_PROVIDER.COD && effectivePaymentStatus === PAYMENT_STATUS.AUTHORIZED);
     if ((nextStatus === ORDER_STATUS.CONFIRMED || fulfillmentStatuses.includes(nextStatus)) && !paidForFulfillment) {
       throw new AppError("Payment must be completed before this order can be confirmed, packed, or shipped", 409);
+    }
+
+    const transitStatuses = [ORDER_STATUS.SHIPPED, ORDER_STATUS.OUT_FOR_DELIVERY, ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED];
+    if (transitStatuses.includes(nextStatus)) {
+      const fulfillmentItems = await this.getRequestAwareFulfillmentItems(order);
+      const actorIsSeller = ["seller", "seller-admin", "seller-sub-admin"].includes(actor.role);
+      const actorSellerId = String(actor.ownerSellerId || actor.sellerId || actor.userId || "");
+      const relevantItemIds = new Set((order.items || [])
+        .filter((item) => !actorIsSeller || String(item.seller_id || item.sellerId || "") === actorSellerId)
+        .map((item) => String(item.id)));
+      const hasShippableQuantity = fulfillmentItems.some((item) => relevantItemIds.has(String(item.orderItemId)) && Number(item.quantity || 0) > 0);
+      if (!hasShippableQuantity) {
+        throw new AppError("All relevant item quantities have an active cancellation or return request and cannot move to transit", 409);
+      }
+      if ([ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED].includes(nextStatus) && await this.hasPendingFulfillmentRequests(orderId)) {
+        throw new AppError("The whole order cannot be completed while an item cancellation or return request is pending", 409);
+      }
     }
 
     if (fulfillmentStatuses.includes(nextStatus)) {

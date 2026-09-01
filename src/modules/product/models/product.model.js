@@ -147,18 +147,6 @@ const bundleItemSchema = new mongoose.Schema(
   { _id: true },
 );
 
-const badgeSchema = new mongoose.Schema(
-  {
-    type: { type: String, trim: true },
-    label: { type: String, trim: true, required: true },
-    color: { type: String, trim: true, default: "#E53E3E" },
-    bgColor: { type: String, trim: true, default: "#FFF5F5" },
-    validFrom: { type: Date },
-    validTo: { type: Date },
-  },
-  { _id: true },
-);
-
 const shippingSchema = new mongoose.Schema(
   {
     freeShipping: { type: Boolean, default: false },
@@ -286,7 +274,6 @@ const productSchema = new mongoose.Schema(
     brand: { type: String, trim: true, index: true },
     productFamilyCode: { type: String, index: true },
     tags: [{ type: String, trim: true, index: true }],
-    badges: [badgeSchema],
 
     // ── Pricing (root-level / simple product)
     price: { type: Number, required: true, min: 0, index: true },

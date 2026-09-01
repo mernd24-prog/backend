@@ -4,7 +4,6 @@ const SIDEBAR_MODULES = [
   { moduleName: "Catalog Management", moduleKey: "catalog-management", moduleSlug: "catalog-management", icon: "MdInventory", moduleType: "group", order: 10, parentModule: null, requiredModule: "products" },
   { moduleName: "Products", moduleKey: "products-menu", moduleSlug: "products-menu", icon: "MdListAlt", moduleType: "group", order: 11, parentModule: "catalog-management", requiredModule: "products" },
   { moduleName: "All Products", moduleKey: "product-catalog", moduleSlug: "product-catalog", icon: "MdViewList", routePath: "/app/product-catalog", moduleType: "page", order: 12, parentModule: "products-menu", requiredModule: "products" },
-  { moduleName: "Product Moderation Queue", moduleKey: "product-moderation-queue", moduleSlug: "product-moderation-queue", icon: "MdFactCheck", routePath: "/app/product-moderation-queue", moduleType: "page", order: 14, parentModule: "products-menu", requiredModule: "products" },
   // Add Product is opened from All Products. Keep the route/RBAC record for
   // deep links, but do not duplicate the Product Catalog action in navigation.
   { moduleName: "Add Product", moduleKey: "add-product", moduleSlug: "add-product", icon: "MdAddBox", routePath: "/app/product-catalog/form", moduleType: "page", order: 13, parentModule: "products-menu", requiredModule: "products", isVisibleInSidebar: false },
@@ -27,7 +26,6 @@ const SIDEBAR_MODULES = [
   { moduleName: "Orders", moduleKey: "orders", moduleSlug: "orders", icon: "MdReceipt", routePath: "/app/orders", moduleType: "page", order: 71, parentModule: "orders-management", requiredModule: "orders" },
   { moduleName: "Checkout Quotes", moduleKey: "checkout-quote", moduleSlug: "checkout-quote", icon: "MdCalculate", routePath: "/app/checkout-quote", moduleType: "page", order: 72, parentModule: "orders-management", requiredModule: "orders" },
   { moduleName: "Abandoned Carts", moduleKey: "carts", moduleSlug: "carts", icon: "MdShoppingBag", routePath: "/app/carts", moduleType: "page", order: 73, parentModule: "orders-management", requiredModule: "carts" },
-  { moduleName: "Subscription Orders", moduleKey: "subscription-orders", moduleSlug: "subscription-orders", icon: "MdSubscriptions", routePath: "/app/subscription-orders", moduleType: "page", order: 74, parentModule: "orders-management", requiredModule: "subscriptions" },
 
   { moduleName: "Payments & Finance", moduleKey: "payments-finance", moduleSlug: "payments-finance", icon: "MdPayment", moduleType: "group", order: 80, parentModule: null, requiredModule: "payments" },
   { moduleName: "Payments", moduleKey: "payments", moduleSlug: "payments", icon: "MdPayment", routePath: "/app/payments", moduleType: "page", order: 81, parentModule: "payments-finance", requiredModule: "payments" },
@@ -111,7 +109,6 @@ const SIDEBAR_MODULES = [
   { moduleName: "Auth Testimonials", moduleKey: "auth-testimonials", moduleSlug: "auth-testimonials", icon: "MdReviews", routePath: "/app/auth-testimonials", moduleType: "page", order: 193, parentModule: "settings-menu", requiredModule: "cms_pages" },
 
   // Catalog Masters additions
-  { moduleName: "Badges", moduleKey: "badges", moduleSlug: "badges", icon: "MdMilitaryTech", routePath: "/app/badges", moduleType: "page", order: 202, parentModule: "catalog-masters", requiredModule: "badges" },
 
   // Users & Access additions
   { moduleName: "Seller Sub-Admins", moduleKey: "seller-sub-admins", moduleSlug: "seller-sub-admins", icon: "MdSupervisorAccount", routePath: "/app/seller-sub-admins", moduleType: "page", order: 214, parentModule: "users-access", requiredModule: "sellers" },

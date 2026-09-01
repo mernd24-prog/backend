@@ -35,33 +35,6 @@ function invalidationReasonForUserPayload(payload = {}) {
   return null;
 }
 
-function escapeRegExp(value = "") {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function buildCreatedAtRange({ dateFrom, dateTo, createdFrom, createdTo } = {}) {
-  const from = dateFrom || createdFrom;
-  const to = dateTo || createdTo;
-  const createdAt = {};
-
-  if (from) {
-    const start = new Date(from);
-    if (!Number.isNaN(start.getTime())) {
-      start.setHours(0, 0, 0, 0);
-      createdAt.$gte = start;
-    }
-  }
-  if (to) {
-    const end = new Date(to);
-    if (!Number.isNaN(end.getTime())) {
-      end.setHours(23, 59, 59, 999);
-      createdAt.$lte = end;
-    }
-  }
-
-  return Object.keys(createdAt).length ? createdAt : null;
-}
-
 class AdminRepository {
   money(value) {
     return Number(value || 0);
@@ -300,6 +273,7 @@ class AdminRepository {
     const recentOrders = recentOrdersRows.map((order) => ({
       id: order.id,
       orderNumber: order.order_number,
+      order_number: order.order_number,
       buyerId: order.buyer_id,
       customerName: buyerNames.get(String(order.buyer_id)) || order.buyer_id,
       status: order.status,
@@ -578,74 +552,6 @@ class AdminRepository {
     return rows[0] || null;
   }
 
-  async listProductsForModeration({
-    status = "pending_approval",
-    category = null,
-    q = "",
-    keyWord = "",
-    search = "",
-    sellerId = null,
-    productType = null,
-    dateFrom = null,
-    dateTo = null,
-    createdFrom = null,
-    createdTo = null,
-    limit = 50,
-    page = 1,
-    sortBy = "createdAt",
-    sortDir = "desc",
-  } = {}) {
-    const filter = status === "change_pending"
-      ? { revisionStatus: "change_pending" }
-      : status === "pending_approval" || status === "pending"
-        ? { approvalStatus: "pending" }
-        : status === "rejected"
-          ? { approvalStatus: "rejected" }
-          : status === "approved"
-            ? { approvalStatus: "approved" }
-            : { status };
-    if (category) {
-      filter.category = category;
-    }
-    if (sellerId) filter.sellerId = sellerId;
-    if (productType) filter.productType = productType;
-
-    const searchTerm = q || keyWord || search;
-    if (searchTerm) {
-      const regex = new RegExp(escapeRegExp(searchTerm), "i");
-      filter.$or = [
-        { title: regex },
-        { description: regex },
-        { sku: regex },
-        { brand: regex },
-        { tags: regex },
-      ];
-    }
-
-    const createdAt = buildCreatedAtRange({ dateFrom, dateTo, createdFrom, createdTo });
-    if (createdAt) filter.createdAt = createdAt;
-
-    const direction = sortDir === "asc" ? 1 : -1;
-    const sortMap = {
-      price_asc: { price: 1 },
-      price_desc: { price: -1 },
-      newest: { createdAt: -1 },
-      oldest: { createdAt: 1 },
-      title: { title: direction },
-      sku: { sku: direction },
-      stock: { stock: direction },
-      createdAt: { createdAt: direction },
-      updatedAt: { updatedAt: direction },
-    };
-    const sort = sortMap[sortBy] || { createdAt: -1 };
-    const skip = (Number(page) - 1) * Number(limit);
-    const [items, total] = await Promise.all([
-      ProductModel.find(filter).sort(sort).skip(skip).limit(Number(limit)),
-      ProductModel.countDocuments(filter),
-    ]);
-    return { items, total };
-  }
-
   async listOrders({
     status = null,
     paymentStatus = null,
@@ -835,6 +741,8 @@ class AdminRepository {
 
       return {
         ...order,
+        orderNumber: order.order_number || order.orderNumber || null,
+        order_number: order.order_number || order.orderNumber || null,
         sellerId,
         seller_id: sellerId,
         sellerName: sellerNames.get(String(sellerId)) || nameFromSnapshot(sellerSnapshot) || null,

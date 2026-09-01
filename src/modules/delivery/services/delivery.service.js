@@ -17,6 +17,7 @@ const { sellerChargeSettingsService } = require("../../seller/services/seller-ch
 const { ShippingProfilesService } = require("./shipping-profiles.service");
 const { settlementLifecycleService } = require("../../seller/services/settlement-lifecycle.service");
 const { ReturnModel } = require("../../returns/models/return.model");
+const { knex } = require("../../../infrastructure/postgres/postgres-client");
 
 const shippingProfilesService = new ShippingProfilesService();
 
@@ -232,6 +233,61 @@ class DeliveryService {
     return actor.ownerSellerId || actor.sellerId || actor.userId;
   }
 
+  async getForwardFulfillmentItems(order, sellerId, organizationId = null) {
+    const [cancellations, returns] = await Promise.all([
+      knex("order_cancellations").where("order_id", order.id),
+      ReturnModel.find({ orderId: order.id, status: { $nin: ["rejected", "qc_failure_upheld"] } }).lean(),
+    ]);
+    const blocked = new Map();
+    const addBlocked = (itemId, quantity) => {
+      const key = String(itemId || "");
+      if (!key) return;
+      blocked.set(key, (blocked.get(key) || 0) + Math.max(Number(quantity || 0), 0));
+    };
+
+    cancellations
+      .filter((request) => !["completed", "failed", "rejected"].includes(String(request.status || "").toLowerCase()))
+      .forEach((request) => (request.items || []).forEach((item) => addBlocked(
+        item.orderItemId || item.order_item_id,
+        item.requestedQuantity || item.requested_quantity || item.quantity,
+      )));
+    returns.forEach((request) => {
+      const status = String(request.status || "").toLowerCase();
+      const refundStatus = String(request.refund?.status || "").toLowerCase();
+      if (status === "closed" && !["completed", "not_required"].includes(refundStatus)) return;
+      const hasApprovalDecision = !["requested", "pending", "under_review"].includes(status);
+      (request.items || []).forEach((item) => {
+        const quantity = hasApprovalDecision && item.approvedQuantity !== undefined
+          ? item.approvedQuantity
+          : item.requestedQuantity ?? item.quantity;
+        addBlocked(item.orderItemId, quantity);
+      });
+    });
+
+    return (order.items || [])
+      .filter((item) => String(item.seller_id || item.sellerId || "") === String(sellerId || ""))
+      .filter((item) => !organizationId || String(item.organization_id || item.organizationId || "") === String(organizationId))
+      .map((item) => {
+        const ordered = Math.max(Number(item.quantity || 0), 0);
+        const alreadyCancelled = Math.max(Number(item.cancelled_quantity || item.cancelledQuantity || 0), 0);
+        const blockedByRequest = Math.max(Number(blocked.get(String(item.id)) || 0), 0);
+        return {
+          orderItemId: item.id,
+          productId: item.product_id || item.productId,
+          variantId: item.variant_id || item.variantId || null,
+          orderedQuantity: ordered,
+          excludedQuantity: Math.min(alreadyCancelled + blockedByRequest, ordered),
+          quantity: Math.max(ordered - alreadyCancelled - blockedByRequest, 0),
+        };
+      });
+  }
+
+  assertHasFulfillableQuantity(items = []) {
+    if (!items.some((item) => Number(item.quantity || 0) > 0)) {
+      throw new AppError("All item quantities in this shipment have an active cancellation or return request and cannot move to transit", 409);
+    }
+  }
+
   async createShipment(payload, actor) {
     const order = await this.orderRepository.findByIdWithItems(payload.orderId);
     if (!order) {
@@ -265,6 +321,8 @@ class DeliveryService {
       throw new AppError("You can create shipments only for your seller account", 403);
     }
     const organizationId = this.resolveShipmentOrganizationId(order, sellerId, payload, actor);
+    const fulfillmentItems = await this.getForwardFulfillmentItems(order, sellerId, organizationId);
+    this.assertHasFulfillableQuantity(fulfillmentItems);
     const dealFulfillment = this.resolveDealFulfillment(order, sellerId, payload);
     const initialStatus = this.resolveInitialShipmentStatus(payload.status, order.status);
     const shipment = await this.deliveryRepository.createShipment({
@@ -283,6 +341,8 @@ class DeliveryService {
       dealId: dealFulfillment.dealId || payload.dealId || null,
       fulfillmentModel: dealFulfillment.fulfillmentModel || payload.fulfillmentModel || null,
       deliveryProofSnapshot: payload.deliveryProofSnapshot || {},
+      packageSnapshot: { ...(payload.packageSnapshot || {}), items: fulfillmentItems.filter((item) => item.quantity > 0) },
+      metadata: { ...(payload.metadata || {}), fulfillmentItems, excludedRequestedQuantities: fulfillmentItems.filter((item) => item.excludedQuantity > 0) },
       createdBy: actor.userId,
       updatedBy: actor.userId,
     });
@@ -481,6 +541,11 @@ class DeliveryService {
       payload.shippedAt = automaticEventTime;
     }
     if (payload.status === DELIVERY_STATUS.IN_TRANSIT) {
+      const orderWithItems = await this.orderRepository.findByIdWithItems(shipment.order_id);
+      const organizationId = shipment.organization_id || shipment.metadata?.organizationId || null;
+      const fulfillmentItems = await this.getForwardFulfillmentItems(orderWithItems, shipment.seller_id, organizationId);
+      this.assertHasFulfillableQuantity(fulfillmentItems);
+      await this.deliveryRepository.updateShipmentFulfillmentSnapshot(shipmentId, fulfillmentItems);
       if (!String(payload.courierName || shipment.courier_name || "").trim()) throw new AppError("Courier name is required when shipping", 400);
       if (!String(payload.awbNumber || payload.trackingNumber || shipment.awb_number || shipment.tracking_number || "").trim()) {
         throw new AppError("AWB or tracking number is required when shipping", 400);
@@ -595,6 +660,16 @@ class DeliveryService {
   async getForwardDeliveryProgress(orderId) {
     const { order, items, shipments: forwardShipments } =
       await this.deliveryRepository.findOrderDeliveryProgress(orderId);
+    const [pendingCancellations, pendingReturns] = await Promise.all([
+      knex("order_cancellations")
+        .where("order_id", orderId)
+        .whereNotIn("status", ["completed", "failed", "rejected"]),
+      ReturnModel.find({
+        orderId: String(orderId),
+        status: { $in: ["requested", "pending", "under_review"] },
+      }).select("_id").lean(),
+    ]);
+    const hasPendingItemRequests = pendingCancellations.length > 0 || pendingReturns.length > 0;
     const groupKey = (sellerId, organizationId = null) => `${String(sellerId)}:${organizationId || "default"}`;
     const sellerIds = new Set(
       (items || [])
@@ -617,10 +692,11 @@ class DeliveryService {
         })
         .filter(Boolean),
     );
-    const allDelivered = sellerIds.size > 0 && Array.from(sellerIds).every((sellerId) => deliveredSellerIds.has(sellerId));
+    const allDelivered = !hasPendingItemRequests && sellerIds.size > 0 && Array.from(sellerIds).every((sellerId) => deliveredSellerIds.has(sellerId));
     return {
       order,
       allDelivered,
+      hasPendingItemRequests,
       aggregateDeliveryStatus: allDelivered
         ? DELIVERY_STATUS.DELIVERED
         : "partially_delivered",

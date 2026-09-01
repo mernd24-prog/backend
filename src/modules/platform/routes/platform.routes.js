@@ -52,10 +52,10 @@ const {
   updateProductReviewSchema,
   bulkUpdateProductReviewsSchema,
   productReviewIdSchema,
-  createBadgeSchema,
-  updateBadgeSchema,
-  listBadgesSchema,
-  badgeIdSchema,
+  createCollectionSchema,
+  updateCollectionSchema,
+  listCollectionsSchema,
+  collectionIdSchema,
 } = require("../validation/platform.validation");
 
 const platformRoutes = express.Router();
@@ -310,31 +310,10 @@ platformRoutes.delete(
   catchErrors(platformController.deleteProductReview),
 );
 
-// ── Badges (public read, auth for write) ─────────────────────────────────────
-
-platformRoutes.get("/badges", checkInput(listBadgesSchema), catchErrors(platformController.listBadges));
-platformRoutes.get("/badges/active", catchErrors(platformController.listActiveBadges));
-platformRoutes.get("/badges/:badgeId", checkInput(badgeIdSchema), catchErrors(platformController.getBadge));
-platformRoutes.post(
-  "/badges",
-  authenticate,
-  allowActions(ACTIONS.CATALOG_MANAGE),
-  checkInput(createBadgeSchema),
-  catchErrors(platformController.createBadge),
-);
-platformRoutes.patch(
-  "/badges/:badgeId",
-  authenticate,
-  allowActions(ACTIONS.CATALOG_MANAGE),
-  checkInput(updateBadgeSchema),
-  catchErrors(platformController.updateBadge),
-);
-platformRoutes.delete(
-  "/badges/:badgeId",
-  authenticate,
-  allowActions(ACTIONS.CATALOG_MANAGE),
-  checkInput(badgeIdSchema),
-  catchErrors(platformController.deleteBadge),
-);
+platformRoutes.get("/collections", checkInput(listCollectionsSchema), catchErrors(platformController.listPublicCollections));
+platformRoutes.get("/collections/:collectionId", checkInput(collectionIdSchema), catchErrors(platformController.getCollection));
+platformRoutes.post("/collections", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(createCollectionSchema), catchErrors(platformController.createCollection));
+platformRoutes.patch("/collections/:collectionId", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(updateCollectionSchema), catchErrors(platformController.updateCollection));
+platformRoutes.delete("/collections/:collectionId", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(collectionIdSchema), catchErrors(platformController.deleteCollection));
 
 module.exports = { platformRoutes, cmsRoutes };

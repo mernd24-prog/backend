@@ -69,16 +69,6 @@ const INVENTORY_TRANSACTION_TYPE = {
   TRANSFER: "transfer",
 };
 
-const PRODUCT_BADGE_TYPE = {
-  NEW: "new",
-  SALE: "sale",
-  HOT: "hot",
-  FEATURED: "featured",
-  LIMITED: "limited",
-  BESTSELLER: "bestseller",
-  EXCLUSIVE: "exclusive",
-};
-
 const ORDER_STATUS = {
   PENDING_PAYMENT: "pending_payment",
   PAYMENT_FAILED: "payment_failed",
@@ -164,7 +154,6 @@ module.exports = {
   DIGITAL_FILE_TYPE,
   SUBSCRIPTION_BILLING_CYCLE,
   INVENTORY_TRANSACTION_TYPE,
-  PRODUCT_BADGE_TYPE,
   ORDER_STATUS,
   PAYMENT_STATUS,
   PAYMENT_PROVIDER,

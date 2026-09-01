@@ -317,10 +317,6 @@ async function ensureProduct(context) {
     brand: brand.name,
     productFamilyCode: PRODUCT_FAMILY_CODE,
     tags: ["backpack", "laptop bag", "travel backpack", "water resistant", "cabin luggage"],
-    badges: [
-      { type: "new", label: "New Arrival", color: "#166534", bgColor: "#DCFCE7", validFrom: now },
-      { type: "featured", label: "Tested for Travel", color: "#1E3A8A", bgColor: "#DBEAFE", validFrom: now },
-    ],
     price: 1299,
     mrp: 1799,
     salePrice: 1299,

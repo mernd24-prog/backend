@@ -1,7 +1,6 @@
 const Joi = require("joi");
 const {
   PRODUCT_STATUS,
-  PRODUCT_TYPE,
   ORDER_STATUS,
   PAYMENT_STATUS,
 } = require("../../../shared/domain/commerce-constants");
@@ -287,45 +286,6 @@ const updateSellerGoLiveSchema = Joi.object({
   }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({ sellerId: Joi.string().required() }).required(),
-});
-
-const moderationQueueSchema = Joi.object({
-  body: Joi.object({}).required(),
-  query: Joi.object({
-    status: Joi.string().valid(
-      PRODUCT_STATUS.PENDING_APPROVAL,
-      PRODUCT_STATUS.DRAFT,
-      PRODUCT_STATUS.REJECTED,
-      PRODUCT_STATUS.CHANGE_PENDING,
-      PRODUCT_STATUS.ACTIVE,
-      PRODUCT_STATUS.INACTIVE,
-    ),
-    category: Joi.string(),
-    q: Joi.string().allow(""),
-    keyWord: Joi.string().allow(""),
-    search: Joi.string().allow(""),
-    sellerId: Joi.string().allow("", null),
-    productType: Joi.string().valid(...Object.values(PRODUCT_TYPE)),
-    dateFrom: Joi.date().allow("", null),
-    dateTo: Joi.date().allow("", null),
-    createdFrom: Joi.date().allow("", null),
-    createdTo: Joi.date().allow("", null),
-    page: Joi.number().integer().min(1),
-    limit: Joi.number().integer().min(1).max(100),
-    sortBy: Joi.string().valid(
-      "price_asc",
-      "price_desc",
-      "newest",
-      "oldest",
-      "title",
-      "sku",
-      "stock",
-      "createdAt",
-      "updatedAt",
-    ),
-    sortDir: Joi.string().valid("asc", "desc"),
-  }).required(),
-  params: Joi.object({}).required(),
 });
 
 const moderateProductSchema = Joi.object({
@@ -762,7 +722,6 @@ module.exports = {
   updateSellerBankStatusSchema,
   updateSellerOnboardingStatusSchema,
   updateSellerGoLiveSchema,
-  moderationQueueSchema,
   moderateProductSchema,
   listOrdersSchema,
   listPaymentsSchema,

@@ -1589,53 +1589,83 @@ class PlatformService {
     };
   }
 
-  // ── Badges ─────────────────────────────────────────────────────────────────
+  normalizeCollectionPayload(payload = {}) {
+    const name = String(payload.name || "").trim();
+    const slug = String(payload.slug || name)
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "");
+    return { ...payload, name, slug };
+  }
 
-  async createBadge(payload, req) {
-    const item = await this.platformRepository.createBadge(payload);
+  async createCollection(payload, req) {
+    const normalized = this.normalizeCollectionPayload(payload);
+    if (normalized.startsAt && normalized.endsAt && new Date(normalized.endsAt) < new Date(normalized.startsAt)) {
+      throw new AppError("Collection end date must be after its start date", 400);
+    }
+    if (await this.platformRepository.getCollection(normalized.slug)) {
+      throw new AppError("A collection with this slug already exists", 409);
+    }
+    const item = await this.platformRepository.createCollection(normalized);
     this.invalidateCatalogCaches();
-    auditService.create(req, { module: "badges", entityId: item?._id, entityType: "Badge", newData: payload });
+    auditService.create(req, { module: "collections", entityId: item?._id, entityType: "Collection", newData: normalized });
     return item;
   }
 
-  async updateBadge(badgeId, payload, req) {
-    const item = await this.platformRepository.getBadge(badgeId);
-    if (!item) throw AppError.notFound("Badge");
-    const updated = await this.platformRepository.updateBadge(badgeId, payload);
+  async updateCollection(collectionId, payload, req) {
+    const existing = await this.platformRepository.getCollection(collectionId);
+    if (!existing) throw AppError.notFound("Collection");
+    const normalized = this.normalizeCollectionPayload({ ...payload, name: payload.name || existing.name, slug: payload.slug || existing.slug });
+    if (normalized.startsAt && normalized.endsAt && new Date(normalized.endsAt) < new Date(normalized.startsAt)) {
+      throw new AppError("Collection end date must be after its start date", 400);
+    }
+    const duplicate = await this.platformRepository.getCollection(normalized.slug);
+    if (duplicate && String(duplicate._id) !== String(existing._id)) {
+      throw new AppError("A collection with this slug already exists", 409);
+    }
+    const updated = await this.platformRepository.updateCollection(collectionId, normalized);
     this.invalidateCatalogCaches();
-    auditService.update(req, { module: "badges", entityId: badgeId, entityType: "Badge", oldData: item, newData: payload });
+    auditService.update(req, { module: "collections", entityId: existing._id, entityType: "Collection", oldData: existing, newData: normalized });
     return updated;
   }
 
-  async getBadge(badgeId) {
-    const item = await this.platformRepository.getBadge(badgeId);
-    if (!item) throw AppError.notFound("Badge");
+  async getCollection(collectionId) {
+    const item = await this.platformRepository.getCollection(collectionId);
+    if (!item) throw AppError.notFound("Collection");
     return item;
   }
 
-  async listBadges(query) {
+  async listCollections(query = {}, { publicOnly = false } = {}) {
     const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir || query.sortOrder };
-    const filter = buildMongoFilter({
-      search: query.q || query.keyWord || query.search,
-      searchFields: ["name", "label"],
-    });
-    if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
+    const filter = buildMongoFilter({ search: query.q || query.keyWord || query.search, searchFields: ["name", "slug", "description", "type"] });
+    if (publicOnly) {
+      const now = new Date();
+      filter.$and = [
+        { $or: [{ active: true }, { isActive: true }, { active: { $exists: false }, isActive: { $exists: false } }] },
+        { $or: [{ startsAt: null }, { startsAt: { $exists: false } }, { startsAt: { $lte: now } }] },
+        { $or: [{ endsAt: null }, { endsAt: { $exists: false } }, { endsAt: { $gte: now } }] },
+      ];
+    } else if (query.active !== undefined) {
+      filter.active = query.active === true || query.active === "true";
+    }
+    if (query.featured !== undefined) filter.featured = query.featured === true || query.featured === "true";
     if (query.type) filter.type = query.type;
-    return this.platformRepository.listBadges(filter, pagination);
+    return this.platformRepository.listCollections(filter, pagination);
   }
 
-  async deleteBadge(badgeId, req) {
-    const item = await this.platformRepository.getBadge(badgeId);
-    if (!item) throw AppError.notFound("Badge");
-    const result = await this.platformRepository.deleteBadge(String(item._id));
+  async deleteCollection(collectionId, req) {
+    const item = await this.platformRepository.getCollection(collectionId);
+    if (!item) throw AppError.notFound("Collection");
+    const references = [String(item._id), item.slug, item.name];
+    const productCount = await ProductModel.countDocuments({ collectionIds: { $in: references } });
+    if (productCount) throw new AppError(`Collection is assigned to ${productCount} product(s). Remove those assignments first.`, 409);
+    await this.platformRepository.deleteCollection(collectionId);
     this.invalidateCatalogCaches();
-    auditService.remove(req, { module: "badges", entityId: badgeId, entityType: "Badge", oldData: item });
-    return result;
+    auditService.remove(req, { module: "collections", entityId: item._id, entityType: "Collection", oldData: item });
+    return item;
   }
 
-  async listActiveBadges() {
-    return this.platformRepository.listActiveBadges();
-  }
 }
 
 module.exports = { PlatformService };

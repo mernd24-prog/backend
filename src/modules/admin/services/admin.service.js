@@ -1371,10 +1371,6 @@ class AdminService {
     return this.getSeller(sellerId);
   }
 
-  async listProductModerationQueue(query) {
-    return this.adminRepository.listProductsForModeration(query);
-  }
-
   async moderateProduct(productId, payload, actor) {
     return this.productService.reviewProduct(productId, payload, actor);
   }
