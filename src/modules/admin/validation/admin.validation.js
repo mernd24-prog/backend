@@ -203,6 +203,7 @@ const updateUserSchema = Joi.object({
       primaryContactName: Joi.string().allow("", null),
       onboardingStatus: Joi.string().valid(...sellerOnboardingStatuses).allow("", null),
     }),
+    password: Joi.string().min(8).max(15),
   })
     .min(1)
     .required(),
@@ -450,23 +451,6 @@ const returnsAnalyticsSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
-const listChargebacksSchema = Joi.object({
-  body: Joi.object({}).required(),
-  query: Joi.object({
-    status: Joi.string().valid(
-      "pending",
-      "accepted",
-      "rejected",
-      "won",
-      "lost",
-    ),
-    fromDate: Joi.date().iso(),
-    toDate: Joi.date().iso(),
-    limit: Joi.number().integer().min(1).max(500),
-    offset: Joi.number().integer().min(0),
-  }).required(),
-  params: Joi.object({}).required(),
-});
 
 const listDeadLetterSchema = Joi.object({
   body: Joi.object({}).required(),
@@ -735,7 +719,6 @@ module.exports = {
   listFeatureFlagsSchema,
   realtimeAnalyticsSchema,
   returnsAnalyticsSchema,
-  listChargebacksSchema,
   listDeadLetterSchema,
   deadLetterActionSchema,
   queueStatusSchema,

@@ -260,11 +260,6 @@ class AdminController {
     res.json(okResponse(data));
   };
 
-  listChargebacks = async (req, res) => {
-    const data = await this.adminService.listChargebacks(req.query);
-    res.json(okResponse(data.items, { total: data.total }));
-  };
-
   systemHealth = async (req, res) => {
     const data = await this.adminService.getSystemHealth();
     res.json(okResponse(data));

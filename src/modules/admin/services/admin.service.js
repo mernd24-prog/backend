@@ -1521,14 +1521,6 @@ class AdminService {
     };
   }
 
-  async listChargebacks(query) {
-    return this.adminRepository.listChargebacks({
-      ...query,
-      limit: Number(query.limit || 50),
-      offset: Number(query.offset || 0),
-    });
-  }
-
   async getSystemHealth() {
     const checks = {
       postgres: { status: "unknown" },

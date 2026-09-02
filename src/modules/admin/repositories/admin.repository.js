@@ -470,24 +470,34 @@ class AdminRepository {
 
   async updateUserById(userId, payload) {
     const invalidationReason = invalidationReasonForUserPayload(payload);
-    const update = {
-      $set: {
-        ...(payload.accountStatus ? { accountStatus: payload.accountStatus } : {}),
-        ...(payload.role ? { role: payload.role } : {}),
-        ...(payload.phone !== undefined ? { phone: payload.phone } : {}),
-        ...(payload.profile ? { profile: payload.profile } : {}),
-        ...(payload.sellerProfile ? { sellerProfile: payload.sellerProfile } : {}),
-        ...(payload.allowedModules ? { allowedModules: payload.allowedModules } : {}),
-        ...(payload.createdBy !== undefined ? { createdBy: payload.createdBy } : {}),
-        ...(payload.createdByRole !== undefined ? { createdByRole: payload.createdByRole } : {}),
-        ...(payload.parentAdminId !== undefined ? { parentAdminId: payload.parentAdminId } : {}),
-        ...(payload.parentSellerId !== undefined ? { parentSellerId: payload.parentSellerId } : {}),
-        ...(payload.hierarchyLevel !== undefined ? { hierarchyLevel: payload.hierarchyLevel } : {}),
-        ...(payload.ownerAdminId !== undefined ? { ownerAdminId: payload.ownerAdminId } : {}),
-        ...(payload.ownerSellerId !== undefined ? { ownerSellerId: payload.ownerSellerId } : {}),
-        ...statusSessionFields(payload.accountStatus),
-      },
+    // If password is provided, hash it and include passwordHash in update
+    const setFields = {
+      ...(payload.accountStatus ? { accountStatus: payload.accountStatus } : {}),
+      ...(payload.role ? { role: payload.role } : {}),
+      ...(payload.phone !== undefined ? { phone: payload.phone } : {}),
+      ...(payload.profile ? { profile: payload.profile } : {}),
+      ...(payload.sellerProfile ? { sellerProfile: payload.sellerProfile } : {}),
+      ...(payload.allowedModules ? { allowedModules: payload.allowedModules } : {}),
+      ...(payload.createdBy !== undefined ? { createdBy: payload.createdBy } : {}),
+      ...(payload.createdByRole !== undefined ? { createdByRole: payload.createdByRole } : {}),
+      ...(payload.parentAdminId !== undefined ? { parentAdminId: payload.parentAdminId } : {}),
+      ...(payload.parentSellerId !== undefined ? { parentSellerId: payload.parentSellerId } : {}),
+      ...(payload.hierarchyLevel !== undefined ? { hierarchyLevel: payload.hierarchyLevel } : {}),
+      ...(payload.ownerAdminId !== undefined ? { ownerAdminId: payload.ownerAdminId } : {}),
+      ...(payload.ownerSellerId !== undefined ? { ownerSellerId: payload.ownerSellerId } : {}),
+      ...statusSessionFields(payload.accountStatus),
     };
+
+    if (payload.password) {
+      try {
+        const passwordHash = await hashText(payload.password);
+        setFields.passwordHash = passwordHash;
+      } catch (err) {
+        // ignore hashing errors and proceed without updating password
+      }
+    }
+
+    const update = { $set: setFields };
     return UserModel.findByIdAndUpdate(
       userId,
       invalidationReason
@@ -1106,44 +1116,6 @@ class AdminRepository {
         count: Number(row.count || 0),
       })),
     };
-  }
-
-  async listChargebacks({ status = null, fromDate = null, toDate = null, limit = 50, offset = 0 } = {}) {
-    const values = [];
-    const clauses = [];
-    let idx = 1;
-
-    if (status) {
-      clauses.push(`representment_status = $${idx++}`);
-      values.push(status);
-    }
-    if (fromDate) {
-      clauses.push(`opened_at >= $${idx++}`);
-      values.push(fromDate);
-    }
-    if (toDate) {
-      clauses.push(`opened_at <= $${idx++}`);
-      values.push(toDate);
-    }
-
-    const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-    values.push(limit, offset);
-    const countValues = values.slice(0, values.length - 2);
-
-    const [rowsResult, totalResult] = await Promise.all([
-      postgresPool.query(
-        `SELECT *
-         FROM chargebacks
-         ${whereSql}
-         ORDER BY opened_at DESC
-         LIMIT $${idx++}
-         OFFSET $${idx}`,
-        values,
-      ),
-      postgresPool.query(`SELECT COUNT(*)::INT AS total FROM chargebacks ${whereSql}`, countValues),
-    ]);
-
-    return { items: rowsResult.rows, total: Number(totalResult.rows[0]?.total || 0) };
   }
 
   async listDeadLetterEvents({ status = null, eventType = null, limit = 50, offset = 0 } = {}) {

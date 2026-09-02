@@ -133,9 +133,6 @@ const MODULE_ALIASES = {
   cod_collections: "payments",
   "payments-finance": "payments",
   payments_finance: "payments",
-  chargebacks: "payments",
-  "fraud-cases": "payments",
-  fraud_cases: "payments",
   refunds: "payments",
   refund: "payments",
   payouts: "payments",
@@ -225,8 +222,6 @@ const MODULE_ALIASES = {
   warranty: "warranty",
   "warranty-templates": "warranty",
   warranty_templates: "warranty",
-  fraud: "fraud",
-  chargebacks: "fraud",
 
   // Deals
   deals: "deals",
@@ -491,7 +486,6 @@ function getRequestModule(req) {
       returns: "returns",
       support: "queries",
       queries: "queries",
-      chargebacks: "fraud",
       referral: "referral",
       system: "admin",
     };

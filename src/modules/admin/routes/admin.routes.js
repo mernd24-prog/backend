@@ -70,7 +70,6 @@ const {
   listFeatureFlagsSchema,
   realtimeAnalyticsSchema,
   returnsAnalyticsSchema,
-  listChargebacksSchema,
   listDeadLetterSchema,
   deadLetterActionSchema,
   queueStatusSchema,
@@ -726,11 +725,6 @@ adminRoutes.get(
   "/returns/analytics",
   checkInput(returnsAnalyticsSchema),
   catchErrors(adminController.returnsAnalytics),
-);
-adminRoutes.get(
-  "/chargebacks",
-  checkInput(listChargebacksSchema),
-  catchErrors(adminController.listChargebacks),
 );
 adminRoutes.get(
   "/system/health",

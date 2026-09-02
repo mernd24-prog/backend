@@ -73,11 +73,29 @@ async function createSuperAdmin() {
     );
 
     if (existingSuperAdmins.length > 0) {
-      console.error(
-        "\n❌ Super admin already exists! This script can only be run once.\n",
-      );
-      process.exitCode = 1;
-      return;
+      console.log("\n⚠️  Existing super admin record(s) found — removing old entries and updating with new values\n");
+
+      // Attempt to remove previous super admin markers and role assignments
+      try {
+        // Remove super_admins entries
+        await sequelize.query(`DELETE FROM super_admins`);
+
+        // If a super-admin role exists, remove any user_roles assignments for that role
+        const [superAdminRoles] = await sequelize.query(
+          `SELECT id FROM roles WHERE is_super_admin = true LIMIT 1`,
+        );
+        if (superAdminRoles && superAdminRoles.length) {
+          const roleIdToRemove = superAdminRoles[0].id;
+          await sequelize.query(`DELETE FROM user_roles WHERE role_id = :roleId`, {
+            replacements: { roleId: roleIdToRemove },
+          });
+        }
+
+        console.log("✓ Previous super admin markers and role assignments removed");
+      } catch (err) {
+        console.warn("⚠️  Failed to fully remove previous super admin DB markers:", err.message);
+        // proceed — create/update will still attempt to set correct state
+      }
     }
 
     console.log("\n🔐 Super Admin Creation - One Time Setup\n");

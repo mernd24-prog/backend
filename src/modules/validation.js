@@ -354,20 +354,6 @@ const notificationValidation = {
   }),
 };
 
-const fraudValidation = {
-  analyzeOrder: Joi.object({
-    order: Joi.object().required(),
-    paymentInfo: Joi.object().required(),
-    userProfile: Joi.object(),
-    orderHistory: Joi.array(),
-  }),
-
-  reviewOrder: Joi.object({
-    decision: Joi.string().valid("approved", "rejected").required(),
-    notes: Joi.string().max(500),
-  }),
-};
-
 const commissionValidation = {
   calculateCommission: Joi.object({
     orderId: Joi.string().required(),
@@ -440,7 +426,6 @@ module.exports = {
   returnValidation,
   dynamicPricingValidation,
   notificationValidation,
-  fraudValidation,
   commissionValidation,
   searchValidation,
 };

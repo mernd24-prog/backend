@@ -114,7 +114,6 @@ Platform modules seeded:
   [platform]  returns                        Return Management
   [platform]  queries                        Support Query Management
   [platform]  payments                       Payment Management
-  [platform]  chargebacks                    Chargeback Management
   [platform]  wallets                        Wallet Management
   [platform]  wallet-management              Wallet Admin
   [platform]  carts                          Cart Management
@@ -185,8 +184,6 @@ Sidebar modules seeded:
   [sidebar]   sidebar-subscription-orders                Subscription Orders
   [sidebar]   sidebar-payments-finance                   Payments & Finance
   [sidebar]   sidebar-payments                           Payments
-  [sidebar]   sidebar-chargebacks                        Chargebacks
-  [sidebar]   sidebar-fraud-cases                        Fraud Cases
   [sidebar]   sidebar-wallet-management                  Admin Wallet
   [sidebar]   sidebar-shipping-fulfilment                Shipping & Fulfilment
   [sidebar]   sidebar-shipment-tracking                  Shipments
@@ -1048,7 +1045,6 @@ Platform modules seeded:
   [platform]  returns                        Return Management
   [platform]  queries                        Support Query Management
   [platform]  payments                       Payment Management
-  [platform]  chargebacks                    Chargeback Management
   [platform]  wallets                        Wallet Management
   [platform]  wallet-management              Wallet Admin
   [platform]  carts                          Cart Management
@@ -1119,8 +1115,6 @@ Sidebar modules seeded:
   [sidebar]   sidebar-subscription-orders                Subscription Orders
   [sidebar]   sidebar-payments-finance                   Payments & Finance
   [sidebar]   sidebar-payments                           Payments
-  [sidebar]   sidebar-chargebacks                        Chargebacks
-  [sidebar]   sidebar-fraud-cases                        Fraud Cases
   [sidebar]   sidebar-wallet-management                  Admin Wallet
   [sidebar]   sidebar-shipping-fulfilment                Shipping & Fulfilment
   [sidebar]   sidebar-shipment-tracking                  Shipments
