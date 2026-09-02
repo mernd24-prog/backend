@@ -13,7 +13,10 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/png",
   "image/webp",
   "image/gif",
+  "image/svg+xml",
 ]);
+const SVG_IMAGE_MIME_TYPE = "image/svg+xml";
+const SVG_IMAGE_MODULES = new Set(["thumbnails"]);
 
 const ALLOWED_VIDEO_MIME_TYPES = new Set([
   "video/mp4",
@@ -27,6 +30,7 @@ const MIME_EXTENSION_MAP = {
   "image/png": ".png",
   "image/webp": ".webp",
   "image/gif": ".gif",
+  "image/svg+xml": ".svg",
 };
 const VIDEO_EXTENSION_MAP = {
   "video/mp4": ".mp4",
@@ -52,7 +56,7 @@ function hasCloudinaryConfig() {
   return env.cloudinary.enabled;
 }
 
-async function readSignature(filePath, length = 16) {
+async function readSignature(filePath, length = 512) {
   const handle = await fs.open(filePath, "r");
   try {
     const buffer = Buffer.alloc(length);
@@ -69,6 +73,10 @@ function signatureMatches(buffer, mimeType) {
   if (mimeType === "image/png") return buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
   if (mimeType === "image/gif") return ascii.startsWith("GIF87a") || ascii.startsWith("GIF89a");
   if (mimeType === "image/webp") return ascii.startsWith("RIFF") && ascii.slice(8, 12) === "WEBP";
+  if (mimeType === "image/svg+xml") {
+    const text = buffer.toString("utf8").replace(/^\uFEFF/, "").trimStart();
+    return text.startsWith("<svg") || (text.startsWith("<?xml") && text.includes("<svg"));
+  }
   if (["video/mp4", "video/quicktime"].includes(mimeType)) return ascii.slice(4, 8) === "ftyp";
   if (mimeType === "video/webm") return buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
   if (mimeType === "video/ogg") return ascii.startsWith("OggS");
@@ -101,7 +109,7 @@ async function moveFile(source, destination) {
 }
 
 class FileUploadService {
-  validateImage(file) {
+  validateImage(file, options = {}) {
     if (!file) {
       throw new AppError("Image file is required", 400);
     }
@@ -110,6 +118,14 @@ class FileUploadService {
       throw new AppError("Unsupported image type", 400, {
         allowedMimeTypes: Array.from(ALLOWED_IMAGE_MIME_TYPES),
       });
+    }
+
+    const moduleName = sanitizeSegment(options.moduleName, "default");
+    if (
+      file.mimetype === SVG_IMAGE_MIME_TYPE &&
+      !SVG_IMAGE_MODULES.has(moduleName)
+    ) {
+      throw new AppError("SVG images are only supported for category uploads", 400);
     }
   }
 
@@ -138,13 +154,13 @@ class FileUploadService {
   }
 
   async uploadImage(file, options = {}) {
-    this.validateImage(file);
+    const moduleName = sanitizeSegment(options.moduleName, "default");
+    this.validateImage(file, { moduleName });
     if (!signatureMatches(await readSignature(file.path), file.mimetype)) {
       await fs.unlink(file.path).catch(() => {});
       throw new AppError("Image content does not match its declared type", 400);
     }
 
-    const moduleName = sanitizeSegment(options.moduleName, "default");
     const imageType = sanitizeSegment(options.imageType, "image");
     const publicId = `${imageType}-${uuidv4()}`;
 

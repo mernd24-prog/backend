@@ -2424,12 +2424,16 @@ class ReferralService {
       this.referralRepository.listDirectChildren(influencerId, {
         status: query.status || null,
         code,
+        fromDate: query.fromDate || null,
+        toDate: query.toDate || null,
         page: Number(query.page || 1),
         limit: Number(query.limit || 50),
       }),
       this.referralRepository.listDirectChildIds(influencerId, {
         status: query.status || null,
         code,
+        fromDate: query.fromDate || null,
+        toDate: query.toDate || null,
       }),
       profile.parentInfluencerId
         ? this.referralRepository.getInfluencerProfileById(profile.parentInfluencerId)
