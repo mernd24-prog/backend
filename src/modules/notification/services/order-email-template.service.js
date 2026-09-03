@@ -28,7 +28,21 @@ const formatMoney = (value, currency = "INR") => {
 
 const trimTrailingSlash = (value = "") => String(value || "").replace(/\/+$/, "");
 const absoluteUrlPattern = /^https?:\/\//i;
-const brandName = process.env.BRAND_NAME || process.env.APP_NAME || "Sam Global";
+const titleCase = (value = "") =>
+  String(value || "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+const brandName = process.env.EMAIL_BRAND_NAME ||
+  process.env.BRAND_NAME ||
+  titleCase(process.env.APP_NAME) ||
+  "Sam Global Ecommerce";
+const customerAppBaseUrl = trimTrailingSlash(process.env.CUSTOMER_APP_BASE_URL || "");
+const logoUrl = process.env.EMAIL_LOGO_URL ||
+  process.env.BRAND_LOGO_URL ||
+  process.env.INVOICE_LOGO_URL ||
+  (customerAppBaseUrl ? `${customerAppBaseUrl}/favicon.png` : "");
 const supportEmail = process.env.SUPPORT_EMAIL || process.env.REPLY_TO_EMAIL || "";
 
 const hiddenPreheader = (text = "") => `
@@ -288,19 +302,24 @@ const renderProductsTable = (items = []) => {
   if (!items.length) return "";
   const rows = items.map((item) => `
     <tr>
-      <td style="padding:12px 0;border-top:1px solid #eef0f4;">
+      <td style="padding:14px 16px 14px 0;border-top:1px solid #eef0f4;vertical-align:top;">
         <div style="font-size:14px;font-weight:700;color:#111827;line-height:1.4;">${escapeHtml(item.name)}</div>
-        ${item.meta ? `<div style="margin-top:3px;font-size:12px;color:#6b7280;">${escapeHtml(item.meta)}</div>` : ""}
+        ${item.meta ? `<div style="margin-top:5px;font-size:12px;line-height:1.5;color:#6b7280;">${escapeHtml(item.meta)}</div>` : ""}
       </td>
-      <td style="padding:12px 0;border-top:1px solid #eef0f4;text-align:center;font-size:13px;color:#111827;">${escapeHtml(item.quantity)}</td>
-      <td style="padding:12px 0;border-top:1px solid #eef0f4;text-align:right;font-size:13px;color:#111827;font-weight:700;">${escapeHtml(item.price)}</td>
+      <td style="width:52px;padding:14px 10px;border-top:1px solid #eef0f4;text-align:center;font-size:13px;color:#111827;white-space:nowrap;vertical-align:top;">${escapeHtml(item.quantity)}</td>
+      <td style="width:150px;min-width:140px;padding:14px 0 14px 12px;border-top:1px solid #eef0f4;text-align:right;font-size:13px;color:#111827;font-weight:700;white-space:nowrap;vertical-align:top;">${escapeHtml(item.price)}</td>
     </tr>`).join("");
   return `
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="table-layout:fixed;">
+      <colgroup>
+        <col style="width:auto;">
+        <col style="width:52px;">
+        <col style="width:150px;">
+      </colgroup>
       <tr>
-        <th align="left" style="padding:8px 0;color:#667085;font-size:12px;font-weight:700;text-transform:uppercase;">Product</th>
-        <th align="center" style="padding:8px 0;color:#667085;font-size:12px;font-weight:700;text-transform:uppercase;">Qty</th>
-        <th align="right" style="padding:8px 0;color:#667085;font-size:12px;font-weight:700;text-transform:uppercase;">Amount</th>
+        <th align="left" style="padding:8px 16px 8px 0;color:#667085;font-size:12px;font-weight:700;text-transform:uppercase;">Product</th>
+        <th align="center" style="width:52px;padding:8px 10px;color:#667085;font-size:12px;font-weight:700;text-transform:uppercase;white-space:nowrap;">Qty</th>
+        <th align="right" style="width:150px;padding:8px 0 8px 12px;color:#667085;font-size:12px;font-weight:700;text-transform:uppercase;white-space:nowrap;">Amount</th>
       </tr>
       ${rows}
     </table>`;
@@ -382,6 +401,9 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
     orderRef ? `Order ${orderRef}` : "",
     moneyOf(payload, "payableAmount", "payable_amount", "totalAmount", "total_amount", "amount"),
   ].filter(Boolean).join(" - ");
+  const logoBlock = logoUrl
+    ? `<img src="${escapeHtml(logoUrl)}" width="34" height="34" alt="${escapeHtml(brandName)}" style="display:block;width:34px;height:34px;border-radius:8px;object-fit:contain;background:#ffffff;">`
+    : `<span style="display:inline-block;width:31px;height:31px;border-radius:8px;background:#f4ab2f;color:#061044;font-size:14px;line-height:31px;text-align:center;font-weight:800;">S</span>`;
 
   const html = `<!doctype html>
   <html>
@@ -389,21 +411,38 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
       <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>${escapeHtml(copy.title)}</title>
+      <style>
+        @media only screen and (max-width: 560px) {
+          .sg-wrapper { padding: 16px 8px !important; }
+          .sg-card { border-radius: 12px !important; }
+          .sg-header { padding: 24px 20px !important; }
+          .sg-body { padding: 24px 20px !important; }
+          .sg-footer { padding: 22px 20px !important; }
+          .sg-title { font-size: 22px !important; }
+        }
+      </style>
     </head>
     <body style="margin:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#111827;">
       ${hiddenPreheader(preheader)}
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f8;padding:30px 12px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-wrapper" style="background:#f4f6f8;padding:30px 12px;">
         <tr>
           <td align="center">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:680px;background:#ffffff;border:1px solid #d9dee8;border-radius:12px;overflow:hidden;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-card" style="max-width:720px;background:#ffffff;border:1px solid #d9dee8;border-radius:14px;overflow:hidden;box-shadow:0 14px 34px rgba(17,24,39,0.08);">
               <tr>
-                <td style="background:#1b1d60;padding:24px 28px;">
-                  <div style="font-size:12px;line-height:1.3;color:#f5c542;text-transform:uppercase;letter-spacing:.08em;">${escapeHtml(brandName)}</div>
-                  <h1 style="margin:12px 0 0;font-size:22px;line-height:1.3;color:#ffffff;">${escapeHtml(copy.title)}</h1>
+                <td class="sg-header" style="background:#211b63;padding:30px 36px 28px;border-bottom:4px solid #f4ab2f;">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td width="44" valign="middle">${logoBlock}</td>
+                      <td valign="middle">
+                        <div style="font-size:12px;line-height:1.3;color:#ffc34d;text-transform:uppercase;letter-spacing:1.8px;font-weight:700;">${escapeHtml(brandName)}</div>
+                      </td>
+                    </tr>
+                  </table>
+                  <h1 class="sg-title" style="margin:20px 0 0;font-size:24px;line-height:1.3;color:#ffffff;font-weight:800;">${escapeHtml(copy.title)}</h1>
                 </td>
               </tr>
               <tr>
-                <td style="padding:28px;">
+                <td class="sg-body" style="padding:34px 36px 32px;">
                   ${orderRef ? `<p style="margin:0 0 20px;"><span style="display:inline-block;background:#f4f6fb;border:1px solid #d9dee8;border-radius:999px;padding:7px 12px;font-size:12px;font-weight:700;color:#1b1d60;">Order Reference: ${escapeHtml(orderRef)}</span></p>` : ""}
                   ${greeting ? `<p style="margin:0 0 10px;font-size:15px;color:#344054;">${escapeHtml(greeting)}</p>` : ""}
                   <p style="margin:0 0 20px;font-size:15px;line-height:1.7;color:#344054;">${escapeHtml(copy.intro)}</p>
@@ -416,21 +455,28 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
                   ${renderAddress("Shipping address", shippingAddress)}
                   ${
                     ctaUrl
-                      ? `<p style="margin:24px 0 0;"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;background:#d7a316;color:#111827;text-decoration:none;border-radius:7px;padding:12px 18px;font-weight:700;font-size:14px;">${escapeHtml(ctaText)}</a></p>`
+                      ? `<p style="margin:28px 0 0;"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;background:#f4ab2f;color:#061044;text-decoration:none;border-radius:8px;padding:13px 24px;font-weight:700;font-size:14px;">${escapeHtml(ctaText)}</a></p>`
                       : ""
                   }
-                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:26px;border-top:1px solid #eef0f4;">
+                </td>
+              </tr>
+              <tr>
+                <td class="sg-footer" style="background:#f7f8fc;border-top:1px solid #e6e9f2;padding:26px 36px;">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
                     <tr>
-                      <td style="padding-top:16px;font-size:12px;line-height:1.6;color:#667085;">
-                        This is an automated transactional email from ${escapeHtml(brandName)}.
-                        ${supportEmail ? `For assistance, contact ${escapeHtml(supportEmail)}.` : "Please contact customer support if you need assistance."}
-                      </td>
+                      <td style="font-size:13px;line-height:1.6;color:#061044;font-weight:800;">${escapeHtml(brandName)}</td>
+                      <td align="right" style="font-size:12px;line-height:1.6;color:#8a91a7;">Help&nbsp;&nbsp;&nbsp; Settings&nbsp;&nbsp;&nbsp; Unsubscribe</td>
                     </tr>
                   </table>
+                  <p style="margin:18px 0 0;font-size:12px;line-height:1.7;color:#9aa1b5;">
+                    This is an automated transactional email from ${escapeHtml(brandName)}.
+                    ${supportEmail ? ` For assistance, contact ${escapeHtml(supportEmail)}.` : " Please contact customer support if you need assistance."}
+                    <br>&copy; ${new Date().getFullYear()} ${escapeHtml(brandName)}. All rights reserved.
+                  </p>
                 </td>
               </tr>
             </table>
-            <p style="max-width:680px;margin:14px auto 0;font-size:11px;line-height:1.5;color:#98a2b3;text-align:center;">
+            <p style="max-width:720px;margin:14px auto 0;font-size:11px;line-height:1.5;color:#98a2b3;text-align:center;">
               Please do not share order or payment information with anyone claiming to represent ${escapeHtml(brandName)} outside official support channels.
             </p>
           </td>
