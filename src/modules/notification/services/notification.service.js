@@ -9,14 +9,12 @@ const { ROLES } = require("../../../shared/constants/roles");
 const { UserModel } = require("../../user/models/user.model");
 const { ORDER_STATUS, PAYMENT_PROVIDER, PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const { env } = require("../../../config/env");
+const { renderEmailTemplate } = require("./email-template-catalog");
 
 const notificationQueue = createQueue("notifications");
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 let subscribersRegistered = false;
-const EMAIL_SUPPRESSED_EVENTS = new Set([
-  DOMAIN_EVENTS.INVOICE_GENERATED_V1,
-  DOMAIN_EVENTS.CREDIT_NOTE_GENERATED_V1,
-]);
+const EMAIL_SUPPRESSED_EVENTS = new Set();
 const SELLER_ROLES = new Set([
   ROLES.SELLER,
   ROLES.SELLER_ADMIN,
@@ -211,6 +209,9 @@ class NotificationService {
 
     this.registerOnboardingSubscribers();
     this.registerPayoutSubscribers();
+    this.registerGrowthPartnerSubscribers();
+    this.registerInventorySubscribers();
+    this.registerProductSubscribers();
   }
 
   registerOnboardingSubscribers() {
@@ -228,6 +229,41 @@ class NotificationService {
           targetType: "seller_onboarding",
           viewUrl: `/app/seller-organizations?sellerId=${encodeURIComponent(event.payload.sellerId || "")}`,
           ...event.payload,
+        };
+        await this.createNotification({
+          userId: adminId,
+          channel: "in_app",
+          subject,
+          template: message,
+          payload,
+          status: "queued",
+          idempotencyKey: `${event.eventName}:${event.id}:${adminId}:admin:in_app`,
+        });
+        await this.queueEmailForUser(adminId, {
+          subject,
+          message,
+          eventName: event.eventName,
+          eventId: event.id,
+          recipientType: "admin",
+          payload,
+        });
+      }));
+    });
+
+    eventBus.subscribe(DOMAIN_EVENTS.USER_KYC_SUBMITTED_V1, async (event) => {
+      const admins = await this.findAdminRecipients();
+      await Promise.all(admins.map(async (admin) => {
+        const adminId = String(admin._id || admin.id);
+        const subject = "Customer KYC Submitted";
+        const message = "A customer submitted KYC details for review.";
+        const payload = {
+          ...event.payload,
+          eventName: event.eventName,
+          eventId: event.id,
+          recipientType: "admin",
+          adminName: admin.profile?.firstName || admin.email || "",
+          targetType: "customer_kyc",
+          viewUrl: `/app/users?userId=${encodeURIComponent(event.payload.userId || "")}`,
         };
         await this.createNotification({
           userId: adminId,
@@ -373,6 +409,172 @@ class NotificationService {
     });
   }
 
+  registerGrowthPartnerSubscribers() {
+    eventBus.subscribe(DOMAIN_EVENTS.REFERRAL_REWARDED_V1, async (event) => {
+      const { referrerUserId, refereeUserId } = event.payload || {};
+      const referrerAmount = env.commerce?.referralReferrerBonus || event.payload?.referrerRewardAmount || 0;
+      const refereeAmount = env.commerce?.referralRefereeBonus || event.payload?.refereeRewardAmount || 0;
+
+      if (referrerUserId) {
+        const subject = "Growth Reward Credited";
+        const message = "A Growth Partner reward has been credited to your account.";
+        const payload = {
+          ...event.payload,
+          eventName: event.eventName,
+          eventId: event.id,
+          recipientType: "growth_partner",
+          targetType: "growth_reward",
+          rewardAmount: referrerAmount,
+          status: "credited",
+          viewUrl: "/app/referral-commerce",
+          templateKey: "growth_reward_credited",
+        };
+        await this.createNotification({
+          userId: String(referrerUserId),
+          channel: "in_app",
+          subject,
+          template: message,
+          payload,
+          status: "queued",
+          idempotencyKey: `${event.eventName}:${event.id}:${referrerUserId}:growth_partner:in_app`,
+        });
+        await this.queueEmailForUser(String(referrerUserId), {
+          subject,
+          message,
+          eventName: event.eventName,
+          eventId: event.id,
+          recipientType: "buyer",
+          payload,
+        });
+      }
+
+      if (refereeUserId) {
+        const subject = "Welcome Reward Credited";
+        const message = "Your welcome reward has been credited to your Sam Global account.";
+        const payload = {
+          ...event.payload,
+          eventName: event.eventName,
+          eventId: event.id,
+          recipientType: "buyer",
+          targetType: "growth_reward",
+          rewardAmount: refereeAmount,
+          status: "credited",
+          viewUrl: "/wallet",
+          templateKey: "growth_reward_credited",
+        };
+        await this.createNotification({
+          userId: String(refereeUserId),
+          channel: "in_app",
+          subject,
+          template: message,
+          payload,
+          status: "queued",
+          idempotencyKey: `${event.eventName}:${event.id}:${refereeUserId}:buyer:in_app`,
+        });
+        await this.queueEmailForUser(String(refereeUserId), {
+          subject,
+          message,
+          eventName: event.eventName,
+          eventId: event.id,
+          recipientType: "buyer",
+          payload,
+        });
+      }
+    });
+  }
+
+  registerInventorySubscribers() {
+    eventBus.subscribe(DOMAIN_EVENTS.INVENTORY_LOW_STOCK_V1, async (event) => {
+      const sellerId = event.payload?.sellerId;
+      if (!sellerId) return;
+      const subject = "Low Stock Alert";
+      const message = "A product has reached its low stock threshold.";
+      const payload = {
+        ...event.payload,
+        eventName: event.eventName,
+        eventId: event.id,
+        recipientType: "seller",
+        targetType: "inventory",
+        viewUrl: "/app/inventory",
+        templateKey: "low_stock_alert",
+      };
+      await this.createNotification({
+        userId: String(sellerId),
+        channel: "in_app",
+        subject,
+        template: message,
+        payload,
+        status: "queued",
+        idempotencyKey: `${event.eventName}:${event.id}:${sellerId}:seller:in_app`,
+      });
+      await this.queueEmailForUser(String(sellerId), {
+        subject,
+        message,
+        eventName: event.eventName,
+        eventId: event.id,
+        recipientType: "seller",
+        payload,
+      });
+
+      const admins = await this.findAdminRecipients();
+      await Promise.all(admins.map(async (admin) => {
+        const adminId = String(admin._id || admin.id);
+        await this.createNotification({
+          userId: adminId,
+          channel: "in_app",
+          subject,
+          template: message,
+          payload: {
+            ...payload,
+            recipientType: "admin",
+            adminName: admin.profile?.firstName || admin.email || "",
+            viewUrl: "/app/inventory",
+          },
+          status: "queued",
+          idempotencyKey: `${event.eventName}:${event.id}:${adminId}:admin:in_app`,
+        });
+      }));
+    });
+  }
+
+  registerProductSubscribers() {
+    [
+      [DOMAIN_EVENTS.PRODUCT_APPROVED_V1, "Product Approved", "Your product has been approved.", "product_approved"],
+      [DOMAIN_EVENTS.PRODUCT_REJECTED_V1, "Product Needs Changes", "Your product was not approved. Please review the requested changes.", "product_rejected"],
+    ].forEach(([eventName, subject, message, templateKey]) => {
+      eventBus.subscribe(eventName, async (event) => {
+        const sellerId = event.payload?.sellerId;
+        if (!sellerId) return;
+        const payload = {
+          ...event.payload,
+          eventName,
+          eventId: event.id,
+          recipientType: "seller",
+          targetType: "product",
+          templateKey,
+          viewUrl: event.payload?.viewUrl || "/app/products",
+        };
+        await this.createNotification({
+          userId: String(sellerId),
+          channel: "in_app",
+          subject,
+          template: message,
+          payload,
+          status: "queued",
+          idempotencyKey: `${eventName}:${event.id}:${sellerId}:seller:in_app`,
+        });
+        await this.queueEmailForUser(String(sellerId), {
+          subject,
+          message,
+          eventName,
+          eventId: event.id,
+          recipientType: "seller",
+          payload,
+        });
+      });
+    });
+  }
+
   withViewMetadata(payload = {}, recipientType = "buyer") {
     const orderId = payload.orderId || payload.order_id || "";
     const returnId = payload.returnId || payload.return_id || "";
@@ -491,8 +693,15 @@ class NotificationService {
   shouldQueueEmail(eventName, recipientType = "buyer", payload = {}) {
     if (EMAIL_SUPPRESSED_EVENTS.has(eventName)) return false;
 
+    const isBuyerRecipient = ["buyer", "customer"].includes(
+      String(recipientType || ""),
+    );
     const isSellerRecipient = String(recipientType || "") === "seller";
     const status = String(payload.status || payload.orderStatus || "");
+
+    if (isBuyerRecipient && eventName === DOMAIN_EVENTS.INVOICE_GENERATED_V1) {
+      return false;
+    }
 
     if (eventName === DOMAIN_EVENTS.ORDER_CREATED_V1) {
       return isSellerRecipient ? !this.isOnlinePaymentProvider(payload) : true;
@@ -569,6 +778,73 @@ class NotificationService {
     }).select("_id email role profile").lean();
   }
 
+  async findBroadcastRecipients(audience = "all", userIds = []) {
+    const filter = { accountStatus: { $ne: "deleted" } };
+    if (audience === "specific_users") {
+      const ids = (Array.isArray(userIds) ? userIds : [])
+        .map((id) => String(id || "").trim())
+        .filter(Boolean);
+      if (!ids.length) return [];
+      filter._id = { $in: ids.filter((id) => UserModel.db.base.Types.ObjectId.isValid(id)) };
+      if (!filter._id.$in.length) return [];
+    } else if (audience === "buyers") {
+      filter.role = ROLES.BUYER;
+    } else if (audience === "sellers") {
+      filter.role = { $in: Array.from(SELLER_ROLES) };
+    } else if (audience === "admins") {
+      filter.role = { $in: [ROLES.ADMIN, ROLES.SUB_ADMIN, ROLES.SUPER_ADMIN, "admin", "sub-admin", "super-admin"] };
+    }
+
+    return UserModel.find(filter).select("_id email role profile sellerProfile").limit(5000).lean();
+  }
+
+  isBroadcastPayload(payload = {}) {
+    return Boolean(payload.title && payload.body && payload.audience);
+  }
+
+  async createBroadcastNotifications(payload = {}) {
+    const recipients = await this.findBroadcastRecipients(payload.audience, payload.userIds);
+    const subject = payload.title;
+    const message = payload.body;
+    const channel = payload.channel || "in_app";
+    const data = payload.data || {};
+    const results = [];
+
+    for (const recipient of recipients) {
+      const userId = String(recipient._id || recipient.id);
+      const itemPayload = {
+        ...data,
+        recipientType: recipient.role,
+        targetType: data.targetType || "broadcast",
+        templateKey: data.templateKey || null,
+      };
+      results.push(await this.createNotification({
+        userId,
+        channel,
+        subject,
+        template: message,
+        payload: itemPayload,
+        email: channel === "email" ? recipient.email : undefined,
+        status: "queued",
+        idempotencyKey: [
+          "broadcast",
+          subject,
+          channel,
+          payload.audience,
+          userId,
+          data.idempotencyKey || data.campaignId || "",
+        ].filter(Boolean).join(":"),
+      }));
+    }
+
+    return {
+      sent: results.length,
+      channel,
+      audience: payload.audience,
+      items: results,
+    };
+  }
+
   extractSellerRecipientIds(payload = {}) {
     const sellerIds = new Set();
     const add = (value) => {
@@ -633,13 +909,26 @@ class NotificationService {
   }
 
   async createNotification(payload) {
+    if (this.isBroadcastPayload(payload)) {
+      return this.createBroadcastNotifications(payload);
+    }
+
     const notification = await this.notificationRepository.create(payload);
 
     if (notification.channel === "email" && payload.email) {
+      const template = renderEmailTemplate({
+        templateKey: payload.payload?.templateKey,
+        eventName: payload.payload?.eventName,
+        recipientType: payload.payload?.recipientType || "customer",
+        subject: notification.subject || "Notification",
+        message: notification.template,
+        payload: payload.payload || {},
+      });
       await this.queueDirectEmail({
         to: payload.email,
-        subject: notification.subject || "Notification",
-        html: `<p>${notification.template}</p>`,
+        subject: template.subject,
+        text: template.text,
+        html: template.html,
         idempotencyKey: payload.idempotencyKey || notification.id,
       });
     }

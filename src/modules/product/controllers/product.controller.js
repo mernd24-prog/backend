@@ -111,13 +111,16 @@ class ProductController {
   };
 
   getOne = async (req, res) => {
-    const product = req.auth
+    const isManagementRoute =
+      req.route?.path === "/manage/:productId" ||
+      String(req.originalUrl || "").includes("/products/manage/");
+    const product = isManagementRoute
       ? await this.productService.getProductForManagement(
           req.params.productId,
           getCurrentUser(req),
         )
       : await this.productService.getProduct(req.params.productId);
-    if (!req.auth) {
+    if (!isManagementRoute) {
       // Track customer views only for public product reads.
       const resolvedProductId = product?._id || product?.id || req.params.productId;
       this.productService.trackView(resolvedProductId).catch(() => {});

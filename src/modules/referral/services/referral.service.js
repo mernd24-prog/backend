@@ -75,6 +75,9 @@ class ReferralService {
           referrerUserId: referrer.id,
           refereeUserId: refereeUser.id,
           referralCode,
+          referrerRewardAmount: env.commerce.referralReferrerBonus,
+          refereeRewardAmount: env.commerce.referralRefereeBonus,
+          status: "credited",
         },
         { source: "referral-module", aggregateId: refereeUser.id },
       ),
@@ -2424,12 +2427,16 @@ class ReferralService {
       this.referralRepository.listDirectChildren(influencerId, {
         status: query.status || null,
         code,
+        fromDate: query.fromDate || null,
+        toDate: query.toDate || null,
         page: Number(query.page || 1),
         limit: Number(query.limit || 50),
       }),
       this.referralRepository.listDirectChildIds(influencerId, {
         status: query.status || null,
         code,
+        fromDate: query.fromDate || null,
+        toDate: query.toDate || null,
       }),
       profile.parentInfluencerId
         ? this.referralRepository.getInfluencerProfileById(profile.parentInfluencerId)

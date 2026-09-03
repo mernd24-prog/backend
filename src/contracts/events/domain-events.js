@@ -40,6 +40,8 @@ const DOMAIN_EVENTS = {
   DEAL_APPROVED_V1: "deal.approved.v1",
   DEAL_REJECTED_V1: "deal.rejected.v1",
   DEAL_CANCELLED_V1: "deal.cancelled.v1",
+  PRODUCT_APPROVED_V1: "product.approved.v1",
+  PRODUCT_REJECTED_V1: "product.rejected.v1",
   INVENTORY_RESERVED_V1: "inventory.reserved.v1",
   INVENTORY_RELEASED_V1: "inventory.released.v1",
   INVENTORY_COMMITTED_V1: "inventory.committed.v1",

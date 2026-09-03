@@ -61,6 +61,23 @@ const toAbsoluteUrl = (value = "", recipientType = "customer") => {
 const firstValue = (...values) =>
   values.find((value) => value !== undefined && value !== null && value !== "");
 
+const isPublicReference = (value = "") => {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  if (/^[0-9a-f]{24}$/i.test(text)) return false;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)) return false;
+  return true;
+};
+
+const containsPrivateReference = (value = "") =>
+  /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(String(value || "")) ||
+  /(^|[^0-9a-f])[0-9a-f]{24}([^0-9a-f]|$)/i.test(String(value || ""));
+
+const publicValue = (...values) => {
+  const value = firstValue(...values);
+  return isPublicReference(value) ? value : "";
+};
+
 const compactRows = (rows = []) =>
   rows.filter((row) => row?.value !== undefined && row?.value !== null && row?.value !== "");
 
@@ -82,7 +99,7 @@ const moneyOf = (payload = {}, ...keys) => {
 };
 
 const orderReferenceOf = (payload = {}) =>
-  firstValue(payload.orderNumber, payload.order_number, payload.orderId, payload.order_id);
+  publicValue(payload.orderNumber, payload.order_number, payload.publicOrderNumber, payload.displayOrderNumber);
 
 const orderDateOf = (payload = {}) => {
   const value = firstValue(payload.orderDate, payload.createdAt, payload.created_at, payload.orderCreatedAt);
@@ -149,7 +166,7 @@ const orderSummaryRowsOf = (payload = {}) => compactRows([
 const refundRowsOf = (payload = {}) => compactRows([
   row("Refund amount", moneyOf(payload, "refundAmount", "refund_amount", "amount")),
   row("Refund method", humanize(firstValue(payload.refundMethod, payload.refund_method, payload.method))),
-  row("Refund reference", firstValue(payload.refundReferenceId, payload.refund_reference_id, payload.referenceId, payload.reference_id)),
+  row("Refund reference", publicValue(payload.refundReferenceId, payload.refund_reference_id, payload.referenceNumber, payload.reference_number, payload.utr)),
   row("Reason", firstValue(payload.reason, payload.rejectionReason, payload.failureReason)),
 ]);
 
@@ -347,7 +364,8 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
   const orderRows = orderRowsOf(payload);
   const shippingAddress = payload.shippingAddress || payload.shipping_address || {};
   const billingAddress = payload.billingAddress || payload.billing_address || {};
-  const ctaUrl = toAbsoluteUrl(payload.viewUrl || "", recipientType);
+  const rawCtaUrl = toAbsoluteUrl(payload.viewUrl || "", recipientType);
+  const ctaUrl = containsPrivateReference(rawCtaUrl) ? "" : rawCtaUrl;
   const ctaText = recipientType === "seller"
     ? "View order"
     : recipientType === "admin"
@@ -377,20 +395,15 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f8;padding:30px 12px;">
         <tr>
           <td align="center">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:680px;background:#ffffff;border:1px solid #d9dee8;border-radius:8px;overflow:hidden;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:680px;background:#ffffff;border:1px solid #d9dee8;border-radius:12px;overflow:hidden;">
               <tr>
-                <td style="background:#ffffff;border-top:4px solid #1b1d60;border-bottom:1px solid #eef0f4;padding:22px 28px;">
-                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                    <tr>
-                      <td style="font-size:18px;font-weight:800;color:#1b1d60;">${escapeHtml(brandName)}</td>
-                      <td align="right" style="font-size:12px;color:#667085;text-transform:uppercase;letter-spacing:.04em;">Official Notification</td>
-                    </tr>
-                  </table>
+                <td style="background:#1b1d60;padding:24px 28px;">
+                  <div style="font-size:12px;line-height:1.3;color:#f5c542;text-transform:uppercase;letter-spacing:.08em;">${escapeHtml(brandName)}</div>
+                  <h1 style="margin:12px 0 0;font-size:22px;line-height:1.3;color:#ffffff;">${escapeHtml(copy.title)}</h1>
                 </td>
               </tr>
               <tr>
                 <td style="padding:28px;">
-                  <h1 style="margin:0 0 10px;font-size:24px;line-height:1.25;color:#111827;">${escapeHtml(copy.title)}</h1>
                   ${orderRef ? `<p style="margin:0 0 20px;"><span style="display:inline-block;background:#f4f6fb;border:1px solid #d9dee8;border-radius:999px;padding:7px 12px;font-size:12px;font-weight:700;color:#1b1d60;">Order Reference: ${escapeHtml(orderRef)}</span></p>` : ""}
                   ${greeting ? `<p style="margin:0 0 10px;font-size:15px;color:#344054;">${escapeHtml(greeting)}</p>` : ""}
                   <p style="margin:0 0 20px;font-size:15px;line-height:1.7;color:#344054;">${escapeHtml(copy.intro)}</p>
@@ -403,7 +416,7 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
                   ${renderAddress("Shipping address", shippingAddress)}
                   ${
                     ctaUrl
-                      ? `<p style="margin:24px 0 0;"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;background:#1b1d60;color:#ffffff;text-decoration:none;border-radius:6px;padding:12px 18px;font-weight:700;font-size:14px;">${escapeHtml(ctaText)}</a></p>`
+                      ? `<p style="margin:24px 0 0;"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;background:#d7a316;color:#111827;text-decoration:none;border-radius:7px;padding:12px 18px;font-weight:700;font-size:14px;">${escapeHtml(ctaText)}</a></p>`
                       : ""
                   }
                   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:26px;border-top:1px solid #eef0f4;">
@@ -459,5 +472,7 @@ module.exports = {
     toAbsoluteUrl,
     row,
     compactRows,
+    publicValue,
+    containsPrivateReference,
   },
 };

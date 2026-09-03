@@ -22,6 +22,29 @@ class ReferralRepository {
     this.userRepository = userRepository;
   }
 
+  normalizeDateRangeStart(value) {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    date.setUTCHours(0, 0, 0, 0);
+    return date;
+  }
+
+  normalizeDateRangeEnd(value) {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    date.setUTCHours(23, 59, 59, 999);
+    return date;
+  }
+
+  applyMongoDateRange(filter, field, { fromDate = null, toDate = null } = {}) {
+    if (!fromDate && !toDate) return;
+    filter[field] = {};
+    if (fromDate) filter[field].$gte = this.normalizeDateRangeStart(fromDate);
+    if (toDate) filter[field].$lte = this.normalizeDateRangeEnd(toDate);
+  }
+
   async findReferrerByCode(referralCode) {
     return this.userRepository.findByReferralCode(referralCode);
   }
@@ -1211,11 +1234,7 @@ class ReferralRepository {
       status: { $nin: ["cancelled", "refunded", "reversed"] },
     };
     if (code) filter.code = String(code).toUpperCase();
-    if (fromDate || toDate) {
-      filter.createdAt = {};
-      if (fromDate) filter.createdAt.$gte = new Date(fromDate);
-      if (toDate) filter.createdAt.$lte = new Date(toDate);
-    }
+    this.applyMongoDateRange(filter, "createdAt", { fromDate, toDate });
 
     const [summary] = await ReferralOrderModel.aggregate([
       { $match: filter },
@@ -1260,11 +1279,7 @@ class ReferralRepository {
       const codeOrderIds = await this.getOrderIdsForCode({ code });
       filter.orderId = { $in: codeOrderIds };
     }
-    if (fromDate || toDate) {
-      filter.createdAt = {};
-      if (fromDate) filter.createdAt.$gte = new Date(fromDate);
-      if (toDate) filter.createdAt.$lte = new Date(toDate);
-    }
+    this.applyMongoDateRange(filter, "createdAt", { fromDate, toDate });
     const [result] = await ReferralCommissionLedgerModel.aggregate([
       { $match: filter },
       {
@@ -1324,10 +1339,18 @@ class ReferralRepository {
 
   async listDirectChildren(
     parentInfluencerId,
-    { status = null, code = null, page = 1, limit = 50 } = {},
+    {
+      status = null,
+      code = null,
+      fromDate = null,
+      toDate = null,
+      page = 1,
+      limit = 50,
+    } = {},
   ) {
     const filter = { parentInfluencerId: String(parentInfluencerId) };
     if (status) filter.status = status;
+    this.applyMongoDateRange(filter, "createdAt", { fromDate, toDate });
     if (code) {
       const codeRows = await ReferralCodeModel.find({
         code: String(code).toUpperCase(),
@@ -1346,9 +1369,13 @@ class ReferralRepository {
     return { items, total };
   }
 
-  async listDirectChildIds(parentInfluencerId, { status = null, code = null } = {}) {
+  async listDirectChildIds(
+    parentInfluencerId,
+    { status = null, code = null, fromDate = null, toDate = null } = {},
+  ) {
     const filter = { parentInfluencerId: String(parentInfluencerId) };
     if (status) filter.status = status;
+    this.applyMongoDateRange(filter, "createdAt", { fromDate, toDate });
     if (code) {
       const codeRows = await ReferralCodeModel.find({
         code: String(code).toUpperCase(),
