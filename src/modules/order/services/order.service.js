@@ -171,7 +171,11 @@ class OrderService {
           ...buyerNotificationPayload,
           ...notificationSellerPayload,
           status: ORDER_STATUS.CONFIRMED,
-          paymentStatus: PAYMENT_STATUS.CAPTURED,
+          paymentStatus: updatedOrder.payment_status ||
+            order.payment_status ||
+            updatedOrder.paymentStatus ||
+            order.paymentStatus ||
+            PAYMENT_STATUS.CAPTURED,
           paymentProvider: updatedOrder.payment_provider || order.payment_provider || updatedOrder.paymentProvider || order.paymentProvider,
           totalAmount: updatedOrder.total_amount ?? order.total_amount ?? updatedOrder.totalAmount ?? order.totalAmount,
           payableAmount: updatedOrder.payable_amount ?? order.payable_amount ?? updatedOrder.payableAmount ?? order.payableAmount,
@@ -2188,6 +2192,7 @@ const sellerPayoutAmount = Number(
     });
     await this.ensureOrderTaxDocuments(orderId);
     await this.clearPurchasedCartItems(orderId, order.buyer_id, [], actor, "payment_authorized");
+    await this.publishOrderPaidNotification(orderId, order, updatedOrder, actor);
 
     return updatedOrder;
   }
