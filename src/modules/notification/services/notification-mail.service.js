@@ -153,10 +153,10 @@ const payoutRows = (payload = {}) => {
 };
 
 const onboardingRows = (payload = {}) => [
-  row("Seller", payload.sellerName || payload.legalName || payload.legalBusinessName || payload.storeDisplayName),
+  row("Business", payload.legalBusinessName || payload.storeDisplayName),
+  row("Seller", payload.sellerName || payload.legalName),
   row("Email", payload.email || payload.sellerEmail || payload.seller_email),
   row("Phone", payload.phone || payload.sellerPhone || payload.seller_phone),
-  row("Organization", payload.legalBusinessName || payload.storeDisplayName),
   row("Status", humanize(payload.status || payload.verificationStatus || payload.approvalStatus)),
   row("KYC status", humanize(payload.kycStatus)),
   row("Bank status", humanize(payload.bankVerificationStatus)),
@@ -195,14 +195,14 @@ const eventCopy = ({ eventName, subject, message, payload = {}, recipientType = 
       ctaText: recipientType === "admin" ? "Review seller" : "Open account",
     },
     [DOMAIN_EVENTS.SELLER_KYC_SUBMITTED_V1]: {
-      title: "Seller Onboarding Submitted",
-      intro: `${payload.legalName || payload.sellerName || "A seller"} has submitted onboarding details and is ready for review.`,
+      title: "New Seller Account Created",
+      intro: `${payload.legalBusinessName || payload.storeDisplayName || payload.legalName || payload.sellerName || "A seller"} completed seller onboarding and is ready for admin review.`,
       rows: onboardingRows(payload),
       ctaText: "Review onboarding",
     },
     [DOMAIN_EVENTS.SELLER_ORGANIZATION_CREATED_V1]: {
-      title: "Seller Organization Submitted",
-      intro: `${payload.legalBusinessName || payload.storeDisplayName || "A seller organization"} has been submitted for review.`,
+      title: "New Seller Account Created",
+      intro: `${payload.legalBusinessName || payload.storeDisplayName || "A seller organization"} submitted seller onboarding details and is ready for admin review.`,
       rows: onboardingRows(payload),
       ctaText: "Review organization",
     },
