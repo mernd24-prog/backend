@@ -65,7 +65,7 @@ async function sendMail({ to, subject, html, text, from = env.defaultFromEmail }
       smtpSecure: env.smtp.secure,
       smtpAuthConfigured: env.smtp.authConfigured,
     }, "Sending email through SMTP");
-    return await transporter.sendMail({
+    const result = await transporter.sendMail({
       from,
       to: recipient,
       subject,
@@ -78,6 +78,15 @@ async function sendMail({ to, subject, html, text, from = env.defaultFromEmail }
       },
       replyTo: process.env.REPLY_TO_EMAIL || process.env.SUPPORT_EMAIL || from,
     });
+    logger.info({
+      to: recipient,
+      subject,
+      messageId: result?.messageId,
+      accepted: result?.accepted,
+      rejected: result?.rejected,
+      response: result?.response,
+    }, "Email delivered through SMTP");
+    return result;
   } catch (error) {
     logger.error({ err: error, to: recipient, subject }, "Email delivery failed");
     throw new AppError("Email delivery failed. Please try again later.", 503);
