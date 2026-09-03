@@ -150,7 +150,10 @@ const supportRows = (payload = {}) => compactRows([
 
 const growthRows = (payload = {}) => compactRows([
   row("Program", "Growth Partner"),
+  row("Order", publicOrderReference(payload)),
+  row("Code", publicValue(payload.referralCode, payload.code)),
   row("Reward", moneyOf(payload, "rewardAmount", "referrerRewardAmount", "amount", "commissionAmount")),
+  row("Reward coins", firstValue(payload.rewardCoins, payload.coins)),
   row("Status", humanize(firstValue(payload.status, payload.rewardStatus))),
   row("Reason", firstValue(payload.reason, payload.adjustmentReason)),
 ]);
@@ -160,6 +163,14 @@ const inventoryRows = (payload = {}) => compactRows([
   row("SKU", publicValue(payload.sku, payload.variantSku)),
   row("Available stock", payload.available),
   row("Threshold", payload.threshold),
+]);
+
+const shipmentRows = (payload = {}) => compactRows([
+  row("Order", publicOrderReference(payload)),
+  row("Status", humanize(firstValue(payload.status, payload.shipmentStatus))),
+  row("Tracking number", publicValue(payload.trackingNumber, payload.tracking_number)),
+  row("Carrier", firstValue(payload.carrierName, payload.carrier_name)),
+  row("Estimated delivery", firstValue(payload.estimatedDelivery, payload.estimated_delivery)),
 ]);
 
 const authRows = (payload = {}) => compactRows([
@@ -334,6 +345,37 @@ const EMAIL_TEMPLATE_DEFINITIONS = {
     intro: () => "A product has reached its low stock threshold.",
     rows: inventoryRows,
     ctaText: "Review inventory",
+    tone: "alert",
+    alertText: "A product has reached its low stock threshold.",
+  },
+  shipment_created: {
+    subject: "Shipment Created",
+    title: "Shipment Created",
+    intro: ({ orderNumber }) => `Shipment has been created${publicValue(orderNumber) ? ` for order ${publicValue(orderNumber)}` : ""}.`,
+    rows: shipmentRows,
+    ctaText: "View details",
+  },
+  shipment_updated: {
+    subject: "Shipment Updated",
+    title: "Shipment Updated",
+    intro: ({ status }) => `Your shipment is now ${humanize(status) || "updated"}.`,
+    rows: shipmentRows,
+    ctaText: "View details",
+  },
+  shipment_delivered: {
+    subject: "Shipment Delivered",
+    title: "Shipment Delivered",
+    intro: () => "Your shipment has been delivered.",
+    rows: shipmentRows,
+    ctaText: "View details",
+  },
+  shipment_failed: {
+    subject: "Shipment Failed",
+    title: "Shipment Failed",
+    intro: () => "Shipment could not be completed. Please review the details below.",
+    rows: shipmentRows,
+    ctaText: "View details",
+    tone: "alert",
   },
   product_approved: {
     subject: "Product Approved",
@@ -374,6 +416,14 @@ const EMAIL_TEMPLATE_DEFINITIONS = {
     subject: "Growth Reward Credited",
     title: "Growth Reward Credited",
     intro: () => "A Growth Partner reward has been credited to your account.",
+    rows: growthRows,
+    ctaText: "View rewards",
+  },
+  growth_order_reward_pending: {
+    subject: "Growth Partner Order Reward Pending",
+    title: "Growth Partner Order Reward Pending",
+    intro: ({ orderNumber }) =>
+      `An order${publicValue(orderNumber) ? ` ${publicValue(orderNumber)}` : ""} was placed using your Growth Partner code. Your reward is pending until the order is completed.`,
     rows: growthRows,
     ctaText: "View rewards",
   },
@@ -425,6 +475,11 @@ const eventTemplateMap = {
   [DOMAIN_EVENTS.CREDIT_NOTE_GENERATED_V1]: () => "credit_note_generated",
   [DOMAIN_EVENTS.SELLER_PAYOUT_STATUS_UPDATED_V1]: () => "seller_payout_update",
   [DOMAIN_EVENTS.INVENTORY_LOW_STOCK_V1]: () => "low_stock_alert",
+  [DOMAIN_EVENTS.SHIPMENT_CREATED_V1]: () => "shipment_created",
+  [DOMAIN_EVENTS.SHIPMENT_TRACKING_UPDATED_V1]: () => "shipment_updated",
+  [DOMAIN_EVENTS.SHIPMENT_DELIVERED_V1]: () => "shipment_delivered",
+  [DOMAIN_EVENTS.SHIPMENT_FAILED_V1]: () => "shipment_failed",
+  [DOMAIN_EVENTS.SHIPMENT_RTO_V1]: () => "shipment_failed",
   [DOMAIN_EVENTS.REFERRAL_REWARDED_V1]: () => "growth_reward_credited",
 };
 
@@ -451,6 +506,8 @@ function renderEmailTemplate({
   const intro = typeof definition.intro === "function"
     ? definition.intro(payload)
     : definition.intro || message || "";
+  const isAlert = definition.tone === "alert";
+  const alertText = definition.alertText || intro;
   const rows = typeof definition.rows === "function" ? definition.rows(payload) : [];
   const preheader = [heading, rows[0]?.value].filter(Boolean).join(" - ");
   const safeCtaUrl = containsPrivateReference(ctaUrl) ? "" : ctaUrl;
@@ -460,9 +517,22 @@ function renderEmailTemplate({
   const detailRows = compactRows(rows)
     .map((item) => {
       const isStatus = /status/i.test(item.label);
+      const isLowStockCount = /available stock/i.test(item.label) && Number(item.value) <= Number(payload.threshold || 0);
+      const isLongValue = String(item.value || "").length > 42;
       const valueStyle = isStatus
         ? "display:inline-block;background:#fff1d6;color:#b06000;border-radius:999px;padding:4px 11px;font-size:12px;font-weight:700;"
+        : isLowStockCount
+          ? "display:inline-block;background:#ffe5e5;color:#d12a2a;border-radius:999px;padding:4px 12px;font-size:13px;font-weight:800;"
         : "color:#061044;font-size:14px;font-weight:700;text-align:right;";
+      if (isLongValue) {
+        return `
+      <tr>
+        <td colspan="2" style="padding:13px 0 5px;color:#8a91a7;font-size:14px;border-bottom:0;vertical-align:top;">${escapeHtml(item.label)}</td>
+      </tr>
+      <tr>
+        <td colspan="2" style="padding:0 0 13px;border-bottom:1px solid #eef0f4;text-align:right;vertical-align:top;"><span style="${valueStyle}">${escapeHtml(item.value)}</span></td>
+      </tr>`;
+      }
       return `
       <tr>
         <td style="padding:13px 0;color:#8a91a7;font-size:14px;border-bottom:1px solid #eef0f4;vertical-align:top;">${escapeHtml(item.label)}</td>
@@ -506,6 +576,7 @@ function renderEmailTemplate({
                       <td valign="middle">
                         <div class="sg-brand-text" style="font-size:12px;line-height:1.3;color:#ffc34d;text-transform:uppercase;letter-spacing:1.8px;font-weight:700;">${escapeHtml(brandName)}</div>
                       </td>
+                      ${isAlert ? `<td align="right" valign="middle"><span style="display:inline-block;background:#7c2d67;color:#ffd7df;border-radius:999px;padding:6px 12px;font-size:11px;font-weight:800;letter-spacing:.04em;">&#9888; ALERT</span></td>` : ""}
                     </tr>
                   </table>
                   <h1 class="sg-title" style="margin:20px 0 0;font-size:24px;line-height:1.3;color:#ffffff;font-weight:800;">${escapeHtml(heading)}</h1>
@@ -513,7 +584,8 @@ function renderEmailTemplate({
               </tr>
               <tr>
                 <td class="sg-body" style="padding:34px 36px 32px;">
-                  <p style="margin:0 0 26px;font-size:16px;line-height:1.8;color:#26324a;">${escapeHtml(message || intro)}</p>
+                  ${isAlert ? `<div style="margin:0 0 28px;border:1px solid #ffb7b7;background:#fff4f4;color:#c1121f;border-radius:9px;padding:14px 16px;font-size:14px;font-weight:800;line-height:1.5;">&#9888; ${escapeHtml(alertText)}</div>` : ""}
+                  ${isAlert ? "" : `<p style="margin:0 0 26px;font-size:16px;line-height:1.8;color:#26324a;">${escapeHtml(message || intro)}</p>`}
                   ${detailRows ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eef0f4;">${detailRows}</table>` : ""}
                   ${button}
                 </td>

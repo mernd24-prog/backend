@@ -98,6 +98,14 @@ class ReferralService {
     return String(value._id || value.id || "");
   }
 
+  displayNameFromProfile(profile = {}, fallback = "") {
+    const name = [
+      profile?.firstName,
+      profile?.lastName,
+    ].filter(Boolean).join(" ").trim();
+    return name || fallback || "";
+  }
+
   normalizeCode(code) {
     return String(code || "")
       .trim()
@@ -873,10 +881,66 @@ class ReferralService {
       await this.referralRepository.updateWallet(allocation.influencerId, {
         $inc: { pendingBalance: coins },
       });
+
+      const recipient = await this.resolveInfluencerNotificationRecipient(allocation.influencerId);
+      if (recipient.userId || recipient.email) {
+        await eventPublisher.publish(
+          makeEvent(
+            DOMAIN_EVENTS.REFERRAL_REWARDED_V1,
+            {
+              growthPartnerUserId: recipient.userId,
+              recipientEmail: recipient.email,
+              partnerName: recipient.name,
+              influencerId: String(allocation.influencerId),
+              commissionType: allocation.commissionType,
+              referralOrderId,
+              orderId: String(payload.orderId),
+              orderNumber: payload.orderNumber || payload.order_number || "",
+              referralCode: context.code,
+              rewardAmount: Number(shareAmount.toFixed(2)),
+              rewardCoins: coins,
+              eligibleAmount: Number(context.eligibleAmount || 0),
+              status: "pending",
+            },
+            {
+              source: "referral-order-module",
+              aggregateId: referralOrderId,
+            },
+          ),
+        );
+      }
     }
 
     await this.referralRepository.incrementReferralCodeUsage(context.codeId);
     return referralOrder;
+  }
+
+  async resolveInfluencerNotificationRecipient(influencerId) {
+    if (!influencerId) return {};
+    const profile = await this.referralRepository.getInfluencerProfileById(influencerId).catch(() => null);
+    if (!profile) return {};
+    const plainProfile = this.toPlainObject(profile);
+
+    if (plainProfile.userId) {
+      const user = await this.referralRepository.getUserById(plainProfile.userId).catch(() => null);
+      const plainUser = this.toPlainObject(user);
+      return {
+        userId: String(plainProfile.userId),
+        email: plainUser?.email || "",
+        name: this.displayNameFromProfile(plainUser?.profile, plainUser?.email),
+      };
+    }
+
+    if (plainProfile.accountId) {
+      const account = await this.referralRepository.getInfluencerAccountById(plainProfile.accountId).catch(() => null);
+      const plainAccount = this.toPlainObject(account);
+      return {
+        email: plainAccount?.email || "",
+        name: this.displayNameFromProfile(plainAccount?.profile, plainAccount?.email),
+      };
+    }
+
+    return {};
   }
 
   async syncInfluencerReferralOrderStatus(orderId, orderStatus, paymentStatus = null) {

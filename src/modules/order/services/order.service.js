@@ -525,6 +525,7 @@ class OrderService {
       });
       await this.referralService.recordInfluencerReferralOrder({
         orderId: order.id,
+        orderNumber: order.order_number || order.orderNumber || orderNumber,
         customerId: actor.userId,
         orderStatus: order.status,
         paymentStatus: order.payment_status || order.paymentStatus,

@@ -425,6 +425,45 @@ class NotificationService {
   registerGrowthPartnerSubscribers() {
     eventBus.subscribe(DOMAIN_EVENTS.REFERRAL_REWARDED_V1, async (event) => {
       const { referrerUserId, refereeUserId } = event.payload || {};
+      const growthPartnerUserId = event.payload?.growthPartnerUserId || event.payload?.partnerUserId;
+      if (growthPartnerUserId || event.payload?.recipientEmail) {
+        const subject = "Growth Partner Order Reward Pending";
+        const orderRef = event.payload?.orderNumber ? ` ${event.payload.orderNumber}` : "";
+        const message = `An order${orderRef} was placed using your Growth Partner code. Your reward is pending until the order is completed.`;
+        const payload = {
+          ...event.payload,
+          eventName: event.eventName,
+          eventId: event.id,
+          recipientType: "growth_partner",
+          targetType: "growth_reward",
+          status: event.payload?.status || "pending",
+          viewUrl: "/app/referral-commerce",
+          templateKey: "growth_order_reward_pending",
+        };
+
+        if (growthPartnerUserId) {
+          await this.createNotification({
+            userId: String(growthPartnerUserId),
+            channel: "in_app",
+            subject,
+            template: message,
+            payload,
+            status: "queued",
+            idempotencyKey: `${event.eventName}:${event.id}:${growthPartnerUserId}:growth_partner_order:in_app`,
+          });
+        }
+
+        await this.queueEmailForUser(growthPartnerUserId ? String(growthPartnerUserId) : "", {
+          subject,
+          message,
+          eventName: event.eventName,
+          eventId: event.id,
+          recipientType: "growth_partner",
+          payload,
+        });
+        return;
+      }
+
       const referrerAmount = env.commerce?.referralReferrerBonus || event.payload?.referrerRewardAmount || 0;
       const refereeAmount = env.commerce?.referralRefereeBonus || event.payload?.refereeRewardAmount || 0;
 
