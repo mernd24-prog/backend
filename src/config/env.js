@@ -1,6 +1,6 @@
 const dotenv = require("dotenv");
 
-dotenv.config();
+dotenv.config({ override: true });
 
 const defaultMaxDocumentBytes = 10 * 1024 * 1024;
 const maxDocumentBytes = Number(process.env.MAX_DOCUMENT_UPLOAD_BYTES || defaultMaxDocumentBytes);
