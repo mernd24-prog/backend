@@ -290,8 +290,8 @@ const renderKeyValueRows = (rows = []) => {
   const html = compactRows(rows)
     .map((item) => `
       <tr>
-        <td style="padding:9px 0;color:#667085;font-size:13px;border-bottom:1px solid #eef0f4;">${escapeHtml(item.label)}</td>
-        <td style="padding:9px 0;color:#111827;font-size:13px;font-weight:600;text-align:right;border-bottom:1px solid #eef0f4;">${escapeHtml(item.value)}</td>
+        <td style="padding:10px 10px 10px 0;color:#667085;font-size:13px;line-height:1.4;border-bottom:1px solid #eef0f4;vertical-align:top;">${escapeHtml(item.label)}</td>
+        <td style="padding:10px 0 10px 10px;color:#111827;font-size:13px;font-weight:700;line-height:1.4;text-align:right;border-bottom:1px solid #eef0f4;vertical-align:top;white-space:nowrap;">${escapeHtml(item.value)}</td>
       </tr>`)
     .join("");
   if (!html) return "";
@@ -302,24 +302,27 @@ const renderProductsTable = (items = []) => {
   if (!items.length) return "";
   const rows = items.map((item) => `
     <tr>
-      <td style="padding:14px 16px 14px 0;border-top:1px solid #eef0f4;vertical-align:top;">
+      <td colspan="2" style="padding:14px 0 6px;border-top:1px solid #eef0f4;vertical-align:top;">
         <div style="font-size:14px;font-weight:700;color:#111827;line-height:1.4;">${escapeHtml(item.name)}</div>
         ${item.meta ? `<div style="margin-top:5px;font-size:12px;line-height:1.5;color:#6b7280;">${escapeHtml(item.meta)}</div>` : ""}
       </td>
-      <td style="width:52px;padding:14px 10px;border-top:1px solid #eef0f4;text-align:center;font-size:13px;color:#111827;white-space:nowrap;vertical-align:top;">${escapeHtml(item.quantity)}</td>
-      <td style="width:150px;min-width:140px;padding:14px 0 14px 12px;border-top:1px solid #eef0f4;text-align:right;font-size:13px;color:#111827;font-weight:700;white-space:nowrap;vertical-align:top;">${escapeHtml(item.price)}</td>
+    </tr>
+    <tr>
+      <td style="padding:6px 12px 14px 0;font-size:13px;color:#667085;white-space:nowrap;">
+        Qty <span style="display:inline-block;margin-left:8px;color:#111827;font-weight:700;">${escapeHtml(item.quantity)}</span>
+      </td>
+      <td style="padding:6px 0 14px 12px;text-align:right;font-size:13px;color:#667085;white-space:nowrap;">
+        Amount <span style="display:inline-block;margin-left:8px;color:#111827;font-weight:800;">${escapeHtml(item.price)}</span>
+      </td>
     </tr>`).join("");
   return `
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="table-layout:fixed;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
       <colgroup>
-        <col style="width:auto;">
-        <col style="width:52px;">
-        <col style="width:150px;">
+        <col style="width:45%;">
+        <col style="width:55%;">
       </colgroup>
       <tr>
-        <th align="left" style="padding:8px 16px 8px 0;color:#667085;font-size:12px;font-weight:700;text-transform:uppercase;">Product</th>
-        <th align="center" style="width:52px;padding:8px 10px;color:#667085;font-size:12px;font-weight:700;text-transform:uppercase;white-space:nowrap;">Qty</th>
-        <th align="right" style="width:150px;padding:8px 0 8px 12px;color:#667085;font-size:12px;font-weight:700;text-transform:uppercase;white-space:nowrap;">Amount</th>
+        <th colspan="2" align="left" style="padding:8px 0;color:#667085;font-size:12px;font-weight:700;text-transform:uppercase;">Product</th>
       </tr>
       ${rows}
     </table>`;
