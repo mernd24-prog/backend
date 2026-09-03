@@ -23,6 +23,15 @@ function hasEnvValue(value) {
   return Boolean(text) && !/[<>]/.test(text);
 }
 
+function hasEmailFromValue(value) {
+  const text = cleanEnvValue(value);
+  if (!text) return false;
+
+  const displayNameMatch = text.match(/<([^<>]+)>$/);
+  const email = displayNameMatch ? displayNameMatch[1].trim() : text;
+  return /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email);
+}
+
 function parseBoolean(value, fallback = false) {
   const text = cleanEnvValue(value).toLowerCase();
   if (!text) return fallback;
@@ -66,8 +75,8 @@ const smtpAuthConfigured = hasEnvValue(emailUser) && hasEnvValue(emailPass);
 const emailMissingKeys = [
   ...findMissingConfig([
     { key: "EMAIL_HOST or SMTP_HOST", value: process.env.EMAIL_HOST || process.env.SMTP_HOST },
-    { key: "EMAIL_FROM or DEFAULT_FROM_EMAIL", value: defaultFromEmail },
   ]),
+  ...(hasEmailFromValue(defaultFromEmail) ? [] : ["EMAIL_FROM or DEFAULT_FROM_EMAIL"]),
   ...(smtpAuthPartial
     ? findMissingConfig([
         { key: "EMAIL_USER or SMTP_USER", value: emailUser },
