@@ -3,6 +3,8 @@ const { AppError } = require("../../../shared/errors/app-error");
 const { ROLES } = require("../../../shared/constants/roles");
 const { sendMail } = require("../../../infrastructure/mail/mailer");
 const { logger } = require("../../../shared/logger/logger");
+const { UserModel } = require("../../user/models/user.model");
+const { NotificationService } = require("../../notification/services/notification.service");
 const { SellerOrganizationRepository } = require("../../seller/repositories/seller-organization.repository");
 const { SupportRepository } = require("../repositories/support.repository");
 const {
@@ -29,9 +31,11 @@ class SupportService {
   constructor({
     supportRepository = new SupportRepository(),
     sellerOrganizationRepository = new SellerOrganizationRepository(),
+    notificationService = new NotificationService(),
   } = {}) {
     this.supportRepository = supportRepository;
     this.sellerOrganizationRepository = sellerOrganizationRepository;
+    this.notificationService = notificationService;
   }
 
   getSubmitterType(auth = {}) {
@@ -199,6 +203,71 @@ class SupportService {
     }
   }
 
+  async notifySubmitterForNewQuery(query = {}) {
+    const userId = String(query.userId || "").trim();
+    if (!userId) return null;
+    const subject = "Support Ticket Created";
+    const message = "Your support request has been received. Our team will review it and respond soon.";
+    const payload = {
+      queryId: query.queryId,
+      category: query.category,
+      status: query.status,
+      subject: query.subject,
+      userType: query.userType,
+      recipientEmail: query.userEmail || null,
+      targetType: "support",
+      viewUrl: `/support/queries/${encodeURIComponent(query.queryId)}`,
+      templateKey: "support_ticket_created",
+    };
+    await this.notificationService.createNotification({
+      userId,
+      channel: "in_app",
+      subject,
+      template: message,
+      payload,
+      status: "queued",
+      idempotencyKey: `support.query.created:${query.queryId}:${userId}:in_app`,
+    });
+    return this.notificationService.queueEmailForUser(userId, {
+      subject,
+      message,
+      eventName: "support.query.created",
+      eventId: query.queryId,
+      recipientType: "buyer",
+      payload,
+    });
+  }
+
+  async notifyAdminsInAppForNewQuery(query = {}) {
+    const admins = await UserModel.find({
+      role: { $in: [ROLES.ADMIN, ROLES.SUB_ADMIN, ROLES.SUPER_ADMIN, "admin", "sub-admin", "super-admin"] },
+      accountStatus: { $ne: "deleted" },
+    }).select("_id email profile").lean().catch(() => []);
+    const subject = "New Support Query";
+    const message = `A new ${query.userType || "user"} support query was submitted.`;
+    await Promise.all(admins.map((admin) => {
+      const adminId = String(admin._id || admin.id);
+      return this.notificationService.createNotification({
+        userId: adminId,
+        channel: "in_app",
+        subject,
+        template: message,
+        payload: {
+          queryId: query.queryId,
+          category: query.category,
+          status: query.status,
+          subject: query.subject,
+          userType: query.userType,
+          targetType: "support",
+          viewUrl: `/app/support?queryId=${encodeURIComponent(query.queryId)}`,
+          templateKey: "support_ticket_admin",
+        },
+        status: "queued",
+        idempotencyKey: `support.query.created:${query.queryId}:${adminId}:admin:in_app`,
+      });
+    }));
+  }
+
   async createQuery(payload = {}, auth = {}) {
     const userType = this.getSubmitterType(auth);
     const userId = this.getSupportOwnerId(auth, userType);
@@ -236,6 +305,12 @@ class SupportService {
     setTimeout(() => {
       this.notifyAdminsForNewQuery(query).catch((error) => {
         logger.error({ err: error, queryId: query?.queryId }, "Support admin email async failure");
+      });
+      this.notifyAdminsInAppForNewQuery(query).catch((error) => {
+        logger.error({ err: error, queryId: query?.queryId }, "Support admin in-app async failure");
+      });
+      this.notifySubmitterForNewQuery(query).catch((error) => {
+        logger.error({ err: error, queryId: query?.queryId }, "Support submitter notification async failure");
       });
     }, ADMIN_EMAIL_DELAY_MS).unref?.();
     return query;

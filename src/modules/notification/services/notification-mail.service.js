@@ -6,24 +6,35 @@ const {
   isOrderEmailEvent,
   helpers,
 } = require("./order-email-template.service");
+const {
+  renderEmailTemplate,
+  resolveTemplateKey,
+} = require("./email-template-catalog");
 
 const { escapeHtml, humanize, formatMoney, toAbsoluteUrl, row } = helpers;
 const brandName = process.env.BRAND_NAME || process.env.APP_NAME || "Sam Global";
 const supportEmail = process.env.SUPPORT_EMAIL || process.env.REPLY_TO_EMAIL || "";
 
+const publicValue = (value = "") => {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (/^[0-9a-f]{24}$/i.test(text)) return "";
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)) return "";
+  return text;
+};
+
 const referenceOf = (payload = {}) =>
   payload.orderNumber ||
-  payload.orderId ||
   payload.returnNumber ||
-  payload.returnId ||
-  payload.payoutId ||
+  payload.payoutNumber ||
+  payload.referenceNumber ||
   "";
 
 const displayReferenceOf = (payload = {}) =>
   payload.orderNumber ||
   payload.returnNumber ||
-  payload.returnId ||
-  payload.payoutId ||
+  payload.payoutNumber ||
+  payload.referenceNumber ||
   "";
 
 const itemCountOf = (payload = {}) => {
@@ -123,8 +134,8 @@ const orderRows = (payload = {}, recipientType = "customer") => {
 const returnRows = (payload = {}) => {
   const currency = payload.currency || "INR";
   return [
-    row("Return ID", payload.returnNumber || payload.returnId),
-    row("Order ID", payload.orderNumber || payload.orderId),
+    row("Return", payload.returnNumber),
+    row("Order", payload.orderNumber),
     row("Status", humanize(payload.status)),
     row("Refund Amount", amountOf(payload) ? formatMoney(amountOf(payload), currency) : ""),
     row("Reason", payload.reason || payload.rejectionReason),
@@ -134,10 +145,10 @@ const returnRows = (payload = {}) => {
 const payoutRows = (payload = {}) => {
   const currency = payload.currency || "INR";
   return [
-    row("Payout ID", payload.payoutId),
+    row("Payout", payload.payoutNumber || payload.referenceNumber || payload.paymentReference || payload.utr),
     row("Status", humanize(payload.status)),
     row("Amount", amountOf(payload) ? formatMoney(amountOf(payload), currency) : ""),
-    row("Reference", payload.referenceId || payload.paymentReference || payload.utr),
+    row("Reference", publicValue(payload.referenceNumber || payload.paymentReference || payload.utr)),
   ].filter(Boolean);
 };
 
@@ -167,11 +178,11 @@ const defaultRows = (payload = {}) => {
 };
 
 const eventCopy = ({ eventName, subject, message, payload = {}, recipientType = "customer" }) => {
-  const orderRef = payload.orderNumber || payload.orderId || "your order";
+  const orderRef = payload.orderNumber || "your order";
   const productSummary = productSummaryOf(payload);
   const productText = productSummary ? ` for ${productSummary}` : "";
-  const returnRef = payload.returnNumber || payload.returnId || "your return request";
-  const payoutRef = payload.payoutId || "your payout";
+  const returnRef = payload.returnNumber || "your return request";
+  const payoutRef = payload.payoutNumber || payload.referenceNumber || "your payout";
 
   const copy = {
     [DOMAIN_EVENTS.AUTH_USER_REGISTERED_V1]: {
@@ -235,7 +246,7 @@ const eventCopy = ({ eventName, subject, message, payload = {}, recipientType = 
       title: recipientType === "seller" ? "Return Requested" : "Return Request Received",
       intro:
         recipientType === "seller"
-          ? `A return has been requested for order ${payload.orderNumber || payload.orderId || ""}.`
+          ? `A return has been requested for order ${payload.orderNumber || ""}.`
           : `We have received your return request ${returnRef}.`,
       rows: returnRows(payload),
       ctaText: "View return",
@@ -365,9 +376,28 @@ const wrapEmail = ({ title, intro, rows = [], ctaText = "View details", ctaUrl =
   </html>`;
 };
 
-const buildTemplate = ({ subject, message, payload = {}, recipientType = "customer", eventName }) => {
+const buildTemplate = ({ subject, message, payload = {}, recipientType = "customer", eventName, templateKey }) => {
   if (isOrderEmailEvent(eventName, payload)) {
     return buildOrderEmailTemplate({ subject, message, payload, recipientType, eventName });
+  }
+
+  const ctaUrl = toAbsoluteUrl(payload.viewUrl || "", recipientType);
+  const resolvedTemplateKey = resolveTemplateKey({
+    templateKey: templateKey || payload.templateKey,
+    eventName: eventName || payload.eventName,
+    recipientType,
+    payload,
+  });
+  if (resolvedTemplateKey) {
+    return renderEmailTemplate({
+      templateKey: resolvedTemplateKey,
+      eventName: eventName || payload.eventName,
+      recipientType,
+      subject,
+      message,
+      payload,
+      ctaUrl,
+    });
   }
 
   const resolvedEventName = eventName || payload.eventName;
@@ -380,7 +410,6 @@ const buildTemplate = ({ subject, message, payload = {}, recipientType = "custom
   });
   const reference = displayReferenceOf(payload);
   const status = humanize(payload.status || payload.verificationStatus || payload.approvalStatus);
-  const ctaUrl = toAbsoluteUrl(payload.viewUrl || "", recipientType);
   const detailText = (rows || [])
     .filter((row) => row?.value !== undefined && row?.value !== null && row?.value !== "")
     .map((row) => `${row.label}: ${row.value}`)
@@ -400,9 +429,9 @@ const buildTemplate = ({ subject, message, payload = {}, recipientType = "custom
 };
 
 class NotificationMailService {
-  async sendTemplatedMail({ to, subject, message, payload = {}, recipientType, eventName }) {
+  async sendTemplatedMail({ to, subject, message, payload = {}, recipientType, eventName, templateKey }) {
     if (!to) return null;
-    const template = buildTemplate({ subject, message, payload, recipientType, eventName });
+    const template = buildTemplate({ subject, message, payload, recipientType, eventName, templateKey });
     try {
       const result = await sendMail({
         to,

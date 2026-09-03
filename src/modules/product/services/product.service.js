@@ -41,6 +41,9 @@ const {
   AdminCityModel,
 } = require("../../admin/models/common-management.model");
 const { ShippingProfilesService } = require("../../delivery/services/shipping-profiles.service");
+const { makeEvent } = require("../../../contracts/events/event");
+const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
+const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 
 const SELLER_BLOCKED_COMPLIANCE_FIELDS = [
   "gstRate",
@@ -2773,7 +2776,9 @@ resolveProductRouteIdentifier(productId, { allowRawObjectId = false } = {}) {
 }
 
 async getProduct(productId) {
-  const productIdentifier = this.resolveProductRouteIdentifier(productId);
+  const productIdentifier = this.resolveProductRouteIdentifier(productId, {
+    allowRawObjectId: true,
+  });
   const productLookup = mongoose.Types.ObjectId.isValid(productIdentifier)
     ? { _id: productIdentifier }
     : {
@@ -3075,6 +3080,29 @@ async getProduct(productId) {
       await this._deleteFromIndex(productId);
     }
     this._invalidateProductCache();
+
+    if (isApproval || isRejection) {
+      await eventPublisher.publish(
+        makeEvent(
+          isApproval ? DOMAIN_EVENTS.PRODUCT_APPROVED_V1 : DOMAIN_EVENTS.PRODUCT_REJECTED_V1,
+          {
+            productId: String(updatedProduct._id || updatedProduct.id || productId),
+            productName: updatedProduct.title || existingProduct.title,
+            productTitle: updatedProduct.title || existingProduct.title,
+            sku: updatedProduct.sku || existingProduct.sku || null,
+            sellerId: updatedProduct.sellerId || existingProduct.sellerId || null,
+            status: nextStatus,
+            approvalStatus: nextApprovalStatus,
+            reason: payload.rejectionReason || payload.notes || null,
+            updatedBy: actor.userId || null,
+            viewUrl: `/app/products/${encodeURIComponent(String(updatedProduct._id || updatedProduct.id || productId))}`,
+          },
+          { source: "product-module", aggregateId: String(updatedProduct._id || updatedProduct.id || productId) },
+        ),
+      ).catch((error) => {
+        logger.error({ err: error, productId }, "Product review notification event failed");
+      });
+    }
 
     return updatedProduct;
   }

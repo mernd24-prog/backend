@@ -22,6 +22,7 @@ const { createOtp } = require("../../../shared/tools/otp");
 const { redis } = require("../../../infrastructure/redis/redis-client");
 const { sendMail } = require("../../../infrastructure/mail/mailer");
 const otpEmailTemplate = require("../../../../templates/otp-email.ejs");
+const { renderEmailTemplate } = require("../../notification/services/email-template-catalog");
 const { env } = require("../../../config/env");
 const { logger } = require("../../../shared/logger/logger");
 const {
@@ -70,6 +71,11 @@ const BUYER_OTP_TTL_SECONDS = 300;
 const BUYER_OTP_CONTEXT_TTL_SECONDS = 600;
 const BUYER_OTP_RESEND_SECONDS = 60;
 const BUYER_OTP_MAX_ATTEMPTS = 5;
+const OTP_DAILY_LIMIT = Math.max(
+  1,
+  Number(process.env.AUTH_OTP_DAILY_LIMIT || process.env.OTP_DAILY_LIMIT || 3),
+);
+const OTP_DAILY_TTL_SECONDS = 24 * 60 * 60;
 class AuthService {
   constructor({
     authRepository = new AuthRepository(),
@@ -194,6 +200,66 @@ class AuthService {
 
   makeVerifiedOtpKey(email, purpose) {
     return `otp_verified:${this.normalizeOtpEmail(email)}:${purpose}`;
+  }
+
+  getOtpDayKeyDate() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  makeOtpDailyLimitKey(identifier, purpose) {
+    const normalizedIdentifier = String(identifier || "").trim().toLowerCase();
+    const hash = createHash("sha256").update(normalizedIdentifier).digest("hex");
+    return `otp_daily:${purpose}:${this.getOtpDayKeyDate()}:${hash}`;
+  }
+
+  async assertAndConsumeDailyOtpQuota(identifier, purpose) {
+    const key = this.makeOtpDailyLimitKey(identifier, purpose);
+    const count = await redis.incr(key);
+    if (count === 1) {
+      await redis.expire(key, OTP_DAILY_TTL_SECONDS);
+    }
+    if (count > OTP_DAILY_LIMIT) {
+      throw new AppError(
+        `OTP daily limit reached. You can request only ${OTP_DAILY_LIMIT} OTPs per day.`,
+        429,
+      );
+    }
+    return key;
+  }
+
+  async rollbackDailyOtpQuota(key) {
+    if (!key) return;
+    try {
+      const next = await redis.decr(key);
+      if (next <= 0) await redis.del(key);
+    } catch {
+      // Best effort only; never hide the original delivery error.
+    }
+  }
+
+  async sendPasswordChangedEmail(user, payload = {}) {
+    const to = String(user?.email || payload.email || "").trim();
+    if (!to) return null;
+    const template = renderEmailTemplate({
+      templateKey: "auth_password_changed",
+      recipientType: "customer",
+      payload: {
+        email: to,
+        action: payload.action || "password_changed",
+      },
+    });
+    return sendMail({
+      to,
+      subject: template.subject,
+      text: template.text,
+      html: template.html,
+    }).catch((error) => {
+      logger.error(
+        { err: error, userId: user?.id || user?._id },
+        "Password changed email failed",
+      );
+      return null;
+    });
   }
 
   makeInitialSellerProfile(payload = {}) {
@@ -1274,6 +1340,11 @@ class AuthService {
       );
     }
 
+    const dailyLimitKey = await this.assertAndConsumeDailyOtpQuota(
+      identity.identifier,
+      BUYER_OTP_PURPOSE,
+    );
+
     const isStaticOtp =
       env.auth.otpMode === "static" ||
       (identity.channel === "mobile" && !env.apitxt.smsOtpEnabled);
@@ -1337,10 +1408,7 @@ class AuthService {
       /*
        * Email OTP
        */
-      if (
-        !isStaticOtp &&
-        identity.channel === "email"
-      ) {
+      if (identity.channel === "email") {
         const html = otpEmailTemplate({
           firstName:
             existingUser?.profile?.firstName ||
@@ -1388,6 +1456,7 @@ class AuthService {
         redis.del(keys.contextKey),
         redis.del(keys.cooldownKey),
         redis.del(keys.attemptsKey),
+        this.rollbackDailyOtpQuota(dailyLimitKey),
       ]);
 
       logger.error(
@@ -1435,7 +1504,7 @@ class AuthService {
         purpose: BUYER_OTP_PURPOSE,
         channel: identity.channel,
         deliveryMode: isStaticOtp
-          ? "static"
+          ? identity.channel === "email" ? "static_email" : "static"
           : identity.channel === "email"
             ? "email"
             : "sms",
@@ -1447,7 +1516,7 @@ class AuthService {
 
     return {
       message: isStaticOtp
-        ? "Static OTP ready"
+        ? identity.channel === "email" ? "OTP sent successfully on email" : "Static OTP ready"
         : "OTP sent successfully",
 
       nextStep: "verify_otp",
@@ -1460,7 +1529,7 @@ class AuthService {
       resendAfter: BUYER_OTP_RESEND_SECONDS,
 
       deliveryMode: isStaticOtp
-        ? "static"
+        ? identity.channel === "email" ? "static_email" : "static"
         : identity.channel === "email"
           ? "email"
           : "sms",
@@ -1804,13 +1873,22 @@ class AuthService {
       );
     }
 
+    const dailyLimitKey = await this.assertAndConsumeDailyOtpQuota(
+      email,
+      purpose,
+    );
+
     const useSellerRegistrationWhatsapp =
       purpose === "registration" &&
       role === ROLES.SELLER &&
       Boolean(mobileNumber) &&
-      env.apitxt.whatsappOtpEnabled;
+      env.apitxt.whatsappOtpEnabled &&
+      String(process.env.AUTH_PRIMARY_OTP_CHANNEL || "email").toLowerCase() === "whatsapp";
     const isStaticOtp = !useSellerRegistrationWhatsapp &&
-      (env.auth.otpMode === "static" || (mobileNumber && !env.apitxt.smsOtpEnabled));
+      (env.auth.otpMode === "static" ||
+        (String(process.env.AUTH_PRIMARY_OTP_CHANNEL || "email").toLowerCase() === "sms" &&
+          mobileNumber &&
+          !env.apitxt.smsOtpEnabled));
     const otp = isStaticOtp ? env.auth.staticOtp : createOtp();
     const otpKey = this.makeOtpKey(email, purpose);
 
@@ -1829,56 +1907,69 @@ class AuthService {
       "Auth OTP generated and stored locally",
     );
 
-    if (useSellerRegistrationWhatsapp) {
-      logger.info(
-        {
-          purpose,
-          role,
-          deliveryMode: "third_party_whatsapp",
-        },
-        "Seller registration OTP WhatsApp delivery selected",
-      );
+    try {
+      if (useSellerRegistrationWhatsapp) {
+        logger.info(
+          {
+            purpose,
+            role,
+            deliveryMode: "third_party_whatsapp",
+          },
+          "Seller registration OTP WhatsApp delivery selected",
+        );
 
-      delivery = await sendWhatsappOtp({
-        mobile: mobileNumber,
-        otp,
-        purpose: "seller_registration",
-      });
-      deliveryMode = delivery?.skipped ? "static_whatsapp" : "third_party_whatsapp";
-    } else if (!isStaticOtp && mobileNumber) {
-      logger.info(
-        {
-          purpose,
-          deliveryMode: "third_party_sms",
-        },
-        "Auth OTP delivery selected",
-      );
+        delivery = await sendWhatsappOtp({
+          mobile: mobileNumber,
+          otp,
+          purpose: "seller_registration",
+        });
+        deliveryMode = delivery?.skipped ? "static_whatsapp" : "third_party_whatsapp";
+      } else if (
+        !isStaticOtp &&
+        String(process.env.AUTH_PRIMARY_OTP_CHANNEL || "email").toLowerCase() === "sms" &&
+        mobileNumber
+      ) {
+        logger.info(
+          {
+            purpose,
+            deliveryMode: "third_party_sms",
+          },
+          "Auth OTP delivery selected",
+        );
 
-      delivery = await sendSmsOtp({
-        mobile: mobileNumber,
-        otp,
-        purpose,
-      });
-      deliveryMode = delivery?.skipped ? "static_sms" : "third_party_sms";
-    } else {
-      logger.info(
-        {
+        delivery = await sendSmsOtp({
+          mobile: mobileNumber,
+          otp,
           purpose,
-          deliveryMode: isStaticOtp ? "static" : "third_party_email",
-        },
-        "Auth OTP delivery selected",
-      );
+        });
+        deliveryMode = delivery?.skipped ? "static_sms" : "third_party_sms";
+      } else {
+        logger.info(
+          {
+            purpose,
+            deliveryMode: isStaticOtp ? "static" : "third_party_email",
+          },
+          "Auth OTP delivery selected",
+        );
 
-      const html = otpEmailTemplate({
-        firstName: existingUser?.profile?.firstName || "User",
-        otp,
-        purpose: this.getOtpPurposeLabel(purpose),
-      });
-      delivery = await sendMail({
-        to: email,
-        subject: `OTP for ${this.getOtpPurposeLabel(purpose)}`,
-        html,
-      });
+        const html = otpEmailTemplate({
+          firstName: existingUser?.profile?.firstName || "User",
+          otp,
+          purpose: this.getOtpPurposeLabel(purpose),
+        });
+        delivery = await sendMail({
+          to: email,
+          subject: `OTP for ${this.getOtpPurposeLabel(purpose)}`,
+          html,
+        });
+        deliveryMode = isStaticOtp ? "static" : "third_party_email";
+      }
+    } catch (error) {
+      await Promise.all([
+        redis.del(otpKey),
+        this.rollbackDailyOtpQuota(dailyLimitKey),
+      ]);
+      throw error;
     }
 
     await eventPublisher.publish(
@@ -1908,7 +1999,9 @@ class AuthService {
     return {
       message: deliveryMode === "third_party_whatsapp"
         ? "OTP sent successfully on WhatsApp"
-        : isStaticOtp ? "Static OTP ready" : "OTP sent successfully",
+        : deliveryMode === "third_party_sms" || deliveryMode === "static_sms"
+          ? "OTP sent successfully on mobile"
+          : "OTP sent successfully on email",
       deliveryMode,
       ...(deliveryMode === "third_party_whatsapp" ? { whatsappSent: true } : {}),
       ...(isStaticOtp && env.auth.exposeStaticOtp ? { otp } : {}),
@@ -1967,7 +2060,7 @@ class AuthService {
 
   async forgotPassword(payload, requestContext = {}) {
     const { email } = payload;
-    return this.sendOtp({ email, purpose: "influencer_forgot_password" }, requestContext);
+    return this.sendOtp({ email, purpose: "forgot_password" }, requestContext);
   }
 
   async influencerForgotPassword(payload, requestContext = {}) {
@@ -2007,6 +2100,7 @@ class AuthService {
     });
     await redis.del(this.makeOtpKey(email, "influencer_forgot_password"));
     await redis.del(this.makeVerifiedOtpKey(email, "influencer_forgot_password"));
+    await this.sendPasswordChangedEmail(account, { action: "growth_partner_password_reset" });
     return { message: "Influencer password reset successfully" };
   }
 
@@ -2027,6 +2121,7 @@ class AuthService {
     await this.authRepository.updatePassword(user.id, passwordHash);
     await redis.del(this.makeOtpKey(email, "forgot_password"));
     await redis.del(this.makeVerifiedOtpKey(email, "forgot_password"));
+    await this.sendPasswordChangedEmail(user, { action: "password_reset" });
 
     return { message: "Password reset successfully" };
   }
@@ -2066,6 +2161,7 @@ class AuthService {
 
     const passwordHash = await hashText(newPassword);
     await this.authRepository.updatePassword(user.id, passwordHash);
+    await this.sendPasswordChangedEmail(user, { action: "password_changed" });
 
     return { message: "Password changed successfully" };
   }

@@ -12,7 +12,23 @@ class CartService {
   }
 
   async getCart(userId) {
-    return this.refreshCartAvailability(await this.cartRepository.getByUserId(userId));
+    const cart = await this.cartRepository.getByUserId(userId);
+    if (!cart) return cart;
+
+    const normalizedWishlist = await this.normalizeWishlist(cart.wishlist || []);
+    const currentKeys = (cart.wishlist || []).map((item) => this.wishlistKey(item)).sort();
+    const nextKeys = normalizedWishlist.map((item) => this.wishlistKey(item)).sort();
+    const wishlistChanged =
+      currentKeys.length !== nextKeys.length ||
+      currentKeys.some((key, index) => key !== nextKeys[index]);
+
+    const cleanCart = wishlistChanged
+      ? await this.cartRepository.upsertCart(userId, {
+          $set: { wishlist: normalizedWishlist },
+        })
+      : cart;
+
+    return this.refreshCartAvailability(cleanCart);
   }
 
   async listCarts(filter = {}, pagination = {}) {

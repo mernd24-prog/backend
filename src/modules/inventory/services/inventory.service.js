@@ -82,6 +82,8 @@ class InventoryService {
               DOMAIN_EVENTS.INVENTORY_LOW_STOCK_V1,
               {
                 productId: item.productId,
+                productName: product.title || product.name || null,
+                productTitle: product.title || product.name || null,
                 variantSku: item.variantSku || null,
                 sellerId: item.sellerId || product.sellerId || null,
                 available,
