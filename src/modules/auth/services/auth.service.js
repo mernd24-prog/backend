@@ -262,6 +262,19 @@ class AuthService {
     });
   }
 
+  async sendOtpEmail({ email, existingUser = null, otp, purpose }) {
+    const html = otpEmailTemplate({
+      firstName: existingUser?.profile?.firstName || "User",
+      otp,
+      purpose: this.getOtpPurposeLabel(purpose),
+    });
+    return sendMail({
+      to: email,
+      subject: `OTP for ${this.getOtpPurposeLabel(purpose)}`,
+      html,
+    });
+  }
+
   makeInitialSellerProfile(payload = {}) {
     const profileName = composeProfileName(
       payload.profile?.firstName,
@@ -1878,17 +1891,25 @@ class AuthService {
       purpose,
     );
 
+    const primaryOtpChannel = String(
+      process.env.AUTH_PRIMARY_OTP_CHANNEL || "email",
+    ).toLowerCase();
+    const selectedOtpChannel =
+      purpose === "registration" && role === ROLES.SELLER
+        ? String(
+            process.env.AUTH_SELLER_REGISTRATION_OTP_CHANNEL ||
+              primaryOtpChannel,
+          ).toLowerCase()
+        : primaryOtpChannel;
     const useSellerRegistrationWhatsapp =
       purpose === "registration" &&
       role === ROLES.SELLER &&
       Boolean(mobileNumber) &&
-      env.apitxt.whatsappOtpEnabled &&
-      String(process.env.AUTH_PRIMARY_OTP_CHANNEL || "email").toLowerCase() === "whatsapp";
-    const isStaticOtp = !useSellerRegistrationWhatsapp &&
-      (env.auth.otpMode === "static" ||
-        (String(process.env.AUTH_PRIMARY_OTP_CHANNEL || "email").toLowerCase() === "sms" &&
-          mobileNumber &&
-          !env.apitxt.smsOtpEnabled));
+      selectedOtpChannel === "whatsapp";
+    const useSmsOtp =
+      selectedOtpChannel === "sms" &&
+      Boolean(mobileNumber);
+    const isStaticOtp = env.auth.otpMode === "static";
     const otp = isStaticOtp ? env.auth.staticOtp : createOtp();
     const otpKey = this.makeOtpKey(email, purpose);
 
@@ -1918,17 +1939,30 @@ class AuthService {
           "Seller registration OTP WhatsApp delivery selected",
         );
 
-        delivery = await sendWhatsappOtp({
-          mobile: mobileNumber,
-          otp,
-          purpose: "seller_registration",
-        });
-        deliveryMode = delivery?.skipped ? "static_whatsapp" : "third_party_whatsapp";
-      } else if (
-        !isStaticOtp &&
-        String(process.env.AUTH_PRIMARY_OTP_CHANNEL || "email").toLowerCase() === "sms" &&
-        mobileNumber
-      ) {
+        try {
+          delivery = await sendWhatsappOtp({
+            mobile: mobileNumber,
+            otp,
+            purpose: "seller_registration",
+          });
+          if (delivery?.skipped) {
+            throw new AppError("WhatsApp OTP delivery was skipped", 503);
+          }
+          deliveryMode = "third_party_whatsapp";
+        } catch (primaryError) {
+          logger.warn(
+            { err: primaryError, purpose, role },
+            "Seller registration WhatsApp OTP failed; falling back to email",
+          );
+          delivery = await this.sendOtpEmail({
+            email,
+            existingUser,
+            otp,
+            purpose,
+          });
+          deliveryMode = "fallback_email";
+        }
+      } else if (!isStaticOtp && useSmsOtp) {
         logger.info(
           {
             purpose,
@@ -1937,12 +1971,29 @@ class AuthService {
           "Auth OTP delivery selected",
         );
 
-        delivery = await sendSmsOtp({
-          mobile: mobileNumber,
-          otp,
-          purpose,
-        });
-        deliveryMode = delivery?.skipped ? "static_sms" : "third_party_sms";
+        try {
+          delivery = await sendSmsOtp({
+            mobile: mobileNumber,
+            otp,
+            purpose,
+          });
+          if (delivery?.skipped) {
+            throw new AppError("SMS OTP delivery was skipped", 503);
+          }
+          deliveryMode = "third_party_sms";
+        } catch (primaryError) {
+          logger.warn(
+            { err: primaryError, purpose, role },
+            "SMS OTP failed; falling back to email",
+          );
+          delivery = await this.sendOtpEmail({
+            email,
+            existingUser,
+            otp,
+            purpose,
+          });
+          deliveryMode = "fallback_email";
+        }
       } else {
         logger.info(
           {
@@ -1952,15 +2003,11 @@ class AuthService {
           "Auth OTP delivery selected",
         );
 
-        const html = otpEmailTemplate({
-          firstName: existingUser?.profile?.firstName || "User",
+        delivery = await this.sendOtpEmail({
+          email,
+          existingUser,
           otp,
-          purpose: this.getOtpPurposeLabel(purpose),
-        });
-        delivery = await sendMail({
-          to: email,
-          subject: `OTP for ${this.getOtpPurposeLabel(purpose)}`,
-          html,
+          purpose,
         });
         deliveryMode = isStaticOtp ? "static" : "third_party_email";
       }
