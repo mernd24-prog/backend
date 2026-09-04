@@ -383,7 +383,7 @@ class AdvancedSearchService {
       };
 
       const response = await elasticsearchClient.search({
-        index: "products",
+        index: "samglobal_products",
         body: {
           query: {
             bool: {
@@ -782,7 +782,7 @@ class AdvancedSearchService {
       }
 
       await elasticsearchClient.index({
-        index: "products",
+        index: "samglobal_products",
         id: productId,
         document: this.buildSearchDocument({ ...productData, _id: productId }),
         refresh: "wait_for",
@@ -817,7 +817,7 @@ class AdvancedSearchService {
       }
 
       await elasticsearchClient.update({
-        index: "products",
+        index: "samglobal_products",
         id: productId,
         doc: updates,
         refresh: "wait_for",
@@ -835,7 +835,7 @@ class AdvancedSearchService {
 
     try {
       await elasticsearchClient.delete({
-        index: "products",
+        index: "samglobal_products",
         id: productId,
       });
     } catch (error) {
@@ -860,7 +860,7 @@ class AdvancedSearchService {
     }
 
     try {
-      await elasticsearchClient.indices.delete({ index: "products" });
+      await elasticsearchClient.indices.delete({ index: "samglobal_products" });
     } catch (error) {
       if (error?.meta?.statusCode !== 404) {
         logger.warn({ err: error }, "Search index delete before rebuild failed");

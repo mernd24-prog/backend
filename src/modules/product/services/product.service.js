@@ -740,13 +740,13 @@ class ProductService {
     if (!productId) return;
 
     if (!isPublicProduct(product)) {
-      await this._deleteFromIndex(productId);
+      this._deleteFromIndex(productId);
       return;
     }
 
     try {
       await elasticsearchClient.index({
-        index: "products",
+        index: "samglobal_products",
         id: String(productId),
         document: this._buildSearchDocument(product),
       });
@@ -759,7 +759,7 @@ class ProductService {
     if (!isElasticsearchEnabled()) return;
 
     try {
-      await elasticsearchClient.delete({ index: "products", id: String(productId) });
+      await elasticsearchClient.delete({ index: "samglobal_products", id: String(productId) });
     } catch (err) {
       if (err?.meta?.statusCode !== 404) {
         logger.error({ err, productId }, "Elasticsearch delete failed");
@@ -1513,7 +1513,7 @@ class ProductService {
       product.status === PRODUCT_STATUS.ACTIVE &&
       product.approvalStatus === PRODUCT_APPROVAL_STATUS.APPROVED
     ) {
-      await this._indexProduct(product);
+      this._indexProduct(product);
     }
     this._invalidateProductCache();
 
@@ -1706,9 +1706,9 @@ class ProductService {
       updatedProduct.status === PRODUCT_STATUS.ACTIVE &&
       updatedProduct.approvalStatus === PRODUCT_APPROVAL_STATUS.APPROVED
     ) {
-      await this._indexProduct(updatedProduct);
+      this._indexProduct(updatedProduct);
     } else {
-      await this._deleteFromIndex(productId);
+      this._deleteFromIndex(productId);
     }
     this._invalidateProductCache();
 
@@ -1915,7 +1915,7 @@ class ProductService {
       publishedVersion: nextVersion,
     });
 
-    await this._indexProduct(updatedProduct);
+    this._indexProduct(updatedProduct);
     this._invalidateProductCache();
 
     return {
@@ -2915,7 +2915,10 @@ async getProduct(productId) {
       return { items: result.items, total: result.total, source: "mongo" };
     };
 
-    if (!isElasticsearchEnabled()) return searchMongo();
+    if (!isElasticsearchEnabled()) {
+      logger.info("[Elasticsearch] Disabled - using existing fallback search");
+      return searchMongo();
+    }
 
     try {
       const esQuery = {
@@ -2996,12 +2999,13 @@ async getProduct(productId) {
         _score: [{ _score: "desc" }, { "analytics.purchases": "desc" }],
       };
       const response = await elasticsearchClient.search({
-        index: "products",
+        index: "samglobal_products",
         from: (page - 1) * limit,
         size: limit,
         query: esQuery,
         sort: sortOptions[query.sort] || sortOptions._score,
       });
+      logger.info("[Elasticsearch] Product search served by Elasticsearch");
       return {
         items: response.hits.hits.map((hit) => ({ ...hit._source, _score: hit._score })),
         total: response.hits.total?.value ?? response.hits.hits.length,
@@ -3009,6 +3013,7 @@ async getProduct(productId) {
       };
     } catch (error) {
       logger.warn({ err: error, q: query.q }, "Elasticsearch search failed, falling back to Mongo");
+      logger.info("[Elasticsearch] Search failed - using fallback search");
       return searchMongo();
     }
   }
@@ -3075,9 +3080,9 @@ async getProduct(productId) {
       nextStatus === PRODUCT_STATUS.ACTIVE &&
       nextApprovalStatus === PRODUCT_APPROVAL_STATUS.APPROVED
     ) {
-      await this._indexProduct(updatedProduct);
+      this._indexProduct(updatedProduct);
     } else {
-      await this._deleteFromIndex(productId);
+      this._deleteFromIndex(productId);
     }
     this._invalidateProductCache();
 
@@ -3166,9 +3171,9 @@ async getProduct(productId) {
 
     if (status === PRODUCT_STATUS.ACTIVE) {
       const updatedProducts = await this.productRepository.findByIds(productIds);
-      await Promise.allSettled(updatedProducts.map((p) => this._indexProduct(p)));
+      Promise.allSettled(updatedProducts.map((p) => this._indexProduct(p)));
     } else {
-      await Promise.allSettled(productIds.map((id) => this._deleteFromIndex(id)));
+      Promise.allSettled(productIds.map((id) => this._deleteFromIndex(id)));
     }
     this._invalidateProductCache();
 
@@ -3185,7 +3190,7 @@ async getProduct(productId) {
     products.forEach((product) => this.assertCanAccessManagementProduct(product, actor));
     await this.productRepository.bulkUpdateVisibility(productIds, visibility);
     const updatedProducts = await this.productRepository.findByIds(productIds);
-    await Promise.allSettled(updatedProducts.map((product) => this._indexProduct(product)));
+    Promise.allSettled(updatedProducts.map((product) => this._indexProduct(product)));
     this._invalidateProductCache();
     return { updated: productIds.length, visibility };
   }
@@ -3444,7 +3449,7 @@ async getProduct(productId) {
 
     await this.productRepository.deleteRevisions(productId);
     const deletedProduct = await this.productRepository.delete(productId);
-    await this._deleteFromIndex(productId);
+    this._deleteFromIndex(productId);
     this._invalidateProductCache();
     return {
       deleted: true,
@@ -3474,7 +3479,7 @@ async getProduct(productId) {
 
     await this.productRepository.deleteManyRevisions(normalizedIds);
     const result = await this.productRepository.deleteMany(normalizedIds);
-    await Promise.allSettled(normalizedIds.map((id) => this._deleteFromIndex(id)));
+    Promise.allSettled(normalizedIds.map((id) => this._deleteFromIndex(id)));
     this._invalidateProductCache();
     return { deleted: Number(result?.deletedCount || 0), productIds: normalizedIds };
   }
@@ -3594,9 +3599,9 @@ async getProduct(productId) {
       updatedProduct.status === PRODUCT_STATUS.ACTIVE &&
       updatedProduct.approvalStatus === PRODUCT_APPROVAL_STATUS.APPROVED
     ) {
-      await this._indexProduct(updatedProduct);
+      this._indexProduct(updatedProduct);
     } else {
-      await this._deleteFromIndex(productId);
+      this._deleteFromIndex(productId);
     }
     this._invalidateProductCache();
     return updatedProduct;
@@ -3651,7 +3656,7 @@ async getProduct(productId) {
           reason: "scheduled_publish_job",
         }),
       });
-      await this._indexProduct(updatedProduct);
+      this._indexProduct(updatedProduct);
       results.push(updatedProduct);
     }
 
