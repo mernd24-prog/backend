@@ -37,14 +37,31 @@ function createDisabledElasticsearchClient() {
 
 const elasticsearchClient = env.elasticsearch.enabled
   ? new Client({
-      node: env.elasticsearchNode,
+      node: env.elasticsearchUrl,
+      auth: {
+        username: env.elasticsearchUsername,
+        password: env.elasticsearchPassword,
+      },
       maxRetries: 0,
-      requestTimeout: 750,
+      requestTimeout: 5000,
+      tls: { rejectUnauthorized: false }, // temporary for local testing; use CA cert in production
     })
   : createDisabledElasticsearchClient();
 
 function isElasticsearchEnabled() {
   return env.elasticsearch.enabled;
 }
+
+console.log("\n========================================");
+console.log("ELASTICSEARCH CONFIG");
+console.log("========================================");
+console.log("Enabled       :", env.elasticsearch.enabled ? "Yes" : "No");
+console.log("Node URL      :", env.elasticsearchUrl || "Not set");
+console.log("Username      :", env.elasticsearchUsername ? "Loaded" : "Missing");
+console.log("Password      :", env.elasticsearchPassword ? "Loaded" : "Missing");
+console.log("Mode          :", env.elasticsearch.mode);
+console.log("Index         :", "samglobal_products");
+console.log("Timeout (ms)  :", 5000);
+console.log("========================================\n");
 
 module.exports = { elasticsearchClient, isElasticsearchEnabled };

@@ -147,10 +147,11 @@ const razorpayXMode = razorpayXLiveRequested && razorpayXConfigured
     ? "mock"
     : "disabled";
 
-const elasticsearchConfigured = hasEnvValue(process.env.ELASTICSEARCH_NODE);
+const elasticsearchUrl = process.env.ELASTICSEARCH_URL || process.env.ELASTICSEARCH_NODE || "";
+const elasticsearchConfigured = hasEnvValue(elasticsearchUrl);
 const elasticsearchEnabled = readBooleanFlag(
-  ["ENABLE_ELASTICSEARCH", "USE_ELASTICSEARCH"],
-  isProductionMode,
+  ["ELASTICSEARCH_ENABLED", "ENABLE_ELASTICSEARCH", "USE_ELASTICSEARCH"],
+  false,
 ) && elasticsearchConfigured;
 
 const cloudinaryMissingKeys = findMissingConfig([
@@ -267,7 +268,9 @@ const env = {
     idleMillis: parsePositiveInteger(process.env.SEQUELIZE_IDLE_MS, 10000),
   },
   redisUrl: process.env.REDIS_URL || "redis://localhost:6379",
-  elasticsearchNode: process.env.ELASTICSEARCH_NODE || "http://localhost:9200",
+  elasticsearchUrl,
+  elasticsearchUsername: process.env.ELASTICSEARCH_USERNAME || "",
+  elasticsearchPassword: process.env.ELASTICSEARCH_PASSWORD || "",
   elasticsearch: {
     enabled: elasticsearchEnabled,
     configured: elasticsearchConfigured,
