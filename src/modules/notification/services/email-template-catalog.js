@@ -1,4 +1,5 @@
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
+const { renderHeroArt } = require("./email-hero-art");
 
 const titleCase = (value = "") =>
   String(value || "")
@@ -11,12 +12,106 @@ const brandName = process.env.EMAIL_BRAND_NAME ||
   process.env.BRAND_NAME ||
   titleCase(process.env.APP_NAME) ||
   "Sam Global Ecommerce";
+const headerBrandName = process.env.EMAIL_HEADER_BRAND_NAME ||
+  brandName.replace(/\s+E-?Commerce$/i, "") ||
+  "Sam Global";
 const customerAppBaseUrl = String(process.env.CUSTOMER_APP_BASE_URL || "").replace(/\/+$/, "");
 const logoUrl = process.env.EMAIL_LOGO_URL ||
   process.env.BRAND_LOGO_URL ||
   process.env.INVOICE_LOGO_URL ||
   (customerAppBaseUrl ? `${customerAppBaseUrl}/favicon.png` : "");
 const supportEmail = process.env.SUPPORT_EMAIL || process.env.REPLY_TO_EMAIL || "";
+const currentYear = new Date().getFullYear();
+
+const EMAIL_ICONS = {
+  account: "&#128075;",
+  alert: "&#9888;",
+  auth: "&#128274;",
+  cart: "&#128722;",
+  delivery: "&#128666;",
+  document: "&#128196;",
+  inventory: "&#128230;",
+  money: "&#128176;",
+  order: "&#128717;",
+  product: "&#127873;",
+  return: "&#8635;",
+  seller: "&#127970;",
+  support: "&#9993;",
+  success: "&#10003;",
+};
+
+const iconForTemplate = (templateKey = "", definition = {}) => {
+  if (definition.icon) return definition.icon;
+  if (definition.tone === "alert" || /failed|rejected|cancelled|low_stock/i.test(templateKey)) return EMAIL_ICONS.alert;
+  if (/auth|password|verification|otp/i.test(templateKey)) return EMAIL_ICONS.auth;
+  if (/welcome/i.test(templateKey)) return EMAIL_ICONS.account;
+  if (/seller|onboarding|kyc/i.test(templateKey)) return EMAIL_ICONS.seller;
+  if (/order|payment/i.test(templateKey)) return /paid|confirmed/i.test(templateKey) ? EMAIL_ICONS.success : EMAIL_ICONS.order;
+  if (/return|refund|credit_note/i.test(templateKey)) return EMAIL_ICONS.return;
+  if (/invoice|document/i.test(templateKey)) return EMAIL_ICONS.document;
+  if (/support/i.test(templateKey)) return EMAIL_ICONS.support;
+  if (/stock|inventory|product/i.test(templateKey)) return /stock/i.test(templateKey) ? EMAIL_ICONS.inventory : EMAIL_ICONS.product;
+  if (/shipment|delivered/i.test(templateKey)) return EMAIL_ICONS.delivery;
+  if (/payout|reward|growth/i.test(templateKey)) return EMAIL_ICONS.money;
+  return EMAIL_ICONS.order;
+};
+
+const renderHeaderIcon = (icon, isAlert = false) => `
+  <table role="presentation" cellpadding="0" cellspacing="0" style="margin-left:auto;">
+    <tr>
+      <td align="center" style="width:168px;">
+        ${renderHeroArt(icon, { type: isAlert ? "alert" : undefined })}
+      </td>
+    </tr>
+  </table>`;
+
+const renderTrustStrip = () => `
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;border-top:1px solid #eef0f4;border-bottom:1px solid #e6e9f2;">
+    <tr>
+      <td class="sg-trust-item" width="33.33%" style="padding:16px 16px 16px 0;border-right:1px solid #dfe5f0;vertical-align:top;">
+        <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+          <td width="46" style="color:#0026d8;font-size:28px;line-height:1;vertical-align:top;">&#128737;</td>
+          <td style="vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Secure &amp; Trusted</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">Your security is our top priority.</div></td>
+        </tr></table>
+      </td>
+      <td class="sg-trust-item" width="33.33%" style="padding:16px;border-right:1px solid #dfe5f0;vertical-align:top;">
+        <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+          <td width="46" style="color:#0026d8;font-size:28px;line-height:1;vertical-align:top;">&#128100;</td>
+          <td style="vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Account Protection</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">This helps us keep your account safe.</div></td>
+        </tr></table>
+      </td>
+      <td class="sg-trust-item" width="33.33%" style="padding:16px 0 16px 16px;vertical-align:top;">
+        <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+          <td width="46" style="color:#0026d8;font-size:28px;line-height:1;vertical-align:top;">&#9993;</td>
+          <td style="vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Didn't Request This?</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">You can safely ignore this email.</div></td>
+        </tr></table>
+      </td>
+    </tr>
+  </table>`;
+
+const renderOtpCodeBlock = (otp) => {
+  if (!otp) return "";
+  const code = String(otp || "").replace(/\s+/g, "");
+  return `
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:22px 0 16px;background:#f5f8ff;border:1px dashed #b8c8ff;border-radius:12px;">
+      <tr>
+        <td colspan="3" align="center" style="padding:18px 16px 8px;font-size:12px;font-weight:800;text-transform:uppercase;color:#0026d8;">&#128274;&nbsp; Your Verification Code</td>
+      </tr>
+      <tr>
+        <td class="sg-code-cell" align="center" style="padding:4px 16px 22px 24px;">
+          <span class="sg-code" style="font-size:42px;line-height:1.15;letter-spacing:12px;font-weight:800;color:#061044;font-family:Arial,Helvetica,sans-serif;white-space:nowrap;">${escapeHtml(code)}</span>
+        </td>
+        <td class="sg-code-divider" width="1" style="padding:0 0 18px;"><div style="width:1px;height:58px;background:#dbe4f4;line-height:1px;font-size:1px;">&nbsp;</div></td>
+        <td class="sg-copy-cell" width="136" align="center" style="padding:4px 20px 22px 18px;font-size:13px;font-weight:800;color:#0026d8;white-space:nowrap;">&#128203;&nbsp; Copy Code</td>
+      </tr>
+    </table>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 22px;background:#fff8eb;border:1px solid #ffe2a8;border-radius:10px;">
+      <tr>
+        <td width="42" align="center" style="padding:12px 0 12px 14px;font-size:24px;color:#f0a000;vertical-align:middle;">&#9201;</td>
+        <td style="padding:12px 14px 12px 10px;font-size:13px;line-height:1.5;color:#061044;"><strong>This code will expire in 15 minutes.</strong><br>Please do not share it with anyone.</td>
+      </tr>
+    </table>`;
+};
 
 const escapeHtml = (value = "") =>
   String(value ?? "")
@@ -102,6 +197,9 @@ const customerNameOf = (payload = {}) => {
 const partnerNameOf = (payload = {}) =>
   firstValue(payload.partnerName, payload.referrerName, payload.influencerName, payload.profile?.firstName);
 
+const recipientNameOf = (payload = {}) =>
+  firstValue(payload.firstName, payload.name, payload.customerName, payload.buyerName, payload.sellerName);
+
 const orderRows = (payload = {}) => compactRows([
   row("Order", publicOrderReference(payload)),
   row("Status", humanize(firstValue(payload.status, payload.orderStatus))),
@@ -139,13 +237,25 @@ const payoutRows = (payload = {}) => compactRows([
   row("Status", humanize(payload.status)),
   row("Amount", moneyOf(payload, "amount", "netAmount", "payoutAmount")),
   row("Reference", publicValue(payload.paymentReference, payload.utr, payload.referenceNumber)),
+  row("Processed at", payload.processedAt),
+  row("Settlement period", payload.period),
+  row("Gross sales", payload.grossSales),
+  row("Platform commission", payload.platformCommission),
+  row("Tax / TCS / TDS", payload.taxAmount),
+  row("Refunds / adjustments", payload.adjustments),
 ]);
 
 const supportRows = (payload = {}) => compactRows([
   row("Ticket", publicValue(payload.queryId, payload.ticketNumber, payload.ticketNo)),
+  row("User type", humanize(payload.userType)),
+  row("Name", payload.name || payload.userName),
+  row("Email", payload.email || payload.userEmail),
+  row("Phone", payload.phone || payload.userPhone),
+  row("Organization", payload.organization),
   row("Category", humanize(payload.category)),
   row("Status", humanize(payload.status)),
   row("Subject", payload.subject),
+  row("Message", payload.message),
 ]);
 
 const growthRows = (payload = {}) => compactRows([
@@ -181,22 +291,25 @@ const authRows = (payload = {}) => compactRows([
 const EMAIL_TEMPLATE_DEFINITIONS = {
   auth_otp: {
     subject: "Your Sam Global verification code",
-    title: "Verification Code",
+    title: "Verify Your Account",
     intro: ({ otp, purpose }) => `Use ${otp} to complete ${humanize(purpose) || "verification"}. This code will expire soon.`,
     rows: authRows,
     ctaText: "",
+    icon: EMAIL_ICONS.auth,
   },
   auth_password_changed: {
     subject: "Your Sam Global password was changed",
     title: "Password Changed",
     intro: () => "Your account password was changed successfully. If this was not you, contact support immediately.",
     rows: authRows,
+    icon: EMAIL_ICONS.auth,
   },
   account_welcome: {
     subject: "Welcome to Sam Global",
     title: "Welcome to Sam Global",
     intro: () => "Your account is ready. You can now continue shopping or managing your Sam Global account.",
     rows: authRows,
+    icon: EMAIL_ICONS.account,
   },
   seller_account_created_admin: {
     subject: "New Seller Account Created",
@@ -511,19 +624,27 @@ function renderEmailTemplate({
   const rows = typeof definition.rows === "function" ? definition.rows(payload) : [];
   const preheader = [heading, rows[0]?.value].filter(Boolean).join(" - ");
   const safeCtaUrl = containsPrivateReference(ctaUrl) ? "" : ctaUrl;
+  const templateIcon = iconForTemplate(resolvedKey, definition);
+  const isOtpTemplate = resolvedKey === "auth_otp" && payload.otp;
+  const bodyIntro = isOtpTemplate
+    ? `Thank you for using ${brandName}. Please use the verification code below to confirm your email address and complete your account setup.`
+    : message || intro;
+  const greeting = /^auth_|account_welcome/.test(resolvedKey || "")
+    ? `Hello ${recipientNameOf(payload) || "User"},`
+    : "";
   const button = safeCtaUrl && definition.ctaText
-    ? `<p style="margin:28px 0 0;"><a href="${escapeHtml(safeCtaUrl)}" style="display:inline-block;background:#f4ab2f;color:#061044;text-decoration:none;border-radius:8px;padding:13px 24px;font-weight:700;font-size:14px;">${escapeHtml(definition.ctaText)}</a></p>`
+    ? `<p style="margin:28px 0 0;"><a href="${escapeHtml(safeCtaUrl)}" style="display:inline-block;background:#d9a327;color:#061044;text-decoration:none;border-radius:999px;padding:13px 26px;font-weight:800;font-size:14px;">${escapeHtml(definition.ctaText)}</a></p>`
     : "";
   const detailRows = compactRows(rows)
     .map((item) => {
       const isStatus = /status/i.test(item.label);
       const isLowStockCount = /available stock/i.test(item.label) && Number(item.value) <= Number(payload.threshold || 0);
-      const isLongValue = String(item.value || "").length > 42;
+      const isLongValue = String(item.value || "").length > 24 || String(item.value || "").includes("@");
       const valueStyle = isStatus
         ? "display:inline-block;background:#fff1d6;color:#b06000;border-radius:999px;padding:4px 11px;font-size:12px;font-weight:700;"
         : isLowStockCount
           ? "display:inline-block;background:#ffe5e5;color:#d12a2a;border-radius:999px;padding:4px 12px;font-size:13px;font-weight:800;"
-        : "color:#061044;font-size:14px;font-weight:700;text-align:right;";
+        : "color:#061044;font-size:14px;font-weight:700;text-align:right;word-break:break-word;";
       if (isLongValue) {
         return `
       <tr>
@@ -541,8 +662,8 @@ function renderEmailTemplate({
     })
     .join("");
   const logoBlock = logoUrl
-    ? `<img src="${escapeHtml(logoUrl)}" width="34" height="34" alt="${escapeHtml(brandName)}" style="display:block;width:34px;height:34px;border-radius:8px;object-fit:contain;background:#ffffff;">`
-    : `<span style="display:inline-block;width:31px;height:31px;border-radius:8px;background:#f4ab2f;color:#061044;font-size:14px;line-height:31px;text-align:center;font-weight:800;">S</span>`;
+    ? `<img src="${escapeHtml(logoUrl)}" width="28" height="28" alt="${escapeHtml(brandName)}" style="display:block;width:28px;height:28px;border-radius:7px;object-fit:contain;background:#ffffff;border:0;outline:none;text-decoration:none;">`
+    : `<span style="display:inline-block;width:28px;height:28px;border-radius:50%;background:#d9a327;color:#061044;font-size:15px;line-height:28px;text-align:center;font-weight:800;">&#9737;</span>`;
 
   const html = `<!doctype html>
   <html>
@@ -554,55 +675,68 @@ function renderEmailTemplate({
         @media only screen and (max-width: 520px) {
           .sg-wrapper { padding: 16px 8px !important; }
           .sg-card { border-radius: 12px !important; }
-          .sg-header { padding: 24px 20px !important; }
-          .sg-body { padding: 24px 20px !important; }
+          .sg-header { padding: 24px 28px !important; }
+          .sg-body { padding: 26px 28px !important; }
           .sg-footer { padding: 22px 20px !important; }
-          .sg-title { font-size: 22px !important; }
-          .sg-brand-text { font-size: 12px !important; }
+          .sg-title { font-size: 21px !important; }
+          .sg-brand-text { font-size: 11px !important; letter-spacing: 1.3px !important; white-space: nowrap !important; }
+          .sg-hero-icon { width: 148px !important; }
+          .sg-hero-art { width: 148px !important; max-width:148px !important; }
+          .sg-code { font-size: 38px !important; letter-spacing: 9px !important; padding-left: 8px !important; padding-right: 8px !important; }
+          .sg-code-cell, .sg-copy-cell, .sg-code-divider { display: block !important; width: 100% !important; box-sizing: border-box !important; }
+          .sg-code-cell { padding: 4px 12px 14px !important; }
+          .sg-code-divider { padding: 0 22px !important; }
+          .sg-code-divider div { width: 100% !important; height: 1px !important; }
+          .sg-copy-cell { padding: 14px 16px 18px !important; text-align: center !important; }
+          .sg-trust-item { display: block !important; width: 100% !important; box-sizing: border-box !important; padding: 14px 0 !important; border-right:0 !important; border-bottom:1px solid #e6e9f2 !important; }
         }
       </style>
     </head>
-    <body style="margin:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+    <body style="margin:0;background:#f3f6fb;font-family:Arial,Helvetica,sans-serif;color:#111827;">
       <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;line-height:1px;font-size:1px;">${escapeHtml(preheader)}</div>
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-wrapper" style="background:#f4f6f8;padding:30px 12px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-wrapper" style="background:#f3f6fb;padding:30px 12px;">
         <tr>
           <td align="center">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-card" style="max-width:620px;background:#ffffff;border:1px solid #d9dee8;border-radius:14px;overflow:hidden;box-shadow:0 14px 34px rgba(17,24,39,0.08);">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-card" style="max-width:600px;background:#ffffff;border:1px solid #d9dee8;border-radius:18px;overflow:hidden;box-shadow:0 18px 40px rgba(17,24,39,0.11);">
               <tr>
-                <td class="sg-header" style="background:#211b63;padding:30px 36px 28px;border-bottom:4px solid #f4ab2f;">
+                <td class="sg-header" style="background:#061044;padding:26px 28px 24px;border-bottom:4px solid #d9a327;">
                   <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
                     <tr>
-                      <td width="44" valign="middle">${logoBlock}</td>
-                      <td valign="middle">
-                        <div class="sg-brand-text" style="font-size:12px;line-height:1.3;color:#ffc34d;text-transform:uppercase;letter-spacing:1.8px;font-weight:700;">${escapeHtml(brandName)}</div>
+                      <td width="190" valign="top">
+                        <table role="presentation" cellpadding="0" cellspacing="0">
+                          <tr>
+                            <td width="36" valign="middle">${logoBlock}</td>
+                            <td valign="middle">
+                              <div class="sg-brand-text" style="font-size:11px;line-height:1.3;color:#ffc34d;text-transform:uppercase;letter-spacing:1.4px;font-weight:800;white-space:nowrap;">${escapeHtml(headerBrandName)}</div>
+                            </td>
+                          </tr>
+                        </table>
+                        <h1 class="sg-title" style="margin:20px 0 0;font-size:24px;line-height:1.25;color:#ffffff;font-weight:800;mso-line-height-rule:exactly;">${escapeHtml(heading)}</h1>
+                        <p style="margin:8px 0 0;font-size:13px;line-height:1.5;color:#dbe6ff;">${escapeHtml(isOtpTemplate ? "One last step to complete your registration" : "Important account update")}</p>
                       </td>
-                      ${isAlert ? `<td align="right" valign="middle"><span style="display:inline-block;background:#7c2d67;color:#ffd7df;border-radius:999px;padding:6px 12px;font-size:11px;font-weight:800;letter-spacing:.04em;">&#9888; ALERT</span></td>` : ""}
+                      <td class="sg-hero-icon" width="148" align="right" valign="middle">${renderHeaderIcon(resolvedKey, isAlert)}</td>
                     </tr>
                   </table>
-                  <h1 class="sg-title" style="margin:20px 0 0;font-size:24px;line-height:1.3;color:#ffffff;font-weight:800;">${escapeHtml(heading)}</h1>
                 </td>
               </tr>
               <tr>
-                <td class="sg-body" style="padding:34px 36px 32px;">
-                  ${isAlert ? `<div style="margin:0 0 28px;border:1px solid #ffb7b7;background:#fff4f4;color:#c1121f;border-radius:9px;padding:14px 16px;font-size:14px;font-weight:800;line-height:1.5;">&#9888; ${escapeHtml(alertText)}</div>` : ""}
-                  ${isAlert ? "" : `<p style="margin:0 0 26px;font-size:16px;line-height:1.8;color:#26324a;">${escapeHtml(message || intro)}</p>`}
+                <td class="sg-body" style="padding:28px 28px 26px;">
+                  ${isAlert ? `<div style="margin:0 0 24px;border:1px solid #ffb7b7;background:#fff4f4;color:#c1121f;border-radius:9px;padding:14px 16px;font-size:14px;font-weight:800;line-height:1.5;">${templateIcon} ${escapeHtml(alertText)}</div>` : ""}
+                  ${greeting ? `<p style="margin:0 0 10px;font-size:16px;line-height:1.5;color:#061044;font-weight:800;">${escapeHtml(greeting)}</p>` : ""}
+                  ${isAlert ? "" : `<p style="margin:0 0 22px;font-size:15px;line-height:1.75;color:#061044;">${escapeHtml(bodyIntro)}</p>`}
+                  ${renderOtpCodeBlock(payload.otp)}
                   ${detailRows ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eef0f4;">${detailRows}</table>` : ""}
                   ${button}
+                  <div class="sg-trust">${renderTrustStrip()}</div>
                 </td>
               </tr>
               <tr>
-                <td class="sg-footer" style="background:#f7f8fc;border-top:1px solid #e6e9f2;padding:26px 36px;">
-                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                    <tr>
-                      <td style="font-size:13px;line-height:1.6;color:#061044;font-weight:800;">${escapeHtml(brandName)}</td>
-                      <td align="right" style="font-size:12px;line-height:1.6;color:#8a91a7;">Help&nbsp;&nbsp;&nbsp; Settings&nbsp;&nbsp;&nbsp; Unsubscribe</td>
-                    </tr>
-                  </table>
-                  <p style="margin:18px 0 0;font-size:12px;line-height:1.7;color:#9aa1b5;">
-                    This is an automated update from ${escapeHtml(brandName)}. Please do not reply to this email.
+                <td class="sg-footer" align="center" style="background:#ffffff;border-top:1px solid #e6e9f2;padding:22px 36px 24px;">
+                  <p style="margin:0;font-size:11px;line-height:1.7;color:#8a91a7;">
+                    This is an automated email from ${escapeHtml(brandName)}. Please do not reply to this email.
                     ${supportEmail ? ` For assistance, contact ${escapeHtml(supportEmail)}.` : ""}
-                    <br>&copy; ${new Date().getFullYear()} ${escapeHtml(brandName)}. All rights reserved.
                   </p>
+                  <p style="margin:12px 0 0;font-size:11px;line-height:1.7;color:#8a91a7;">&#128274; &copy; ${currentYear} ${escapeHtml(brandName)}. All rights reserved.</p>
                 </td>
               </tr>
             </table>
@@ -616,7 +750,13 @@ function renderEmailTemplate({
   return {
     templateKey: resolvedKey,
     subject: title,
-    text: [heading, "", message || intro, textRows ? `\n${textRows}` : ""].filter(Boolean).join("\n"),
+    text: [
+      heading,
+      "",
+      bodyIntro,
+      isOtpTemplate ? `Verification code: ${payload.otp}` : "",
+      textRows ? `\n${textRows}` : "",
+    ].filter(Boolean).join("\n"),
     html,
   };
 }

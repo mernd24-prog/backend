@@ -10,6 +10,7 @@ const {
   renderEmailTemplate,
   resolveTemplateKey,
 } = require("./email-template-catalog");
+const { renderHeroArt } = require("./email-hero-art");
 
 const { escapeHtml, humanize, formatMoney, toAbsoluteUrl, row } = helpers;
 const titleCase = (value = "") =>
@@ -22,12 +23,16 @@ const brandName = process.env.EMAIL_BRAND_NAME ||
   process.env.BRAND_NAME ||
   titleCase(process.env.APP_NAME) ||
   "Sam Global Ecommerce";
+const headerBrandName = process.env.EMAIL_HEADER_BRAND_NAME ||
+  brandName.replace(/\s+E-?Commerce$/i, "") ||
+  "Sam Global";
 const customerAppBaseUrl = String(process.env.CUSTOMER_APP_BASE_URL || "").replace(/\/+$/, "");
 const logoUrl = process.env.EMAIL_LOGO_URL ||
   process.env.BRAND_LOGO_URL ||
   process.env.INVOICE_LOGO_URL ||
   (customerAppBaseUrl ? `${customerAppBaseUrl}/favicon.png` : "");
 const supportEmail = process.env.SUPPORT_EMAIL || process.env.REPLY_TO_EMAIL || "";
+const currentYear = new Date().getFullYear();
 
 const publicValue = (value = "") => {
   const text = String(value || "").trim();
@@ -338,27 +343,27 @@ const wrapEmail = ({ title, intro, rows = [], ctaText = "View details", ctaUrl =
     .filter((row) => row?.value !== undefined && row?.value !== null && row?.value !== "")
     .map(
       (row) => {
-        const isLongValue = String(row.value || "").length > 42;
+        const isLongValue = String(row.value || "").length > 24 || String(row.value || "").includes("@");
         if (isLongValue) {
           return `
         <tr>
           <td colspan="2" style="padding:11px 0 4px;color:#8a91a7;font-size:13px;">${escapeHtml(row.label)}</td>
         </tr>
         <tr>
-          <td colspan="2" style="padding:0 0 11px;color:#061044;font-size:13px;font-weight:700;text-align:right;border-bottom:1px solid #eef0f4;">${escapeHtml(row.value)}</td>
+          <td colspan="2" style="padding:0 0 11px;color:#061044;font-size:13px;font-weight:700;text-align:right;border-bottom:1px solid #eef0f4;word-break:break-word;">${escapeHtml(row.value)}</td>
         </tr>`;
         }
         return `
         <tr>
           <td style="padding:10px 10px 10px 0;color:#8a91a7;font-size:13px;border-bottom:1px solid #eef0f4;vertical-align:top;">${escapeHtml(row.label)}</td>
-          <td style="padding:10px 0 10px 10px;color:#061044;font-size:13px;font-weight:700;text-align:right;border-bottom:1px solid #eef0f4;vertical-align:top;">${escapeHtml(row.value)}</td>
+          <td style="padding:10px 0 10px 10px;color:#061044;font-size:13px;font-weight:700;text-align:right;border-bottom:1px solid #eef0f4;vertical-align:top;word-break:break-word;">${escapeHtml(row.value)}</td>
         </tr>`;
       },
     )
     .join("");
   const logoBlock = logoUrl
-    ? `<img src="${escapeHtml(logoUrl)}" width="34" height="34" alt="${escapeHtml(brandName)}" style="display:block;width:34px;height:34px;border-radius:8px;object-fit:contain;background:#ffffff;">`
-    : `<span style="display:inline-block;width:31px;height:31px;border-radius:8px;background:#f4ab2f;color:#061044;font-size:14px;line-height:31px;text-align:center;font-weight:800;">S</span>`;
+    ? `<img src="${escapeHtml(logoUrl)}" width="28" height="28" alt="${escapeHtml(brandName)}" style="display:block;width:28px;height:28px;border-radius:7px;object-fit:contain;background:#ffffff;border:0;outline:none;text-decoration:none;">`
+    : `<span style="display:inline-block;width:28px;height:28px;border-radius:50%;background:#d9a327;color:#061044;font-size:15px;line-height:28px;text-align:center;font-weight:800;">&#9737;</span>`;
 
   return `<!doctype html>
   <html>
@@ -370,33 +375,46 @@ const wrapEmail = ({ title, intro, rows = [], ctaText = "View details", ctaUrl =
         @media only screen and (max-width: 520px) {
           .sg-wrapper { padding: 16px 8px !important; }
           .sg-card { border-radius: 12px !important; }
-          .sg-header { padding: 24px 20px !important; }
-          .sg-body { padding: 24px 20px !important; }
+          .sg-header { padding: 24px 28px !important; }
+          .sg-body { padding: 26px 28px !important; }
           .sg-footer { padding: 22px 20px !important; }
-          .sg-title { font-size: 22px !important; }
+          .sg-title { font-size: 21px !important; }
+          .sg-brand-text { font-size: 11px !important; letter-spacing: 1.3px !important; white-space: nowrap !important; }
+          .sg-hero-icon { width: 148px !important; }
+          .sg-hero-art { width: 148px !important; max-width:148px !important; }
         }
       </style>
     </head>
-    <body style="margin:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#111827;">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-wrapper" style="background:#f4f6f8;padding:30px 12px;">
+    <body style="margin:0;background:#f3f6fb;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-wrapper" style="background:#f3f6fb;padding:30px 12px;">
         <tr>
           <td align="center">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-card" style="max-width:620px;background:#ffffff;border:1px solid #d9dee8;border-radius:14px;overflow:hidden;box-shadow:0 14px 34px rgba(17,24,39,0.08);">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-card" style="max-width:600px;background:#ffffff;border:1px solid #d9dee8;border-radius:18px;overflow:hidden;box-shadow:0 18px 40px rgba(17,24,39,0.11);">
               <tr>
-                <td class="sg-header" style="background:#211b63;padding:30px 36px 28px;border-bottom:4px solid #f4ab2f;">
+                <td class="sg-header" style="background:#061044;padding:26px 28px 24px;border-bottom:4px solid #d9a327;">
                   <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
                     <tr>
-                      <td width="44" valign="middle">${logoBlock}</td>
-                      <td valign="middle">
-                        <div style="font-size:12px;line-height:1.3;color:#ffc34d;text-transform:uppercase;letter-spacing:1.8px;font-weight:700;">${escapeHtml(brandName)}</div>
+                      <td width="190" valign="top">
+                        <table role="presentation" cellpadding="0" cellspacing="0">
+                          <tr>
+                            <td width="36" valign="middle">${logoBlock}</td>
+                            <td valign="middle">
+                              <div class="sg-brand-text" style="font-size:11px;line-height:1.3;color:#ffc34d;text-transform:uppercase;letter-spacing:1.4px;font-weight:800;white-space:nowrap;">${escapeHtml(headerBrandName)}</div>
+                            </td>
+                          </tr>
+                        </table>
+                        <h1 class="sg-title" style="margin:20px 0 0;font-size:24px;line-height:1.25;color:#ffffff;font-weight:800;mso-line-height-rule:exactly;">${escapeHtml(title)}</h1>
+                        <p style="margin:8px 0 0;font-size:13px;line-height:1.5;color:#dbe6ff;">Important account update</p>
+                      </td>
+                      <td class="sg-hero-icon" width="148" align="right" valign="middle">
+                        ${renderHeroArt(title || "support")}
                       </td>
                     </tr>
                   </table>
-                  <h1 class="sg-title" style="margin:20px 0 0;font-size:24px;line-height:1.3;color:#ffffff;font-weight:800;">${escapeHtml(title)}</h1>
                 </td>
               </tr>
               <tr>
-                <td class="sg-body" style="padding:34px 36px 32px;">
+                <td class="sg-body" style="padding:28px 28px 26px;">
                   <p style="margin:0 0 26px;font-size:16px;line-height:1.8;color:#26324a;">${escapeHtml(intro)}</p>
                   ${
                     detailRows
@@ -405,24 +423,18 @@ const wrapEmail = ({ title, intro, rows = [], ctaText = "View details", ctaUrl =
                   }
                   ${
                     ctaUrl
-                      ? `<p style="margin:28px 0 0;"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;background:#f4ab2f;color:#061044;text-decoration:none;border-radius:8px;padding:13px 24px;font-weight:700;font-size:14px;">${escapeHtml(ctaText)}</a></p>`
+                      ? `<p style="margin:28px 0 0;"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;background:#d9a327;color:#061044;text-decoration:none;border-radius:999px;padding:13px 26px;font-weight:800;font-size:14px;">${escapeHtml(ctaText)}</a></p>`
                       : ""
                   }
                 </td>
               </tr>
               <tr>
-                <td class="sg-footer" style="background:#f7f8fc;border-top:1px solid #e6e9f2;padding:26px 36px;">
-                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                    <tr>
-                      <td style="font-size:13px;line-height:1.6;color:#061044;font-weight:800;">${escapeHtml(brandName)}</td>
-                      <td align="right" style="font-size:12px;line-height:1.6;color:#8a91a7;">Help&nbsp;&nbsp;&nbsp; Settings&nbsp;&nbsp;&nbsp; Unsubscribe</td>
-                    </tr>
-                  </table>
-                  <p style="margin:18px 0 0;font-size:12px;line-height:1.7;color:#9aa1b5;">
-                    This is an automated transactional email from ${escapeHtml(brandName)}.
+                <td class="sg-footer" align="center" style="background:#ffffff;border-top:1px solid #e6e9f2;padding:22px 36px 24px;">
+                  <p style="margin:0;font-size:11px;line-height:1.7;color:#8a91a7;">
+                    This is an automated transactional email from ${escapeHtml(brandName)}. Please do not reply to this email.
                     ${supportEmail ? ` For assistance, contact ${escapeHtml(supportEmail)}.` : " Please contact support if you need assistance."}
-                    <br>&copy; ${new Date().getFullYear()} ${escapeHtml(brandName)}. All rights reserved.
                   </p>
+                  <p style="margin:12px 0 0;font-size:11px;line-height:1.7;color:#8a91a7;">&#128274; &copy; ${currentYear} ${escapeHtml(brandName)}. All rights reserved.</p>
                 </td>
               </tr>
             </table>

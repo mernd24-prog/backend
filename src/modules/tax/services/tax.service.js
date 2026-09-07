@@ -10,6 +10,7 @@ const { UserModel } = require("../../user/models/user.model");
 const { documentRendererService } = require("../../../shared/services/document-renderer.service");
 const { sendMail } = require("../../../infrastructure/mail/mailer");
 const { NotificationQueueModel } = require("../../notification/models/notification-preference.model");
+const { renderEmailTemplate } = require("../../notification/services/email-template-catalog");
 const {
   resolveShippingPolicy,
 } = require("../../../shared/domain/seller-payout-rules");
@@ -884,11 +885,24 @@ class TaxService {
 
   async sendQueuedTaxDocument(queueItem, rendered = {}) {
     try {
+      const fallbackTemplate = rendered.html
+        ? null
+        : renderEmailTemplate({
+            templateKey: queueItem.payload?.documentType === "credit_note" ? "credit_note_generated" : "invoice_generated",
+            recipientType: "customer",
+            subject: queueItem.subject || "Tax document",
+            message: queueItem.body || "Your tax document is ready.",
+            payload: {
+              orderNumber: queueItem.payload?.orderNumber,
+              referenceId: queueItem.payload?.referenceId,
+              status: "generated",
+            },
+          });
       const result = await sendMail({
         to: queueItem.recipient,
         subject: queueItem.subject || "Tax document",
-        html: rendered.html || `<pre>${queueItem.body || ""}</pre>`,
-        text: rendered.text || queueItem.body || "",
+        html: rendered.html || fallbackTemplate.html,
+        text: rendered.text || fallbackTemplate?.text || queueItem.body || "",
       });
       queueItem.status = "sent";
       queueItem.attempts = Number(queueItem.attempts || 0) + 1;

@@ -245,6 +245,7 @@ class AuthService {
       recipientType: "customer",
       payload: {
         email: to,
+        firstName: user?.profile?.firstName,
         action: payload.action || "password_changed",
       },
     });
@@ -271,6 +272,7 @@ class AuthService {
     return sendMail({
       to: email,
       subject: `OTP for ${this.getOtpPurposeLabel(purpose)}`,
+      text: `Your Sam Global verification code is ${otp}. It will expire in 15 minutes. Please do not share it with anyone.`,
       html,
     });
   }
@@ -1455,6 +1457,9 @@ class AuthService {
             `OTP for ${this.getOtpPurposeLabel(
               BUYER_OTP_PURPOSE,
             )}`,
+
+          text:
+            `Your Sam Global verification code is ${otp}. It will expire in 15 minutes. Please do not share it with anyone.`,
 
           html,
         });

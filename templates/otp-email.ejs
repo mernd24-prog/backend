@@ -1,4 +1,5 @@
 function otpEmailTemplate({ firstName, otp, purpose }) {
+  const { renderHeroArt } = require("../src/modules/notification/services/email-hero-art");
   const escapeHtml = (value = "") =>
     String(value ?? "")
       .replace(/&/g, "&amp;")
@@ -6,35 +7,106 @@ function otpEmailTemplate({ firstName, otp, purpose }) {
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#39;");
+
+  const brandName = process.env.EMAIL_BRAND_NAME || process.env.BRAND_NAME || "Sam Global";
+  const headerBrandName = process.env.EMAIL_HEADER_BRAND_NAME ||
+    brandName.replace(/\s+E-?Commerce$/i, "") ||
+    "Sam Global";
   const displayName = escapeHtml(String(firstName || "User").trim());
-  const displayPurpose = escapeHtml(String(purpose || "verification").trim());
-  const displayOtp = escapeHtml(otp);
+  const displayPurpose = escapeHtml(String(purpose || "registration").trim());
+  const displayOtp = escapeHtml(String(otp || "").replace(/\s+/g, ""));
+  const currentYear = new Date().getFullYear();
+
   return `
   <!DOCTYPE html>
   <html>
   <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>OTP Verification</title>
+      <title>Verify Your Account</title>
+      <style>
+        @media only screen and (max-width: 520px) {
+          .sg-wrapper { padding: 16px 8px !important; }
+          .sg-card { border-radius: 12px !important; }
+          .sg-header { padding: 24px 28px !important; }
+          .sg-body { padding: 26px 28px !important; }
+          .sg-title { font-size: 21px !important; }
+          .sg-brand-text { font-size: 11px !important; letter-spacing: 1.3px !important; white-space: nowrap !important; }
+          .sg-hero-icon { width: 148px !important; }
+          .sg-hero-art { width: 148px !important; max-width:148px !important; }
+          .sg-code { font-size: 38px !important; letter-spacing: 9px !important; padding-left: 8px !important; padding-right: 8px !important; }
+          .sg-code-cell, .sg-copy-cell, .sg-code-divider { display: block !important; width: 100% !important; box-sizing: border-box !important; }
+          .sg-code-cell { padding: 4px 12px 14px !important; }
+          .sg-code-divider { padding: 0 22px !important; }
+          .sg-code-divider div { width: 100% !important; height: 1px !important; }
+          .sg-copy-cell { padding: 14px 16px 18px !important; text-align: center !important; }
+          .sg-trust-item { display: block !important; width: 100% !important; box-sizing: border-box !important; padding: 14px 0 !important; border-right:0 !important; border-bottom:1px solid #e6e9f2 !important; }
+        }
+      </style>
   </head>
-  <body style="margin:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#111827;">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f8;padding:30px 12px;">
+  <body style="margin:0;background:#f3f6fb;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-wrapper" style="background:#f3f6fb;padding:30px 12px;">
         <tr>
           <td align="center">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;background:#ffffff;border:1px solid #d9dee8;border-radius:12px;overflow:hidden;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-card" style="max-width:600px;background:#ffffff;border:1px solid #d9dee8;border-radius:18px;overflow:hidden;box-shadow:0 18px 40px rgba(17,24,39,0.11);">
               <tr>
-                <td style="background:#1b1d60;padding:24px 26px;">
-                  <div style="font-size:12px;line-height:1.3;color:#f5c542;text-transform:uppercase;letter-spacing:.08em;">SAM GLOBAL</div>
-                  <h1 style="margin:12px 0 0;font-size:22px;line-height:1.3;color:#ffffff;">Verification Code</h1>
+                <td class="sg-header" style="background:#061044;padding:26px 28px 24px;border-bottom:4px solid #d9a327;">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td width="190" valign="top">
+                        <table role="presentation" cellpadding="0" cellspacing="0">
+                          <tr>
+                            <td width="36" valign="middle"><span style="display:inline-block;width:28px;height:28px;border-radius:50%;background:#d9a327;color:#061044;font-size:15px;line-height:28px;text-align:center;font-weight:800;">&#9737;</span></td>
+                            <td valign="middle"><div class="sg-brand-text" style="font-size:11px;line-height:1.3;color:#ffc34d;text-transform:uppercase;letter-spacing:1.4px;font-weight:800;white-space:nowrap;">${escapeHtml(headerBrandName)}</div></td>
+                          </tr>
+                        </table>
+                        <h1 class="sg-title" style="margin:20px 0 0;font-size:24px;line-height:1.25;color:#ffffff;font-weight:800;mso-line-height-rule:exactly;">Verify Your Account</h1>
+                        <p style="margin:8px 0 0;font-size:13px;line-height:1.5;color:#dbe6ff;">One last step to complete your ${displayPurpose}</p>
+                      </td>
+                      <td class="sg-hero-icon" width="148" align="right" valign="middle">
+                        ${renderHeroArt("auth_otp")}
+                      </td>
+                    </tr>
+                  </table>
                 </td>
               </tr>
               <tr>
-                <td style="padding:26px;">
-                  <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#344054;">Hello ${displayName},</p>
-                  <p style="margin:0 0 20px;font-size:15px;line-height:1.7;color:#344054;">Use this code to complete ${displayPurpose}.</p>
-                  <div style="margin:0 0 20px;background:#f9fafb;border:1px solid #eef0f4;border-radius:8px;padding:18px;text-align:center;font-size:30px;font-weight:800;color:#1b1d60;letter-spacing:6px;">${displayOtp}</div>
-                  <p style="margin:0;font-size:14px;line-height:1.7;color:#344054;">This code will expire soon. Please do not share it with anyone.</p>
-                  <p style="margin:26px 0 0;border-top:1px solid #eef0f4;padding-top:16px;font-size:12px;line-height:1.6;color:#667085;">This is an automated security email from Sam Global. Please do not reply to this email.</p>
+                <td class="sg-body" style="padding:28px 28px 26px;">
+                  <p style="margin:0 0 8px;font-size:16px;line-height:1.5;color:#111827;font-weight:800;">Hello ${displayName},</p>
+                  <p style="margin:0 0 22px;font-size:15px;line-height:1.75;color:#26324a;">Please use the verification code below to confirm your email address and complete your account setup.</p>
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 16px;background:#f5f8ff;border:1px dashed #b8c8ff;border-radius:12px;">
+                    <tr><td colspan="3" align="center" style="padding:18px 16px 8px;font-size:12px;font-weight:800;text-transform:uppercase;color:#0026d8;">&#128274;&nbsp; Your Verification Code</td></tr>
+                    <tr>
+                      <td class="sg-code-cell" align="center" style="padding:4px 16px 22px 24px;"><span class="sg-code" style="font-size:42px;line-height:1.15;letter-spacing:12px;font-weight:800;color:#061044;font-family:Arial,Helvetica,sans-serif;white-space:nowrap;">${displayOtp}</span></td>
+                      <td class="sg-code-divider" width="1" style="padding:0 0 18px;"><div style="width:1px;height:58px;background:#dbe4f4;line-height:1px;font-size:1px;">&nbsp;</div></td>
+                      <td class="sg-copy-cell" width="136" align="center" style="padding:4px 20px 22px 18px;font-size:13px;font-weight:800;color:#0026d8;white-space:nowrap;">&#128203;&nbsp; Copy Code</td>
+                    </tr>
+                  </table>
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 22px;background:#fff8eb;border:1px solid #ffe2a8;border-radius:10px;">
+                    <tr>
+                      <td width="42" align="center" style="padding:12px 0 12px 14px;font-size:24px;color:#f0a000;vertical-align:middle;">&#9201;</td>
+                      <td style="padding:12px 14px 12px 10px;font-size:13px;line-height:1.5;color:#061044;"><strong>This code will expire in 15 minutes.</strong><br>Please do not share it with anyone.</td>
+                    </tr>
+                  </table>
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-trust" style="margin-top:28px;border-top:1px solid #eef0f4;border-bottom:1px solid #e6e9f2;">
+                    <tr>
+                      <td class="sg-trust-item" width="33.33%" style="padding:16px 16px 16px 0;border-right:1px solid #dfe5f0;vertical-align:top;">
+                        <table role="presentation" cellpadding="0" cellspacing="0"><tr><td width="46" style="color:#0026d8;font-size:28px;line-height:1;vertical-align:top;">&#128737;</td><td style="vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Secure &amp; Trusted</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">Your security is our top priority.</div></td></tr></table>
+                      </td>
+                      <td class="sg-trust-item" width="33.33%" style="padding:16px;border-right:1px solid #dfe5f0;vertical-align:top;">
+                        <table role="presentation" cellpadding="0" cellspacing="0"><tr><td width="46" style="color:#0026d8;font-size:28px;line-height:1;vertical-align:top;">&#128100;</td><td style="vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Account Protection</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">This helps us keep your account safe.</div></td></tr></table>
+                      </td>
+                      <td class="sg-trust-item" width="33.33%" style="padding:16px 0 16px 16px;vertical-align:top;">
+                        <table role="presentation" cellpadding="0" cellspacing="0"><tr><td width="46" style="color:#0026d8;font-size:28px;line-height:1;vertical-align:top;">&#9993;</td><td style="vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Didn't Request This?</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">You can safely ignore this email.</div></td></tr></table>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+              <tr>
+                <td align="center" style="background:#ffffff;border-top:1px solid #e6e9f2;padding:22px 36px 24px;">
+                  <p style="margin:0;font-size:11px;line-height:1.7;color:#8a91a7;">This is an automated security email from ${escapeHtml(brandName)}. Please do not reply to this email.</p>
+                  <p style="margin:12px 0 0;font-size:11px;line-height:1.7;color:#8a91a7;">&#128274; &copy; ${currentYear} ${escapeHtml(brandName)}. All rights reserved.</p>
                 </td>
               </tr>
             </table>
