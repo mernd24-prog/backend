@@ -13,6 +13,10 @@ const {
   buildPublicSearchFilters,
   isPublicProduct,
 } = require("../catalog/public-product-filter");
+const {
+  buildProductSearchDocument,
+  hydrateMissingSearchMedia,
+} = require("../search/product-search-document");
 
 const AUTOCOMPLETE_CACHE_TTL_MS = 2 * 60 * 1000;
 const AUTOCOMPLETE_CACHE_MAX_ITEMS = 200;
@@ -176,49 +180,7 @@ function scoreAutocompleteSuggestion(term, product = {}) {
 
 class AdvancedSearchService {
   buildSearchDocument(product) {
-    const source = typeof product.toObject === "function" ? product.toObject() : product;
-    return {
-      id: String(source._id || source.id),
-      title: source.title,
-      shortDescription: source.shortDescription || "",
-      category: source.category,
-      categoryId: source.categoryId,
-      brand: source.brand || "",
-      sku: source.sku || "",
-      description: source.description,
-      price: source.price,
-      salePrice: source.salePrice || source.price,
-      gstRate: source.gstRate || 18,
-      hsnCode: source.hsnCode || "",
-      color: source.color || "",
-      productType: source.productType || "simple",
-      productFamilyCode: source.productFamilyCode || "",
-      tags: Array.isArray(source.tags) ? source.tags : [],
-      origin: source.origin || {},
-      sellerId: source.sellerId,
-      stock: source.stock || 0,
-      availableStock: Math.max(0, (source.stock || 0) - (source.reservedStock || 0)),
-      rating: source.rating || 0,
-      reviewCount: source.reviewCount || 0,
-      analytics: {
-        views: source.analytics?.views || 0,
-        purchases: source.analytics?.purchases || 0,
-        cartAdds: source.analytics?.cartAdds || 0,
-      },
-      attributes: source.attributes
-        ? Object.fromEntries(
-            source.attributes instanceof Map
-              ? source.attributes
-              : Object.entries(source.attributes),
-          )
-        : {},
-      status: source.status,
-      visibility: source.visibility || "public",
-      publishedAt: source.publishedAt || source.createdAt,
-      scheduledAt: source.scheduledAt || null,
-      createdAt: source.createdAt,
-      updatedAt: source.updatedAt,
-    };
+    return buildProductSearchDocument(product);
   }
 
   // ==============================
@@ -398,12 +360,14 @@ class AdvancedSearchService {
         },
       });
 
+      const results = response.hits.hits.map((hit) => ({
+        id: hit._id,
+        score: hit._score,
+        ...hit._source,
+      }));
+
       return {
-        results: response.hits.hits.map((hit) => ({
-          id: hit._id,
-          score: hit._score,
-          ...hit._source,
-        })),
+        results: await hydrateMissingSearchMedia(results, ProductModel),
         total: response.hits.total.value,
         page,
         limit,

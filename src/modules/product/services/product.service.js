@@ -27,6 +27,10 @@ const {
   buildPublicSearchFilters,
   isPublicProduct,
 } = require("../../../shared/catalog/public-product-filter");
+const {
+  buildProductSearchDocument,
+  hydrateMissingSearchMedia,
+} = require("../../../shared/search/product-search-document");
 const { logger } = require("../../../shared/logger/logger");
 const { PlatformRepository } = require("../../platform/repositories/platform.repository");
 const { PlatformService } = require("../../platform/services/platform.service");
@@ -687,50 +691,7 @@ class ProductService {
   // ─── Elasticsearch ────────────────────────────────────────────────────────
 
   _buildSearchDocument(product) {
-    return {
-      id: String(product._id || product.id),
-      title: product.title,
-      shortDescription: product.shortDescription || "",
-      category: product.category,
-      categoryId: product.categoryId,
-      brand: product.brand || "",
-      description: product.description,
-      price: product.price,
-      salePrice: product.salePrice || product.price,
-      gstRate: product.gstRate || 18,
-      hsnCode: product.hsnCode || "",
-      color: product.color || "",
-      productType: product.productType || PRODUCT_TYPE.SIMPLE,
-      tags: Array.isArray(product.tags) ? product.tags : [],
-      origin: product.origin || {},
-      sellerId: product.sellerId,
-      organizationId: product.organizationId,
-      storeId: product.storeId || "",
-      warehouseId: product.warehouseId || "",
-      organizationSnapshot: product.organizationSnapshot || {},
-      stock: product.stock || 0,
-      availableStock: Math.max(0, (product.stock || 0) - (product.reservedStock || 0)),
-      rating: product.rating || 0,
-      reviewCount: product.reviewCount || 0,
-      analytics: {
-        views: product.analytics?.views || 0,
-        purchases: product.analytics?.purchases || 0,
-      },
-      attributes: product.attributes
-        ? Object.fromEntries(
-            product.attributes instanceof Map
-              ? product.attributes
-              : Object.entries(product.attributes),
-          )
-        : {},
-      status: product.status,
-      approvalStatus: product.approvalStatus,
-      visibility: product.visibility || PRODUCT_VISIBILITY.PUBLIC,
-      publishedAt: product.publishedAt || product.createdAt,
-      scheduledAt: product.scheduledAt || null,
-      createdAt: product.createdAt,
-      updatedAt: product.updatedAt,
-    };
+    return buildProductSearchDocument(product);
   }
 
   async _indexProduct(product) {
@@ -3006,8 +2967,13 @@ async getProduct(productId) {
         sort: sortOptions[query.sort] || sortOptions._score,
       });
       logger.info("[Elasticsearch] Product search served by Elasticsearch");
+      const items = response.hits.hits.map((hit) => ({
+        id: hit._id,
+        ...hit._source,
+        _score: hit._score,
+      }));
       return {
-        items: response.hits.hits.map((hit) => ({ ...hit._source, _score: hit._score })),
+        items: await hydrateMissingSearchMedia(items, ProductModel),
         total: response.hits.total?.value ?? response.hits.hits.length,
         source: "elasticsearch",
       };
