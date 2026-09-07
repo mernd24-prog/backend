@@ -435,6 +435,9 @@ function sampleBodyForRoute(route) {
   if (pathName.endsWith('/admin/referral/influencers/:influencerId/child-permission')) {
     return { canCreateChildren: true, reason: 'Granted by Admin from Postman' };
   }
+  if (pathName.endsWith('/admin/referral/influencers/:influencerId/verification')) {
+    return { section: 'kyc', decision: 'verified', reason: '' };
+  }
 
   if (pathName.endsWith('/users/me')) return { profile: { firstName: 'Postman', lastName: 'Buyer', avatarUrl: '' } };
   if (pathName.endsWith('/users/me/kyc')) return sampleUserKycBody();

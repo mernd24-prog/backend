@@ -880,16 +880,29 @@ class AuthService {
     const result = await this.referralService.registerChildFromInvite(payload);
     return {
       influencerId: result.id || result.influencerId,
-      status: "pending_approval",
-      message: "Registration submitted. You can log in after an Admin approves your account.",
+      status: "pending_kyc",
+      message: "Registration completed. Log in to submit KYC documents and bank details for Admin approval.",
       parent: result.parentInfluencerId || null,
     };
   }
 
   async loginInfluencer(payload, requestContext = {}) {
-    const account = await this.referralService.getInfluencerAccountForLogin(payload.email);
+    let account = await this.referralService.getInfluencerAccountForLogin(payload.email);
     if (!account) {
       return this.login(payload, requestContext, { requireInfluencer: true });
+    }
+
+    // Referral approval controls commerce access, not access to the onboarding
+    // profile. Migrate older pending accounts on login so they can submit or
+    // correct KYC and payout details while operational modules remain gated.
+    if (account.accountStatus === "pending_approval") {
+      const profile = await this.referralService.getInfluencerProfileByActorId(account.id);
+      if (profile) {
+        account = await this.referralService.updateInfluencerAccountStatus(
+          account.id,
+          "active",
+        );
+      }
     }
 
     if (account.accountStatus && account.accountStatus !== "active") {

@@ -152,16 +152,21 @@ class ReferralService {
 
   async buildChildRegistrationInvite(profile, { includeQr = false } = {}) {
     const ensured = await this.ensureChildRegistrationCode(profile);
-    const shareable = ensured.status === "active" && ensured.canCreateChildren === true;
+    const verificationApproved = this.isVerificationApproved(ensured);
+    const shareable = verificationApproved && ensured.status === "active" && ensured.canCreateChildren === true;
     const registrationUrl = `${env.influencerPortalUrl}/register?invite=${encodeURIComponent(ensured.childRegistrationCode)}`;
     const nativeDeepLink = `${env.influencerNativeScheme}://register?invite=${encodeURIComponent(ensured.childRegistrationCode)}`;
     return {
-      code: ensured.childRegistrationCode,
-      registrationUrl,
-      universalLink: registrationUrl,
-      nativeDeepLink,
+      code: shareable ? ensured.childRegistrationCode : null,
+      registrationUrl: shareable ? registrationUrl : null,
+      universalLink: shareable ? registrationUrl : null,
+      nativeDeepLink: shareable ? nativeDeepLink : null,
       shareable,
-      disabledReason: shareable ? null : "Admin permission to create child accounts is required",
+      disabledReason: shareable
+        ? null
+        : !verificationApproved
+          ? "KYC documents and bank details must be approved first"
+          : "Admin permission to create child accounts is required",
       qrDataUrl: includeQr && shareable
         ? await QRCode.toDataURL(registrationUrl, { errorCorrectionLevel: "M", margin: 2, width: 320 })
         : null,
@@ -199,10 +204,24 @@ class ReferralService {
       status: plain.status,
       canCreateChildren: Boolean(plain.canCreateChildren),
       promotedAt: plain.promotedAt || null,
-      onboardingStatus: plain.onboardingStatus || "approved",
-      kycStatus: plain.kycStatus || "pending",
-      payoutProfileStatus: plain.payoutProfileStatus || "pending",
+      onboardingStatus: plain.onboardingStatus || "pending_kyc",
+      kycStatus: plain.kycStatus || "not_submitted",
+      payoutProfileStatus: plain.payoutProfileStatus || "not_submitted",
     };
+  }
+
+  isVerificationApproved(profile = {}) {
+    return profile.kycStatus === "verified" &&
+      profile.payoutProfileStatus === "verified";
+  }
+
+  assertVerificationApproved(profile = {}, action = "use referral features") {
+    if (!this.isVerificationApproved(profile)) {
+      throw new AppError(
+        `KYC documents and bank details must be approved before you can ${action}`,
+        403,
+      );
+    }
   }
 
   async enrichInfluencer(profile) {
@@ -224,7 +243,9 @@ class ReferralService {
       account: account ? this.toPlainObject(account) : null,
       user: this.toPlainObject(identity),
       legacyUser: legacyUser ? this.toPlainObject(legacyUser) : null,
-      primaryCode: primaryCode ? this.toPlainObject(primaryCode) : null,
+      primaryCode: this.isVerificationApproved(plainProfile) && primaryCode
+        ? this.toPlainObject(primaryCode)
+        : null,
       wallet: wallet ? this.toPlainObject(wallet) : null,
       childRegistration: await this.buildChildRegistrationInvite(profile),
     };
@@ -391,14 +412,17 @@ class ReferralService {
       influencerType: "parent",
       level: 1,
       path: [],
-      status: payload.status || "active",
-      canCreateChildren: payload.canCreateChildren ?? true,
-      onboardingStatus: payload.onboardingStatus || "approved",
-      kycStatus: payload.kycStatus || "pending",
-      payoutProfileStatus: payload.payoutProfileStatus || "pending",
+      status: "pending",
+      canCreateChildren: false,
+      onboardingStatus: "pending_kyc",
+      kycStatus: "not_submitted",
+      payoutProfileStatus: "not_submitted",
       yearlySalesAmount: Number(payload.yearlySalesAmount || 0),
       createdBy: actor?.userId || null,
-      metadata: payload.metadata || {},
+      metadata: {
+        ...(payload.metadata || {}),
+        requestedCanCreateChildren: payload.canCreateChildren ?? true,
+      },
     });
     const influencerId = this.getRecordId(created);
     const profile = await this.referralRepository.updateInfluencerProfile(
@@ -411,7 +435,10 @@ class ReferralService {
 
     const profileWithInvite = await this.ensureChildRegistrationCode(profile);
     await this.referralRepository.ensureWallet(influencerId);
-    await this.ensureDefaultCode(profileWithInvite, actor, payload);
+    await this.ensureDefaultCode(profileWithInvite, actor, {
+      ...payload,
+      codeStatus: "suspended",
+    });
 
     return {
       ...(await this.enrichInfluencer(profileWithInvite)),
@@ -428,6 +455,7 @@ class ReferralService {
     if (!parent.canCreateChildren) {
       throw new AppError("Parent influencer cannot create children", 400);
     }
+    this.assertVerificationApproved(parent, "create a brand associate");
 
     const { account, user, temporaryPassword } = await this.ensureInfluencerUser({
       ...payload,
@@ -449,11 +477,11 @@ class ReferralService {
       originalParentInfluencerId: parent.originalParentInfluencerId || null,
       level: Number(parent.level || 1) + 1,
       path: parentPath,
-      status: payload.status || "active",
-      canCreateChildren: payload.canCreateChildren ?? false,
-      onboardingStatus: payload.onboardingStatus || "approved",
-      kycStatus: payload.kycStatus || "pending",
-      payoutProfileStatus: payload.payoutProfileStatus || "pending",
+      status: "pending",
+      canCreateChildren: false,
+      onboardingStatus: "pending_kyc",
+      kycStatus: "not_submitted",
+      payoutProfileStatus: "not_submitted",
       yearlySalesAmount: Number(payload.yearlySalesAmount || 0),
       createdBy: actor?.userId || null,
       metadata: payload.metadata || {},
@@ -465,7 +493,10 @@ class ReferralService {
 
     const profileWithInvite = await this.ensureChildRegistrationCode(profile);
     await this.referralRepository.ensureWallet(childId);
-    await this.ensureDefaultCode(profileWithInvite, actor, payload);
+    await this.ensureDefaultCode(profileWithInvite, actor, {
+      ...payload,
+      codeStatus: "suspended",
+    });
 
     return {
       ...(await this.enrichInfluencer(profileWithInvite)),
@@ -477,12 +508,13 @@ class ReferralService {
   async createMyChildInfluencer(actor = {}, payload = {}) {
     const parent = await this.getInfluencerProfileByActorId(actor.userId);
     if (!parent) throw new AppError("Influencer profile not found", 404);
+    this.assertVerificationApproved(parent, "create a brand associate");
     if (parent.canCreateChildren !== true) {
       throw new AppError("You do not have permission to create brand associates", 403);
     }
     return this.createChildInfluencer(this.getRecordId(parent), {
       ...payload,
-      accountStatus: "pending_approval",
+      accountStatus: "active",
       status: "pending",
       canCreateChildren: false,
       onboardingStatus: "pending_admin_approval",
@@ -495,6 +527,7 @@ class ReferralService {
     if (!parent || parent.status !== "active" || parent.canCreateChildren !== true) {
       throw new AppError("This associate registration invitation is invalid or disabled", 400);
     }
+    this.assertVerificationApproved(parent, "share an associate registration invitation");
     const enriched = await this.enrichInfluencer(parent);
     return {
       parent: {
@@ -511,13 +544,14 @@ class ReferralService {
     if (!parent || parent.status !== "active" || parent.canCreateChildren !== true) {
       throw new AppError("This associate registration invitation is invalid or disabled", 400);
     }
+    this.assertVerificationApproved(parent, "register a brand associate");
     return this.createChildInfluencer(this.getRecordId(parent), {
       email: payload.email,
       phone: payload.phone,
       password: payload.password,
       firstName: payload.firstName,
       lastName: payload.lastName,
-      accountStatus: "pending_approval",
+      accountStatus: "active",
       status: "pending",
       onboardingStatus: "pending_admin_approval",
       canCreateChildren: false,
@@ -528,6 +562,9 @@ class ReferralService {
 
   async updateInfluencerStatus(influencerId, payload = {}) {
     const influencer = await this.getInfluencerOrThrow(influencerId);
+    if (payload.status === "active") {
+      this.assertVerificationApproved(influencer, "activate this referral partner");
+    }
     const profile = await this.referralRepository.updateInfluencerProfile(
       this.getRecordId(influencer),
       {
@@ -539,7 +576,8 @@ class ReferralService {
 
     if (profile.accountId) {
       await this.referralRepository.updateInfluencerAccount(String(profile.accountId), {
-        $set: { accountStatus: payload.status === "active" ? "active" : payload.status === "pending" ? "pending_approval" : payload.status },
+        // Pending referral profiles must still be able to access onboarding.
+        $set: { accountStatus: ["active", "pending"].includes(payload.status) ? "active" : payload.status },
         $inc: { sessionVersion: 1 },
       });
     }
@@ -558,6 +596,12 @@ class ReferralService {
 
   async updateInfluencerChildPermission(influencerId, payload = {}) {
     const influencer = await this.getInfluencerOrThrow(influencerId);
+    if (payload.canCreateChildren === true) {
+      this.assertVerificationApproved(influencer, "create brand associates");
+      if (influencer.status !== "active") {
+        throw new AppError("Referral partner must be active before child creation is enabled", 409);
+      }
+    }
     const profile = await this.referralRepository.updateInfluencerProfile(this.getRecordId(influencer), {
       canCreateChildren: payload.canCreateChildren === true,
       "metadata.childPermissionUpdatedAt": new Date().toISOString(),
@@ -570,8 +614,62 @@ class ReferralService {
     };
   }
 
+  async reviewInfluencerVerification(influencerId, payload = {}, actor = {}) {
+    const influencer = await this.getInfluencerOrThrow(influencerId);
+    const current = this.toPlainObject(influencer);
+    const section = payload.section;
+    const statusField = section === "kyc" ? "kycStatus" : "payoutProfileStatus";
+    const submittedStatus = current[statusField] || "not_submitted";
+    if (!["submitted", "under_review", "rejected", "verified"].includes(submittedStatus)) {
+      throw new AppError(
+        section === "kyc" ? "KYC documents have not been submitted" : "Bank details have not been submitted",
+        409,
+      );
+    }
+
+    const nextKycStatus = section === "kyc" ? payload.decision : current.kycStatus;
+    const nextBankStatus = section === "bank" ? payload.decision : current.payoutProfileStatus;
+    const fullyApproved = nextKycStatus === "verified" && nextBankStatus === "verified";
+    const rejected = nextKycStatus === "rejected" || nextBankStatus === "rejected";
+    const readyForReview = ["submitted", "verified"].includes(nextKycStatus) &&
+      ["submitted", "verified"].includes(nextBankStatus);
+    const reviewKey = section === "kyc" ? "kycReview" : "bankReview";
+    const requestedChildPermission = current.metadata?.requestedCanCreateChildren === true;
+    const profile = await this.referralRepository.updateInfluencerProfile(influencerId, {
+      [statusField]: payload.decision,
+      onboardingStatus: fullyApproved
+        ? "approved"
+        : rejected
+          ? "rejected"
+          : readyForReview ? "pending_admin_approval" : "pending_kyc",
+      status: fullyApproved ? "active" : rejected ? "rejected" : "pending",
+      canCreateChildren: fullyApproved && current.influencerType === "parent"
+        ? requestedChildPermission
+        : false,
+      [`metadata.${reviewKey}`]: {
+        decision: payload.decision,
+        reason: payload.reason || null,
+        reviewedBy: actor.userId || null,
+        reviewedAt: new Date().toISOString(),
+      },
+    });
+
+    if (profile.accountId) {
+      await this.referralRepository.updateInfluencerAccount(String(profile.accountId), {
+        // Keep onboarding accounts able to sign in and correct rejected data.
+        $set: { accountStatus: "active" },
+        $inc: { sessionVersion: 1 },
+      });
+    }
+    await this.referralRepository.updateReferralCodesByInfluencer(influencerId, {
+      status: fullyApproved ? "active" : "suspended",
+    });
+    return this.enrichInfluencer(profile);
+  }
+
   async promoteInfluencer(influencerId, payload = {}) {
     const influencer = await this.getInfluencerOrThrow(influencerId);
+    this.assertVerificationApproved(influencer, "promote this partner");
     const parentId = influencer.parentInfluencerId || null;
     const profile = await this.referralRepository.updateInfluencerProfile(
       this.getRecordId(influencer),
@@ -606,6 +704,7 @@ class ReferralService {
 
   async createReferralCode(payload = {}, actor = {}) {
     const influencer = await this.getInfluencerOrThrow(payload.influencerId);
+    this.assertVerificationApproved(influencer, "create a referral code");
     if (influencer.status !== "active") {
       throw new AppError("Influencer must be active before creating a code", 400);
     }
@@ -648,6 +747,10 @@ class ReferralService {
 
     const update = { ...payload };
     delete update.codeId;
+    if (update.status === "active") {
+      const influencer = await this.getInfluencerOrThrow(existing.influencerId);
+      this.assertInfluencerOperational(influencer, "activate a referral code");
+    }
     if (update.code) {
       update.code = this.normalizeCode(update.code);
       const duplicate = await this.referralRepository.getReferralCodeByCode(
@@ -762,6 +865,7 @@ class ReferralService {
     }
 
     const influencer = await this.getInfluencerOrThrow(code.influencerId);
+    this.assertVerificationApproved(influencer, "use this referral code");
     if (influencer.status !== "active") {
       throw new AppError("Influencer code is not active", 400);
     }
@@ -1725,10 +1829,14 @@ class ReferralService {
   async getMyInfluencerProfileOrThrow(actor = {}) {
     const profile = await this.getInfluencerProfileByActorId(actor.userId);
     if (!profile) throw new AppError("Influencer profile not found", 404);
-    if (profile.status !== "active") {
-      throw new AppError("Influencer profile is not active", 403);
-    }
     return profile;
+  }
+
+  assertInfluencerOperational(profile = {}, action = "access this feature") {
+    if (profile.status !== "active") {
+      throw new AppError("Referral partner is awaiting Admin approval", 403);
+    }
+    this.assertVerificationApproved(profile, action);
   }
 
   async getInfluencerProfileByActorId(actorId) {
@@ -1753,6 +1861,13 @@ class ReferralService {
 
   async updateInfluencerAccountLastLogin(accountId, lastLoginAt) {
     return this.referralRepository.updateInfluencerAccountLastLogin(accountId, lastLoginAt);
+  }
+
+  async updateInfluencerAccountStatus(accountId, accountStatus) {
+    return this.referralRepository.updateInfluencerAccount(accountId, {
+      $set: { accountStatus },
+      $inc: { sessionVersion: 1 },
+    });
   }
 
   async updateInfluencerAccountRefreshSessions(accountId, refreshSessions) {
@@ -1780,7 +1895,8 @@ class ReferralService {
     const parentModules = [
       { key: "network", label: "My Associates", route: "/app/network" },
     ];
-    const allowedModules = status === "active"
+    const verificationApproved = this.isVerificationApproved(profile);
+    const allowedModules = status === "active" && verificationApproved
       ? [
           ...commonModules,
           ...(profile.canCreateChildren
@@ -1793,11 +1909,12 @@ class ReferralService {
       isInfluencer: true,
       influencerId: this.getRecordId(profile),
       status,
-      active: status === "active",
-      canAccessAnalytics: status === "active",
-      onboardingStatus: profile.onboardingStatus || "approved",
-      kycStatus: profile.kycStatus || "pending",
-      payoutProfileStatus: profile.payoutProfileStatus || "pending",
+      active: status === "active" && verificationApproved,
+      verificationApproved,
+      canAccessAnalytics: status === "active" && verificationApproved,
+      onboardingStatus: profile.onboardingStatus || "pending_kyc",
+      kycStatus: profile.kycStatus || "not_submitted",
+      payoutProfileStatus: profile.payoutProfileStatus || "not_submitted",
       influencerType: profile.influencerType,
       canCreateChildren: Boolean(profile.canCreateChildren),
       childRegistration: {
@@ -1808,7 +1925,7 @@ class ReferralService {
       },
       parentInfluencerId: profile.parentInfluencerId || null,
       allowedModules,
-      primaryCode: enriched.primaryCode
+      primaryCode: verificationApproved && enriched.primaryCode
         ? this.formatMobileReferralCode(enriched.primaryCode, {})
         : null,
       api: {
@@ -2082,6 +2199,7 @@ class ReferralService {
 
   async getInfluencerDashboard(actor = {}, query = {}) {
     const profile = await this.getMyInfluencerProfileOrThrow(actor);
+    this.assertInfluencerOperational(profile, "view the dashboard");
     const influencerId = this.getRecordId(profile);
     await this.releaseMaturedInfluencerCoins(influencerId);
     const code = query.code ? this.normalizeCode(query.code) : null;
@@ -2177,6 +2295,7 @@ class ReferralService {
 
   async listMyInfluencerCodes(actor = {}, query = {}) {
     const profile = await this.getMyInfluencerProfileOrThrow(actor);
+    this.assertInfluencerOperational(profile, "view or share referral codes");
     const influencerId = this.getRecordId(profile);
     const result = await this.listReferralCodes({
       ...query,
@@ -2199,6 +2318,7 @@ class ReferralService {
 
   async listMyReferralOrders(actor = {}, query = {}) {
     const profile = await this.getMyInfluencerProfileOrThrow(actor);
+    this.assertInfluencerOperational(profile, "view referral orders");
     const influencerId = this.getRecordId(profile);
     const coinStatuses = new Set(["locked", "available", "reversed"]);
     const status = query.status || null;
@@ -2280,6 +2400,7 @@ class ReferralService {
 
   async listMyCoinLedger(actor = {}, query = {}) {
     const profile = await this.getMyInfluencerProfileOrThrow(actor);
+    this.assertInfluencerOperational(profile, "view coin activity");
     const influencerId = this.getRecordId(profile);
     const result = await this.referralRepository.listMobileCoinLedger({
       ...query,
@@ -2299,6 +2420,7 @@ class ReferralService {
 
   async getMyInfluencerWallet(actor = {}) {
     const profile = await this.getMyInfluencerProfileOrThrow(actor);
+    this.assertInfluencerOperational(profile, "view the referral wallet");
     const influencerId = this.getRecordId(profile);
     await this.releaseMaturedInfluencerCoins(influencerId);
     const [wallet, rule, pendingPayouts] = await Promise.all([
@@ -2329,6 +2451,7 @@ class ReferralService {
 
   async listMyWithdrawals(actor = {}, query = {}) {
     const profile = await this.getMyInfluencerProfileOrThrow(actor);
+    this.assertInfluencerOperational(profile, "view withdrawals");
     const result = await this.listPayouts({
       ...query,
       influencerId: this.getRecordId(profile),
@@ -2343,6 +2466,7 @@ class ReferralService {
 
   async createMyWithdrawal(actor = {}, payload = {}) {
     const profile = await this.getMyInfluencerProfileOrThrow(actor);
+    this.assertInfluencerOperational(profile, "request a withdrawal");
     const influencerId = this.getRecordId(profile);
     await this.releaseMaturedInfluencerCoins(influencerId);
     const amount = Number(payload.amount || 0);
@@ -2482,6 +2606,7 @@ class ReferralService {
 
   async getMyInfluencerNetwork(actor = {}, query = {}) {
     const profile = await this.getMyInfluencerProfileOrThrow(actor);
+    this.assertInfluencerOperational(profile, "view brand associates");
     if (profile.canCreateChildren !== true) {
       throw new AppError("Admin permission to create child accounts is required", 403);
     }
@@ -2577,6 +2702,7 @@ class ReferralService {
 
   async getMyChildInfluencerDetail(actor = {}, childId, query = {}) {
     const parent = await this.getMyInfluencerProfileOrThrow(actor);
+    this.assertInfluencerOperational(parent, "view brand associates");
     if (parent.canCreateChildren !== true) {
       throw new AppError("Admin permission to view child accounts is required", 403);
     }
@@ -2597,9 +2723,9 @@ class ReferralService {
     return {
       associate: {
         ...this.publicInfluencerNode(enriched),
-        kycStatus: enriched.kycStatus || "pending",
-        payoutProfileStatus: enriched.payoutProfileStatus || "pending",
-        onboardingStatus: enriched.onboardingStatus || "approved",
+        kycStatus: enriched.kycStatus || "not_submitted",
+        payoutProfileStatus: enriched.payoutProfileStatus || "not_submitted",
+        onboardingStatus: enriched.onboardingStatus || "pending_kyc",
       },
       dateRange: { fromDate: query.fromDate || null, toDate: query.toDate || null },
       performance: {
@@ -2648,11 +2774,13 @@ class ReferralService {
         profile: userProfile,
       },
       kyc: {
-        status: enriched.kycStatus || "pending",
-        onboardingStatus: enriched.onboardingStatus || "approved",
+        status: enriched.kycStatus || "not_submitted",
+        onboardingStatus: enriched.onboardingStatus || "pending_kyc",
+        review: enriched.metadata?.kycReview || null,
       },
       payoutProfile: {
-        status: enriched.payoutProfileStatus || "pending",
+        status: enriched.payoutProfileStatus || "not_submitted",
+        review: enriched.metadata?.bankReview || null,
         bankOrUpiConfigured: Boolean(
           enriched.metadata?.details?.payout?.accountNumber ||
           enriched.metadata?.details?.payout?.upiId,
@@ -2695,16 +2823,54 @@ class ReferralService {
       ...(payload.documents ? { documents: { ...(details.documents || {}), ...payload.documents } } : {}),
       ...(payload.payout ? { payout: { ...(details.payout || {}), ...payload.payout } } : {}),
     };
+    const documents = nextDetails.documents || {};
+    const payout = nextDetails.payout || {};
+    const kycComplete = [
+      documents.panCardUrl,
+      documents.aadhaarCardUrl,
+      documents.cancelledChequeUrl,
+    ].every(Boolean);
+    const bankComplete = payout.method === "upi"
+      ? Boolean(payout.accountHolderName && payout.upiId)
+      : Boolean(
+          payout.accountHolderName &&
+          payout.bankName &&
+          payout.accountNumber &&
+          payout.ifscCode,
+        );
+    const nextKycStatus = payload.documents
+      ? (kycComplete ? "submitted" : "not_submitted")
+      : profile.kycStatus;
+    const nextBankStatus = payload.payout
+      ? (bankComplete ? "submitted" : "not_submitted")
+      : profile.payoutProfileStatus;
+    const hasSubmission = ["submitted", "verified"].includes(nextKycStatus) &&
+      ["submitted", "verified"].includes(nextBankStatus);
+    const verificationChanged = Boolean(payload.documents || payload.payout);
     await this.referralRepository.updateInfluencerProfile(this.getRecordId(profile), {
       metadata: { ...currentMetadata, details: nextDetails },
-      ...(payload.payout ? { payoutProfileStatus: "submitted" } : {}),
-      ...(payload.documents ? { kycStatus: "submitted" } : {}),
+      ...(verificationChanged
+        ? {
+            onboardingStatus: hasSubmission ? "pending_admin_approval" : "pending_kyc",
+            status: "pending",
+            canCreateChildren: false,
+          }
+        : {}),
+      ...(payload.payout ? { payoutProfileStatus: nextBankStatus } : {}),
+      ...(payload.documents ? { kycStatus: nextKycStatus } : {}),
     });
+    if (verificationChanged) {
+      await this.referralRepository.updateReferralCodesByInfluencer(
+        this.getRecordId(profile),
+        { status: "suspended" },
+      );
+    }
     return this.getMyInfluencerProfile(actor);
   }
 
   async getMyInfluencerAnalytics(actor = {}, query = {}) {
     const profile = await this.getMyInfluencerProfileOrThrow(actor);
+    this.assertInfluencerOperational(profile, "view analytics");
     const dashboard = await this.getInfluencerDashboard(actor, query);
     let network = null;
     if (profile.influencerType === "parent" && profile.canCreateChildren) {
@@ -2724,6 +2890,7 @@ class ReferralService {
 
   async getMyBonusProgress(actor = {}, query = {}) {
     const profile = await this.getMyInfluencerProfileOrThrow(actor);
+    this.assertInfluencerOperational(profile, "view bonus progress");
     return this.getBonusProgressReport({
       ...query,
       influencerId: this.getRecordId(profile),

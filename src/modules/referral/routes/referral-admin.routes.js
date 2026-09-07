@@ -13,6 +13,7 @@ const {
   createChildInfluencerSchema,
   updateInfluencerStatusSchema,
   updateInfluencerChildPermissionSchema,
+  reviewInfluencerVerificationSchema,
   promoteInfluencerSchema,
   listCodesSchema,
   createCodeSchema,
@@ -64,6 +65,11 @@ referralAdminRoutes.patch(
   "/influencers/:influencerId/child-permission",
   checkInput(updateInfluencerChildPermissionSchema),
   catchErrors(referralAdminController.updateInfluencerChildPermission),
+);
+referralAdminRoutes.patch(
+  "/influencers/:influencerId/verification",
+  checkInput(reviewInfluencerVerificationSchema),
+  catchErrors(referralAdminController.reviewInfluencerVerification),
 );
 referralAdminRoutes.patch(
   "/influencers/:influencerId/promote",

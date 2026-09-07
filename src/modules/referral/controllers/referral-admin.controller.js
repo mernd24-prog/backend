@@ -67,6 +67,15 @@ class ReferralAdminController {
     res.json(okResponse(influencer));
   };
 
+  reviewInfluencerVerification = async (req, res) => {
+    const influencer = await this.referralService.reviewInfluencerVerification(
+      req.params.influencerId,
+      req.body,
+      getCurrentUser(req),
+    );
+    res.json(okResponse(influencer));
+  };
+
   promoteInfluencer = async (req, res) => {
     const influencer = await this.referralService.promoteInfluencer(
       req.params.influencerId,

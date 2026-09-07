@@ -160,6 +160,20 @@ const updateInfluencerChildPermissionSchema = Joi.object({
   params: Joi.object({ influencerId: Joi.string().required() }).required(),
 });
 
+const reviewInfluencerVerificationSchema = Joi.object({
+  body: Joi.object({
+    section: Joi.string().valid("kyc", "bank").required(),
+    decision: Joi.string().valid("verified", "rejected").required(),
+    reason: Joi.when("decision", {
+      is: "rejected",
+      then: Joi.string().trim().min(3).max(500).required(),
+      otherwise: Joi.string().trim().max(500).allow("", null),
+    }),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({ influencerId: Joi.string().required() }).required(),
+});
+
 const promoteInfluencerSchema = Joi.object({
   body: Joi.object({
     canCreateChildren: Joi.boolean().default(true),
@@ -422,6 +436,7 @@ module.exports = {
   createChildInfluencerSchema,
   updateInfluencerStatusSchema,
   updateInfluencerChildPermissionSchema,
+  reviewInfluencerVerificationSchema,
   promoteInfluencerSchema,
   listCodesSchema,
   createCodeSchema,
