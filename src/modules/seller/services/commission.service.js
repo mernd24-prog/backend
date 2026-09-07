@@ -15,6 +15,7 @@ const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { env } = require("../../../config/env");
 const { sendMail } = require("../../../infrastructure/mail/mailer");
+const { renderEmailTemplate } = require("../../notification/services/email-template-catalog");
 const { RazorpayXPayoutProvider } = require("../../../infrastructure/payouts/providers/razorpayx.provider");
 const { WalletService } = require("../../wallet/services/wallet.service");
 const {
@@ -179,25 +180,6 @@ class SellerCommissionService {
     const period = `${this.formatPayoutDate(payout.period_start)} - ${this.formatPayoutDate(payout.period_end)}`;
     const reference = payout.payment_reference || payout.id;
     const amount = this.renderMoney(payout.net_amount, currency);
-    const rows = [
-      ["Payout ID", payout.id],
-      ["Amount Credited", amount],
-      ["Payment Method", method],
-      ["Payment Reference", reference],
-      ["Status", "Completed"],
-      ["Processed At", processedAt],
-      ["Settlement Period", period],
-      ["Gross Sales", this.renderMoney(payout.total_amount, currency)],
-      ["Platform Commission", this.renderMoney(payout.commission_amount, currency)],
-      ["Tax / TCS / TDS", this.renderMoney(payout.tax_amount, currency)],
-      ["Refunds / Adjustments", this.renderMoney((Number(payout.refund_amount || 0) + Number(payout.adjustment_amount || 0)), currency)],
-    ];
-    const tableRows = rows.map(([label, value]) => `
-      <tr>
-        <td style="padding:10px 12px;border-bottom:1px solid #e8edf5;color:#64748b;">${this.escapeMailHtml(label)}</td>
-        <td style="padding:10px 12px;border-bottom:1px solid #e8edf5;color:#0f172a;font-weight:600;">${this.escapeMailHtml(value)}</td>
-      </tr>
-    `).join("");
     const subject = `Seller payout completed - ${amount}`;
     const text = [
       `Hi ${sellerName},`,
@@ -212,22 +194,26 @@ class SellerCommissionService {
       "",
       "You can check the payout status in your seller finance dashboard.",
     ].join("\n");
-    const html = `
-      <div style="font-family:Arial,sans-serif;background:#f6f8fb;padding:24px;color:#0f172a;">
-        <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
-          <div style="padding:22px 24px;background:#0f1b4c;color:#ffffff;">
-            <div style="font-size:18px;font-weight:700;">Seller payout completed</div>
-            <div style="font-size:14px;margin-top:6px;color:#dbeafe;">${this.escapeMailHtml(amount)} has been settled to ${this.escapeMailHtml(method)}.</div>
-          </div>
-          <div style="padding:24px;">
-            <p style="margin:0 0 16px;">Hi ${this.escapeMailHtml(sellerName)},</p>
-            <p style="margin:0 0 18px;color:#475569;">Your payout is now marked completed. Here are the payout details:</p>
-            <table style="width:100%;border-collapse:collapse;border:1px solid #e8edf5;border-radius:6px;overflow:hidden;">${tableRows}</table>
-            <p style="margin:18px 0 0;color:#64748b;font-size:13px;">You can check the full status and settlement details in your seller finance dashboard.</p>
-          </div>
-        </div>
-      </div>
-    `;
+    const template = renderEmailTemplate({
+      templateKey: "seller_payout_update",
+      recipientType: "seller",
+      subject,
+      message: `Hi ${sellerName}, your payout has been completed. ${amount} has been settled to ${method}.`,
+      payload: {
+        payoutNumber: reference,
+        referenceNumber: reference,
+        status: "completed",
+        amount: payout.net_amount,
+        currency,
+        paymentReference: payout.payment_reference,
+        processedAt,
+        period,
+        grossSales: this.renderMoney(payout.total_amount, currency),
+        platformCommission: this.renderMoney(payout.commission_amount, currency),
+        taxAmount: this.renderMoney(payout.tax_amount, currency),
+        adjustments: this.renderMoney((Number(payout.refund_amount || 0) + Number(payout.adjustment_amount || 0)), currency),
+      },
+    });
 
     logger.warn({
       payoutId: payout.id,
@@ -237,7 +223,7 @@ class SellerCommissionService {
       smtpLive: env.smtp.live,
     }, "Sending seller payout completion email");
 
-    const result = await sendMail({ to, subject, text, html });
+    const result = await sendMail({ to, subject: template.subject, text, html: template.html });
     logger.warn({
       payoutId: payout.id,
       sellerId: payout.seller_id,

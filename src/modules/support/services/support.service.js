@@ -3,6 +3,7 @@ const { AppError } = require("../../../shared/errors/app-error");
 const { ROLES } = require("../../../shared/constants/roles");
 const { sendMail } = require("../../../infrastructure/mail/mailer");
 const { logger } = require("../../../shared/logger/logger");
+const { renderEmailTemplate } = require("../../notification/services/email-template-catalog");
 const { UserModel } = require("../../user/models/user.model");
 const { NotificationService } = require("../../notification/services/notification.service");
 const { SellerOrganizationRepository } = require("../../seller/repositories/seller-organization.repository");
@@ -129,24 +130,6 @@ class SupportService {
 
   buildAdminQueryEmail(query = {}) {
     const userType = query.userType === "seller" ? "Seller" : "Customer";
-    const rows = [
-      ["Query ID", query.queryId],
-      ["User Type", userType],
-      ["Name", query.userName || "N/A"],
-      ["Email", query.userEmail || "N/A"],
-      ["Phone", query.userPhone || "N/A"],
-      ["Category", String(query.category || "OTHER").replace(/_/g, " ")],
-      ["Subject", query.subject || "N/A"],
-      ...(query.sellerOrganizationName || query.sellerOrganizationId
-        ? [["Organization", query.sellerOrganizationName || query.sellerOrganizationId]]
-        : []),
-    ];
-    const tableRows = rows.map(([label, value]) => `
-      <tr>
-        <td style="width:150px;padding:10px 12px;border-bottom:1px solid #edf2f7;background:#f8fafc;font-weight:700;color:#334155;">${this.escapeHtml(label)}</td>
-        <td style="padding:10px 12px;border-bottom:1px solid #edf2f7;color:#0f172a;">${this.escapeHtml(value || "N/A")}</td>
-      </tr>
-    `).join("");
     const subject = `[Support] New ${userType} Query ${query.queryId}`;
     const text = [
       `New ${userType.toLowerCase()} support query received.`,
@@ -158,24 +141,25 @@ class SupportService {
       "",
       query.message || "",
     ].join("\n");
-    const html = `
-      <div style="margin:0;padding:24px;background:#f5f7fb;font-family:Arial,sans-serif;color:#0f172a;">
-        <div style="max-width:680px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;">
-          <div style="background:#111827;color:#ffffff;padding:20px 24px;">
-            <div style="font-size:18px;font-weight:700;">New ${this.escapeHtml(userType)} Support Query</div>
-            <div style="font-size:13px;margin-top:6px;color:#d1d5db;">${this.escapeHtml(query.queryId)}</div>
-          </div>
-          <div style="padding:24px;">
-            <table style="width:100%;border-collapse:collapse;border:1px solid #edf2f7;">${tableRows}</table>
-            <div style="margin-top:20px;">
-              <div style="font-size:13px;font-weight:700;color:#334155;text-transform:uppercase;">Message</div>
-              <div style="margin-top:8px;padding:14px;border:1px solid #e5e7eb;border-radius:8px;background:#f8fafc;white-space:pre-wrap;line-height:1.5;">${this.escapeHtml(query.message || "No message")}</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-    return { subject, text, html };
+    const template = renderEmailTemplate({
+      templateKey: "support_ticket_admin",
+      recipientType: "admin",
+      subject,
+      message: `A new ${userType.toLowerCase()} support query was submitted.`,
+      payload: {
+        queryId: query.queryId,
+        userType,
+        name: query.userName || "N/A",
+        email: query.userEmail || "N/A",
+        phone: query.userPhone || "N/A",
+        category: query.category || "OTHER",
+        status: query.status || "open",
+        subject: query.subject || "N/A",
+        message: query.message || "No message",
+        organization: query.sellerOrganizationName || query.sellerOrganizationId,
+      },
+    });
+    return { subject: template.subject, text, html: template.html };
   }
 
   async notifyAdminsForNewQuery(query = {}) {
