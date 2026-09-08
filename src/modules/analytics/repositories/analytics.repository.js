@@ -2,9 +2,12 @@ const { AnalyticsModel } = require("../models/analytics.model");
 const { knex } = require("../../../infrastructure/postgres/postgres-client");
 const { ReturnModel } = require("../../returns/models/return.model");
 const { UserModel } = require("../../user/models/user.model");
+const { ProductModel } = require("../../product/models/product.model");
 
 const DELIVERED_ORDER_STATUSES = ["delivered", "fulfilled", "completed"];
 const CANCELLED_ORDER_STATUSES = ["cancelled", "payment_failed"];
+const RETURNED_ORDER_STATUSES = ["return_requested", "return_approved", "partially_returned", "returned"];
+const REFUNDED_PAYMENT_STATUSES = ["refunded", "partially_refunded"];
 const SUCCESS_SHIPMENT_STATUSES = ["delivered"];
 const FAILED_SHIPMENT_STATUSES = ["failed", "cancelled", "rto", "lost", "damaged"];
 const RETURN_REFUNDED_STATUSES = ["refunded", "partially_refunded"];
@@ -25,14 +28,18 @@ class AnalyticsRepository {
       payoutSummary,
       deliverySummary,
       returnSummary,
+      productViews,
       recentOrders,
+      salesDetails,
     ] = await Promise.all([
       this.getSellerOrderSummary(sellerId, { fromDate, toDate }),
       this.getSellerFinanceSummary(sellerId, { fromDate, toDate }),
       this.getSellerPayoutSummary(sellerId, { fromDate, toDate }),
       this.getSellerDeliverySummary(sellerId, { fromDate, toDate }),
       this.getReturnSummary({ sellerId, fromDate, toDate }),
+      this.getSellerProductViews(sellerId, { fromDate, toDate }),
       this.getSellerRecentOrders(sellerId, { fromDate, toDate, limit: recentLimit }),
+      this.getSellerSalesDetails(sellerId, { fromDate, toDate, limit: recentLimit }),
     ]);
 
     const returnRate = this.rate(returnSummary.returnCount, orderSummary.orderCount);
@@ -53,6 +60,15 @@ class AnalyticsRepository {
         ...deliverySummary,
         successRate: deliverySuccessRate,
       },
+      salesSummary: this.composeSellerSalesSummary({
+        fromDate,
+        toDate,
+        orderSummary,
+        financeSummary,
+        returnSummary,
+        productViews,
+      }),
+      salesDetails,
       recentOrders,
     };
   }
@@ -109,6 +125,9 @@ class AnalyticsRepository {
         COUNT(DISTINCT o.id)::INT AS order_count,
         COUNT(DISTINCT o.id) FILTER (WHERE o.status IN (${this.bindings(DELIVERED_ORDER_STATUSES)}))::INT AS delivered_orders,
         COUNT(DISTINCT o.id) FILTER (WHERE o.status IN (${this.bindings(CANCELLED_ORDER_STATUSES)}))::INT AS cancelled_orders,
+        COUNT(DISTINCT o.id) FILTER (WHERE o.status IN (${this.bindings(RETURNED_ORDER_STATUSES)}))::INT AS returned_orders,
+        COUNT(DISTINCT o.id) FILTER (WHERE o.payment_status IN (${this.bindings(REFUNDED_PAYMENT_STATUSES)}))::INT AS refunded_orders,
+        COALESCE(SUM(oi.quantity), 0)::INT AS total_products_sold,
         COALESCE(SUM(oi.line_total), 0)::NUMERIC AS total_sales_amount,
         COALESCE(SUM(oi.discount_amount), 0)::NUMERIC AS discount_amount,
         COALESCE(SUM(oi.tax_amount), 0)::NUMERIC AS gst_amount,
@@ -116,13 +135,21 @@ class AnalyticsRepository {
         COALESCE(SUM(${this.jsonNumberSql("oi.pricing_snapshot", "platformFeeTaxAmount")}), 0)::NUMERIC AS commission_tax_amount,
         COALESCE(SUM(${this.jsonNumberSql("oi.pricing_snapshot", "sellerPayoutBaseAmount")}), 0)::NUMERIC AS seller_payout_base_amount,
         MAX(o.currency) AS currency
-      `, [...DELIVERED_ORDER_STATUSES, ...CANCELLED_ORDER_STATUSES]))
+      `, [
+        ...DELIVERED_ORDER_STATUSES,
+        ...CANCELLED_ORDER_STATUSES,
+        ...RETURNED_ORDER_STATUSES,
+        ...REFUNDED_PAYMENT_STATUSES,
+      ]))
       .first();
 
     return {
       orderCount: Number(row?.order_count || 0),
       deliveredOrders: Number(row?.delivered_orders || 0),
       cancelledOrders: Number(row?.cancelled_orders || 0),
+      returnedOrders: Number(row?.returned_orders || 0),
+      refundedOrders: Number(row?.refunded_orders || 0),
+      totalProductsSold: Number(row?.total_products_sold || 0),
       totalSalesAmount: this.money(row?.total_sales_amount),
       discountAmount: this.money(row?.discount_amount),
       gstAmount: this.money(row?.gst_amount),
@@ -145,6 +172,8 @@ class AnalyticsRepository {
         COALESCE(SUM(tax_amount), 0)::NUMERIC AS commission_tax_amount,
         COALESCE(SUM(refund_amount), 0)::NUMERIC AS refund_adjustment_amount,
         COALESCE(SUM(net_amount), 0)::NUMERIC AS net_seller_revenue,
+        COALESCE(SUM(${this.jsonNumberSql("metadata", "sellerDeliveryChargeAmount")}), 0)::NUMERIC AS shipping_amount,
+        COALESCE(SUM(${this.jsonNumberSql("metadata", "shippingDeductionAmount")}), 0)::NUMERIC AS shipping_deduction_amount,
         COUNT(*) FILTER (WHERE status = 'pending')::INT AS pending_count,
         COUNT(*) FILTER (WHERE status = 'paid')::INT AS paid_count,
         MAX(currency) AS currency
@@ -158,6 +187,8 @@ class AnalyticsRepository {
       commissionTaxAmount: this.money(row?.commission_tax_amount),
       refundAdjustmentAmount: this.money(row?.refund_adjustment_amount),
       netSellerRevenue: this.money(row?.net_seller_revenue),
+      shippingAmount: this.money(row?.shipping_amount),
+      shippingDeductionAmount: this.money(row?.shipping_deduction_amount),
       pendingCommissionCount: Number(row?.pending_count || 0),
       paidCommissionCount: Number(row?.paid_count || 0),
       currency: row?.currency || "INR",
@@ -198,7 +229,7 @@ class AnalyticsRepository {
   }
 
   async getSellerRecentOrders(sellerId, { fromDate = null, toDate = null, limit = 10 } = {}) {
-    const rows = await knex("order_items as oi")
+    const orderRows = await knex("order_items as oi")
       .join("orders as o", "o.id", "oi.order_id")
       .where("oi.seller_id", sellerId)
       .modify((builder) => this.applyDateRange(builder, { fromDate, toDate }, "o.created_at"))
@@ -217,7 +248,32 @@ class AnalyticsRepository {
       .orderBy("o.created_at", "desc")
       .limit(Number(limit || 10));
 
-    return rows.map((row) => ({
+    const orderIds = orderRows.map((row) => row.id);
+    const productRows = orderIds.length
+      ? await knex("order_items")
+        .where("seller_id", sellerId)
+        .whereIn("order_id", orderIds)
+        .select("order_id", "product_id", "product_title")
+        .sum({ units_sold: "quantity" })
+        .sum({ revenue: "line_total" })
+        .groupBy("order_id", "product_id", "product_title")
+      : [];
+    const productsByOrderId = productRows.reduce((acc, row) => {
+      const key = String(row.order_id);
+      if (!acc.has(key)) acc.set(key, []);
+      const unitsSold = Number(row.units_sold || 0);
+      acc.get(key).push({
+        product_id: row.product_id,
+        name: row.product_title || "",
+        units_sold: unitsSold,
+        revenue: this.money(row.revenue),
+        productId: row.product_id,
+        unitsSold,
+      });
+      return acc;
+    }, new Map());
+
+    return orderRows.map((row) => ({
       id: row.id,
       orderNumber: row.order_number,
       status: row.status,
@@ -227,7 +283,144 @@ class AnalyticsRepository {
       taxAmount: this.money(row.tax_amount),
       currency: row.currency || "INR",
       createdAt: row.created_at,
+      products: productsByOrderId.get(String(row.id)) || [],
     }));
+  }
+
+  composeSellerSalesSummary({
+    fromDate = null,
+    toDate = null,
+    orderSummary = {},
+    financeSummary = {},
+    returnSummary = {},
+    productViews = 0,
+  } = {}) {
+    return {
+      reportPeriod: this.buildWindow(fromDate, toDate),
+      totalRevenue: this.money(orderSummary.totalSalesAmount),
+      totalOrders: Number(orderSummary.orderCount || 0),
+      totalProductsSold: Number(orderSummary.totalProductsSold || 0),
+      completedOrders: Number(orderSummary.deliveredOrders || 0),
+      cancelledOrders: Number(orderSummary.cancelledOrders || 0),
+      returnedOrders: Number(orderSummary.returnedOrders || returnSummary.returnCount || 0),
+      refundedOrders: Number(orderSummary.refundedOrders || returnSummary.refundedCount || 0),
+      productViews: Number(productViews || 0),
+      grossSales: this.money(financeSummary.grossAmount || orderSummary.totalSalesAmount),
+      discount: this.money(orderSummary.discountAmount),
+      shipping: this.money(financeSummary.shippingAmount),
+      refundAmount: this.money(financeSummary.refundAdjustmentAmount || returnSummary.refundAmount),
+      commission: this.money(financeSummary.commissionAmount),
+      netSellerEarnings: this.money(financeSummary.netSellerRevenue),
+    };
+  }
+
+  async getSellerSalesDetails(sellerId, { fromDate = null, toDate = null, limit = 10 } = {}) {
+    const commissionAggregate = knex("seller_commissions")
+      .select("order_item_id")
+      .where("seller_id", sellerId)
+      .groupBy("order_item_id")
+      .sum({ commission_amount: "commission_amount" })
+      .sum({ refund_amount: "refund_amount" })
+      .sum({ net_amount: "net_amount" })
+      .max({ payout_id: knex.raw("payout_id::text") })
+      .max({ commission_status: "status" })
+      .sum({ shipping_amount: knex.raw(this.jsonNumberSql("metadata", "sellerDeliveryChargeAmount")) })
+      .sum({ shipping_deduction_amount: knex.raw(this.jsonNumberSql("metadata", "shippingDeductionAmount")) })
+      .as("sc");
+
+    const rows = await knex("order_items as oi")
+      .join("orders as o", "o.id", "oi.order_id")
+      .leftJoin(commissionAggregate, "sc.order_item_id", "oi.id")
+      .leftJoin("seller_payouts as sp", knex.raw("sp.id::text"), "sc.payout_id")
+      .where("oi.seller_id", sellerId)
+      .modify((builder) => this.applyDateRange(builder, { fromDate, toDate }, "o.created_at"))
+      .select(
+        "o.id as order_id",
+        "o.order_number",
+        "o.status as order_status",
+        "o.payment_status",
+        "o.created_at as order_date",
+        "o.currency",
+        "oi.id as order_item_id",
+        "oi.product_title",
+        "oi.product_id",
+        "oi.product_sku",
+        "oi.variant_id",
+        "oi.variant_sku",
+        "oi.variant_title",
+        "oi.category",
+        "oi.quantity",
+        "oi.unit_price",
+        "oi.line_total",
+        "oi.discount_amount",
+        "oi.tax_amount",
+        "oi.payout_status as item_payout_status",
+        "sc.commission_status",
+        "sc.commission_amount",
+        "sc.refund_amount",
+        "sc.net_amount",
+        "sc.shipping_amount",
+        "sc.shipping_deduction_amount",
+        "sp.status as payout_status",
+        "sp.processed_at as payout_processed_at",
+        "sp.scheduled_at as payout_scheduled_at",
+        "sp.created_at as payout_created_at",
+      )
+      .orderBy("o.created_at", "desc")
+      .limit(Number(limit || 10));
+
+    return rows.map((row) => {
+      const subtotal = this.money(Number(row.unit_price || 0) * Number(row.quantity || 0));
+      const discount = this.money(row.discount_amount);
+      const tax = this.money(row.tax_amount);
+      const shipping = this.money(row.shipping_amount);
+      const shippingDeduction = this.money(row.shipping_deduction_amount);
+      const grossAmount = this.money(Number(row.line_total || subtotal || 0) - discount + tax + shipping);
+      return {
+        orderId: row.order_number || row.order_id,
+        orderUuid: row.order_id,
+        orderItemId: row.order_item_id,
+        orderDate: row.order_date,
+        orderStatus: row.order_status,
+        paymentStatus: row.payment_status,
+        productName: row.product_title || "",
+        productId: row.product_id,
+        sku: row.variant_sku || row.product_sku || "",
+        variant: row.variant_title || row.variant_sku || row.variant_id || "",
+        category: row.category || "",
+        quantity: Number(row.quantity || 0),
+        unitPrice: this.money(row.unit_price),
+        subtotal,
+        discount,
+        tax,
+        shipping,
+        grossAmount,
+        refundAmount: this.money(row.refund_amount),
+        commission: this.money(row.commission_amount),
+        shippingDeduction,
+        netSellerEarnings: this.money(row.net_amount),
+        payoutStatus: row.payout_status || row.item_payout_status || row.commission_status || null,
+        payoutDate: row.payout_processed_at || row.payout_scheduled_at || row.payout_created_at || null,
+        currency: row.currency || "INR",
+      };
+    });
+  }
+
+  async getSellerProductViews(sellerId, { fromDate = null, toDate = null } = {}) {
+    const productIds = await ProductModel.distinct("_id", { sellerId: String(sellerId) });
+    if (!productIds.length) return 0;
+
+    const productIdStrings = productIds.map((id) => String(id));
+    const filter = {
+      eventName: "product_view",
+      "metadata.productId": { $in: productIdStrings },
+    };
+    const createdAt = {};
+    if (fromDate) createdAt.$gte = new Date(this.normalizeDateRangeStart(fromDate));
+    if (toDate) createdAt.$lte = new Date(this.normalizeDateRangeEnd(toDate));
+    if (Object.keys(createdAt).length) filter.createdAt = createdAt;
+
+    return AnalyticsModel.countDocuments(filter);
   }
 
   async getAdminOrderSummary(range = {}) {
