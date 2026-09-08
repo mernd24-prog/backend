@@ -54,36 +54,27 @@ const isAlertOrderEvent = (eventName = "") =>
   [DOMAIN_EVENTS.ORDER_PAYMENT_FAILED_V1, DOMAIN_EVENTS.REFUND_FAILED_V1, DOMAIN_EVENTS.ORDER_CANCELLED_V1].includes(eventName);
 
 const renderHeaderIcon = (icon, isAlert = false) => `
-  <table role="presentation" cellpadding="0" cellspacing="0" style="margin-left:auto;">
-    <tr>
-      <td align="center" style="width:168px;">
-        ${renderHeroArt(icon, { type: isAlert ? "alert" : undefined })}
-      </td>
-    </tr>
-  </table>`;
+  ${renderHeroArt(icon, { type: isAlert ? "alert" : undefined })}`;
 
 const renderTrustStrip = () => `
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;border-top:1px solid #eef0f4;padding-top:18px;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;">
     <tr>
-      <td style="padding:0;">
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <td align="center" style="padding:0;">
+        <table role="presentation" width="420" cellpadding="0" cellspacing="0" class="sg-trust-list" style="width:420px;max-width:100%;border-top:1px solid #eef0f4;">
           <tr>
-            <td width="44" style="padding:14px 12px 14px 0;border-bottom:1px solid #e6e9f2;color:#0026d8;font-size:24px;line-height:1;vertical-align:top;">&#128737;</td>
             <td style="padding:14px 0;border-bottom:1px solid #e6e9f2;vertical-align:top;">
               <div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Secure &amp; Trusted</div>
               <div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">Order updates are sent from official systems.</div>
             </td>
           </tr>
           <tr>
-            <td width="44" style="padding:14px 12px 14px 0;border-bottom:1px solid #e6e9f2;color:#0026d8;font-size:24px;line-height:1;vertical-align:top;">&#128722;</td>
             <td style="padding:14px 0;border-bottom:1px solid #e6e9f2;vertical-align:top;">
               <div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Order Protection</div>
               <div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">Review details only in your account.</div>
             </td>
           </tr>
           <tr>
-            <td width="44" style="padding:14px 12px 14px 0;border-bottom:1px solid #e6e9f2;color:#0026d8;font-size:24px;line-height:1;vertical-align:top;">&#9993;</td>
-            <td style="padding:14px 0;border-bottom:1px solid #e6e9f2;vertical-align:top;">
+            <td style="padding:14px 0;vertical-align:top;">
               <div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Need Help?</div>
               <div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">Contact support from your order page.</div>
             </td>
@@ -455,7 +446,7 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
   ].filter(Boolean).join(" - ");
   const logoBlock = logoUrl
     ? `<img src="${escapeHtml(logoUrl)}" width="28" height="28" alt="${escapeHtml(brandName)}" style="display:block;width:28px;height:28px;border-radius:7px;object-fit:contain;background:#ffffff;border:0;outline:none;text-decoration:none;">`
-    : `<span style="display:inline-block;width:28px;height:28px;border-radius:50%;background:#d9a327;color:#061044;font-size:15px;line-height:28px;text-align:center;font-weight:800;">&#9737;</span>`;
+    : `<span style="display:inline-block;width:28px;height:28px;border-radius:7px;background:#d9a327;color:#061044;font-size:12px;line-height:28px;text-align:center;font-weight:800;">SG</span>`;
 
   const html = `<!doctype html>
   <html>
@@ -474,6 +465,7 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
           .sg-brand-text { font-size: 11px !important; letter-spacing: 1.3px !important; white-space: nowrap !important; }
           .sg-hero-icon { width: 148px !important; }
           .sg-hero-art { width: 148px !important; max-width:148px !important; }
+          .sg-trust-list { width: 100% !important; }
         }
       </style>
     </head>
@@ -499,7 +491,6 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
                         <h1 class="sg-title" style="margin:20px 0 0;font-size:24px;line-height:1.25;color:#ffffff;font-weight:800;mso-line-height-rule:exactly;">${escapeHtml(copy.title)}</h1>
                         <p style="margin:8px 0 0;font-size:13px;line-height:1.5;color:#dbe6ff;">${escapeHtml(isAlert ? "Please review this update" : "Your order update is ready")}</p>
                       </td>
-                      <td class="sg-hero-icon" width="148" align="right" valign="middle">${renderHeaderIcon(resolvedEventName, isAlert)}</td>
                     </tr>
                   </table>
                 </td>
@@ -530,7 +521,7 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
                     This is an automated transactional email from ${escapeHtml(brandName)}. Please do not reply to this email.
                     ${supportEmail ? ` For assistance, contact ${escapeHtml(supportEmail)}.` : " Please contact customer support if you need assistance."}
                   </p>
-                  <p style="margin:12px 0 0;font-size:11px;line-height:1.7;color:#8a91a7;">&#128274; &copy; ${currentYear} ${escapeHtml(brandName)}. All rights reserved.</p>
+                  <p style="margin:12px 0 0;font-size:11px;line-height:1.7;color:#8a91a7;">&copy; ${currentYear} ${escapeHtml(brandName)}. All rights reserved.</p>
                 </td>
               </tr>
             </table>

@@ -363,7 +363,7 @@ const wrapEmail = ({ title, intro, rows = [], ctaText = "View details", ctaUrl =
     .join("");
   const logoBlock = logoUrl
     ? `<img src="${escapeHtml(logoUrl)}" width="28" height="28" alt="${escapeHtml(brandName)}" style="display:block;width:28px;height:28px;border-radius:7px;object-fit:contain;background:#ffffff;border:0;outline:none;text-decoration:none;">`
-    : `<span style="display:inline-block;width:28px;height:28px;border-radius:50%;background:#d9a327;color:#061044;font-size:15px;line-height:28px;text-align:center;font-weight:800;">&#9737;</span>`;
+    : `<span style="display:inline-block;width:28px;height:28px;border-radius:7px;background:#d9a327;color:#061044;font-size:12px;line-height:28px;text-align:center;font-weight:800;">SG</span>`;
 
   return `<!doctype html>
   <html>
@@ -406,9 +406,6 @@ const wrapEmail = ({ title, intro, rows = [], ctaText = "View details", ctaUrl =
                         <h1 class="sg-title" style="margin:20px 0 0;font-size:24px;line-height:1.25;color:#ffffff;font-weight:800;mso-line-height-rule:exactly;">${escapeHtml(title)}</h1>
                         <p style="margin:8px 0 0;font-size:13px;line-height:1.5;color:#dbe6ff;">Important account update</p>
                       </td>
-                      <td class="sg-hero-icon" width="148" align="right" valign="middle">
-                        ${renderHeroArt(title || "support")}
-                      </td>
                     </tr>
                   </table>
                 </td>
@@ -434,7 +431,7 @@ const wrapEmail = ({ title, intro, rows = [], ctaText = "View details", ctaUrl =
                     This is an automated transactional email from ${escapeHtml(brandName)}. Please do not reply to this email.
                     ${supportEmail ? ` For assistance, contact ${escapeHtml(supportEmail)}.` : " Please contact support if you need assistance."}
                   </p>
-                  <p style="margin:12px 0 0;font-size:11px;line-height:1.7;color:#8a91a7;">&#128274; &copy; ${currentYear} ${escapeHtml(brandName)}. All rights reserved.</p>
+                  <p style="margin:12px 0 0;font-size:11px;line-height:1.7;color:#8a91a7;">&copy; ${currentYear} ${escapeHtml(brandName)}. All rights reserved.</p>
                 </td>
               </tr>
             </table>

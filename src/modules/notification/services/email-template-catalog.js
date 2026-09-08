@@ -24,20 +24,20 @@ const supportEmail = process.env.SUPPORT_EMAIL || process.env.REPLY_TO_EMAIL || 
 const currentYear = new Date().getFullYear();
 
 const EMAIL_ICONS = {
-  account: "&#128075;",
-  alert: "&#9888;",
-  auth: "&#128274;",
-  cart: "&#128722;",
-  delivery: "&#128666;",
-  document: "&#128196;",
-  inventory: "&#128230;",
-  money: "&#128176;",
-  order: "&#128717;",
-  product: "&#127873;",
-  return: "&#8635;",
-  seller: "&#127970;",
-  support: "&#9993;",
-  success: "&#10003;",
+  account: "",
+  alert: "",
+  auth: "",
+  cart: "",
+  delivery: "",
+  document: "",
+  inventory: "",
+  money: "",
+  order: "",
+  product: "",
+  return: "",
+  seller: "",
+  support: "",
+  success: "",
 };
 
 const iconForTemplate = (templateKey = "", definition = {}) => {
@@ -56,33 +56,24 @@ const iconForTemplate = (templateKey = "", definition = {}) => {
   return EMAIL_ICONS.order;
 };
 
-const renderHeaderIcon = (icon, isAlert = false) => `
-  <table role="presentation" cellpadding="0" cellspacing="0" style="margin-left:auto;">
-    <tr>
-      <td align="center" style="width:168px;">
-        ${renderHeroArt(icon, { type: isAlert ? "alert" : undefined })}
-      </td>
-    </tr>
-  </table>`;
+const renderHeaderIcon = (icon, isAlert = false, heroType) => `
+  ${renderHeroArt(icon, { type: heroType || (isAlert ? "alert" : undefined) })}`;
 
 const renderTrustStrip = () => `
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;border-top:1px solid #eef0f4;border-bottom:1px solid #e6e9f2;">
     <tr>
       <td class="sg-trust-item" width="33.33%" style="padding:16px 16px 16px 0;border-right:1px solid #dfe5f0;vertical-align:top;">
         <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-          <td width="46" style="color:#0026d8;font-size:28px;line-height:1;vertical-align:top;">&#128737;</td>
           <td style="vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Secure &amp; Trusted</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">Your security is our top priority.</div></td>
         </tr></table>
       </td>
       <td class="sg-trust-item" width="33.33%" style="padding:16px;border-right:1px solid #dfe5f0;vertical-align:top;">
         <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-          <td width="46" style="color:#0026d8;font-size:28px;line-height:1;vertical-align:top;">&#128100;</td>
           <td style="vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Account Protection</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">This helps us keep your account safe.</div></td>
         </tr></table>
       </td>
       <td class="sg-trust-item" width="33.33%" style="padding:16px 0 16px 16px;vertical-align:top;">
         <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-          <td width="46" style="color:#0026d8;font-size:28px;line-height:1;vertical-align:top;">&#9993;</td>
           <td style="vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Didn't Request This?</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">You can safely ignore this email.</div></td>
         </tr></table>
       </td>
@@ -95,20 +86,19 @@ const renderOtpCodeBlock = (otp) => {
   return `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:22px 0 16px;background:#f5f8ff;border:1px dashed #b8c8ff;border-radius:12px;">
       <tr>
-        <td colspan="3" align="center" style="padding:18px 16px 8px;font-size:12px;font-weight:800;text-transform:uppercase;color:#0026d8;">&#128274;&nbsp; Your Verification Code</td>
+        <td colspan="3" align="center" style="padding:18px 16px 8px;font-size:12px;font-weight:800;text-transform:uppercase;color:#0026d8;">Your Verification Code</td>
       </tr>
       <tr>
         <td class="sg-code-cell" align="center" style="padding:4px 16px 22px 24px;">
           <span class="sg-code" style="font-size:42px;line-height:1.15;letter-spacing:12px;font-weight:800;color:#061044;font-family:Arial,Helvetica,sans-serif;white-space:nowrap;">${escapeHtml(code)}</span>
         </td>
         <td class="sg-code-divider" width="1" style="padding:0 0 18px;"><div style="width:1px;height:58px;background:#dbe4f4;line-height:1px;font-size:1px;">&nbsp;</div></td>
-        <td class="sg-copy-cell" width="136" align="center" style="padding:4px 20px 22px 18px;font-size:13px;font-weight:800;color:#0026d8;white-space:nowrap;">&#128203;&nbsp; Copy Code</td>
+        <td class="sg-copy-cell" width="136" align="center" style="padding:4px 20px 22px 18px;font-size:13px;font-weight:800;color:#0026d8;white-space:nowrap;">Copy Code</td>
       </tr>
     </table>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 22px;background:#fff8eb;border:1px solid #ffe2a8;border-radius:10px;">
       <tr>
-        <td width="42" align="center" style="padding:12px 0 12px 14px;font-size:24px;color:#f0a000;vertical-align:middle;">&#9201;</td>
-        <td style="padding:12px 14px 12px 10px;font-size:13px;line-height:1.5;color:#061044;"><strong>This code will expire in 15 minutes.</strong><br>Please do not share it with anyone.</td>
+        <td style="padding:12px 14px;font-size:13px;line-height:1.5;color:#061044;"><strong>This code will expire in 15 minutes.</strong><br>Please do not share it with anyone.</td>
       </tr>
     </table>`;
 };
@@ -458,6 +448,8 @@ const EMAIL_TEMPLATE_DEFINITIONS = {
     intro: () => "A product has reached its low stock threshold.",
     rows: inventoryRows,
     ctaText: "Review inventory",
+    icon: EMAIL_ICONS.inventory,
+    heroType: "inventory",
     tone: "alert",
     alertText: "A product has reached its low stock threshold.",
   },
@@ -663,7 +655,7 @@ function renderEmailTemplate({
     .join("");
   const logoBlock = logoUrl
     ? `<img src="${escapeHtml(logoUrl)}" width="28" height="28" alt="${escapeHtml(brandName)}" style="display:block;width:28px;height:28px;border-radius:7px;object-fit:contain;background:#ffffff;border:0;outline:none;text-decoration:none;">`
-    : `<span style="display:inline-block;width:28px;height:28px;border-radius:50%;background:#d9a327;color:#061044;font-size:15px;line-height:28px;text-align:center;font-weight:800;">&#9737;</span>`;
+    : `<span style="display:inline-block;width:28px;height:28px;border-radius:7px;background:#d9a327;color:#061044;font-size:12px;line-height:28px;text-align:center;font-weight:800;">SG</span>`;
 
   const html = `<!doctype html>
   <html>
@@ -714,14 +706,13 @@ function renderEmailTemplate({
                         <h1 class="sg-title" style="margin:20px 0 0;font-size:24px;line-height:1.25;color:#ffffff;font-weight:800;mso-line-height-rule:exactly;">${escapeHtml(heading)}</h1>
                         <p style="margin:8px 0 0;font-size:13px;line-height:1.5;color:#dbe6ff;">${escapeHtml(isOtpTemplate ? "One last step to complete your registration" : "Important account update")}</p>
                       </td>
-                      <td class="sg-hero-icon" width="148" align="right" valign="middle">${renderHeaderIcon(resolvedKey, isAlert)}</td>
                     </tr>
                   </table>
                 </td>
               </tr>
               <tr>
                 <td class="sg-body" style="padding:28px 28px 26px;">
-                  ${isAlert ? `<div style="margin:0 0 24px;border:1px solid #ffb7b7;background:#fff4f4;color:#c1121f;border-radius:9px;padding:14px 16px;font-size:14px;font-weight:800;line-height:1.5;">${templateIcon} ${escapeHtml(alertText)}</div>` : ""}
+                  ${isAlert ? `<div style="margin:0 0 24px;border:1px solid #ffb7b7;background:#fff4f4;color:#c1121f;border-radius:9px;padding:14px 16px;font-size:14px;font-weight:800;line-height:1.5;">${escapeHtml(alertText)}</div>` : ""}
                   ${greeting ? `<p style="margin:0 0 10px;font-size:16px;line-height:1.5;color:#061044;font-weight:800;">${escapeHtml(greeting)}</p>` : ""}
                   ${isAlert ? "" : `<p style="margin:0 0 22px;font-size:15px;line-height:1.75;color:#061044;">${escapeHtml(bodyIntro)}</p>`}
                   ${renderOtpCodeBlock(payload.otp)}
@@ -736,7 +727,7 @@ function renderEmailTemplate({
                     This is an automated email from ${escapeHtml(brandName)}. Please do not reply to this email.
                     ${supportEmail ? ` For assistance, contact ${escapeHtml(supportEmail)}.` : ""}
                   </p>
-                  <p style="margin:12px 0 0;font-size:11px;line-height:1.7;color:#8a91a7;">&#128274; &copy; ${currentYear} ${escapeHtml(brandName)}. All rights reserved.</p>
+                  <p style="margin:12px 0 0;font-size:11px;line-height:1.7;color:#8a91a7;">&copy; ${currentYear} ${escapeHtml(brandName)}. All rights reserved.</p>
                 </td>
               </tr>
             </table>
