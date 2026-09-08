@@ -13,6 +13,13 @@ const platformProductOptionValueSchema = new mongoose.Schema(
     imageUrl: { type: String, trim: true, default: "" },
     sortOrder: { type: Number, default: 0 },
     active: { type: Boolean, default: true, index: true },
+    approvalStatus: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "approved",
+      index: true,
+    },
+    submittedBySellerId: { type: String, default: "", index: true },
   },
   { timestamps: true },
 );

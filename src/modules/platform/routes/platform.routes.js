@@ -47,6 +47,8 @@ const {
   updateProductOptionValueSchema,
   listProductOptionValuesSchema,
   productOptionValueIdSchema,
+  sellerProductOptionSubmissionSchema,
+  reviewProductOptionSubmissionSchema,
   listProductReviewsSchema,
   createProductReviewSchema,
   updateProductReviewSchema,
@@ -69,6 +71,7 @@ const allowSellerBrandSubmission = (req, res, next) => {
   if ([ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(req.auth?.role)) return next();
   return res.status(403).json({ success: false, message: "Seller access required" });
 };
+const allowSellerMasterSubmission = allowSellerBrandSubmission;
 
 platformRoutes.get("/catalog-prefill", catchErrors(platformController.getCatalogPrefillData));
 
@@ -262,6 +265,32 @@ platformRoutes.post("/batches", authenticate, allowActions(ACTIONS.CATALOG_MANAG
 platformRoutes.patch("/batches/:batchId", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(updateBatchSchema), catchErrors(platformController.updateBatch));
 platformRoutes.delete("/batches/:batchId", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(batchIdSchema), catchErrors(platformController.deleteBatch));
 
+platformRoutes.get(
+  "/product-options/submissions/mine",
+  authenticate,
+  allowSellerMasterSubmission,
+  catchErrors(platformController.listMyProductOptionSubmissions),
+);
+platformRoutes.get(
+  "/product-options/available/mine",
+  authenticate,
+  allowSellerMasterSubmission,
+  catchErrors(platformController.listAvailableProductOptions),
+);
+platformRoutes.post(
+  "/product-options/submissions",
+  authenticate,
+  allowSellerMasterSubmission,
+  checkInput(sellerProductOptionSubmissionSchema),
+  catchErrors(platformController.submitProductOption),
+);
+platformRoutes.patch(
+  "/product-options/:optionId/approval",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(reviewProductOptionSubmissionSchema),
+  catchErrors(platformController.reviewProductOptionSubmission),
+);
 platformRoutes.get("/product-options", checkInput(listProductOptionsSchema), catchErrors(platformController.listProductOptions));
 platformRoutes.post("/product-options", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(createProductOptionSchema), catchErrors(platformController.createProductOption));
 platformRoutes.patch("/product-options/:optionId", authenticate, allowActions(ACTIONS.CATALOG_MANAGE), checkInput(updateProductOptionSchema), catchErrors(platformController.updateProductOption));
@@ -280,6 +309,20 @@ platformRoutes.get(
   allowActions(ACTIONS.CATALOG_REVIEW),
   checkInput(listProductReviewsSchema),
   catchErrors(platformController.listProductReviews),
+);
+platformRoutes.get(
+  "/product-review-summaries",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_REVIEW),
+  checkInput(listProductReviewsSchema),
+  catchErrors(platformController.listProductReviewSummaries),
+);
+platformRoutes.get(
+  "/product-review-summaries/:productId/reviews",
+  authenticate,
+  allowActions(ACTIONS.CATALOG_REVIEW),
+  checkInput(listProductReviewsSchema),
+  catchErrors(platformController.listProductReviewDetails),
 );
 platformRoutes.post(
   "/product-reviews",

@@ -167,6 +167,22 @@ class PlatformController {
     res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
   };
 
+  listProductReviewSummaries = async (req, res) => {
+    const { page, limit } = getPage(req.query);
+    const result = await this.platformService.listProductReviewSummaries(req.query, req.auth || {});
+    res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total), summary: result.stats }));
+  };
+
+  listProductReviewDetails = async (req, res) => {
+    const { page, limit } = getPage(req.query);
+    const result = await this.platformService.listProductReviewDetails(req.params.productId, req.query, req.auth || {});
+    res.json(okResponse(result.items, {
+      pagination: paginationMeta(page, limit, result.total),
+      summary: result.stats,
+      product: result.product,
+    }));
+  };
+
   createProductReviewByAdmin = async (req, res) => {
     const item = await this.platformService.createProductReviewByAdmin(req.body, req.auth || {});
     res.status(201).json(okResponse(item, { message: "Product review created successfully." }));
@@ -274,6 +290,30 @@ class PlatformController {
     res.status(201).json(okResponse(item, { message: "Product option created successfully." }));
   };
 
+  submitProductOption = async (req, res) => {
+    const item = await this.platformService.submitProductOption(req.body, req.auth || {}, req);
+    res.status(201).json(okResponse(item, { message: "Option Master submitted for approval." }));
+  };
+
+  listMyProductOptionSubmissions = async (req, res) => {
+    const result = await this.platformService.listMyProductOptionSubmissions(req.auth || {});
+    res.json(okResponse(result.items, { pagination: paginationMeta(1, 100, result.total) }));
+  };
+
+  listAvailableProductOptions = async (req, res) => {
+    const result = await this.platformService.listAvailableProductOptions(req.auth || {});
+    res.json(okResponse(result.items, { pagination: paginationMeta(1, 500, result.total) }));
+  };
+
+  reviewProductOptionSubmission = async (req, res) => {
+    const item = await this.platformService.reviewProductOptionSubmission(
+      req.params.optionId,
+      req.body,
+      req,
+    );
+    res.json(okResponse(item, { message: `Option Master ${req.body.action === "approve" ? "approved" : "rejected"}.` }));
+  };
+
   updateProductOption = async (req, res) => {
     const item = await this.platformService.updateProductOption(req.params.optionId, req.body, req);
     res.json(okResponse(item, { message: "Product option updated successfully." }));
@@ -281,7 +321,7 @@ class PlatformController {
 
   listProductOptions = async (req, res) => {
     const { page, limit } = getPage(req.query);
-    const result = await this.platformService.listProductOptions(req.query);
+    const result = await this.platformService.listProductOptions(req.query, req);
     res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
   };
 
@@ -304,7 +344,7 @@ class PlatformController {
 
   listProductOptionValues = async (req, res) => {
     const { page, limit } = getPage(req.query);
-    const result = await this.platformService.listProductOptionValues(req.query);
+    const result = await this.platformService.listProductOptionValues(req.query, req);
     res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
   };
 

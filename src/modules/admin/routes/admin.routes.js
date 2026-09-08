@@ -133,6 +133,7 @@ const {
   createProductOptionSchema,
   updateProductOptionSchema,
   listProductOptionsSchema,
+  reviewProductOptionSubmissionSchema,
   productOptionIdSchema,
   createProductOptionValueSchema,
   updateProductOptionValueSchema,
@@ -1001,6 +1002,7 @@ adminRoutes.delete("/platform/batches/:batchId", checkInput(batchIdSchema), catc
 
 adminRoutes.post("/platform/product-options", checkInput(createProductOptionSchema), catchErrors(platformController.createProductOption));
 adminRoutes.get("/platform/product-options", checkInput(listProductOptionsSchema), catchErrors(platformController.listProductOptions));
+adminRoutes.patch("/platform/product-options/:optionId/approval", checkInput(reviewProductOptionSubmissionSchema), catchErrors(platformController.reviewProductOptionSubmission));
 adminRoutes.patch("/platform/product-options/:optionId", checkInput(updateProductOptionSchema), catchErrors(platformController.updateProductOption));
 adminRoutes.delete("/platform/product-options/:optionId", checkInput(productOptionIdSchema), catchErrors(platformController.deleteProductOption));
 

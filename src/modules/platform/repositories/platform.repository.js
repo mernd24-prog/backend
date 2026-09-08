@@ -277,7 +277,15 @@ class PlatformRepository {
   async getProductReviewByProductAndBuyer(productId, buyerIds = []) {
     const ids = Array.isArray(buyerIds) ? buyerIds.filter(Boolean) : [buyerIds].filter(Boolean);
     if (!ids.length) return null;
-    return ProductReviewModel.findOne({ productId, buyerId: { $in: ids } }).sort({ createdAt: -1 });
+    const idVariants = [];
+    const productValue = String(productId || "");
+    if (productValue) {
+      idVariants.push(productValue);
+      if (mongoose.Types.ObjectId.isValid(productValue)) {
+        idVariants.push(new mongoose.Types.ObjectId(productValue));
+      }
+    }
+    return ProductReviewModel.findOne({ productId: { $in: idVariants }, buyerId: { $in: ids } }).sort({ createdAt: -1 });
   }
 
   async createProductReview(payload) {
@@ -290,9 +298,24 @@ class PlatformRepository {
     else if (pagination.sortBy === "helpfulVotes") sort.helpfulVotes = pagination.sortDir === "asc" ? 1 : -1;
     else sort.createdAt = pagination.sortDir === "asc" ? 1 : -1;
 
+    const normalizedFilter = { ...filter };
+    if (normalizedFilter.productId !== undefined) {
+      const productIdValues = [];
+      const value = normalizedFilter.productId;
+      if (value !== null && value !== undefined) {
+        if (Array.isArray(value)) productIdValues.push(...value);
+        else productIdValues.push(value);
+      }
+      const stringValues = productIdValues
+        .map((entry) => String(entry || ""))
+        .filter(Boolean);
+      const objectIdValues = stringValues.filter((entry) => mongoose.Types.ObjectId.isValid(entry)).map((entry) => new mongoose.Types.ObjectId(entry));
+      normalizedFilter.productId = { $in: Array.from(new Set([...stringValues, ...objectIdValues.map((entry) => entry.toString()), ...objectIdValues])) };
+    }
+
     const [items, total] = await Promise.all([
-      ProductReviewModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
-      ProductReviewModel.countDocuments(filter),
+      ProductReviewModel.find(normalizedFilter).sort(sort).skip(pagination.skip).limit(pagination.limit),
+      ProductReviewModel.countDocuments(normalizedFilter),
     ]);
     return { items, total };
   }
@@ -596,6 +619,10 @@ class PlatformRepository {
 
   async listAllProductOptionValues(filter = {}) {
     return PlatformProductOptionValueModel.find(filter).sort({ optionId: 1, sortOrder: 1, name: 1 });
+  }
+
+  async updateProductOptionValues(filter, payload) {
+    return PlatformProductOptionValueModel.updateMany(filter, payload);
   }
 
   async createCollection(payload) {

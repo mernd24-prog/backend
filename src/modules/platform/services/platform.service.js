@@ -7,16 +7,22 @@ const { forget } = require("../../../shared/tools/cache");
 const { ProductModel } = require("../../product/models/product.model");
 const { OrderRepository } = require("../../order/repositories/order.repository");
 const { UserModel } = require("../../user/models/user.model");
+const { ProductReviewModel } = require("../models/product-review.model");
 const { PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const {
   AdminTaxModel,
   AdminSubTaxModel,
   AdminTaxRuleModel,
 } = require("../../admin/models/common-management.model");
+const { default: mongoose } = require("mongoose");
 
 function actorIdFromRequest(req) {
   const auth = req?.auth || {};
   return auth.sub || auth.id || auth.userId || null;
+}
+
+function escapeRegex(value = "") {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function withCreateActor(payload, req) {
@@ -776,6 +782,222 @@ class PlatformService {
     });
   }
 
+  async listProductReviewSummaries(query = {}, actor = {}) {
+    const pagination = {
+      ...getPage(query),
+      sortBy: query.sortBy || "createdAt",
+      sortDir: query.sortDir || query.sortOrder || "desc",
+    };
+
+    const sellerId = actor.ownerSellerId || actor.userId;
+    const productFilter = {};
+    if (sellerId) {
+      productFilter.sellerId = sellerId;
+      if (actor.organizationId) productFilter.organizationId = actor.organizationId;
+    }
+    if (query.productId) productFilter._id = query.productId;
+
+    const q = String(query.q || query.keyWord || query.search || "").trim();
+    if (q) {
+      const pattern = new RegExp(escapeRegex(q), "i");
+      productFilter.$or = [
+        { title: pattern },
+        { name: pattern },
+        { slug: pattern },
+        { sku: pattern },
+      ];
+    }
+
+    const products = await ProductModel.find(productFilter)
+      .select("_id title name slug sku images imageUrls thumbnail thumbnailUrl image imageUrl sellerId organizationId rating reviewCount")
+      .lean();
+
+    const productIds = products.map((product) => String(product._id));
+    if (!productIds.length) {
+      return { items: [], total: 0, stats: { avgRating: 0, count: 0 } };
+    }
+
+    const reviewProductIds = [
+      ...new Set(
+        productIds.flatMap((productId) => {
+          const variants = [String(productId || "")];
+          if (productId && mongoose.Types.ObjectId.isValid(String(productId))) {
+            variants.push(new mongoose.Types.ObjectId(String(productId)));
+          }
+          return variants;
+        }).filter(Boolean),
+      ),
+    ];
+    const reviewFilter = { productId: { $in: reviewProductIds } };
+    if (query.status) reviewFilter.status = query.status;
+    if (query.rating) reviewFilter.rating = Number(query.rating);
+
+    const [groupedReviews, totalResult] = await Promise.all([
+      ProductReviewModel.aggregate([
+        { $match: reviewFilter },
+        {
+          $group: {
+            _id: "$productId",
+            reviewCount: { $sum: 1 },
+            averageRating: { $avg: "$rating" },
+            publishedCount: {
+              $sum: { $cond: [{ $eq: ["$status", "published"] }, 1, 0] },
+            },
+            pendingCount: {
+              $sum: { $cond: [{ $eq: ["$status", "pending"] }, 1, 0] },
+            },
+            hiddenCount: {
+              $sum: { $cond: [{ $eq: ["$status", "hidden"] }, 1, 0] },
+            },
+            rejectedCount: {
+              $sum: { $cond: [{ $eq: ["$status", "rejected"] }, 1, 0] },
+            },
+            latestReviewAt: { $max: "$createdAt" },
+          },
+        },
+        { $sort: { latestReviewAt: -1, _id: 1 } },
+        { $skip: pagination.skip },
+        { $limit: pagination.limit },
+      ]),
+      ProductReviewModel.aggregate([
+        { $match: reviewFilter },
+        { $group: { _id: "$productId" } },
+        { $count: "total" },
+      ]),
+    ]);
+
+    const productMap = new Map(products.map((product) => [String(product._id), product]));
+    const items = groupedReviews.map((summary) => {
+      const product = productMap.get(String(summary._id)) || {};
+      const productImage = productImageFromProduct(product);
+      const averageRating = Number(summary.averageRating || product.rating || 0);
+      return {
+        productId: String(summary._id),
+        id: String(summary._id),
+        _id: String(summary._id),
+        title: product.title || product.name || product.sku || "",
+        name: product.title || product.name || product.sku || "",
+        slug: product.slug || "",
+        image: productImage,
+        productImage,
+        sellerId: product.sellerId || "",
+        organizationId: product.organizationId || "",
+        averageRating: Number(averageRating.toFixed(1)),
+        reviewCount: Number(summary.reviewCount || 0),
+        publishedCount: Number(summary.publishedCount || 0),
+        pendingCount: Number(summary.pendingCount || 0),
+        hiddenCount: Number(summary.hiddenCount || 0),
+        rejectedCount: Number(summary.rejectedCount || 0),
+        latestReviewAt: summary.latestReviewAt || null,
+        product: {
+          id: String(product._id || summary._id),
+          title: product.title || product.name || product.sku || "",
+          slug: product.slug || "",
+          sku: product.sku || "",
+          image: productImage,
+        },
+      };
+    });
+
+    return {
+      items,
+      total: totalResult[0]?.total || 0,
+      stats: {
+        avgRating: Number(
+          items.reduce((sum, item) => sum + Number(item.averageRating || 0), 0) / (items.length || 1),
+        ).toFixed(1),
+        count: items.length,
+      },
+    };
+  }
+
+  async listProductReviewDetails(productId, query = {}, actor = {}) {
+    const resolvedProductId = String(productId || "").trim();
+    const emptyResult = {
+      product: {
+        id: resolvedProductId,
+        productId: resolvedProductId,
+        title: "",
+        name: "",
+        slug: "",
+        sku: "",
+        image: "",
+        sellerId: "",
+        organizationId: "",
+        rating: 0,
+        reviewCount: 0,
+      },
+      stats: { avgRating: 0, count: 0, distribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 } },
+      total: 0,
+      items: [],
+    };
+
+    if (!resolvedProductId) {
+      return emptyResult;
+    }
+
+    const sellerId = actor.ownerSellerId || actor.userId;
+    const productFilter = { _id: resolvedProductId };
+    if (sellerId) {
+      productFilter.sellerId = sellerId;
+      if (actor.organizationId) productFilter.organizationId = actor.organizationId;
+    }
+
+    const product = await ProductModel.findOne(productFilter)
+      .select("_id title name slug sku images imageUrls thumbnail thumbnailUrl image imageUrl sellerId organizationId rating reviewCount")
+      .lean();
+
+    const pagination = {
+      ...getPage(query),
+      sortBy: query.sortBy || "createdAt",
+      sortDir: query.sortDir || query.sortOrder || "desc",
+    };
+    const productIdMatches = [{ productId: resolvedProductId }];
+    if (mongoose.Types.ObjectId.isValid(resolvedProductId)) {
+      productIdMatches.push({ productId: new mongoose.Types.ObjectId(resolvedProductId) });
+      productIdMatches.push({ productId: String(new mongoose.Types.ObjectId(resolvedProductId)) });
+    }
+    const filter = { $or: productIdMatches };
+    if (query.buyerId) filter.buyerId = query.buyerId;
+    if (query.status) filter.status = query.status;
+    if (query.rating) filter.rating = Number(query.rating);
+
+    const result = await this.platformRepository.listProductReviews(filter, pagination);
+    const items = await this.enrichProductReviewItems(result.items);
+    const stats = await this.platformRepository.getProductRatingStats(resolvedProductId);
+
+    return {
+      product: product ? {
+        id: String(product._id),
+        productId: String(product._id),
+        title: product.title || product.name || product.sku || "",
+        name: product.title || product.name || product.sku || "",
+        slug: product.slug || "",
+        sku: product.sku || "",
+        image: productImageFromProduct(product),
+        sellerId: product.sellerId || "",
+        organizationId: product.organizationId || "",
+        rating: Number(product.rating || product.averageRating || product.avgRating || 0),
+        reviewCount: Number(product.reviewCount || stats.count || 0),
+      } : {
+        id: resolvedProductId,
+        productId: resolvedProductId,
+        title: "",
+        name: "",
+        slug: "",
+        sku: "",
+        image: "",
+        sellerId: "",
+        organizationId: "",
+        rating: 0,
+        reviewCount: Number(stats.count || 0),
+      },
+      stats,
+      total: result.total,
+      items,
+    };
+  }
+
   async listProductReviews(query = {}) {
     const pagination = {
       ...getPage(query),
@@ -1380,7 +1602,12 @@ class PlatformService {
   }
 
   async createProductOption(payload, req) {
-    const item = await this.platformRepository.createProductOption(payload);
+    const item = await this.platformRepository.createProductOption({
+      ...payload,
+      nameKey: String(payload.name || "").trim().toLowerCase(),
+      approvalStatus: "approved",
+      active: payload.active !== false,
+    });
     this.invalidateCatalogCaches();
     auditService.create(req, { module: "option_masters", entityId: item?._id, entityType: "ProductOption", newData: payload });
     return item;
@@ -1389,13 +1616,18 @@ class PlatformService {
   async updateProductOption(optionId, payload, req) {
     const item = await this.platformRepository.getProductOption(optionId);
     if (!item) throw AppError.notFound("Product option");
-    const updated = await this.platformRepository.updateProductOption(optionId, payload);
+    const updated = await this.platformRepository.updateProductOption(optionId, {
+      ...payload,
+      ...(payload.name
+        ? { nameKey: String(payload.name).trim().toLowerCase() }
+        : {}),
+    });
     this.invalidateCatalogCaches();
     auditService.update(req, { module: "option_masters", entityId: optionId, entityType: "ProductOption", oldData: item, newData: payload });
     return updated;
   }
 
-  async listProductOptions(query) {
+  async listProductOptions(query, req = null) {
     const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir };
     const filter = buildMongoFilter({
       search:      query.q || query.keyWord || query.search,
@@ -1403,7 +1635,128 @@ class PlatformService {
     });
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
     if (query.slug) filter.slug = query.slug;
+    const isAdminCatalogRequest = String(req?.originalUrl || "").includes("/admin/");
+    if (query.approvalStatus && isAdminCatalogRequest) {
+      filter.approvalStatus = query.approvalStatus;
+    } else if (!isAdminCatalogRequest) {
+      filter.active = true;
+      filter.approvalStatus = { $in: ["approved", null, ""] };
+    }
     return this.platformRepository.listProductOptions(filter, pagination);
+  }
+
+  async submitProductOption(payload, actor = {}, req) {
+    const sellerId = String(actor.ownerSellerId || actor.userId || actor.sub || "");
+    if (!sellerId) throw AppError.ownershipDenied();
+    const nameKey = String(payload.name || "").trim().toLowerCase();
+    const existing = await this.platformRepository.listProductOptions(
+      { name: { $regex: `^${escapeRegex(payload.name)}$`, $options: "i" } },
+      { skip: 0, limit: 1 },
+    );
+    if (existing.total) throw new AppError("An Option Master with this name already exists", 409);
+
+    const option = await this.platformRepository.createProductOption({
+      name: payload.name,
+      nameKey,
+      slug: payload.slug || nameKey.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
+      description: payload.description || "",
+      displayType: payload.displayType || "button",
+      active: false,
+      approvalStatus: "pending",
+      submittedBySellerId: sellerId,
+      submittedByUserId: String(actor.userId || actor.sub || ""),
+    });
+
+    const values = [];
+    for (const [index, value] of payload.values.entries()) {
+      values.push(
+        await this.platformRepository.createProductOptionValue({
+          ...value,
+          optionId: String(option._id),
+          option_id: String(option._id),
+          optionName: option.name,
+          valueCode:
+            value.valueCode ||
+            String(value.name).trim().toLowerCase().replace(/\s+/g, "_"),
+          sortOrder: index,
+          active: false,
+          approvalStatus: "pending",
+          submittedBySellerId: sellerId,
+        }),
+      );
+    }
+    this.invalidateCatalogCaches();
+    auditService.create(req, { module: "option_masters", entityId: option._id, entityType: "Option Master submission", newData: payload });
+    return { ...(option.toObject ? option.toObject() : option), values };
+  }
+
+  async listMyProductOptionSubmissions(actor = {}) {
+    const sellerId = String(actor.ownerSellerId || actor.userId || actor.sub || "");
+    if (!sellerId) throw AppError.ownershipDenied();
+    return this.platformRepository.listProductOptions(
+      { submittedBySellerId: sellerId },
+      { skip: 0, limit: 100, sortBy: "updatedAt", sortDir: "desc" },
+    );
+  }
+
+  async listAvailableProductOptions(actor = {}) {
+    const sellerId = String(actor.ownerSellerId || actor.userId || actor.sub || "");
+    if (!sellerId) throw AppError.ownershipDenied();
+    const result = await this.platformRepository.listProductOptions(
+      {
+        $or: [
+          { active: true, approvalStatus: { $in: ["approved", null, ""] } },
+          { approvalStatus: "pending", submittedBySellerId: sellerId },
+        ],
+      },
+      { skip: 0, limit: 500, sortBy: "name", sortDir: "asc" },
+    );
+    const optionIds = result.items.map((item) => String(item._id));
+    const values = optionIds.length
+      ? await this.platformRepository.listAllProductOptionValues({
+          optionId: { $in: optionIds },
+          $or: [
+            { active: true, approvalStatus: { $in: ["approved", null, ""] } },
+            { approvalStatus: "pending", submittedBySellerId: sellerId },
+          ],
+        })
+      : [];
+    const valuesByOption = values.reduce((map, value) => {
+      const key = String(value.optionId);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(value);
+      return map;
+    }, new Map());
+    return {
+      ...result,
+      items: result.items.map((item) => ({
+        ...(item.toObject ? item.toObject() : item),
+        values: valuesByOption.get(String(item._id)) || [],
+      })),
+    };
+  }
+
+  async reviewProductOptionSubmission(optionId, { action, rejectionReason }, req) {
+    const option = await this.platformRepository.getProductOption(optionId);
+    if (!option) throw AppError.notFound("Option Master submission");
+    if (option.approvalStatus !== "pending") {
+      throw new AppError("Only pending Option Masters can be reviewed", 400);
+    }
+    const approved = action === "approve";
+    const updated = await this.platformRepository.updateProductOption(optionId, {
+      approvalStatus: approved ? "approved" : "rejected",
+      active: approved,
+      rejectionReason: approved ? "" : String(rejectionReason || "").trim(),
+      reviewedBy: String(actorIdFromRequest(req) || ""),
+      reviewedAt: new Date(),
+    });
+    await this.platformRepository.updateProductOptionValues(
+      { optionId: String(optionId) },
+      { approvalStatus: approved ? "approved" : "rejected", active: approved },
+    );
+    this.invalidateCatalogCaches();
+    auditService.update(req, { module: "option_masters", entityId: optionId, entityType: "Option Master approval", oldData: option, newData: updated });
+    return updated;
   }
 
   async deleteProductOption(optionId, req) {
@@ -1444,11 +1797,15 @@ class PlatformService {
     return result;
   }
 
-  async listProductOptionValues(query) {
+  async listProductOptionValues(query, req = null) {
     const pagination = { ...getPage(query), sortBy: query.sortBy, sortDir: query.sortDir };
     const filter = {};
     if (query.option_id || query.optionId) filter.optionId = query.option_id || query.optionId;
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
+    if (!String(req?.originalUrl || "").includes("/admin/")) {
+      filter.active = true;
+      filter.approvalStatus = { $in: ["approved", null, ""] };
+    }
     const q = query.q || query.keyWord || query.search;
     if (q) filter.name = { $regex: q, $options: "i" };
     const result = await this.platformRepository.listProductOptionValues(filter, pagination);

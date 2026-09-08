@@ -143,6 +143,20 @@ sellerRoutes.get(
   checkInput(listProductReviewsSchema),
   catchErrors(sellerController.listProductReviews),
 );
+sellerRoutes.get(
+  "/me/product-review-summaries",
+  authenticate,
+  allowRoles(ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN),
+  checkInput(listProductReviewsSchema),
+  catchErrors(sellerController.listProductReviewSummaries),
+);
+sellerRoutes.get(
+  "/me/product-review-summaries/:productId/reviews",
+  authenticate,
+  allowRoles(ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN),
+  checkInput(listProductReviewsSchema),
+  catchErrors(sellerController.listProductReviewDetails),
+);
 sellerRoutes.post(
   "/me/product-reviews/bulk-action",
   authenticate,

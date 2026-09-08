@@ -1147,7 +1147,7 @@ class ProductService {
       }
     }
 
-    await this.validateProductOptionReferences(payload.options || []);
+    await this.validateProductOptionReferences(payload.options || [], actor);
     await this.validateShippingProfileReference(payload, existingProduct);
     await this.validateRelatedProductReferences(payload, existingProduct);
     await this.validateCollectionReferences(payload.collectionIds || []);
@@ -1207,17 +1207,29 @@ class ProductService {
     }
   }
 
-  async validateProductOptionReferences(options = []) {
+  async validateProductOptionReferences(options = [], actor = {}) {
+    const sellerId = String(actor.ownerSellerId || actor.userId || actor.sub || "");
     for (const option of options || []) {
       if (!option?.platformOptionId) continue;
       const masterOption = await this.platformRepository.getProductOption(option.platformOptionId);
-      if (!masterOption || masterOption.active === false) {
+      const isOwnPendingOption =
+        isSellerRole(actor) &&
+        masterOption?.approvalStatus === "pending" &&
+        String(masterOption.submittedBySellerId || "") === sellerId;
+      if (
+        !masterOption ||
+        masterOption.approvalStatus === "rejected" ||
+        (!isOwnPendingOption && masterOption.active === false) ||
+        (!isOwnPendingOption && masterOption.approvalStatus === "pending")
+      ) {
         throw new AppError(`Product option '${option.name || option.platformOptionId}' is not active`, 400);
       }
 
       const allowedValues = await this.platformRepository.listAllProductOptionValues({
         optionId: String(masterOption._id),
-        active: true,
+        ...(isOwnPendingOption
+          ? { approvalStatus: "pending", submittedBySellerId: sellerId }
+          : { active: true, approvalStatus: { $in: ["approved", null, ""] } }),
       });
       const allowedNames = new Set(
         allowedValues.flatMap((item) => [

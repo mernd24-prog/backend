@@ -653,6 +653,36 @@ const reviewBrandSubmissionsSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
+const sellerProductOptionSubmissionSchema = Joi.object({
+  body: Joi.object({
+    name: v.name({ label: "Option name", max: 200 }),
+    slug: v.slug().optional(),
+    description: v.text({ max: 1000 }),
+    displayType: Joi.string()
+      .valid("button", "dropdown", "color_swatch", "radio", "thumbnail")
+      .default("button"),
+    values: Joi.array()
+      .items(
+        Joi.object({
+          name: Joi.string().trim().min(1).max(200).required(),
+          valueCode: Joi.string().trim().allow(""),
+          colorHex: Joi.string().trim().allow(""),
+          imageUrl: Joi.string().trim().allow(""),
+        }),
+      )
+      .min(1)
+      .required(),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({}).required(),
+});
+
+const reviewProductOptionSubmissionSchema = Joi.object({
+  body: Joi.object(brandReviewBody).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({ optionId: Joi.string().required() }).required(),
+});
+
 const brandIdSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({}).required(),
@@ -717,7 +747,7 @@ const updateProductOptionSchema = Joi.object({
 });
 const listProductOptionsSchema = Joi.object({
   body: Joi.object({}).required(),
-  query: listQuery.concat(Joi.object({ q: Joi.string().allow(""), keyWord: Joi.string().allow(""), search: Joi.string().allow(""), active: Joi.boolean() })),
+  query: listQuery.concat(Joi.object({ q: Joi.string().allow(""), keyWord: Joi.string().allow(""), search: Joi.string().allow(""), active: Joi.boolean(), approvalStatus: Joi.string().valid("pending", "approved", "rejected") })),
   params: Joi.object({}).required(),
 });
 const productOptionIdSchema = Joi.object({
@@ -855,6 +885,8 @@ module.exports = {
   sellerBrandResubmissionSchema,
   reviewBrandSubmissionSchema,
   reviewBrandSubmissionsSchema,
+  sellerProductOptionSubmissionSchema,
+  reviewProductOptionSubmissionSchema,
   brandIdSchema,
   createBatchSchema,
   updateBatchSchema,
