@@ -81,6 +81,8 @@ const MODULE_ALIASES = {
   pincodes: "zip_codes",
   "pin-code": "zip_codes",
   "pin-codes": "zip_codes",
+  "stock-notifications": "inventory",
+  stock_notifications: "inventory",
   "hsn-code": "tax",
   "hsn-codes": "tax",
   product: "products",

@@ -1,9 +1,11 @@
 const { AppError } = require("../../../shared/errors/app-error");
+const { logger } = require("../../../shared/logger/logger");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { ProductRepository } = require("../../product/repositories/product.repository");
 const { InventoryRepository } = require("../repositories/inventory.repository");
+const { StockNotificationService } = require("../../stock-notification/services/stock-notification.service");
 
 const LOW_STOCK_DEFAULT = 5;
 
@@ -58,9 +60,11 @@ class InventoryService {
   constructor({
     inventoryRepository = new InventoryRepository(),
     productRepository = new ProductRepository(),
+    stockNotificationService = new StockNotificationService({ productRepository }),
   } = {}) {
     this.inventoryRepository = inventoryRepository;
     this.productRepository = productRepository;
+    this.stockNotificationService = stockNotificationService;
   }
 
   async publishLowStockAlerts(items = []) {
@@ -663,6 +667,8 @@ class InventoryService {
       throw new AppError("Inventory adjustment does not change stock", 400);
     }
 
+    const beforeAvailableStock = this.getAvailableStock(product, variantSku);
+
     let updatedProduct = variantSku
       ? await this.productRepository.adjustVariantStock(productId, variantSku, adjustment)
       : await this.productRepository.adjustStock(productId, adjustment);
@@ -711,7 +717,33 @@ class InventoryService {
       },
     ]);
 
+    const afterAvailableStock = this.getAvailableStock(updatedProduct, variantSku);
+    if (beforeAvailableStock <= 0 && afterAvailableStock > 0) {
+      this.stockNotificationService.queueForAvailableStock(
+        String(productId),
+        {
+          variantSku,
+          message: "Your requested product is back in stock. Order soon while it is available.",
+        },
+        actor,
+      ).catch((error) => {
+        logger.error(
+          { err: error, productId: String(productId), variantSku },
+          "Back-in-stock notification queue failed after inventory update",
+        );
+      });
+    }
+
     return updatedProduct;
+  }
+
+  getAvailableStock(product = {}, variantSku = "") {
+    const variants = Array.isArray(product.variants) ? product.variants : [];
+    const variant = variantSku
+      ? variants.find((item) => item.sku === variantSku)
+      : null;
+    const source = variant || product;
+    return Math.max(0, Number(source.stock || 0) - Number(source.reservedStock || 0));
   }
 }
 

@@ -87,17 +87,18 @@ const SIDEBAR_MODULES = [
   // { moduleName: "Product Variants", moduleKey: "product-variants", moduleSlug: "product-variants", icon: "MdGridView", routePath: "/app/product-variants", moduleType: "page", order: 27, parentModule: "catalog-masters", requiredModule: "platform", isVisibleInSidebar: false },
   // { moduleName: "Product Reviews", moduleKey: "product-reviews", moduleSlug: "product-reviews", icon: "MdReviews", routePath: "/app/product-reviews", moduleType: "page", order: 28, parentModule: "catalog-masters", requiredModule: "reviews" },
 
-  // {
-  //   moduleName: "Inventory Management",
-  //   moduleKey: "inventory-management",
-  //   moduleSlug: "inventory-management",
-  //   icon: "MdWarehouse",
-  //   moduleType: "group",
-  //   order: 50,
-  //   parentModule: null,
-  //   requiredModule: "inventory",
-  // },
-  // { moduleName: "Inventory", moduleKey: "inventory", moduleSlug: "inventory", icon: "MdInventory", routePath: "/app/inventory", moduleType: "page", order: 51, parentModule: "inventory-management", requiredModule: "inventory" },
+  {
+    moduleName: "Inventory Management",
+    moduleKey: "inventory-management",
+    moduleSlug: "inventory-management",
+    icon: "MdWarehouse",
+    moduleType: "group",
+    order: 50,
+    parentModule: null,
+    requiredModule: "inventory",
+  },
+  { moduleName: "Inventory", moduleKey: "inventory", moduleSlug: "inventory", icon: "MdInventory", routePath: "/app/inventory", moduleType: "page", order: 51, parentModule: "inventory-management", requiredModule: "inventory" },
+  { moduleName: "Stock Notifications", moduleKey: "stock-notifications", moduleSlug: "stock-notifications", icon: "MdCampaign", routePath: "/app/stock-notifications", moduleType: "page", order: 52, parentModule: "inventory-management", requiredModule: "inventory" },
 
   // {
   //   moduleName: "Orders Management",
@@ -812,6 +813,17 @@ const SELLER_SIDEBAR_MODULES = [
     requiredModule: "inventory",
   },
   {
+    moduleName: "Stock Notifications",
+    moduleKey: "seller-stock-notifications",
+    moduleSlug: "seller-stock-notifications",
+    icon: "MdCampaign",
+    routePath: "/app/stock-notifications",
+    moduleType: "page",
+    order: 42,
+    parentModule: "seller-inventory-management",
+    requiredModule: "inventory",
+  },
+  {
     moduleName: "Orders",
     moduleKey: "seller-orders-management",
     moduleSlug: "seller-orders-management",
@@ -1122,11 +1134,13 @@ const ROUTE_METADATA_BY_KEY = {
     ],
   },
   inventory: {
-    supportedRoutes: ["/app/inventory", "/app/inventory/:productId"],
+    supportedRoutes: ["/app/inventory", "/app/inventory/:productId", "/app/stock-notifications"],
   },
   "seller-inventory-products": {
-    supportedRoutes: ["/app/inventory", "/app/inventory/:productId"],
+    supportedRoutes: ["/app/inventory", "/app/inventory/:productId", "/app/stock-notifications"],
   },
+  "stock-notifications": { supportedRoutes: ["/app/stock-notifications"] },
+  "seller-stock-notifications": { supportedRoutes: ["/app/stock-notifications"] },
   orders: { supportedRoutes: ["/app/orders/view/:id", "/app/view-orders"] },
   "seller-orders": {
     supportedRoutes: ["/app/orders/view/:id", "/app/view-orders"],
