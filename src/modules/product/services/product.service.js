@@ -2126,20 +2126,30 @@ class ProductService {
       const categoryMatches = [];
 
       for (const selectedCategory of selectedCategories) {
+        const categoryReference = String(selectedCategory || "").trim();
         const normalizedCategory = normalizeCategoryKey(selectedCategory);
-        if (!normalizedCategory) continue;
+        if (!categoryReference || !normalizedCategory) continue;
 
         const descendantKeys = await remember(
-          `categories:descendants:${normalizedCategory}`,
+          `categories:descendants:${categoryReference}`,
           300,
-          () => this.platformRepository
-            .getCategoryDescendantKeys(normalizedCategory)
-            .catch(() => []),
+          async () => {
+            const exactMatches = await this.platformRepository
+              .getCategoryDescendantKeys(categoryReference)
+              .catch(() => []);
+            if (exactMatches.length || categoryReference === normalizedCategory) {
+              return exactMatches;
+            }
+            return this.platformRepository
+              .getCategoryDescendantKeys(normalizedCategory)
+              .catch(() => []);
+          },
         );
 
         if (descendantKeys.length) {
           categoryMatches.push(...descendantKeys);
         } else {
+          categoryMatches.push(categoryReference);
           categoryMatches.push(
             new RegExp(`^${escapeRegExp(normalizedCategory)}(?:-|$)`, "i"),
           );

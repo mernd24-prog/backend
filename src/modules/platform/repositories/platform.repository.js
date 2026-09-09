@@ -80,6 +80,14 @@ class PlatformRepository {
                   in: "$$descendant.categoryKey",
                 },
               },
+              [{ $toString: "$_id" }],
+              {
+                $map: {
+                  input: "$descendants",
+                  as: "descendant",
+                  in: { $toString: "$$descendant._id" },
+                },
+              },
             ],
           },
         },

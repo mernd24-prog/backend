@@ -137,7 +137,33 @@ class ProductRepository {
 
     const [result = {}] = await ProductModel.aggregate([
       { $match: filter },
-      { $lookup: { from: "categorytrees", localField: "category", foreignField: "categoryKey", as: "_activeCategory" } },
+      {
+        $lookup: {
+          from: "categorytrees",
+          let: {
+            categoryReferences: {
+              $setUnion: [
+                [{ $toString: { $ifNull: ["$category", ""] } }],
+                [{ $toString: { $ifNull: ["$categoryId", ""] } }],
+              ],
+            },
+          },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    { $in: ["$categoryKey", "$$categoryReferences"] },
+                    { $in: [{ $toString: "$_id" }, "$$categoryReferences"] },
+                  ],
+                },
+              },
+            },
+            { $limit: 1 },
+          ],
+          as: "_activeCategory",
+        },
+      },
       { $unwind: "$_activeCategory" },
       { $match: { "_activeCategory.active": true } },
       {
