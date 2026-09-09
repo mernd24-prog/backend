@@ -39,6 +39,9 @@ const queryIdParam = Joi.object({
 const createSupportQuerySchema = Joi.object({
   body: Joi.object({
     category: Joi.string().trim().uppercase().valid(...allCategories).required(),
+    otherCategory: Joi.string().trim().max(100).allow("", null),
+    orderNumber: Joi.string().trim().max(80).allow("", null),
+    product: Joi.string().trim().max(160).allow("", null),
     subject: Joi.string().trim().min(5).max(220).required(),
     message: Joi.string().trim().min(10).max(5000).required(),
     attachmentUrls: Joi.array().items(Joi.string().uri().max(1000)).max(10).default([]),
