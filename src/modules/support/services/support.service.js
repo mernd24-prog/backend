@@ -105,6 +105,11 @@ class SupportService {
     return `${prefix}-${date}-${suffix}`;
   }
 
+  normalizeOptionalText(value) {
+    const text = String(value || "").trim();
+    return text || null;
+  }
+
   escapeHtml(value = "") {
     return String(value ?? "")
       .replace(/&/g, "&amp;")
@@ -282,6 +287,9 @@ class SupportService {
       attachmentUrls: payload.attachmentUrls || [],
       metadata: {
         ...(payload.metadata || {}),
+        otherCategory: this.normalizeOptionalText(payload.otherCategory),
+        orderNumber: this.normalizeOptionalText(payload.orderNumber),
+        product: this.normalizeOptionalText(payload.product),
         requesterRole: auth.role || null,
         requesterUserId: auth.sub || null,
       },

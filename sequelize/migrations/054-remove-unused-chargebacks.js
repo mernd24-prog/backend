@@ -1,11 +1,12 @@
 "use strict";
 
 module.exports = {
-  async up(queryInterface) {
-    await queryInterface.dropTable("chargebacks");
+  id: "054-remove-unused-chargebacks",
+  async up({ queryInterface, transaction }) {
+    await queryInterface.dropTable("chargebacks", { transaction }).catch(() => {});
   },
 
-  async down(queryInterface, Sequelize) {
+  async down({ queryInterface, Sequelize, transaction }) {
     await queryInterface.createTable("chargebacks", {
       id: { type: Sequelize.UUID, primaryKey: true, allowNull: false },
       payment_id: { type: Sequelize.UUID, allowNull: false },
@@ -18,6 +19,6 @@ module.exports = {
       opened_at: { type: Sequelize.DATE, allowNull: false, defaultValue: Sequelize.NOW },
       closed_at: { type: Sequelize.DATE, allowNull: true },
       metadata: { type: Sequelize.JSONB, allowNull: false, defaultValue: {} },
-    });
+    }, { transaction });
   },
 };
