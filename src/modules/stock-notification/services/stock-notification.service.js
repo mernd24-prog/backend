@@ -6,7 +6,7 @@ const { ProductRepository } = require("../../product/repositories/product.reposi
 const { StockNotificationRepository } = require("../repositories/stock-notification.repository");
 
 const SELLER_ROLES = new Set(["seller", "seller-admin", "seller-sub-admin"]);
-const notificationQueue = createQueue("notifications");
+let notificationQueue;
 
 const normalizeText = (value) => String(value || "").trim();
 
@@ -39,6 +39,13 @@ const publicProductUrl = (notification = {}) => {
   const base = String(process.env.CUSTOMER_APP_URL || process.env.WEB_APP_URL || "").replace(/\/+$/, "");
   const slugOrId = notification.productSlug || notification.productId;
   return base && slugOrId ? `${base}/products/${encodeURIComponent(slugOrId)}` : "";
+};
+
+const getNotificationQueue = () => {
+  if (!notificationQueue) {
+    notificationQueue = createQueue("notifications");
+  }
+  return notificationQueue;
 };
 
 class StockNotificationService {
@@ -129,41 +136,111 @@ class StockNotificationService {
     const productName = notification.productTitle || "Your requested product";
     const productUrl = publicProductUrl(notification);
     const subject = `${productName} is back in stock`;
+    const brandName = process.env.APP_BRAND_NAME || "Sam Global Ecommerce";
+    const currentYear = new Date().getFullYear();
     const variantLine = notification.variantTitle
-      ? `<p style="margin:4px 0 0;color:#64748b;font-size:14px;">${this.escapeHtml(notification.variantTitle)}</p>`
-      : "";
-    const cta = productUrl
-      ? `<a href="${this.escapeHtml(productUrl)}" style="display:inline-block;background:#1B1D60;color:#ffffff;text-decoration:none;border-radius:8px;padding:12px 18px;font-weight:700;">Shop now</a>`
+      ? `<p style="margin:0 0 4px 0;color:#6b7280;font-size:12.5px;">${this.escapeHtml(notification.variantTitle)}</p>`
       : "";
     const customMessage = normalizeText(message)
-      ? `<p style="margin:18px 0 0;color:#334155;font-size:15px;line-height:1.6;">${this.escapeHtml(message)}</p>`
+      ? this.escapeHtml(message)
+      : "Stock is limited - order soon to avoid missing out again.";
+    const productMedia = notification.productImage
+      ? `<img src="${this.escapeHtml(notification.productImage)}" alt="${this.escapeHtml(productName)}" width="72" height="72" style="display:block;width:72px;height:72px;object-fit:contain;border-radius:10px;background:#eceef4;" />`
+      : `<span style="display:inline-block;width:72px;height:72px;line-height:72px;text-align:center;background:#eceef4;border-radius:10px;color:#9297a8;font-size:22px;font-weight:700;">S</span>`;
+    const cta = productUrl
+      ? `
+            <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 26px 0;">
+              <tr>
+                <td style="border-radius:8px;background:#f0a93c;">
+                  <a href="${this.escapeHtml(productUrl)}" style="display:inline-block;padding:12px 26px;color:#211a5e;font-size:13.5px;font-weight:700;text-decoration:none;">Order Now</a>
+                </td>
+              </tr>
+            </table>`
       : "";
-    const html = `
-      <div style="margin:0;padding:0;background:#f6f7fb;font-family:Arial,sans-serif;color:#111827;">
-        <div style="max-width:620px;margin:0 auto;padding:28px 16px;">
-          <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;">
-            <div style="background:#1B1D60;color:#ffffff;padding:24px;">
-              <p style="margin:0 0 8px;color:#F4C542;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;">Back in stock</p>
-              <h1 style="margin:0;font-size:26px;line-height:1.25;">Your requested product is available now</h1>
-            </div>
-            <div style="padding:24px;">
-              <p style="margin:0 0 16px;font-size:16px;line-height:1.6;">Hi ${this.escapeHtml(notification.name || "there")},</p>
-              <p style="margin:0 0 18px;color:#334155;font-size:15px;line-height:1.6;">Good news. <strong>${this.escapeHtml(productName)}</strong> is back in stock.</p>
-              <div style="display:flex;gap:14px;align-items:center;border:1px solid #e5e7eb;border-radius:12px;padding:14px;margin:0 0 22px;">
-                ${notification.productImage ? `<img src="${this.escapeHtml(notification.productImage)}" alt="${this.escapeHtml(productName)}" style="width:74px;height:74px;object-fit:contain;border-radius:10px;background:#f8fafc;" />` : ""}
-                <div>
-                  <p style="margin:0;color:#111827;font-size:16px;font-weight:700;">${this.escapeHtml(productName)}</p>
-                  ${variantLine}
-                  ${notification.sku ? `<p style="margin:4px 0 0;color:#64748b;font-size:13px;">SKU: ${this.escapeHtml(notification.sku)}</p>` : ""}
-                </div>
-              </div>
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Back in Stock</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f2f3f7;font-family:'Segoe UI',Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:40px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 8px 28px rgba(24,20,80,0.10);">
+          <tr>
+            <td style="background:#211a5e;padding:0;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="padding:24px 36px 22px 36px;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td>
+                          <span style="display:inline-block;width:28px;height:28px;background:#f0a93c;border-radius:7px;text-align:center;line-height:28px;font-weight:800;color:#211a5e;font-size:13px;vertical-align:middle;">S</span>
+                          <span style="color:#f0a93c;font-size:11.5px;font-weight:700;letter-spacing:1.5px;margin-left:9px;text-transform:uppercase;vertical-align:middle;">${this.escapeHtml(brandName)}</span>
+                        </td>
+                        <td align="right">
+                          <span style="background:rgba(52,211,153,0.18);color:#6ee7b7;font-size:10.5px;font-weight:700;letter-spacing:0.4px;text-transform:uppercase;padding:5px 11px;border-radius:20px;">Back in Stock</span>
+                        </td>
+                      </tr>
+                    </table>
+                    <h1 style="color:#ffffff;font-size:21px;font-weight:700;line-height:1.35;margin:16px 0 0 0;">Your requested product is available now</h1>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="height:4px;background:#f0a93c;"></td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:30px 36px 32px 36px;">
+              <p style="color:#374151;font-size:14.5px;line-height:1.6;margin:0 0 14px 0;">Hi ${this.escapeHtml(notification.name || "there")},</p>
+              <p style="color:#374151;font-size:14.5px;line-height:1.6;margin:0 0 24px 0;">
+                Good news - <strong style="color:#1f2937;">${this.escapeHtml(productName)}</strong> is back in stock and ready to order.
+              </p>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7f8fb;border:1px solid #eceef4;border-radius:12px;margin-bottom:26px;">
+                <tr>
+                  <td style="padding:18px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td style="width:76px;vertical-align:top;">${productMedia}</td>
+                        <td style="padding-left:16px;vertical-align:middle;">
+                          <p style="margin:0 0 4px 0;color:#1f2937;font-size:14.5px;font-weight:700;">${this.escapeHtml(productName)}</p>
+                          ${variantLine}
+                          ${notification.sku ? `<p style="margin:0;color:#9297a8;font-size:11.5px;">SKU: ${this.escapeHtml(notification.sku)}</p>` : ""}
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
               ${cta}
-              ${customMessage}
-              <p style="margin:24px 0 0;color:#64748b;font-size:12px;line-height:1.5;">You received this because you asked us to notify you when this item was available again.</p>
-            </div>
-          </div>
-        </div>
-      </div>`;
+              <p style="color:#6b7280;font-size:13px;line-height:1.6;margin:0;">${customMessage}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#f7f8fb;padding:24px 36px;border-top:1px solid #eceef4;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td>
+                    <p style="margin:0;color:#211a5e;font-size:12.5px;font-weight:700;">${this.escapeHtml(brandName)}</p>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin:14px 0 0 0;color:#a5aabb;font-size:11px;line-height:1.6;">
+                You received this because you asked us to notify you when this item was available again.<br>
+                &copy; ${currentYear} ${this.escapeHtml(brandName)}. All rights reserved.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
     const text = `Hi ${notification.name || "there"},\n\n${productName} is back in stock.${notification.sku ? `\nSKU: ${notification.sku}` : ""}${productUrl ? `\nShop now: ${productUrl}` : ""}${message ? `\n\n${message}` : ""}`;
     return { subject, html, text };
   }
@@ -244,7 +321,7 @@ class StockNotificationService {
 
   async queueBackInStockEmail(notification = {}, message = "") {
     const mail = this.buildBackInStockEmail(notification, message);
-    await notificationQueue.add("stock-notification-email", {
+    await getNotificationQueue().add("stock-notification-email", {
       notificationId: notification.id,
       to: notification.email,
       ...mail,
