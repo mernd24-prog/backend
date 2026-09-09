@@ -143,17 +143,17 @@ const SIDEBAR_MODULES = [
     parentModule: "payments-finance",
     requiredModule: "payments",
   },
-  // {
-  //   moduleName: "COD Collections",
-  //   moduleKey: "cod-collections",
-  //   moduleSlug: "cod-collections",
-  //   icon: "MdPayments",
-  //   routePath: "/app/cod-collections",
-  //   moduleType: "page",
-  //   order: 81.5,
-  //   parentModule: "payments-finance",
-  //   requiredModule: "payments",
-  // },
+  {
+    moduleName: "COD Collections",
+    moduleKey: "cod-collections",
+    moduleSlug: "cod-collections",
+    icon: "MdPayments",
+    routePath: "/app/cod-collections",
+    moduleType: "page",
+    order: 81.5,
+    parentModule: "payments-finance",
+    requiredModule: "payments",
+  },
   // { moduleName: "Admin Wallet", moduleKey: "wallet-management", moduleSlug: "wallet-management", icon: "MdAccountBalanceWallet", routePath: "/app/wallet-management", moduleType: "page", order: 84, parentModule: "payments-finance", requiredModule: "wallets" },
 
   // {
