@@ -2787,11 +2787,13 @@ async getProduct(productId) {
   const productIdentifier = this.resolveProductRouteIdentifier(productId, {
     allowRawObjectId: true,
   });
+
   const productLookup = mongoose.Types.ObjectId.isValid(productIdentifier)
     ? { _id: productIdentifier }
     : {
         slug: productIdentifier,
       };
+
   const product = await this.productRepository.findOne(
     applyPublicProductFilter(productLookup),
   );
@@ -2818,8 +2820,11 @@ async getProduct(productId) {
             "sellerProfile.description": 1,
             "sellerProfile.supportEmail": 1,
             "sellerProfile.supportPhone": 1,
-            "sellerProfile.businessWebsite": 1,
-            "sellerProfile.businessAddress": 1,
+            // "sellerProfile.businessWebsite": 1,
+            // "sellerProfile.businessAddress": 1,
+
+            // Seller account creation time
+            createdAt: 1,
           })
           .lean()
       : null,
@@ -2846,6 +2851,10 @@ async getProduct(productId) {
       ? {
           id: String(seller._id),
           name: sellerName,
+
+          // Seller account creation time
+          joinAt: seller.createdAt || null,
+
           description: seller.sellerProfile?.description || null,
           avatarUrl: seller.profile?.avatarUrl || null,
           supportEmail: seller.sellerProfile?.supportEmail || null,
@@ -2854,10 +2863,14 @@ async getProduct(productId) {
 
           address: seller.sellerProfile?.businessAddress
             ? {
-                line1: seller.sellerProfile.businessAddress.line1 || null,
-                line2: seller.sellerProfile.businessAddress.line2 || null,
-                city: seller.sellerProfile.businessAddress.city || null,
-                state: seller.sellerProfile.businessAddress.state || null,
+                line1:
+                  seller.sellerProfile.businessAddress.line1 || null,
+                line2:
+                  seller.sellerProfile.businessAddress.line2 || null,
+                city:
+                  seller.sellerProfile.businessAddress.city || null,
+                state:
+                  seller.sellerProfile.businessAddress.state || null,
                 country:
                   seller.sellerProfile.businessAddress.country || null,
                 postalCode:
