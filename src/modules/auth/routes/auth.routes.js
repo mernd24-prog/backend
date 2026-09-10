@@ -25,12 +25,12 @@ const {
 const authRoutes = express.Router();
 const authController = new AuthController();
 
-authRoutes.use([
-  "/register", "/register-otp", "/verify-registration", "/login",
-  "/influencer/login", "/influencer/register", "/influencer/invites", "/social", "/refresh", "/otp-auth", "/send-otp",
-  "/influencer/forgot-password", "/influencer/verify-reset-otp", "/influencer/reset-password",
-  "/verify-otp", "/resend-otp", "/forgot-password", "/reset-password",
-], authRateLimit);
+// authRoutes.use([
+//   "/register", "/register-otp", "/verify-registration", "/login",
+//   "/influencer/login", "/influencer/register", "/influencer/invites", "/social", "/refresh", "/otp-auth", "/send-otp",
+//   "/influencer/forgot-password", "/influencer/verify-reset-otp", "/influencer/reset-password",
+//   "/verify-otp", "/resend-otp", "/forgot-password", "/reset-password",
+// ], authRateLimit);
 authRoutes.post("/register", checkInput(registerSchema), catchErrors(authController.register));
 authRoutes.post("/register-otp", checkInput(registerWithOtpSchema), catchErrors(authController.registerWithOtp));
 authRoutes.post("/verify-registration", checkInput(verifyRegistrationSchema), catchErrors(authController.verifyRegistration));
