@@ -41,6 +41,21 @@ class ReferralAdminController {
     res.status(201).json(okResponse(influencer));
   };
 
+  listBrandAssociatesByParent = async (req, res) => {
+    const result = await this.referralService.listBrandAssociatesByParent(
+      req.params.parentId,
+      req.query,
+    );
+    res.json(
+      okResponse(result.items, {
+        parent: result.parent,
+        total: result.total,
+        page: result.page,
+        limit: result.limit,
+      }),
+    );
+  };
+
   createChildInfluencer = async (req, res) => {
     const actor = getCurrentUser(req);
     const influencer = await this.referralService.createChildInfluencer(

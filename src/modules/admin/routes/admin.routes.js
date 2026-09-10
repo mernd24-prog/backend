@@ -117,6 +117,7 @@ const {
   listGeographiesSchema,
   geographyCodeSchema,
   listProductReviewsSchema,
+  productReviewDetailsSchema,
   updateProductReviewSchema,
   bulkUpdateProductReviewsSchema,
   productReviewIdSchema,
@@ -942,6 +943,16 @@ adminRoutes.get(
   "/platform/product-reviews",
   checkInput(listProductReviewsSchema),
   catchErrors(platformController.listProductReviews),
+);
+adminRoutes.get(
+  "/platform/product-review-summaries",
+  checkInput(listProductReviewsSchema),
+  catchErrors(platformController.listProductReviewSummaries),
+);
+adminRoutes.get(
+  "/platform/product-review-summaries/:productId/reviews",
+  checkInput(productReviewDetailsSchema),
+  catchErrors(platformController.listProductReviewDetails),
 );
 adminRoutes.post(
   "/platform/product-reviews/bulk-action",

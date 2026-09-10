@@ -169,13 +169,22 @@ class PlatformController {
 
   listProductReviewSummaries = async (req, res) => {
     const { page, limit } = getPage(req.query);
-    const result = await this.platformService.listProductReviewSummaries(req.query, req.auth || {});
+    const result = await this.platformService.listProductReviewSummaries(
+      req.query,
+      req.auth || {},
+      { sellerScoped: false },
+    );
     res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total), summary: result.stats }));
   };
 
   listProductReviewDetails = async (req, res) => {
     const { page, limit } = getPage(req.query);
-    const result = await this.platformService.listProductReviewDetails(req.params.productId, req.query, req.auth || {});
+    const result = await this.platformService.listProductReviewDetails(
+      req.params.productId,
+      req.query,
+      req.auth || {},
+      { sellerScoped: false },
+    );
     res.json(okResponse(result.items, {
       pagination: paginationMeta(page, limit, result.total),
       summary: result.stats,

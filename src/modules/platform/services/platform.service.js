@@ -25,6 +25,27 @@ function escapeRegex(value = "") {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function endOfDay(value) {
+  const date = new Date(value);
+  date.setUTCHours(23, 59, 59, 999);
+  return date;
+}
+
+function normalizeReviewModerationStatus(value) {
+  const statuses = {
+    approve: "published",
+    publish: "published",
+    published: "published",
+    hide: "hidden",
+    hidden: "hidden",
+    discard: "rejected",
+    reject: "rejected",
+    rejected: "rejected",
+    pending: "pending",
+  };
+  return statuses[String(value || "").trim().toLowerCase()] || null;
+}
+
 function withCreateActor(payload, req) {
   const actorId = actorIdFromRequest(req);
   if (!actorId) return payload;
@@ -96,10 +117,6 @@ function reviewBuyerLookupId(value = "") {
   if (isMongoObjectId(raw)) return raw;
   const adminMatch = raw.match(/^admin:([a-f\d]{24})$/i);
   return adminMatch ? adminMatch[1] : "";
-}
-
-function escapeRegex(value = "") {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function isPlatformReviewSearch(value = "") {
@@ -782,20 +799,33 @@ class PlatformService {
     });
   }
 
-  async listProductReviewSummaries(query = {}, actor = {}) {
+  async listProductReviewSummaries(query = {}, actor = {}, { sellerScoped = false } = {}) {
     const pagination = {
       ...getPage(query),
       sortBy: query.sortBy || "createdAt",
       sortDir: query.sortDir || query.sortOrder || "desc",
     };
 
-    const sellerId = actor.ownerSellerId || actor.userId;
     const productFilter = {};
-    if (sellerId) {
+    if (sellerScoped) {
+      const sellerId = actor.ownerSellerId || actor.userId;
+      if (!sellerId) throw AppError.forbidden("Seller context is required");
       productFilter.sellerId = sellerId;
       if (actor.organizationId) productFilter.organizationId = actor.organizationId;
+    } else {
+      if (query.sellerId) productFilter.sellerId = query.sellerId;
+      if (query.organizationId) productFilter.organizationId = query.organizationId;
     }
-    if (query.productId) productFilter._id = query.productId;
+    if (query.productId) {
+      if (!mongoose.Types.ObjectId.isValid(String(query.productId))) {
+        return { items: [], total: 0, stats: { avgRating: 0, count: 0 } };
+      }
+      productFilter._id = query.productId;
+    }
+    if (query.productStatus) productFilter.status = query.productStatus;
+    if (query.category) {
+      productFilter.$and = [{ $or: [{ category: query.category }, { categoryId: query.category }] }];
+    }
 
     const q = String(query.q || query.keyWord || query.search || "").trim();
     if (q) {
@@ -831,13 +861,36 @@ class PlatformService {
     const reviewFilter = { productId: { $in: reviewProductIds } };
     if (query.status) reviewFilter.status = query.status;
     if (query.rating) reviewFilter.rating = Number(query.rating);
+    if (query.minRating || query.maxRating) {
+      reviewFilter.rating = {
+        ...(query.minRating ? { $gte: Number(query.minRating) } : {}),
+        ...(query.maxRating ? { $lte: Number(query.maxRating) } : {}),
+      };
+    }
+    if (query.hasMedia === true || query.hasMedia === "true") reviewFilter["media.0"] = { $exists: true };
+    if (query.hasMedia === false || query.hasMedia === "false") reviewFilter["media.0"] = { $exists: false };
+    if (query.startDate || query.endDate) {
+      reviewFilter.createdAt = {
+        ...(query.startDate ? { $gte: new Date(query.startDate) } : {}),
+        ...(query.endDate ? { $lte: endOfDay(query.endDate) } : {}),
+      };
+    }
+    const summarySort = {
+      averageRating: { averageRating: pagination.sortDir === "asc" ? 1 : -1 },
+      rating: { averageRating: pagination.sortDir === "asc" ? 1 : -1 },
+      reviewCount: { reviewCount: pagination.sortDir === "asc" ? 1 : -1 },
+      count: { reviewCount: pagination.sortDir === "asc" ? 1 : -1 },
+      pendingCount: { pendingCount: pagination.sortDir === "asc" ? 1 : -1 },
+      latestReviewAt: { latestReviewAt: pagination.sortDir === "asc" ? 1 : -1 },
+      createdAt: { latestReviewAt: pagination.sortDir === "asc" ? 1 : -1 },
+    }[pagination.sortBy] || { latestReviewAt: -1 };
 
     const [groupedReviews, totalResult] = await Promise.all([
       ProductReviewModel.aggregate([
         { $match: reviewFilter },
         {
           $group: {
-            _id: "$productId",
+            _id: { $toString: "$productId" },
             reviewCount: { $sum: 1 },
             averageRating: { $avg: "$rating" },
             publishedCount: {
@@ -855,14 +908,20 @@ class PlatformService {
             latestReviewAt: { $max: "$createdAt" },
           },
         },
-        { $sort: { latestReviewAt: -1, _id: 1 } },
+        { $sort: { ...summarySort, _id: 1 } },
         { $skip: pagination.skip },
         { $limit: pagination.limit },
       ]),
       ProductReviewModel.aggregate([
         { $match: reviewFilter },
-        { $group: { _id: "$productId" } },
-        { $count: "total" },
+        { $group: { _id: { $toString: "$productId" }, averageRating: { $avg: "$rating" } } },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            averageRating: { $avg: "$averageRating" },
+          },
+        },
       ]),
     ]);
 
@@ -903,15 +962,13 @@ class PlatformService {
       items,
       total: totalResult[0]?.total || 0,
       stats: {
-        avgRating: Number(
-          items.reduce((sum, item) => sum + Number(item.averageRating || 0), 0) / (items.length || 1),
-        ).toFixed(1),
-        count: items.length,
+        avgRating: Number(Number(totalResult[0]?.averageRating || 0).toFixed(1)),
+        count: Number(totalResult[0]?.total || 0),
       },
     };
   }
 
-  async listProductReviewDetails(productId, query = {}, actor = {}) {
+  async listProductReviewDetails(productId, query = {}, actor = {}, { sellerScoped = false } = {}) {
     const resolvedProductId = String(productId || "").trim();
     const emptyResult = {
       product: {
@@ -936,9 +993,13 @@ class PlatformService {
       return emptyResult;
     }
 
-    const sellerId = actor.ownerSellerId || actor.userId;
+    if (!mongoose.Types.ObjectId.isValid(resolvedProductId)) {
+      throw new AppError("Invalid product ID", 400);
+    }
     const productFilter = { _id: resolvedProductId };
-    if (sellerId) {
+    if (sellerScoped) {
+      const sellerId = actor.ownerSellerId || actor.userId;
+      if (!sellerId) throw AppError.forbidden("Seller context is required");
       productFilter.sellerId = sellerId;
       if (actor.organizationId) productFilter.organizationId = actor.organizationId;
     }
@@ -946,6 +1007,12 @@ class PlatformService {
     const product = await ProductModel.findOne(productFilter)
       .select("_id title name slug sku images imageUrls thumbnail thumbnailUrl image imageUrl sellerId organizationId rating reviewCount")
       .lean();
+    if (!product) {
+      if (sellerScoped) {
+        throw AppError.forbidden("You can only view reviews for your own products");
+      }
+      throw AppError.notFound("Product");
+    }
 
     const pagination = {
       ...getPage(query),
@@ -961,13 +1028,40 @@ class PlatformService {
     if (query.buyerId) filter.buyerId = query.buyerId;
     if (query.status) filter.status = query.status;
     if (query.rating) filter.rating = Number(query.rating);
+    if (query.minRating || query.maxRating) {
+      filter.rating = {
+        ...(query.minRating ? { $gte: Number(query.minRating) } : {}),
+        ...(query.maxRating ? { $lte: Number(query.maxRating) } : {}),
+      };
+    }
+    if (query.hasMedia === true || query.hasMedia === "true") filter["media.0"] = { $exists: true };
+    if (query.hasMedia === false || query.hasMedia === "false") filter["media.0"] = { $exists: false };
+    if (query.startDate || query.endDate) {
+      filter.createdAt = {
+        ...(query.startDate ? { $gte: new Date(query.startDate) } : {}),
+        ...(query.endDate ? { $lte: endOfDay(query.endDate) } : {}),
+      };
+    }
+    const q = String(query.q || query.search || "").trim();
+    if (q) {
+      const pattern = new RegExp(escapeRegex(q), "i");
+      filter.$and = [{
+        $or: [
+          { buyerName: pattern },
+          { title: pattern },
+          { reviewText: pattern },
+          { orderId: pattern },
+          { buyerId: pattern },
+        ],
+      }];
+    }
 
     const result = await this.platformRepository.listProductReviews(filter, pagination);
     const items = await this.enrichProductReviewItems(result.items);
-    const stats = await this.platformRepository.getProductRatingStats(resolvedProductId);
+    const stats = await this.platformRepository.getProductReviewModerationStats(resolvedProductId);
 
     return {
-      product: product ? {
+      product: {
         id: String(product._id),
         productId: String(product._id),
         title: product.title || product.name || product.sku || "",
@@ -979,18 +1073,6 @@ class PlatformService {
         organizationId: product.organizationId || "",
         rating: Number(product.rating || product.averageRating || product.avgRating || 0),
         reviewCount: Number(product.reviewCount || stats.count || 0),
-      } : {
-        id: resolvedProductId,
-        productId: resolvedProductId,
-        title: "",
-        name: "",
-        slug: "",
-        sku: "",
-        image: "",
-        sellerId: "",
-        organizationId: "",
-        rating: 0,
-        reviewCount: Number(stats.count || 0),
       },
       stats,
       total: result.total,
@@ -1187,15 +1269,24 @@ class PlatformService {
   async updateProductReview(reviewId, payload, actor = {}) {
     const item = await this.platformRepository.getProductReview(reviewId);
     if (!item) throw AppError.notFound("Product review");
+    const requestedStatus = payload.status || payload.action;
+    const normalizedStatus = requestedStatus
+      ? normalizeReviewModerationStatus(requestedStatus)
+      : null;
+    if (requestedStatus && !normalizedStatus) {
+      throw new AppError("Invalid review status", 400);
+    }
     const updatePayload = { ...payload };
-    if (payload.status) {
+    delete updatePayload.action;
+    if (normalizedStatus) {
+      updatePayload.status = normalizedStatus;
       updatePayload.moderatedBy = actor.userId || actor.sub || actor.id || null;
       updatePayload.moderatedAt = new Date();
-      if (payload.status === "published") updatePayload.rejectionReason = "";
+      if (normalizedStatus === "published") updatePayload.rejectionReason = "";
     }
     const updated = await this.platformRepository.updateProductReview(reviewId, updatePayload);
-    if (payload.status) {
-      this._syncProductRating(item.productId).catch(() => {});
+    if (normalizedStatus) {
+      await this._syncProductRating(item.productId);
     }
     const [enriched] = await this.enrichProductReviewItems([updated]);
     return enriched || updated;
@@ -1204,7 +1295,8 @@ class PlatformService {
   async updateSellerProductReview(reviewId, payload = {}, actor = {}) {
     const sellerId = actor.ownerSellerId || actor.userId;
     if (!sellerId) throw AppError.forbidden("Seller context is required");
-    if (!["pending", "published", "hidden", "rejected"].includes(payload.status)) {
+    const status = normalizeReviewModerationStatus(payload.status || payload.action);
+    if (!status) {
       throw new AppError("Invalid review status", 400);
     }
 
@@ -1219,18 +1311,18 @@ class PlatformService {
     if (!product) throw AppError.forbidden("You can only moderate reviews for your own products");
 
     const updatePayload = {
-      status: payload.status,
+      status,
       moderatedBy: actor.userId || actor.sub || actor.id || null,
       moderatedAt: new Date(),
     };
-    if (payload.status === "rejected") {
+    if (status === "rejected") {
       updatePayload.rejectionReason = payload.rejectionReason || payload.reason || "";
-    } else if (payload.status === "published") {
+    } else if (status === "published") {
       updatePayload.rejectionReason = "";
     }
 
     const updated = await this.platformRepository.updateProductReview(reviewId, updatePayload);
-    this._syncProductRating(item.productId).catch(() => {});
+    await this._syncProductRating(item.productId);
     const [enriched] = await this.enrichProductReviewItems([updated]);
     return enriched || updated;
   }
@@ -1244,8 +1336,8 @@ class PlatformService {
       : [];
     if (!reviewIds.length) throw new AppError("Select at least one review", 400);
 
-    const status = payload.status || (payload.action === "approve" ? "published" : payload.action);
-    if (!["pending", "published", "hidden", "rejected"].includes(status)) {
+    const status = normalizeReviewModerationStatus(payload.status || payload.action);
+    if (!status) {
       throw new AppError("Invalid review status", 400);
     }
 
@@ -1281,7 +1373,7 @@ class PlatformService {
       reviews.map((review) => review._id),
       update,
     );
-    productIds.forEach((id) => this._syncProductRating(id).catch(() => {}));
+    await Promise.all(productIds.map((id) => this._syncProductRating(id)));
     return {
       matchedCount: result.matchedCount ?? result.n ?? reviews.length,
       modifiedCount: result.modifiedCount ?? result.nModified ?? 0,
@@ -1294,8 +1386,8 @@ class PlatformService {
       : [];
     if (!reviewIds.length) throw new AppError("Select at least one review", 400);
 
-    const status = payload.status || (payload.action === "approve" ? "published" : payload.action);
-    if (!["pending", "published", "hidden", "rejected"].includes(status)) {
+    const status = normalizeReviewModerationStatus(payload.status || payload.action);
+    if (!status) {
       throw new AppError("Invalid review status", 400);
     }
 
@@ -1304,6 +1396,9 @@ class PlatformService {
     );
     const existingReviews = reviews.filter(Boolean);
     if (!existingReviews.length) throw AppError.notFound("Product reviews");
+    if (existingReviews.length !== reviewIds.length) {
+      throw AppError.notFound("One or more product reviews");
+    }
 
     const update = {
       status,
@@ -1321,7 +1416,7 @@ class PlatformService {
       update,
     );
     const productIds = [...new Set(existingReviews.map((review) => String(review.productId)).filter(Boolean))];
-    productIds.forEach((id) => this._syncProductRating(id).catch(() => {}));
+    await Promise.all(productIds.map((id) => this._syncProductRating(id)));
     return {
       matchedCount: result.matchedCount ?? result.n ?? existingReviews.length,
       modifiedCount: result.modifiedCount ?? result.nModified ?? 0,
@@ -1332,7 +1427,7 @@ class PlatformService {
     const item = await this.platformRepository.getProductReview(reviewId);
     if (!item) throw AppError.notFound("Product review");
     await this.platformRepository.deleteProductReview(reviewId);
-    this._syncProductRating(item.productId).catch(() => {});
+    await this._syncProductRating(item.productId);
     return { deleted: true };
   }
 
@@ -1341,7 +1436,7 @@ class PlatformService {
     if (!item) throw AppError.notFound("Review");
     if (String(item.buyerId) !== String(buyerId)) throw AppError.ownershipDenied();
     await this.platformRepository.deleteProductReview(reviewId);
-    this._syncProductRating(item.productId).catch(() => {});
+    await this._syncProductRating(item.productId);
     return { deleted: true };
   }
 

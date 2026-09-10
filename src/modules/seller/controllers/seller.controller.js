@@ -145,14 +145,23 @@ class SellerController {
   listProductReviewSummaries = async (req, res) => {
     const actor = getCurrentUser(req);
     const { page, limit } = getPage(req.query);
-    const result = await this.platformService.listProductReviewSummaries(req.query, actor);
+    const result = await this.platformService.listProductReviewSummaries(
+      req.query,
+      actor,
+      { sellerScoped: true },
+    );
     res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total), summary: result.stats }));
   };
 
   listProductReviewDetails = async (req, res) => {
     const actor = getCurrentUser(req);
     const { page, limit } = getPage(req.query);
-    const result = await this.platformService.listProductReviewDetails(req.params.productId, req.query, actor);
+    const result = await this.platformService.listProductReviewDetails(
+      req.params.productId,
+      req.query,
+      actor,
+      { sellerScoped: true },
+    );
     res.json(okResponse(result.items, {
       pagination: paginationMeta(page, limit, result.total),
       summary: result.stats,

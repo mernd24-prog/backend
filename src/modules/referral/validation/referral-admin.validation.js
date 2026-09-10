@@ -116,6 +116,17 @@ const listInfluencersSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
+const listBrandAssociatesByParentSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    ...pagingQuery,
+    status: Joi.string().valid(...influencerStatuses),
+  }).required(),
+  params: Joi.object({
+    parentId: Joi.string().required(),
+  }).required(),
+});
+
 const listProductAmountsSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({ ...pagingQuery, productId: Joi.string(), active: Joi.boolean() }).required(),
@@ -429,6 +440,7 @@ const listFraudReviewsSchema = Joi.object({
 
 module.exports = {
   listInfluencersSchema,
+  listBrandAssociatesByParentSchema,
   listProductAmountsSchema,
   upsertProductAmountSchema,
   productAmountIdSchema,

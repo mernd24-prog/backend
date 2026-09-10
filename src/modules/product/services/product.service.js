@@ -1501,6 +1501,13 @@ class ProductService {
 
     if (
       isSellerRole(actor) &&
+      Object.prototype.hasOwnProperty.call(payload, "approvalStatus")
+    ) {
+      throw new AppError("Only an admin can approve or reject a product", 403);
+    }
+
+    if (
+      isSellerRole(actor) &&
       existingProduct.sellerId !== (actor.ownerSellerId || actor.userId)
     ) {
       throw new AppError("Permission denied", 403);
@@ -1588,28 +1595,30 @@ class ProductService {
       version: (existingProduct.version || 1) + 1,
     };
 
+    // An approved product remains unchanged and customer-visible while the
+    // seller's edits wait in a separate revision for admin review.
+    if (
+      isSellerRole(actor) &&
+      existingProduct.status === PRODUCT_STATUS.ACTIVE &&
+      existingProduct.approvalStatus === PRODUCT_APPROVAL_STATUS.APPROVED
+    ) {
+      return this.createPendingRevision(existingProduct, updatePayload, actor);
+    }
+
     if (
       updatePayload.approvalStatus &&
       updatePayload.approvalStatus !== existingProduct.approvalStatus
     ) {
       const isApproval = updatePayload.approvalStatus === PRODUCT_APPROVAL_STATUS.APPROVED;
       const isRejection = updatePayload.approvalStatus === PRODUCT_APPROVAL_STATUS.REJECTED;
-      const isSellerSelfApproval = isSellerRole(actor) && isApproval;
-
-      if (isSellerRole(actor) && !isSellerSelfApproval) {
-        throw new AppError("Seller can only approve their own product", 403);
-      }
-
-      if (!isSellerSelfApproval) {
-        this.assertCanReviewProductStatus(
-          actor,
-          isApproval
-            ? PRODUCT_STATUS.ACTIVE
-            : isRejection
-              ? PRODUCT_STATUS.REJECTED
-              : PRODUCT_STATUS.INACTIVE,
-        );
-      }
+      this.assertCanReviewProductStatus(
+        actor,
+        isApproval
+          ? PRODUCT_STATUS.ACTIVE
+          : isRejection
+            ? PRODUCT_STATUS.REJECTED
+            : PRODUCT_STATUS.INACTIVE,
+      );
 
       if (isApproval) {
         updatePayload.status = PRODUCT_STATUS.ACTIVE;
@@ -1631,6 +1640,22 @@ class ProductService {
         notes: payload.notes || null,
         checklist: existingProduct.moderation?.checklist || {},
       };
+    }
+
+    // Editing and resubmitting a rejected product starts a fresh review. It
+    // remains excluded from every customer query until an admin approves it.
+    if (
+      isSellerRole(actor) &&
+      existingProduct.approvalStatus === PRODUCT_APPROVAL_STATUS.REJECTED &&
+      payload.status &&
+      payload.status !== PRODUCT_STATUS.DRAFT
+    ) {
+      updatePayload.status = PRODUCT_STATUS.ACTIVE;
+      updatePayload.approvalStatus = PRODUCT_APPROVAL_STATUS.PENDING;
+      updatePayload.rejectionReason = null;
+      updatePayload["moderation.submittedAt"] = new Date();
+      updatePayload["moderation.rejectionReason"] = null;
+      updatePayload["moderation.notes"] = "Product resubmitted for admin approval.";
     }
 
     // if (
@@ -3493,11 +3518,27 @@ async getProduct(productId) {
       slug: slugify(`${title}-${Date.now()}`, { lower: true, strict: true }),
       sku: payload.sku || (source.sku ? `${source.sku}-COPY-${Date.now()}` : source.sku),
       status: PRODUCT_STATUS.DRAFT,
+      approvalStatus: PRODUCT_APPROVAL_STATUS.PENDING,
       visibility: PRODUCT_VISIBILITY.PRIVATE,
       publishedAt: null,
       scheduledAt: null,
       revisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
       rejectionReason: null,
+      moderation: {
+        submittedAt: null,
+        reviewedAt: null,
+        reviewedBy: null,
+        rejectionReason: null,
+        notes: "Duplicated product must be submitted for admin approval.",
+        checklist: {
+          titleVerified: false,
+          categoryVerified: false,
+          complianceVerified: false,
+          mediaVerified: false,
+          pricingVerified: false,
+          inventoryVerified: false,
+        },
+      },
       version: 1,
       createdBy: actor.userId,
       lastUpdatedBy: actor.userId,

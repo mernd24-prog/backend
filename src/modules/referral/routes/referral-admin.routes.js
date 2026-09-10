@@ -6,6 +6,7 @@ const { catchErrors } = require("../../../shared/middleware/catch-errors");
 const { checkInput } = require("../../../shared/middleware/check-input");
 const {
   listInfluencersSchema,
+  listBrandAssociatesByParentSchema,
   listProductAmountsSchema,
   upsertProductAmountSchema,
   productAmountIdSchema,
@@ -50,6 +51,11 @@ referralAdminRoutes.post(
   "/influencers/parents",
   checkInput(createParentInfluencerSchema),
   catchErrors(referralAdminController.createParentInfluencer),
+);
+referralAdminRoutes.get(
+  "/influencers/:parentId/brand-associates",
+  checkInput(listBrandAssociatesByParentSchema),
+  catchErrors(referralAdminController.listBrandAssociatesByParent),
 );
 referralAdminRoutes.post(
   "/influencers/:parentId/children",

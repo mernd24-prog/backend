@@ -400,6 +400,34 @@ class ReferralService {
     };
   }
 
+  async listBrandAssociatesByParent(parentId, query = {}) {
+    const parent = await this.getInfluencerOrThrow(parentId);
+    if (parent.influencerType !== "parent") {
+      throw new AppError("The supplied profile is not a Growth Partner", 400);
+    }
+
+    const page = Number(query.page || 1);
+    const limit = Number(query.limit || 50);
+    const result = await this.referralRepository.listInfluencerProfiles({
+      q: query.q || "",
+      status: query.status || null,
+      influencerType: "child",
+      parentInfluencerId: this.getRecordId(parent),
+      page,
+      limit,
+    });
+
+    return {
+      parent: this.publicInfluencerNode(await this.enrichInfluencer(parent)),
+      items: await Promise.all(
+        result.items.map((item) => this.enrichInfluencer(item)),
+      ),
+      total: result.total,
+      page,
+      limit,
+    };
+  }
+
   async createParentInfluencer(payload = {}, actor = {}) {
     const { account, user, temporaryPassword } = await this.ensureInfluencerUser({
       ...payload,

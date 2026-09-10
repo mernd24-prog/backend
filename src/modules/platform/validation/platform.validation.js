@@ -474,10 +474,21 @@ const listProductReviewsSchema = Joi.object({
       orderId: Joi.string(),
       status: Joi.string().valid("pending", "published", "hidden", "rejected"),
       rating: Joi.number().integer().min(1).max(5),
+      minRating: Joi.number().min(1).max(5),
+      maxRating: Joi.number().min(1).max(5),
+      hasMedia: Joi.boolean(),
       sortOrder: Joi.string().valid("asc", "desc"),
     }),
   ),
   params: Joi.object({}).required(),
+});
+
+const productReviewDetailsSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: listProductReviewsSchema.extract("query"),
+  params: Joi.object({
+    productId: Joi.string().trim().required(),
+  }).required(),
 });
 
 const createProductReviewSchema = Joi.object({
@@ -503,6 +514,7 @@ const updateProductReviewSchema = Joi.object({
     media: Joi.array().items(Joi.string()),
     helpfulVotes: Joi.number().integer().min(0),
     status: Joi.string().valid("pending", "published", "hidden", "rejected"),
+    action: Joi.string().valid("approve", "publish", "hide", "discard", "reject"),
     rejectionReason: Joi.string().trim().max(1000).allow("", null),
     adminReply: Joi.object({
       text: Joi.string().allow("", null),
@@ -516,10 +528,11 @@ const updateProductReviewSchema = Joi.object({
 
 const sellerUpdateProductReviewSchema = Joi.object({
   body: Joi.object({
-    status: Joi.string().valid("pending", "published", "hidden", "rejected").required(),
+    status: Joi.string().valid("pending", "published", "hidden", "rejected"),
+    action: Joi.string().valid("approve", "publish", "hide", "discard", "reject"),
     rejectionReason: Joi.string().trim().max(1000).allow("", null),
     reason: Joi.string().trim().max(1000).allow("", null),
-  }).required(),
+  }).or("status", "action").required(),
   query: Joi.object({}).required(),
   params: Joi.object({
     reviewId: Joi.string().required(),
@@ -529,7 +542,7 @@ const sellerUpdateProductReviewSchema = Joi.object({
 const bulkUpdateProductReviewsSchema = Joi.object({
   body: Joi.object({
     reviewIds: Joi.array().items(Joi.string().required()).min(1).max(100).required(),
-    action: Joi.string().valid("approve", "published", "hidden", "rejected"),
+    action: Joi.string().valid("approve", "publish", "published", "hide", "hidden", "discard", "reject", "rejected", "pending"),
     status: Joi.string().valid("pending", "published", "hidden", "rejected"),
     rejectionReason: Joi.string().trim().max(1000).allow("", null),
     reason: Joi.string().trim().max(1000).allow("", null),
@@ -873,6 +886,7 @@ module.exports = {
   geographyParamSchema,
   geographyCodeSchema: geographyParamSchema,
   listProductReviewsSchema,
+  productReviewDetailsSchema,
   createProductReviewSchema,
   updateProductReviewSchema,
   sellerUpdateProductReviewSchema,

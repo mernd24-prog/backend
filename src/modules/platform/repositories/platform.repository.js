@@ -367,8 +367,9 @@ class PlatformRepository {
   }
 
   async getProductRatingStats(productId) {
+    const productIds = [String(productId || "")].filter(Boolean);
     const result = await ProductReviewModel.aggregate([
-      { $match: { productId, status: "published" } },
+      { $match: { productId: { $in: productIds }, status: "published" } },
       {
         $group: {
           _id: null,
@@ -385,6 +386,38 @@ class PlatformRepository {
     const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
     dist.forEach((r) => { if (distribution[r] !== undefined) distribution[r]++; });
     return { avgRating: Math.round(avgRating * 10) / 10, count, distribution };
+  }
+
+  async getProductReviewModerationStats(productId) {
+    const productIds = [String(productId || "")].filter(Boolean);
+    const [result] = await ProductReviewModel.aggregate([
+      { $match: { productId: { $in: productIds } } },
+      {
+        $group: {
+          _id: null,
+          avgRating: { $avg: "$rating" },
+          count: { $sum: 1 },
+          ratings: { $push: "$rating" },
+          publishedCount: { $sum: { $cond: [{ $eq: ["$status", "published"] }, 1, 0] } },
+          pendingCount: { $sum: { $cond: [{ $eq: ["$status", "pending"] }, 1, 0] } },
+          hiddenCount: { $sum: { $cond: [{ $eq: ["$status", "hidden"] }, 1, 0] } },
+          rejectedCount: { $sum: { $cond: [{ $eq: ["$status", "rejected"] }, 1, 0] } },
+        },
+      },
+    ]);
+    const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    (result?.ratings || []).forEach((rating) => {
+      if (distribution[rating] !== undefined) distribution[rating] += 1;
+    });
+    return {
+      avgRating: Number(Number(result?.avgRating || 0).toFixed(1)),
+      count: Number(result?.count || 0),
+      distribution,
+      publishedCount: Number(result?.publishedCount || 0),
+      pendingCount: Number(result?.pendingCount || 0),
+      hiddenCount: Number(result?.hiddenCount || 0),
+      rejectedCount: Number(result?.rejectedCount || 0),
+    };
   }
 
   async createBrand(payload) {
