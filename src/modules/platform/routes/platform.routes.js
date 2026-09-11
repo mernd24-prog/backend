@@ -1,6 +1,6 @@
 const express = require("express");
 const { PlatformController } = require("../controllers/platform.controller");
-const { authenticate } = require("../../../shared/middleware/authenticate");
+const { authenticate, authenticateOptional } = require("../../../shared/middleware/authenticate");
 const { allowActions } = require("../../../shared/middleware/access");
 const { catchErrors } = require("../../../shared/middleware/catch-errors");
 const { checkInput } = require("../../../shared/middleware/check-input");
@@ -59,6 +59,7 @@ const {
   updateCollectionSchema,
   listCollectionsSchema,
   collectionIdSchema,
+  reviewCatalogSubmissionSchema,
 } = require("../validation/platform.validation");
 
 const platformRoutes = express.Router();
@@ -73,11 +74,15 @@ const allowSellerBrandSubmission = (req, res, next) => {
   return res.status(403).json({ success: false, message: "Seller access required" });
 };
 const allowSellerMasterSubmission = allowSellerBrandSubmission;
+const allowCatalogAdmin = (req, res, next) => {
+  if ([ROLES.ADMIN, ROLES.SUB_ADMIN, ROLES.SUPER_ADMIN].includes(req.auth?.role)) return next();
+  return res.status(403).json({ success: false, message: "Admin access required" });
+};
 
-platformRoutes.get("/catalog-prefill", catchErrors(platformController.getCatalogPrefillData));
+platformRoutes.get("/catalog-prefill", authenticateOptional, catchErrors(platformController.getCatalogPrefillData));
 
-platformRoutes.get("/categories", checkInput(listCategoriesSchema), catchErrors(platformController.listCategories));
-platformRoutes.get("/categories/:categoryKey", checkInput(categoryKeySchema), catchErrors(platformController.getCategory));
+platformRoutes.get("/categories", authenticateOptional, checkInput(listCategoriesSchema), catchErrors(platformController.listCategories));
+platformRoutes.get("/categories/:categoryKey", authenticateOptional, checkInput(categoryKeySchema), catchErrors(platformController.getCategory));
 platformRoutes.get(
   "/categories/:categoryKey/attributes",
   checkInput(categoryKeySchema),
@@ -96,6 +101,14 @@ platformRoutes.patch(
   allowActions(ACTIONS.CATALOG_MANAGE),
   checkInput(updateCategorySchema),
   catchErrors(platformController.updateCategory),
+);
+platformRoutes.patch(
+  "/categories/:categoryKey/approval",
+  authenticate,
+  allowCatalogAdmin,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(reviewCatalogSubmissionSchema),
+  catchErrors(platformController.reviewCategorySubmission),
 );
 platformRoutes.delete(
   "/categories/:categoryKey",
@@ -153,8 +166,8 @@ platformRoutes.delete(
   catchErrors(platformController.deleteProductVariant),
 );
 
-platformRoutes.get("/hsn-codes", checkInput(listHsnCodesSchema), catchErrors(platformController.listHsnCodes));
-platformRoutes.get("/hsn-codes/:hsnCode", checkInput(hsnCodeParamSchema), catchErrors(platformController.getHsnCode));
+platformRoutes.get("/hsn-codes", authenticateOptional, checkInput(listHsnCodesSchema), catchErrors(platformController.listHsnCodes));
+platformRoutes.get("/hsn-codes/:hsnCode", authenticateOptional, checkInput(hsnCodeParamSchema), catchErrors(platformController.getHsnCode));
 platformRoutes.post(
   "/hsn-codes",
   authenticate,
@@ -168,6 +181,14 @@ platformRoutes.patch(
   allowActions(ACTIONS.CATALOG_MANAGE),
   checkInput(updateHsnCodeSchema),
   catchErrors(platformController.updateHsnCode),
+);
+platformRoutes.patch(
+  "/hsn-codes/:hsnCode/approval",
+  authenticate,
+  allowCatalogAdmin,
+  allowActions(ACTIONS.CATALOG_MANAGE),
+  checkInput(reviewCatalogSubmissionSchema),
+  catchErrors(platformController.reviewHsnCodeSubmission),
 );
 platformRoutes.delete(
   "/hsn-codes/:hsnCode",
@@ -201,8 +222,8 @@ platformRoutes.delete(
   catchErrors(platformController.deleteGeography),
 );
 
-platformRoutes.get("/brands", checkInput(listBrandsSchema), catchErrors(platformController.listBrands));
-platformRoutes.get("/brands/:brandId", checkInput(brandIdSchema), catchErrors(platformController.getBrand));
+platformRoutes.get("/brands", authenticateOptional, checkInput(listBrandsSchema), catchErrors(platformController.listBrands));
+platformRoutes.get("/brands/:brandId", authenticateOptional, checkInput(brandIdSchema), catchErrors(platformController.getBrand));
 // Seller submissions are deliberately separate from catalog management: sellers
 // can request a brand without gaining access to master-brand administration.
 platformRoutes.get(
@@ -228,6 +249,7 @@ platformRoutes.patch(
 platformRoutes.patch(
   "/brands/approval",
   authenticate,
+  allowCatalogAdmin,
   allowActions(ACTIONS.CATALOG_MANAGE),
   checkInput(reviewBrandSubmissionsSchema),
   catchErrors(platformController.reviewBrandSubmissions),
@@ -235,6 +257,7 @@ platformRoutes.patch(
 platformRoutes.patch(
   "/brands/:brandId/approval",
   authenticate,
+  allowCatalogAdmin,
   allowActions(ACTIONS.CATALOG_MANAGE),
   checkInput(reviewBrandSubmissionSchema),
   catchErrors(platformController.reviewBrandSubmission),
@@ -288,6 +311,7 @@ platformRoutes.post(
 platformRoutes.patch(
   "/product-options/:optionId/approval",
   authenticate,
+  allowCatalogAdmin,
   allowActions(ACTIONS.CATALOG_MANAGE),
   checkInput(reviewProductOptionSubmissionSchema),
   catchErrors(platformController.reviewProductOptionSubmission),

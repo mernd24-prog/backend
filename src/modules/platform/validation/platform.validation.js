@@ -102,6 +102,22 @@ const categoryKeySchema = Joi.object({
   }).required(),
 });
 
+const reviewCatalogSubmissionSchema = Joi.object({
+  body: Joi.object({
+    action: Joi.string().valid("approve", "reject").required(),
+    rejectionReason: Joi.when("action", {
+      is: "reject",
+      then: Joi.string().trim().min(2).required(),
+      otherwise: Joi.string().trim().allow(""),
+    }),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    categoryKey: Joi.string(),
+    hsnCode: Joi.string(),
+  }).or("categoryKey", "hsnCode").required(),
+});
+
 const createProductFamilySchema = Joi.object({
   body: Joi.object({
     familyCode: Joi.string().trim().required(),
@@ -866,6 +882,7 @@ module.exports = {
   updateCategorySchema,
   listCategoriesSchema,
   categoryKeySchema,
+  reviewCatalogSubmissionSchema,
   createProductFamilySchema,
   updateProductFamilySchema,
   listProductFamiliesSchema,

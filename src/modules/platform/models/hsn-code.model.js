@@ -10,6 +10,12 @@ const hsnCodeSchema = new mongoose.Schema(
     exempt: { type: Boolean, default: false },
     category: { type: String, default: null, index: true },
     active: { type: Boolean, default: true, index: true },
+    approvalStatus: { type: String, enum: ["pending", "approved", "rejected"], default: "approved", index: true },
+    submittedBySellerId: { type: String, default: "", index: true },
+    submittedByUserId: { type: String, default: "" },
+    rejectionReason: { type: String, default: "", trim: true },
+    reviewedBy: { type: String, default: "" },
+    reviewedAt: { type: Date, default: null },
   },
   { timestamps: true },
 );

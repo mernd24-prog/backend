@@ -607,7 +607,7 @@ adminRoutes.patch(
 adminRoutes.get(
   "/products/:productId",
   checkInput(productParamSchema),
-  catchErrors(productController.getOne),
+  catchErrors(productController.getOneForManagement),
 );
 adminRoutes.patch(
   "/products/:productId",

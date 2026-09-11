@@ -755,6 +755,7 @@ class ProductService {
       includeInactive,
       includeProducts,
       sellerId,
+      actorRole: actor.role || "public",
       organizationId: query.organizationId || null,
       productLimit,
     })}`;
@@ -776,7 +777,7 @@ class ProductService {
         states,
         cities,
       ] = await Promise.all([
-        this.platformService.getCatalogPrefillData({ includeInactive }),
+        this.platformService.getCatalogPrefillData({ includeInactive }, actor),
         this.listRawMasterCollection("collections", rawActiveFilter, { sort: { sortOrder: 1, name: 1 } }),
         this.listRawMasterCollection("tags", activeFilter, { sort: { group: 1, name: 1 }, limit: 1000 }),
         WarehouseModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(500).lean(),
@@ -930,13 +931,13 @@ class ProductService {
     const includeOptionValues = query.includeOptionValues !== false && query.includeOptionValues !== "false";
     const includeCategoryAttributes =
       query.includeCategoryAttributes !== false && query.includeCategoryAttributes !== "false";
-    const cacheKey = `products:prefill:basic:${JSON.stringify({ includeInactive, includeOptionValues, includeCategoryAttributes })}`;
+    const cacheKey = `products:prefill:basic:${JSON.stringify({ includeInactive, includeOptionValues, includeCategoryAttributes, actorRole: actor.role || "public", sellerId: actor.ownerSellerId || actor.userId || null })}`;
     return remember(cacheKey, 300, async () => {
       const catalog = await this.platformService.getCatalogPrefillData({
         includeInactive,
         includeOptionValues,
         includeCategoryAttributes,
-      });
+      }, actor);
       const optionValuesByOptionId = (catalog.optionValues || []).reduce((acc, item) => {
         const optionId = String(item.optionId || item.option_id || "");
         if (!optionId) return acc;

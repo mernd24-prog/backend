@@ -128,6 +128,14 @@ class ProductController {
     res.json(okResponse(product));
   };
 
+  getOneForManagement = async (req, res) => {
+    const product = await this.productService.getProductForManagement(
+      req.params.productId,
+      getCurrentUser(req),
+    );
+    res.json(okResponse(product));
+  };
+
   search = async (req, res) => {
     const result = await this.productService.searchProducts(req.query);
     res.json(okResponse(result.items, { total: result.total, source: result.source }));

@@ -1619,6 +1619,7 @@ class SellerOrganizationService {
     const existing = await this.adminGet(sellerId, organizationId, actor);
     const isApprovalAttempt =
       ["approved", "active"].includes(status) ||
+      payload.bankVerificationStatus === "verified" ||
       payload.goLiveStatus === "live";
     let repairPayload = {};
     if (isApprovalAttempt) {

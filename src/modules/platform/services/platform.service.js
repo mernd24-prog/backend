@@ -124,6 +124,30 @@ function isPlatformReviewSearch(value = "") {
   return /^(platform|admin)$/i.test(String(value || "").trim());
 }
 
+const ADMIN_ROLES = new Set([ROLES.ADMIN, ROLES.SUB_ADMIN, ROLES.SUPER_ADMIN]);
+const SELLER_ROLES = new Set([ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN]);
+
+function catalogActorContext(actor = {}) {
+  const role = String(actor.role || "");
+  return {
+    isAdmin: ADMIN_ROLES.has(role),
+    isSeller: SELLER_ROLES.has(role),
+    sellerId: String(actor.ownerSellerId || actor.userId || actor.sub || actor.id || ""),
+  };
+}
+
+function applyCatalogSubmissionVisibility(filter = {}, actor = {}) {
+  const context = catalogActorContext(actor);
+  if (context.isAdmin) return filter;
+  const approvedOrLegacy = {
+    $or: [{ approvalStatus: "approved" }, { approvalStatus: { $exists: false } }],
+  };
+  const visibility = context.isSeller && context.sellerId
+    ? { $or: [approvedOrLegacy, { submittedBySellerId: context.sellerId }] }
+    : approvedOrLegacy;
+  return Object.keys(filter).length ? { $and: [filter, visibility] } : visibility;
+}
+
 class PlatformService {
   constructor({
     platformRepository = new PlatformRepository(),
@@ -142,7 +166,15 @@ class PlatformService {
   }
 
   async createCategory(payload, req) {
-    const category = await this.platformRepository.createCategory(payload);
+    const actor = req?.auth || {};
+    const context = catalogActorContext(actor);
+    const category = await this.platformRepository.createCategory({
+      ...payload,
+      active: context.isSeller ? false : payload.active !== false,
+      approvalStatus: context.isSeller ? "pending" : "approved",
+      submittedBySellerId: context.isSeller ? context.sellerId : "",
+      submittedByUserId: context.isSeller ? String(actor.userId || actor.sub || "") : "",
+    });
     this.invalidateCatalogCaches();
     auditService.create(req, { module: "categories", entityId: category?._id || category?.categoryKey, entityType: "Category", newData: payload });
     return category;
@@ -157,10 +189,18 @@ class PlatformService {
     return updated;
   }
 
-  async getCategory(categoryKey) {
+  async getCategory(categoryKey, actor = {}) {
     const category = await this.platformRepository.getCategory(categoryKey);
     if (!category) throw AppError.notFound("Category");
+    this.assertCatalogSubmissionVisible(category, actor, "Category");
     return category;
+  }
+
+  assertCatalogSubmissionVisible(item, actor = {}, resource = "Catalog item") {
+    const context = catalogActorContext(actor);
+    const isApproved = !item.approvalStatus || item.approvalStatus === "approved";
+    const isOwner = context.isSeller && context.sellerId === String(item.submittedBySellerId || "");
+    if (!context.isAdmin && !isApproved && !isOwner) throw AppError.notFound(resource);
   }
 
   normalizeCategoryAttributes(category = {}) {
@@ -226,7 +266,7 @@ class PlatformService {
     return roots;
   }
 
-  async listCategories(query) {
+  async listCategories(query, actor = {}) {
     const isTreeRequested = query.tree === true || query.tree === "true";
     const pagination = isTreeRequested
       ? { page: 1, limit: 5000, skip: 0 }
@@ -240,6 +280,7 @@ class PlatformService {
       },
     });
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
+    const visibleFilter = applyCatalogSubmissionVisibility(filter, actor);
 
     if (isTreeRequested) {
       const maxDepth = query.maxDepth || 3;
@@ -250,9 +291,9 @@ class PlatformService {
       }
 
       const result = await this.platformRepository.listCategoriesFast(
-        filter,
+        visibleFilter,
         pagination,
-        "categoryKey title parentKey level active sortOrder bannerUrl iconUrl isDashboardVisible",
+        "categoryKey title parentKey level active approvalStatus submittedBySellerId sortOrder bannerUrl iconUrl isDashboardVisible",
       );
       const tree = this.buildCategoryTree(result.items || [], maxDepth);
       const value = { items: tree, total: tree.length };
@@ -263,9 +304,13 @@ class PlatformService {
       return value;
     }
 
-    const result = await this.platformRepository.listCategories(filter, pagination);
+    const result = await this.platformRepository.listCategories(visibleFilter, pagination);
 
     return result;
+  }
+
+  async reviewCategorySubmission(categoryKey, payload, req) {
+    return this.reviewCatalogSubmission("Category", categoryKey, payload, req);
   }
 
   async deleteCategory(categoryKey, req) {
@@ -414,8 +459,16 @@ class PlatformService {
     return item;
   }
 
-  async createHsnCode(payload) {
-    const item = await this.platformRepository.createHsnCode(payload);
+  async createHsnCode(payload, req) {
+    const actor = req?.auth || {};
+    const context = catalogActorContext(actor);
+    const item = await this.platformRepository.createHsnCode({
+      ...payload,
+      active: context.isSeller ? false : payload.active !== false,
+      approvalStatus: context.isSeller ? "pending" : "approved",
+      submittedBySellerId: context.isSeller ? context.sellerId : "",
+      submittedByUserId: context.isSeller ? String(actor.userId || actor.sub || "") : "",
+    });
     this.invalidateCatalogCaches();
     return item;
   }
@@ -430,15 +483,16 @@ class PlatformService {
     return updated;
   }
 
-  async getHsnCode(code) {
+  async getHsnCode(code, actor = {}) {
     const item = await this.platformRepository.getHsnCode(code);
     if (!item) {
       throw AppError.notFound("HSN code");
     }
+    this.assertCatalogSubmissionVisible(item, actor, "HSN code");
     return item;
   }
 
-  async listHsnCodes(query) {
+  async listHsnCodes(query, actor = {}) {
     const pagination = getPage(query);
     const filter = {};
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
@@ -451,7 +505,34 @@ class PlatformService {
         { category: { $regex: q, $options: "i" } },
       ];
     }
-    return this.platformRepository.listHsnCodes(filter, pagination);
+    return this.platformRepository.listHsnCodes(applyCatalogSubmissionVisibility(filter, actor), pagination);
+  }
+
+  async reviewHsnCodeSubmission(code, payload, req) {
+    return this.reviewCatalogSubmission("HSN code", code, payload, req);
+  }
+
+  async reviewCatalogSubmission(type, identifier, { action, rejectionReason }, req) {
+    const isCategory = type === "Category";
+    const item = isCategory
+      ? await this.platformRepository.getCategory(identifier)
+      : await this.platformRepository.getHsnCode(identifier);
+    if (!item) throw AppError.notFound(type);
+    if (item.approvalStatus !== "pending") throw new AppError(`Only pending ${type.toLowerCase()} submissions can be reviewed`, 400);
+    const approved = action === "approve";
+    const update = {
+      approvalStatus: approved ? "approved" : "rejected",
+      active: approved,
+      rejectionReason: approved ? "" : String(rejectionReason || "").trim(),
+      reviewedBy: String(actorIdFromRequest(req) || ""),
+      reviewedAt: new Date(),
+    };
+    const result = isCategory
+      ? await this.platformRepository.updateCategory(identifier, update)
+      : await this.platformRepository.updateHsnCode(identifier, update);
+    this.invalidateCatalogCaches();
+    auditService.update(req, { module: isCategory ? "categories" : "hsn_codes", entityId: identifier, entityType: `${type} approval`, oldData: item, newData: result });
+    return result;
   }
 
   async deleteHsnCode(code) {
@@ -1514,13 +1595,14 @@ class PlatformService {
     return updated;
   }
 
-  async getBrand(brandId) {
+  async getBrand(brandId, actor = {}) {
     const item = await this.platformRepository.getBrand(brandId);
     if (!item) throw AppError.notFound("Brand");
+    this.assertCatalogSubmissionVisible(item, actor, "Brand");
     return item;
   }
 
-  async listBrands(query) {
+  async listBrands(query, actor = {}) {
     const page = Math.max(Number(query.page || 1), 1);
     const limit = Math.min(Math.max(Number(query.limit || 20), 1), 5000);
     const pagination = {
@@ -1544,7 +1626,7 @@ class PlatformService {
         filter.approvalStatus = query.approvalStatus;
       }
     }
-    return this.platformRepository.listBrands(filter, pagination);
+    return this.platformRepository.listBrands(applyCatalogSubmissionVisibility(filter, actor), pagination);
   }
 
   async submitBrand(payload, actor = {}, req) {
@@ -1999,13 +2081,27 @@ class PlatformService {
     });
   }
 
-  async getCatalogPrefillData(query = {}) {
+  async getCatalogPrefillData(query = {}, actor = {}) {
     const includeOptionValues = query.includeOptionValues !== false && query.includeOptionValues !== "false";
     const includeCategoryAttributes =
       query.includeCategoryAttributes !== false && query.includeCategoryAttributes !== "false";
-    const brandFilter = query.includeInactive
+    const context = catalogActorContext(actor);
+    const approvedOrLegacy = { $or: [{ approvalStatus: "approved" }, { approvalStatus: { $exists: false } }] };
+    const statusVisibility = context.isAdmin
       ? {}
-      : { active: true, approvalStatus: { $nin: ["pending", "rejected"] } };
+      : context.isSeller && context.sellerId
+        ? { $or: [approvedOrLegacy, { submittedBySellerId: context.sellerId }] }
+        : approvedOrLegacy;
+    const activeOrOwnPending = context.isAdmin
+      ? {}
+      : context.isSeller && context.sellerId
+        ? { $or: [{ active: true }, { submittedBySellerId: context.sellerId }] }
+        : { active: true };
+    const visibleFilter = query.includeInactive
+      ? statusVisibility
+      : context.isAdmin
+        ? { $or: [{ active: true }, { approvalStatus: "pending" }] }
+        : { $and: [statusVisibility, activeOrOwnPending] };
     const activeFilter = query.includeInactive ? {} : { active: true };
     const [
       categoryResult,
@@ -2019,11 +2115,11 @@ class PlatformService {
       subTaxes,
       taxRules,
     ] = await Promise.all([
-      this.platformRepository.listCategories({}, { skip: 0, limit: 5000 }),
-      this.platformRepository.listBrands(brandFilter, { skip: 0, limit: 500 }),
+      this.platformRepository.listCategories(visibleFilter, { skip: 0, limit: 5000 }),
+      this.platformRepository.listBrands(visibleFilter, { skip: 0, limit: 500 }),
       this.platformRepository.listProductFamilies({}, { skip: 0, limit: 500 }),
       this.platformRepository.listProductVariants({}, { skip: 0, limit: 500 }),
-      this.platformRepository.listHsnCodes({ active: true }, { skip: 0, limit: 1000 }),
+      this.platformRepository.listHsnCodes(visibleFilter, { skip: 0, limit: 1000 }),
       this.platformRepository.listAllProductOptions(activeFilter),
       includeOptionValues
         ? this.platformRepository.listAllProductOptionValues(activeFilter)

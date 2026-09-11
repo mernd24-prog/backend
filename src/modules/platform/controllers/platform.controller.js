@@ -26,7 +26,7 @@ class PlatformController {
   };
 
   getCategory = async (req, res) => {
-    const category = await this.platformService.getCategory(req.params.categoryKey);
+    const category = await this.platformService.getCategory(req.params.categoryKey, req.auth || {});
     res.json(okResponse(category));
   };
 
@@ -38,8 +38,13 @@ class PlatformController {
   listCategories = async (req, res) => {
     const isTreeRequested = req.query.tree === true || req.query.tree === "true";
     const { page, limit } = isTreeRequested ? { page: 1, limit: 1000 } : getPage(req.query);
-    const result = await this.platformService.listCategories(req.query);
+    const result = await this.platformService.listCategories(req.query, req.auth || {});
     res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
+  };
+
+  reviewCategorySubmission = async (req, res) => {
+    const category = await this.platformService.reviewCategorySubmission(req.params.categoryKey, req.body, req);
+    res.json(okResponse(category, { message: `Category ${req.body.action}d successfully.` }));
   };
 
   deleteCategory = async (req, res) => {
@@ -106,7 +111,7 @@ class PlatformController {
   // ── HSN Codes ───────────────────────────────────────────────────────────────
 
   createHsnCode = async (req, res) => {
-    const item = await this.platformService.createHsnCode(req.body);
+    const item = await this.platformService.createHsnCode(req.body, req);
     res.status(201).json(okResponse(item));
   };
 
@@ -116,14 +121,19 @@ class PlatformController {
   };
 
   getHsnCode = async (req, res) => {
-    const item = await this.platformService.getHsnCode(req.params.hsnCode);
+    const item = await this.platformService.getHsnCode(req.params.hsnCode, req.auth || {});
     res.json(okResponse(item));
   };
 
   listHsnCodes = async (req, res) => {
     const { page, limit } = getPage(req.query);
-    const result = await this.platformService.listHsnCodes(req.query);
+    const result = await this.platformService.listHsnCodes(req.query, req.auth || {});
     res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
+  };
+
+  reviewHsnCodeSubmission = async (req, res) => {
+    const item = await this.platformService.reviewHsnCodeSubmission(req.params.hsnCode, req.body, req);
+    res.json(okResponse(item, { message: `HSN code ${req.body.action}d successfully.` }));
   };
 
   deleteHsnCode = async (req, res) => {
@@ -225,13 +235,13 @@ class PlatformController {
   };
 
   getBrand = async (req, res) => {
-    const item = await this.platformService.getBrand(req.params.brandId);
+    const item = await this.platformService.getBrand(req.params.brandId, req.auth || {});
     res.json(okResponse(item));
   };
 
   listBrands = async (req, res) => {
     const { page, limit } = getBrandPage(req.query);
-    const result = await this.platformService.listBrands(req.query);
+    const result = await this.platformService.listBrands(req.query, req.auth || {});
     res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
   };
 
@@ -365,7 +375,7 @@ class PlatformController {
   // ── Catalog Prefill ─────────────────────────────────────────────────────────
 
   getCatalogPrefillData = async (req, res) => {
-    const result = await this.platformService.getCatalogPrefillData(req.query);
+    const result = await this.platformService.getCatalogPrefillData(req.query, req.auth || {});
     res.json(okResponse(result));
   };
 
