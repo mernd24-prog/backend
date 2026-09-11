@@ -50,6 +50,7 @@ const {
   sellerProductOptionSubmissionSchema,
   reviewProductOptionSubmissionSchema,
   listProductReviewsSchema,
+  listProductReviewDetailsSchema,
   createProductReviewSchema,
   updateProductReviewSchema,
   bulkUpdateProductReviewsSchema,
@@ -321,7 +322,7 @@ platformRoutes.get(
   "/product-review-summaries/:productId/reviews",
   authenticate,
   allowActions(ACTIONS.CATALOG_REVIEW),
-  checkInput(listProductReviewsSchema),
+  checkInput(listProductReviewDetailsSchema),
   catchErrors(platformController.listProductReviewDetails),
 );
 platformRoutes.post(

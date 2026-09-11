@@ -9,6 +9,7 @@ const { OrderRepository } = require("../../order/repositories/order.repository")
 const { UserModel } = require("../../user/models/user.model");
 const { ProductReviewModel } = require("../models/product-review.model");
 const { PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
+const { ROLES } = require("../../../shared/constants/roles");
 const {
   AdminTaxModel,
   AdminSubTaxModel,
@@ -789,13 +790,29 @@ class PlatformService {
       sortDir: query.sortDir || query.sortOrder || "desc",
     };
 
-    const sellerId = actor.ownerSellerId || actor.userId;
+    const actorIsSeller = [ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(String(actor.role || "").trim());
+    const sellerId = actorIsSeller ? String(actor.ownerSellerId || actor.userId || actor.sub || "").trim() : "";
+    const requestedSellerId = String(query.sellerId || "").trim();
     const productFilter = {};
-    if (sellerId) {
-      productFilter.sellerId = sellerId;
-      if (actor.organizationId) productFilter.organizationId = actor.organizationId;
+
+    if (actorIsSeller) {
+      if (sellerId) {
+        productFilter.sellerId = sellerId;
+        if (actor.organizationId) productFilter.organizationId = actor.organizationId;
+      }
+    } else if (requestedSellerId) {
+      const selectedSeller = await UserModel.findOne({ _id: requestedSellerId, role: ROLES.SELLER }).select("_id").lean();
+      if (!selectedSeller) throw new AppError("Invalid sellerId", 400);
+      productFilter.sellerId = requestedSellerId;
     }
-    if (query.productId) productFilter._id = query.productId;
+
+    if (query.productId) {
+      productFilter._id = query.productId;
+      if (productFilter.sellerId) {
+        const ownedProduct = await ProductModel.findOne({ _id: query.productId, sellerId: productFilter.sellerId }).select("_id").lean();
+        if (!ownedProduct) throw new AppError.forbidden("Selected product does not belong to the selected seller");
+      }
+    }
 
     const q = String(query.q || query.keyWord || query.search || "").trim();
     if (q) {
@@ -936,11 +953,25 @@ class PlatformService {
       return emptyResult;
     }
 
-    const sellerId = actor.ownerSellerId || actor.userId;
+    const actorIsSeller = [ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(String(actor.role || "").trim());
+    const sellerId = actorIsSeller ? String(actor.ownerSellerId || actor.userId || actor.sub || "").trim() : "";
+    const requestedSellerId = String(query.sellerId || "").trim();
     const productFilter = { _id: resolvedProductId };
-    if (sellerId) {
-      productFilter.sellerId = sellerId;
-      if (actor.organizationId) productFilter.organizationId = actor.organizationId;
+
+    if (actorIsSeller) {
+      if (sellerId) {
+        productFilter.sellerId = sellerId;
+        if (actor.organizationId) productFilter.organizationId = actor.organizationId;
+      }
+    } else if (requestedSellerId) {
+      const selectedSeller = await UserModel.findOne({ _id: requestedSellerId, role: ROLES.SELLER }).select("_id").lean();
+      if (!selectedSeller) throw new AppError("Invalid sellerId", 400);
+      productFilter.sellerId = requestedSellerId;
+    }
+
+    const ownedProduct = await ProductModel.findOne({ _id: resolvedProductId, sellerId: productFilter.sellerId }).select("_id").lean();
+    if (productFilter.sellerId && !ownedProduct) {
+      throw new AppError.forbidden("Selected product does not belong to the selected seller");
     }
 
     const product = await ProductModel.findOne(productFilter)
@@ -952,12 +983,7 @@ class PlatformService {
       sortBy: query.sortBy || "createdAt",
       sortDir: query.sortDir || query.sortOrder || "desc",
     };
-    const productIdMatches = [{ productId: resolvedProductId }];
-    if (mongoose.Types.ObjectId.isValid(resolvedProductId)) {
-      productIdMatches.push({ productId: new mongoose.Types.ObjectId(resolvedProductId) });
-      productIdMatches.push({ productId: String(new mongoose.Types.ObjectId(resolvedProductId)) });
-    }
-    const filter = { $or: productIdMatches };
+    const filter = { productId: resolvedProductId };
     if (query.buyerId) filter.buyerId = query.buyerId;
     if (query.status) filter.status = query.status;
     if (query.rating) filter.rating = Number(query.rating);
@@ -998,13 +1024,25 @@ class PlatformService {
     };
   }
 
-  async listProductReviews(query = {}) {
+  async listProductReviews(query = {}, actor = {}) {
     const pagination = {
       ...getPage(query),
       sortBy: query.sortBy,
       sortDir: query.sortDir || query.sortOrder,
     };
+    const actorIsSeller = [ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(String(actor.role || "").trim());
+    const sellerId = actorIsSeller ? String(actor.ownerSellerId || actor.userId || actor.sub || "").trim() : "";
+    const requestedSellerId = String(query.sellerId || "").trim();
     const filter = {};
+
+    if (actorIsSeller) {
+      if (sellerId) filter.sellerId = sellerId;
+    } else if (requestedSellerId) {
+      const selectedSeller = await UserModel.findOne({ _id: requestedSellerId, role: ROLES.SELLER }).select("_id").lean();
+      if (!selectedSeller) throw new AppError("Invalid sellerId", 400);
+      filter.sellerId = requestedSellerId;
+    }
+
     if (query.productId) filter.productId = query.productId;
     if (query.buyerId) filter.buyerId = { $in: [query.buyerId, `admin:${query.buyerId}`] };
     if (query.orderId) filter.orderId = query.orderId;
