@@ -22,7 +22,6 @@
     "db:create-complete-test-product": "node scripts/db/create-complete-test-product.js",
     "db:seed:rbac": "node scripts/db/seed-rbac.js",
     "db:seed:rbac-routes": "node scripts/db/seed-rbac-routes.js",
-    "db:repair:order-commissions": "node scripts/db/repair-order-commissions.js",
     "db:repair:refund-commission-balances": "node scripts/db/repair-refund-commission-balances.js",
     "db:sync:product-indexes": "node scripts/db/sync-product-indexes.js",
     "db:backfill:shipments": "node scripts/db/backfill-missing-order-shipments.js",

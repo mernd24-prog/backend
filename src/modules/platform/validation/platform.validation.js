@@ -470,6 +470,7 @@ const listProductReviewsSchema = Joi.object({
   query: listQuery.concat(
     Joi.object({
       productId: Joi.string(),
+      sellerId: Joi.string(),
       buyerId: Joi.string(),
       orderId: Joi.string(),
       status: Joi.string().valid("pending", "published", "hidden", "rejected"),
@@ -483,9 +484,7 @@ const listProductReviewsSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
-const productReviewDetailsSchema = Joi.object({
-  body: Joi.object({}).required(),
-  query: listProductReviewsSchema.extract("query"),
+const listProductReviewDetailsSchema = listProductReviewsSchema.keys({
   params: Joi.object({
     productId: Joi.string().trim().required(),
   }).required(),
@@ -886,7 +885,7 @@ module.exports = {
   geographyParamSchema,
   geographyCodeSchema: geographyParamSchema,
   listProductReviewsSchema,
-  productReviewDetailsSchema,
+  listProductReviewDetailsSchema,
   createProductReviewSchema,
   updateProductReviewSchema,
   sellerUpdateProductReviewSchema,

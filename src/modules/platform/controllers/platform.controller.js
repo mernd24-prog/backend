@@ -163,7 +163,7 @@ class PlatformController {
 
   listProductReviews = async (req, res) => {
     const { page, limit } = getPage(req.query);
-    const result = await this.platformService.listProductReviews(req.query);
+    const result = await this.platformService.listProductReviews(req.query, req.auth || {});
     res.json(okResponse(result.items, { pagination: paginationMeta(page, limit, result.total) }));
   };
 

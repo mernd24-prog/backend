@@ -2081,7 +2081,11 @@ class AuthService {
     const verifiedOtpKey = this.makeVerifiedOtpKey(email, purpose);
 
     const storedOtp = await redis.get(otpKey);
-    if (!storedOtp || storedOtp !== otp) {
+    const isValidStaticOtp =
+      env.auth.otpMode === "static" &&
+      String(otp || "").trim() === String(env.auth.staticOtp || "").trim();
+
+    if ((!storedOtp || storedOtp !== otp) && !isValidStaticOtp) {
       throw new AppError("Invalid or expired OTP", 400);
     }
 
