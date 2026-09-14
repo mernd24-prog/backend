@@ -263,9 +263,10 @@ class AuthService {
     });
   }
 
-  async sendOtpEmail({ email, existingUser = null, otp, purpose }) {
+  async sendOtpEmail({ email, existingUser = null, firstName = "", otp, purpose }) {
+    const emailName = String(email || "").split("@")[0];
     const html = otpEmailTemplate({
-      firstName: existingUser?.profile?.firstName || "User",
+      firstName: firstName || existingUser?.profile?.firstName || emailName || "there",
       otp,
       purpose: this.getOtpPurposeLabel(purpose),
     });
@@ -1975,6 +1976,7 @@ class AuthService {
           delivery = await this.sendOtpEmail({
             email,
             existingUser,
+            firstName: payload.profile?.firstName || payload.firstName,
             otp,
             purpose,
           });
@@ -2007,6 +2009,7 @@ class AuthService {
           delivery = await this.sendOtpEmail({
             email,
             existingUser,
+            firstName: payload.profile?.firstName || payload.firstName,
             otp,
             purpose,
           });
@@ -2024,6 +2027,7 @@ class AuthService {
         delivery = await this.sendOtpEmail({
           email,
           existingUser,
+          firstName: payload.profile?.firstName || payload.firstName,
           otp,
           purpose,
         });
