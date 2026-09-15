@@ -1,5 +1,4 @@
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
-const { renderHeroArt } = require("./email-hero-art");
 
 const titleCase = (value = "") =>
   String(value || "")
@@ -40,41 +39,17 @@ const EMAIL_ICONS = {
   success: "",
 };
 
-const iconForTemplate = (templateKey = "", definition = {}) => {
-  if (definition.icon) return definition.icon;
-  if (definition.tone === "alert" || /failed|rejected|cancelled|low_stock/i.test(templateKey)) return EMAIL_ICONS.alert;
-  if (/auth|password|verification|otp/i.test(templateKey)) return EMAIL_ICONS.auth;
-  if (/welcome/i.test(templateKey)) return EMAIL_ICONS.account;
-  if (/seller|onboarding|kyc/i.test(templateKey)) return EMAIL_ICONS.seller;
-  if (/order|payment/i.test(templateKey)) return /paid|confirmed/i.test(templateKey) ? EMAIL_ICONS.success : EMAIL_ICONS.order;
-  if (/return|refund|credit_note/i.test(templateKey)) return EMAIL_ICONS.return;
-  if (/invoice|document/i.test(templateKey)) return EMAIL_ICONS.document;
-  if (/support/i.test(templateKey)) return EMAIL_ICONS.support;
-  if (/stock|inventory|product/i.test(templateKey)) return /stock/i.test(templateKey) ? EMAIL_ICONS.inventory : EMAIL_ICONS.product;
-  if (/shipment|delivered/i.test(templateKey)) return EMAIL_ICONS.delivery;
-  if (/payout|reward|growth/i.test(templateKey)) return EMAIL_ICONS.money;
-  return EMAIL_ICONS.order;
-};
-
-const renderHeaderIcon = (icon, isAlert = false, heroType) => `
-  ${renderHeroArt(icon, { type: heroType || (isAlert ? "alert" : undefined) })}`;
-
 const renderTrustStrip = () => `
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;border-top:1px solid #eef0f4;border-bottom:1px solid #e6e9f2;">
     <tr>
-      <td class="sg-trust-item" width="33.33%" style="padding:16px 16px 16px 0;border-right:1px solid #dfe5f0;vertical-align:top;">
+      <td class="sg-trust-item" width="50%" style="padding:16px 16px 16px 0;border-right:1px solid #dfe5f0;vertical-align:top;">
         <table role="presentation" cellpadding="0" cellspacing="0"><tr>
           <td style="vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Secure &amp; Trusted</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">Your security is our top priority.</div></td>
         </tr></table>
       </td>
-      <td class="sg-trust-item" width="33.33%" style="padding:16px;border-right:1px solid #dfe5f0;vertical-align:top;">
+      <td class="sg-trust-item" width="50%" style="padding:16px 0 16px 16px;vertical-align:top;">
         <table role="presentation" cellpadding="0" cellspacing="0"><tr>
           <td style="vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Account Protection</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">This helps us keep your account safe.</div></td>
-        </tr></table>
-      </td>
-      <td class="sg-trust-item" width="33.33%" style="padding:16px 0 16px 16px;vertical-align:top;">
-        <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-          <td style="vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Didn't Request This?</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">You can safely ignore this email.</div></td>
         </tr></table>
       </td>
     </tr>
@@ -86,14 +61,9 @@ const renderOtpCodeBlock = (otp) => {
   return `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:22px 0 16px;background:#f5f8ff;border:1px dashed #b8c8ff;border-radius:12px;">
       <tr>
-        <td colspan="3" align="center" style="padding:18px 16px 8px;font-size:12px;font-weight:800;text-transform:uppercase;color:#0026d8;">Your Verification Code</td>
-      </tr>
-      <tr>
-        <td class="sg-code-cell" align="center" style="padding:4px 16px 22px 24px;">
+        <td class="sg-code-cell" align="center" style="padding:24px 16px 26px;">
           <span class="sg-code" style="font-size:42px;line-height:1.15;letter-spacing:12px;font-weight:800;color:#061044;font-family:Arial,Helvetica,sans-serif;white-space:nowrap;">${escapeHtml(code)}</span>
         </td>
-        <td class="sg-code-divider" width="1" style="padding:0 0 18px;"><div style="width:1px;height:58px;background:#dbe4f4;line-height:1px;font-size:1px;">&nbsp;</div></td>
-        <td class="sg-copy-cell" width="136" align="center" style="padding:4px 20px 22px 18px;font-size:13px;font-weight:800;color:#0026d8;white-space:nowrap;">Copy Code</td>
       </tr>
     </table>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 22px;background:#fff8eb;border:1px solid #ffe2a8;border-radius:10px;">
@@ -616,7 +586,6 @@ function renderEmailTemplate({
   const rows = typeof definition.rows === "function" ? definition.rows(payload) : [];
   const preheader = [heading, rows[0]?.value].filter(Boolean).join(" - ");
   const safeCtaUrl = containsPrivateReference(ctaUrl) ? "" : ctaUrl;
-  const templateIcon = iconForTemplate(resolvedKey, definition);
   const isOtpTemplate = resolvedKey === "auth_otp" && payload.otp;
   const bodyIntro = isOtpTemplate
     ? `Thank you for using ${brandName}. Please use the verification code below to confirm your email address and complete your account setup.`
@@ -672,14 +641,8 @@ function renderEmailTemplate({
           .sg-footer { padding: 22px 20px !important; }
           .sg-title { font-size: 21px !important; }
           .sg-brand-text { font-size: 11px !important; letter-spacing: 1.3px !important; white-space: nowrap !important; }
-          .sg-hero-icon { width: 148px !important; }
-          .sg-hero-art { width: 148px !important; max-width:148px !important; }
           .sg-code { font-size: 38px !important; letter-spacing: 9px !important; padding-left: 8px !important; padding-right: 8px !important; }
-          .sg-code-cell, .sg-copy-cell, .sg-code-divider { display: block !important; width: 100% !important; box-sizing: border-box !important; }
-          .sg-code-cell { padding: 4px 12px 14px !important; }
-          .sg-code-divider { padding: 0 22px !important; }
-          .sg-code-divider div { width: 100% !important; height: 1px !important; }
-          .sg-copy-cell { padding: 14px 16px 18px !important; text-align: center !important; }
+          .sg-code-cell { padding: 8px 12px 24px !important; }
           .sg-trust-item { display: block !important; width: 100% !important; box-sizing: border-box !important; padding: 14px 0 !important; border-right:0 !important; border-bottom:1px solid #e6e9f2 !important; }
         }
       </style>
