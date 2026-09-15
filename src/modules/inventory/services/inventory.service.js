@@ -22,6 +22,23 @@ const toNumber = (value) => Number(value || 0);
 
 const normalizeText = (value) => String(value || "").trim();
 
+const normalizeImageList = (...sources) => {
+  const seen = new Set();
+  return sources
+    .flatMap((source) => (Array.isArray(source) ? source : [source]))
+    .map((item) =>
+      typeof item === "object"
+        ? item?.url || item?.secure_url || item?.src || item?.path || ""
+        : item,
+    )
+    .map((item) => normalizeText(item))
+    .filter((item) => {
+      if (!item || seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    });
+};
+
 const variantLabel = (variant = {}) => {
   const attrs = variant.attributes instanceof Map
     ? Object.fromEntries(variant.attributes.entries())
@@ -405,7 +422,18 @@ class InventoryService {
     const availableStock = Math.max(0, stock - reservedStock);
     const threshold = toNumber(product.inventorySettings?.lowStockThreshold) || LOW_STOCK_DEFAULT;
     const variantSku = normalizeText(variant.sku);
-    const image = Array.isArray(variant.images) && variant.images.length ? variant.images[0] : "";
+    const images = normalizeImageList(
+      variant.images,
+      variant.image,
+      product.images,
+      product.commonImages,
+      product.imageUrls,
+      product.image,
+      product.imageUrl,
+      product.thumbnail,
+      product.thumbnailUrl,
+    );
+    const image = images[0] || "";
 
     return {
       id: `${product._id || product.id}:${variant._id || variantSku}`,
@@ -417,6 +445,7 @@ class InventoryService {
       variantSku,
       sku: variantSku,
       image,
+      images,
       currentStock: stock,
       stock,
       reservedStock,
