@@ -428,7 +428,7 @@ class ProductRepository {
 
     const [items, total] = await Promise.all([
       ProductModel.find(query)
-        .select("title sku sellerId organizationId organizationSnapshot category categoryId brand status visibility variants inventorySettings updatedAt createdAt")
+        .select("title sku sellerId organizationId organizationSnapshot category categoryId brand status visibility images commonImages imageUrls image imageUrl thumbnail thumbnailUrl variants inventorySettings updatedAt createdAt")
         .sort({ [sortBy]: sortDir })
         .skip((safePage - 1) * safeLimit)
         .limit(safeLimit)
