@@ -139,12 +139,10 @@ function catalogActorContext(actor = {}) {
 function applyCatalogSubmissionVisibility(filter = {}, actor = {}) {
   const context = catalogActorContext(actor);
   if (context.isAdmin) return filter;
-  const approvedOrLegacy = {
-    $or: [{ approvalStatus: "approved" }, { approvalStatus: { $exists: false } }],
-  };
-  const visibility = context.isSeller && context.sellerId
-    ? { $or: [approvedOrLegacy, { submittedBySellerId: context.sellerId }] }
-    : approvedOrLegacy;
+  // Seller-owned pending submissions remain available through the dedicated
+  // submission endpoints, but generic catalog consumers only receive records
+  // that have explicitly completed approval.
+  const visibility = { approvalStatus: "approved" };
   return Object.keys(filter).length ? { $and: [filter, visibility] } : visibility;
 }
 
@@ -198,9 +196,8 @@ class PlatformService {
 
   assertCatalogSubmissionVisible(item, actor = {}, resource = "Catalog item") {
     const context = catalogActorContext(actor);
-    const isApproved = !item.approvalStatus || item.approvalStatus === "approved";
-    const isOwner = context.isSeller && context.sellerId === String(item.submittedBySellerId || "");
-    if (!context.isAdmin && !isApproved && !isOwner) throw AppError.notFound(resource);
+    const isApproved = item.approvalStatus === "approved";
+    if (!context.isAdmin && !isApproved) throw AppError.notFound(resource);
   }
 
   normalizeCategoryAttributes(category = {}) {
@@ -267,6 +264,7 @@ class PlatformService {
   }
 
   async listCategories(query, actor = {}) {
+    const isNavigationRequested = query.navigation === true || query.navigation === "true";
     const isTreeRequested = query.tree === true || query.tree === "true";
     const pagination = isTreeRequested
       ? { page: 1, limit: 5000, skip: 0 }
@@ -280,7 +278,17 @@ class PlatformService {
       },
     });
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
+    if (query.approvalStatus) filter.approvalStatus = query.approvalStatus;
     const visibleFilter = applyCatalogSubmissionVisibility(filter, actor);
+
+    if (isNavigationRequested) {
+      const navigationFilter = { ...visibleFilter, level: 0, active: true };
+      return this.platformRepository.listCategoriesFast(
+        navigationFilter,
+        { page: 1, limit: 50, skip: 0 },
+        "categoryKey title parentKey level active sortOrder imageUrl bannerUrl iconUrl isDashboardVisible",
+      );
+    }
 
     if (isTreeRequested) {
       const maxDepth = query.maxDepth || 3;
@@ -496,6 +504,7 @@ class PlatformService {
     const pagination = getPage(query);
     const filter = {};
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
+    if (query.approvalStatus) filter.approvalStatus = query.approvalStatus;
     if (query.category) filter.category = query.category;
     const q = query.q || query.keyWord || query.search;
     if (q) {
@@ -1834,11 +1843,15 @@ class PlatformService {
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
     if (query.slug) filter.slug = query.slug;
     const isAdminCatalogRequest = String(req?.originalUrl || "").includes("/admin/");
+    const strictApproval = query.strictApproval === true || query.strictApproval === "true";
     if (query.approvalStatus && isAdminCatalogRequest) {
       filter.approvalStatus = query.approvalStatus;
+    } else if (strictApproval) {
+      filter.active = true;
+      filter.approvalStatus = "approved";
     } else if (!isAdminCatalogRequest) {
       filter.active = true;
-      filter.approvalStatus = { $in: ["approved", null, ""] };
+      filter.approvalStatus = "approved";
     }
     return this.platformRepository.listProductOptions(filter, pagination);
   }
@@ -2000,9 +2013,13 @@ class PlatformService {
     const filter = {};
     if (query.option_id || query.optionId) filter.optionId = query.option_id || query.optionId;
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
-    if (!String(req?.originalUrl || "").includes("/admin/")) {
+    const strictApproval = query.strictApproval === true || query.strictApproval === "true";
+    if (strictApproval) {
       filter.active = true;
-      filter.approvalStatus = { $in: ["approved", null, ""] };
+      filter.approvalStatus = "approved";
+    } else if (!String(req?.originalUrl || "").includes("/admin/")) {
+      filter.active = true;
+      filter.approvalStatus = "approved";
     }
     const q = query.q || query.keyWord || query.search;
     if (q) filter.name = { $regex: q, $options: "i" };
@@ -2085,24 +2102,12 @@ class PlatformService {
     const includeOptionValues = query.includeOptionValues !== false && query.includeOptionValues !== "false";
     const includeCategoryAttributes =
       query.includeCategoryAttributes !== false && query.includeCategoryAttributes !== "false";
-    const context = catalogActorContext(actor);
-    const approvedOrLegacy = { $or: [{ approvalStatus: "approved" }, { approvalStatus: { $exists: false } }] };
-    const statusVisibility = context.isAdmin
-      ? {}
-      : context.isSeller && context.sellerId
-        ? { $or: [approvedOrLegacy, { submittedBySellerId: context.sellerId }] }
-        : approvedOrLegacy;
-    const activeOrOwnPending = context.isAdmin
-      ? {}
-      : context.isSeller && context.sellerId
-        ? { $or: [{ active: true }, { submittedBySellerId: context.sellerId }] }
-        : { active: true };
-    const visibleFilter = query.includeInactive
-      ? statusVisibility
-      : context.isAdmin
-        ? { $or: [{ active: true }, { approvalStatus: "pending" }] }
-        : { $and: [statusVisibility, activeOrOwnPending] };
-    const activeFilter = query.includeInactive ? {} : { active: true };
+    // Product/CMS prefills feed selectors. Pending seller submissions belong
+    // only in approval-management screens and must not become selectable by
+    // their owner (or by an admin) before approval.
+    const visibleFilter = { active: true, approvalStatus: "approved" };
+    const activeApprovedFilter = { active: true, approvalStatus: "approved" };
+    const activeFilter = { active: true };
     const [
       categoryResult,
       brandResult,
@@ -2117,16 +2122,16 @@ class PlatformService {
     ] = await Promise.all([
       this.platformRepository.listCategories(visibleFilter, { skip: 0, limit: 5000 }),
       this.platformRepository.listBrands(visibleFilter, { skip: 0, limit: 500 }),
-      this.platformRepository.listProductFamilies({}, { skip: 0, limit: 500 }),
-      this.platformRepository.listProductVariants({}, { skip: 0, limit: 500 }),
+      this.platformRepository.listProductFamilies({ status: "active" }, { skip: 0, limit: 500 }),
+      this.platformRepository.listProductVariants({ status: "active" }, { skip: 0, limit: 500 }),
       this.platformRepository.listHsnCodes(visibleFilter, { skip: 0, limit: 1000 }),
-      this.platformRepository.listAllProductOptions(activeFilter),
+      this.platformRepository.listAllProductOptions(activeApprovedFilter),
       includeOptionValues
-        ? this.platformRepository.listAllProductOptionValues(activeFilter)
+        ? this.platformRepository.listAllProductOptionValues(activeApprovedFilter)
         : Promise.resolve([]),
-      AdminTaxModel.find(query.includeInactive ? {} : { active: true }).sort({ name: 1 }),
-      AdminSubTaxModel.find(query.includeInactive ? {} : { active: true }).sort({ name: 1 }),
-      AdminTaxRuleModel.find(query.includeInactive ? {} : { active: true }).sort({ createdAt: -1 }),
+      AdminTaxModel.find(activeFilter).sort({ name: 1 }),
+      AdminSubTaxModel.find(activeFilter).sort({ name: 1 }),
+      AdminTaxRuleModel.find(activeFilter).sort({ createdAt: -1 }),
     ]);
     const categories = categoryResult?.items || [];
     const brands = brandResult?.items || [];

@@ -94,12 +94,11 @@ class ProductController {
       publicOnly: true,
       actor: null,
     });
-    return res.json(okResponse({
-      products: result.items || [],
-      facets: result.facets || {},
-    }, {
+    return res.json(okResponse({ products: result.items || [] }, {
       pagination: paginationMeta(page, limit, result.total || 0),
-      meta: { facets: result.facets || {} },
+      meta: Object.keys(result.facets || {}).length
+        ? { facets: result.facets }
+        : undefined,
     }));
   };
 

@@ -322,6 +322,7 @@ const listProductSchema = Joi.object({
     productType: Joi.string().valid(...Object.values(PRODUCT_TYPE)),
     hasVariants: Joi.boolean(),
     includeVariants: Joi.boolean(),
+    view: Joi.string().valid("full", "cards", "facets"),
     visibility: Joi.string(),
     hsnCode: Joi.string(),
     color: Joi.string(),

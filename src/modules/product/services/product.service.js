@@ -138,6 +138,49 @@ const PRODUCT_LIST_PROJECTION = {
   updatedAt: 1,
 };
 
+// Public grids only need enough data to render a ProductCard and perform the
+// add-to-cart/wishlist action. Detail, compliance and admin fields stay on the
+// dedicated product-detail endpoint.
+const PRODUCT_CARD_PROJECTION = {
+  title: 1,
+  slug: 1,
+  shortDescription: 1,
+  category: 1,
+  brand: 1,
+  price: 1,
+  mrp: 1,
+  salePrice: 1,
+  currency: 1,
+  images: 1,
+  commonImages: 1,
+  rating: 1,
+  reviewCount: 1,
+  stock: 1,
+  reservedStock: 1,
+  hasVariants: 1,
+  defaultVariantId: 1,
+  "variants._id": 1,
+  "variants.sku": 1,
+  "variants.title": 1,
+  "variants.price": 1,
+  "variants.mrp": 1,
+  "variants.salePrice": 1,
+  "variants.stock": 1,
+  "variants.reservedStock": 1,
+  "variants.status": 1,
+  "variants.isDefault": 1,
+  "variants.attributes": 1,
+  "variants.images": 1,
+  "shipping.codAvailable": 1,
+  "shipping.freeShipping": 1,
+  "shipping.shippingCharge": 1,
+  "shipping.additionalCost": 1,
+  "metadata.featured": 1,
+  "metadata.isDealProduct": 1,
+  "metadata.dealBadge": 1,
+  createdAt: 1,
+};
+
 const buildProductListProjection = (query = {}) => ({
   ...PRODUCT_LIST_PROJECTION,
   variants: 1,
@@ -2311,14 +2354,35 @@ class ProductService {
     }
 
     const publicFilter = applyPublicProductFilter(filter);
-    const projection = buildProductListProjection(query);
-    const cacheKey = `products:${JSON.stringify({ filter: publicFilter, pagination, projection })}`;
-    const result = await remember(cacheKey, 60, () =>
+    const discoveryView = ["cards", "facets"].includes(query.view)
+      ? query.view
+      : "full";
+    if (discoveryView === "cards") {
+      const cacheKey = `products:cards:${JSON.stringify({ query, pagination })}`;
+      const result = await remember(cacheKey, 120, () =>
+        this.productRepository.paginate(publicFilter, pagination, {
+          projection: PRODUCT_CARD_PROJECTION,
+          lean: true,
+        }),
+      );
+      return {
+        ...result,
+        items: await this.enrichProductsWithActiveDeals(result.items || []),
+        facets: {},
+      };
+    }
+    const projection = PRODUCT_CARD_PROJECTION;
+    // Do not serialize publicFilter here: it contains the current time in the
+    // publish/schedule predicates and would make every Redis key unique.
+    const cacheKey = `products:${discoveryView}:${JSON.stringify({ query, pagination })}`;
+    const result = await remember(cacheKey, discoveryView === "facets" ? 300 : 120, () =>
       this.productRepository.aggregatePublicCatalog(publicFilter, pagination, projection),
     );
     return {
       ...result,
-      items: await this.enrichProductsWithActiveDeals(result.items || []),
+      items: discoveryView === "facets"
+        ? []
+        : await this.enrichProductsWithActiveDeals(result.items || []),
       facets: result.facets || {},
     };
   }
@@ -2575,6 +2639,7 @@ class ProductService {
       "productType",
       "hasVariants",
       "includeVariants",
+      "view",
       "visibility",
       "hsnCode",
       "color",
@@ -2966,14 +3031,14 @@ async getProduct(productId) {
         esQuery.bool.filter.push({
           bool: {
             should: [
-              { term: { "category.keyword": category } },
-              { term: { "categoryId.keyword": category } },
+              { term: { category } },
+              { term: { categoryId: category } },
             ],
             minimum_should_match: 1,
           },
         });
       }
-      if (query.brand) esQuery.bool.filter.push({ term: { "brand.keyword": query.brand } });
+      if (query.brand) esQuery.bool.filter.push({ term: { brand: query.brand } });
       if (query.productType) esQuery.bool.filter.push({ term: { productType: query.productType } });
       if (query.productFamilyCode || query.family || query.familyCode) {
         const familyFilter = buildProductSearchExactFilter(
@@ -3026,6 +3091,13 @@ async getProduct(productId) {
         size: limit,
         query: esQuery,
         sort: sortOptions[query.sort] || sortOptions._score,
+        _source: [
+          "title", "slug", "shortDescription", "category", "categoryId", "brand",
+          "sku", "price", "salePrice", "gstRate", "stock", "reservedStock",
+          "availableStock", "rating", "reviewCount", "images", "commonImages",
+          "image", "imageUrl", "thumbnail", "variants", "sellerId", "organizationId",
+          "shipping", "metadata", "status", "approvalStatus", "visibility", "createdAt",
+        ],
       });
       logger.info("[Elasticsearch] Product search served by Elasticsearch");
       const items = response.hits.hits.map((hit) => ({

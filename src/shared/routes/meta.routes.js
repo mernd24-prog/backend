@@ -152,7 +152,15 @@ metaRoutes.get(
   "/dropdowns/:resource",
   catchErrors(async (req, res) => {
     const { resource } = req.params;
-    const query = { ...req.query, active: req.query.active ?? "true" };
+    // Dropdowns are consumable catalog data, not administration lists. Never
+    // allow callers to opt inactive or unapproved master records back in via
+    // query parameters.
+    const query = {
+      ...req.query,
+      active: "true",
+      approvalStatus: "approved",
+      strictApproval: "true",
+    };
     const parentId = req.query.parentId || "";
 
     if (SYSTEM_DROPDOWNS[resource]) {
@@ -225,7 +233,7 @@ metaRoutes.get(
         result = await platformService.listProductFamilies({
           ...query,
           category: req.query.parentId || req.query.category || undefined,
-          status: req.query.status || "active",
+          status: "active",
         });
         options = result.items.map((item) => ({
           label: item.title || item.name || item.familyCode,
@@ -275,6 +283,8 @@ metaRoutes.get(
           optionId: String(warrantyOption._id || warrantyOption.id),
           limit: 100,
           active: true,
+          approvalStatus: "approved",
+          strictApproval: true,
         });
         options = warrantyValuesResult.items.map((item) => {
           const valueCode = String(item.valueCode || "");

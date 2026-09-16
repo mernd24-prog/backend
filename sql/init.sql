@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS orders (
   payment_provider VARCHAR(64),
   cod_charge_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
   shipping_address JSONB NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_buyer_id ON orders (buyer_id);
@@ -52,7 +53,8 @@ CREATE TABLE IF NOT EXISTS payments (
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   verified_at TIMESTAMPTZ,
   failed_reason TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_payments_buyer_id ON payments (buyer_id);

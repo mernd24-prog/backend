@@ -131,9 +131,11 @@ class ProductRepository {
       : (page - 1) * limit;
     const sort = this._buildSort(pagination.sortBy, pagination.sortDir);
     const newArrivalCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const productProjection = projection
-      ? { ...projection, variants: 1, attributes: 1, collectionIds: 1, tags: 1 }
-      : {};
+    // Projection is applied only inside the paginated items facet. The other
+    // facet pipelines still see complete source documents, so forcing whole
+    // variants/attributes here only bloats responses and conflicts with the
+    // card projection's selected variant subfields.
+    const productProjection = projection ? { ...projection } : {};
 
     const [result = {}] = await ProductModel.aggregate([
       { $match: filter },

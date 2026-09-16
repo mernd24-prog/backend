@@ -88,6 +88,7 @@ const listCategoriesSchema = Joi.object({
       active:     Joi.boolean(),
       categoryKey: Joi.string(),
       tree:       Joi.boolean(),
+      navigation: Joi.boolean(),
       maxDepth:   Joi.number().integer().min(1).max(6),
     }),
   ),

@@ -27,6 +27,16 @@ module.exports = {
     }
 
     if (tables.includes("payments")) {
+      // Older local installations initialized this table through sql/init.sql,
+      // whose original definition did not include the canonical timestamp.
+      // Make the reconciliation safe for both bootstrap paths.
+      const paymentColumns = await queryInterface.describeTable("payments", { transaction });
+      if (!paymentColumns.updated_at) {
+        await queryInterface.sequelize.query(
+          "ALTER TABLE payments ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+          { transaction },
+        );
+      }
       await queryInterface.sequelize.query(
         `UPDATE payments p
          SET status = 'captured',
@@ -53,6 +63,13 @@ module.exports = {
     }
 
     if (tables.includes("orders") && tables.includes("payments")) {
+      const orderColumns = await queryInterface.describeTable("orders", { transaction });
+      if (!orderColumns.updated_at) {
+        await queryInterface.sequelize.query(
+          "ALTER TABLE orders ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+          { transaction },
+        );
+      }
       await queryInterface.sequelize.query(
         `UPDATE orders o
          SET payment_status = 'captured', updated_at = NOW()

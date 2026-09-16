@@ -683,6 +683,45 @@ class AdvancedSearchService {
     if (pending) return pending;
 
     const lookup = (async () => {
+      if (isElasticsearchEnabled()) {
+        try {
+          const response = await elasticsearchClient.search({
+            index: "samglobal_products",
+            size: maxLimit,
+            _source: ["title", "brand", "category", "categoryId", "image", "imageUrl", "images", "commonImages"],
+            query: {
+              bool: {
+                filter: buildPublicSearchFilters(),
+                must: [{
+                  multi_match: {
+                    query: term,
+                    type: "bool_prefix",
+                    fields: ["title^4", "title._2gram^3", "title._3gram^2", "brand^2", "category^2"],
+                  },
+                }],
+              },
+            },
+          });
+          const suggestions = response.hits.hits.map((hit) => ({
+            title: hit._source?.title || "",
+            brandName: hit._source?.brand || "",
+            categoryName: hit._source?.category || hit._source?.categoryId || "",
+            image:
+              hit._source?.image ||
+              hit._source?.imageUrl ||
+              hit._source?.images?.[0] ||
+              hit._source?.commonImages?.[0] ||
+              "",
+          })).filter((item) => item.title);
+          if (suggestions.length) {
+            setAutocompleteCache(cacheKey, suggestions);
+            return suggestions;
+          }
+        } catch (error) {
+          logger.warn({ err: error, term }, "Elasticsearch autocomplete failed; using Mongo fallback");
+        }
+      }
+
       const regex = new RegExp(`^${escapeRegex(term)}`, "i");
       const prefixProducts = await ProductModel.find(
         applyPublicProductFilter({ title: regex }),
