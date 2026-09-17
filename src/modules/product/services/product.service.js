@@ -974,7 +974,7 @@ class ProductService {
     const includeOptionValues = query.includeOptionValues !== false && query.includeOptionValues !== "false";
     const includeCategoryAttributes =
       query.includeCategoryAttributes !== false && query.includeCategoryAttributes !== "false";
-    const cacheKey = `products:prefill:basic:${JSON.stringify({ includeInactive, includeOptionValues, includeCategoryAttributes, actorRole: actor.role || "public", sellerId: actor.ownerSellerId || actor.userId || null })}`;
+    const cacheKey = `products:prefill:basic:v2:${JSON.stringify({ includeInactive, includeOptionValues, includeCategoryAttributes, actorRole: actor.role || "public", sellerId: actor.ownerSellerId || actor.userId || null })}`;
     return remember(cacheKey, 300, async () => {
       const catalog = await this.platformService.getCatalogPrefillData({
         includeInactive,

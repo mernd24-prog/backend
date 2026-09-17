@@ -76,9 +76,26 @@ async function forget(input) {
   const pattern = patternFromInput(input);
   if (!pattern) return 0;
 
+  // Keep the in-process cache consistent with Redis. Previously catalog
+  // invalidation removed only Redis keys, leaving stale product-prefill data
+  // in memory until its TTL expired.
+  const matcher = pattern.includes("*") || pattern.includes("?") || pattern.includes("[")
+    ? new RegExp(`^${pattern
+      .replace(/[.+^${}()|\\]/g, "\\$&")
+      .replace(/\*/g, ".*")
+      .replace(/\?/g, ".")}$`)
+    : null;
+  let memoryDeleted = 0;
+  for (const key of memoryCache.keys()) {
+    if ((matcher && matcher.test(key)) || (!matcher && key === pattern)) {
+      memoryCache.delete(key);
+      memoryDeleted += 1;
+    }
+  }
+
   try {
     if (!pattern.includes("*") && !pattern.includes("?") && !pattern.includes("[")) {
-      return redis.del(pattern);
+      return memoryDeleted + await redis.del(pattern);
     }
 
     let cursor = "0";
@@ -91,9 +108,9 @@ async function forget(input) {
       }
     } while (cursor !== "0");
 
-    return deleted;
+    return memoryDeleted + deleted;
   } catch (err) {
-    return 0;
+    return memoryDeleted;
   }
 }
 
