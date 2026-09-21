@@ -468,17 +468,7 @@ const SIDEBAR_MODULES = [
     parentModule: "referral-commerce",
     requiredModule: "referral",
   },
-  {
-    moduleName: "Referral Codes",
-    moduleKey: "referral-codes",
-    moduleSlug: "referral-codes",
-    icon: "MdShare",
-    routePath: "/app/referral-commerce/codes",
-    moduleType: "page",
-    order: 133,
-    parentModule: "referral-commerce",
-    requiredModule: "referral-codes",
-  },
+   
   {
     moduleName: "Rules & Coins",
     moduleKey: "referral-rules",
@@ -630,11 +620,11 @@ const SIDEBAR_MODULES = [
     requiredModule: "cms_pages",
   },
   {
-    moduleName: "Auth Testimonials",
-    moduleKey: "auth-testimonials",
-    moduleSlug: "auth-testimonials",
+    moduleName: "Onboarding Testimonials",
+    moduleKey: "onboarding-testimonials",
+    moduleSlug: "onboarding-testimonials",
     icon: "MdReviews",
-    routePath: "/app/auth-testimonials",
+    routePath: "/app/onboarding-testimonials",
     moduleType: "page",
     order: 193,
     parentModule: "settings-menu",
@@ -648,19 +638,7 @@ const SIDEBAR_MODULES = [
  
   // Festival Management
 
-  // Marketing additions
-  {
-    moduleName: "Notifications",
-    moduleKey: "notifications",
-    moduleSlug: "notifications",
-    icon: "MdNotifications",
-    routePath: "/app/notifications",
-    moduleType: "page",
-    order: 238,
-    parentModule: "marketing",
-    requiredModule: "notifications",
-  },
-
+  
   // Reports & Analytics additions
   {
     moduleName: "Analytics Dashboard",

@@ -1,38 +1,74 @@
-require("dotenv").config();
-const mongoose = require("mongoose");
+#!/usr/bin/env node
 
-const COLLECTIONS = [
-  "categorytrees",
-  "platformbrands",
-  "hsncodes",
-  "platformproductoptions",
-  "platformproductoptionvalues",
-];
+const { connectMongo, mongoose } = require("../../src/infrastructure/mongo/mongo-client");
+const {
+  CategoryTreeModel,
+} = require("../../src/modules/platform/models/category-tree.model");
+const {
+  HsnCodeModel,
+} = require("../../src/modules/platform/models/hsn-code.model");
+const { forget } = require("../../src/shared/tools/cache");
+const { redis } = require("../../src/infrastructure/redis/redis-client");
 
-async function run() {
-  await mongoose.connect(process.env.MONGO_URI);
+const LEGACY_APPROVAL_FILTER = {
+  $and: [
+    {
+      $or: [
+        { approvalStatus: { $exists: false } },
+        { approvalStatus: null },
+        { approvalStatus: "" },
+      ],
+    },
+    {
+      $or: [
+        { submittedBySellerId: { $exists: false } },
+        { submittedBySellerId: null },
+        { submittedBySellerId: "" },
+      ],
+    },
+  ],
+};
 
-  for (const collectionName of COLLECTIONS) {
-    const result = await mongoose.connection.collection(collectionName).updateMany(
-      {
-        $or: [
-          { approvalStatus: { $exists: false } },
-          { approvalStatus: null },
-          { approvalStatus: "" },
-        ],
+async function backfillCatalogMasterApproval() {
+  try {
+    await connectMongo();
+
+    const reviewedAt = new Date();
+    const update = {
+      $set: {
+        approvalStatus: "approved",
+        reviewedBy: "catalog-approval-backfill",
+        reviewedAt,
       },
-      { $set: { approvalStatus: "approved" } },
-    );
+    };
 
-    console.log(`${collectionName}: approved ${result.modifiedCount} legacy record(s)`);
+    const [categories, hsnCodes] = await Promise.all([
+      CategoryTreeModel.updateMany(LEGACY_APPROVAL_FILTER, update),
+      HsnCodeModel.updateMany(LEGACY_APPROVAL_FILTER, update),
+    ]);
+
+    await Promise.all([
+      forget(/^products:prefill:/),
+      forget(/^catalog:/),
+    ]);
+
+    console.log(
+      JSON.stringify(
+        {
+          categoriesApproved: categories.modifiedCount || 0,
+          hsnCodesApproved: hsnCodes.modifiedCount || 0,
+        },
+        null,
+        2,
+      ),
+    );
+  } finally {
+    if (mongoose.connection.readyState !== 0) await mongoose.disconnect();
+    redis.disconnect();
   }
 }
 
-run()
-  .catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await mongoose.disconnect();
-  });
+backfillCatalogMasterApproval().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

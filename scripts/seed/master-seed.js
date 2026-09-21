@@ -54,18 +54,10 @@ const seedModules = {
   sellers: 'sellers.seed.js',
   'shipping-profiles': 'shipping-profiles.seed.js',
   'shipping-profile-templates': 'shipping-profile-templates.seed.js',
-  warehouses: 'warehouses.seed.js',
   products: 'products.seed.js',
   variants: 'variants.seed.js',
   inventory: 'inventory.seed.js',
-  customers: 'customers.seed.js',
   orders: 'orders.seed.js',
-  'referral-bonuses': 'referral-bonuses.seed.js',
-  reviews: 'reviews.seed.js',
-  recommendations: 'recommendations.seed.js',
-  analytics: 'analytics.seed.js',
-  search: 'search.seed.js',
-  notifications: 'notifications.seed.js',
 };
 
 // Full seed order (with dependencies)

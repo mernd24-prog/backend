@@ -318,6 +318,8 @@ class HSNSeed {
         exempt: exempt || false,
         category,
         active: true,
+        approvalStatus: 'approved',
+        submittedBySellerId: '',
         createdAt: new Date(),
         updatedAt: new Date(),
       });
