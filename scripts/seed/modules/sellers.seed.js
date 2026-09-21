@@ -31,7 +31,7 @@ class SellersSeed {
 
   async execute() {
     const users = mongoose.connection.collection('users');
-    const passwordHash = await bcrypt.hash(process.env.SEED_SELLER_PASSWORD || 'Seller@2026!', 10);
+    const passwordHash = await bcrypt.hash(process.env.SEED_SELLER_PASSWORD || '  ', 10);
     let created = 0;
 
     for (let index = 0; index < SELLER_COUNT; index += 1) {

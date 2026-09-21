@@ -12,7 +12,12 @@ const {
   listPagesSchema: cmsListSchema,
 } = require("../../cms/validation/cms.validation");
 const { authenticate } = require("../../../shared/middleware/authenticate");
-const { allowActions, allowRoles, allowPermissions } = require("../../../shared/middleware/access");
+const {
+  allowActions,
+  allowRoles,
+  allowPermissions,
+  allowPlatformModule,
+} = require("../../../shared/middleware/access");
 const { catchErrors } = require("../../../shared/middleware/catch-errors");
 const {
   checkInput,
@@ -462,6 +467,13 @@ adminRoutes.delete(
   "/users/:userId",
   checkInput(deactivateUserSchema),
   catchErrors(adminController.deactivateUser),
+);
+// Cross-tenant seller data is platform-scoped. This boundary protects every
+// seller directory/detail/organization route below, including future routes
+// added under these prefixes.
+adminRoutes.use(
+  ["/vendors", "/sellers", "/seller-organizations"],
+  allowPlatformModule("sellers"),
 );
 adminRoutes.get(
   "/vendors",

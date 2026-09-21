@@ -377,4 +377,42 @@ function allowPermissions(...permissionSlugs) {
   };
 }
 
-module.exports = { allowRoles, allowActions, allowPermissions };
+/**
+ * Protects platform-wide data from seller identities while retaining dynamic
+ * RBAC for platform staff. Use this for cross-tenant directories, selectors,
+ * reports, and mutations that must never be available in seller self-service.
+ */
+function allowPlatformModule(moduleSlug) {
+  return (req, res, next) => {
+    if (!req.auth) {
+      return next(new AppError("Authentication required", 401));
+    }
+
+    if (isSuperAdmin(req)) return next();
+
+    const platformRoles = new Set([ROLES.ADMIN, ROLES.SUB_ADMIN]);
+    const userRoles = getUserRoles(req);
+    if (!userRoles.some((role) => platformRoles.has(role))) {
+      return next(new AppError("Forbidden: platform scope required", 403));
+    }
+
+    const action = inferRequestAction(req);
+    if (!hasGrantedPermission(req.auth, moduleSlug, action)) {
+      return next(
+        new AppError(
+          `Forbidden: permission denied for ${cleanModuleName(moduleSlug)}:${action}`,
+          403,
+        ),
+      );
+    }
+
+    return next();
+  };
+}
+
+module.exports = {
+  allowRoles,
+  allowActions,
+  allowPermissions,
+  allowPlatformModule,
+};
