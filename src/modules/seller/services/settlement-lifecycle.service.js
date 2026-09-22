@@ -6,12 +6,17 @@ const { AppError } = require("../../../shared/errors/app-error");
 const { ORDER_STATUS, PAYMENT_PROVIDER, PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
 const { ReturnModel } = require("../../returns/models/return.model");
+const { ReferralService } = require("../../referral/services/referral.service");
 
 const ADMIN_ROLES = new Set(["admin", "sub-admin", "super-admin"]);
 const OPEN_RETURN_STATUSES = ["requested", "approved", "picked_up", "received", "qc_pending", "refund_pending"];
 const FINAL_COLLECTION_STATUSES = ["verified", "remitted"];
 
 class SettlementLifecycleService {
+  constructor({ referralService = new ReferralService() } = {}) {
+    this.referralService = referralService;
+  }
+
   isAdmin(actor = {}) {
     return Boolean(actor.isSuperAdmin || ADMIN_ROLES.has(actor.role));
   }
@@ -426,7 +431,12 @@ class SettlementLifecycleService {
         to_status: ORDER_STATUS.FULFILLED, reason: "return_window_closed", actor_id: "system", actor_role: "system",
         metadata: { automated: true, returnEligibleUntil: order.fulfillment_eligible_at }, created_at: knex.fn.now(),
       }).catch(() => {});
-      results.push({ orderId: order.id, fulfilled: true });
+      await this.referralService.syncInfluencerReferralOrderStatus(
+        order.id,
+        ORDER_STATUS.FULFILLED,
+        order.payment_status || null,
+      );
+      results.push({ orderId: order.id, fulfilled: true, referralSynced: true });
     }
     return results;
   }
