@@ -155,7 +155,10 @@ class SocialAuthService {
     let decodedToken;
 
     try {
-      decodedToken = await admin.auth(app).verifyIdToken(idToken, true);
+      decodedToken = await admin.auth(app).verifyIdToken(
+        idToken,
+        env.firebase.serviceAccountConfigured,
+      );
     } catch (error) {
       throw new AppError("Invalid Firebase identity token", 401);
     }
