@@ -178,10 +178,54 @@ async function hydrateMissingSearchMedia(results = [], ProductModel) {
   });
 }
 
+async function hydrateLatestSearchProducts(results = [], ProductModel, publicFilter = {}) {
+  if (!Array.isArray(results) || !results.length || !ProductModel) return results;
+
+  const ids = results
+    .map((item) => String(item.id || item._id || ""))
+    .filter(Boolean);
+
+  if (!ids.length) return [];
+
+  const products = await ProductModel.find({
+    ...publicFilter,
+    _id: { $in: ids },
+  })
+    .lean()
+    .catch(() => []);
+
+  const scoreById = new Map(
+    results.map((item) => [
+      String(item.id || item._id || ""),
+      item._score ?? item.score ?? null,
+    ]),
+  );
+  const productById = new Map(
+    products.map((product) => {
+      const id = String(product._id || product.id);
+      return [
+        id,
+        {
+          id,
+          ...buildProductSearchDocument(product),
+          _id: product._id,
+          _score: scoreById.get(id),
+          score: scoreById.get(id),
+        },
+      ];
+    }),
+  );
+
+  return ids
+    .map((id) => productById.get(id))
+    .filter(Boolean);
+}
+
 module.exports = {
   buildProductSearchDocument,
   buildSearchMediaFields,
   hasSearchMediaFields,
+  hydrateLatestSearchProducts,
   hydrateMissingSearchMedia,
   normalizeImageUrl,
   normalizeImages,

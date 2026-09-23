@@ -173,6 +173,26 @@ const socialLoginSchema = Joi.object({
   params: emptyParamsSchema,
 });
 
+const androidFirebaseLoginSchema = Joi.object({
+  body: Joi.object({
+    idToken: Joi.string()
+      .trim()
+      .required(),
+
+    role: Joi.string()
+      .valid(ROLES.BUYER, ROLES.SELLER)
+      .default(ROLES.BUYER),
+
+    referralCode: Joi.string()
+      .trim()
+      .uppercase()
+      .allow("", null),
+  }).required(),
+
+  query: emptyQuerySchema,
+  params: emptyParamsSchema,
+});
+
 /*
  * Unified buyer OTP schema.
  *
@@ -384,6 +404,7 @@ module.exports = {
   influencerInviteSchema,
   refreshSchema,
   socialLoginSchema,
+  androidFirebaseLoginSchema,
 
   /*
    * New unified buyer OTP validation.
