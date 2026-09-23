@@ -29,7 +29,7 @@ const {
 } = require("../../../shared/catalog/public-product-filter");
 const {
   buildProductSearchDocument,
-  hydrateMissingSearchMedia,
+  hydrateLatestSearchProducts,
 } = require("../../../shared/search/product-search-document");
 const { logger } = require("../../../shared/logger/logger");
 const { PlatformRepository } = require("../../platform/repositories/platform.repository");
@@ -3105,9 +3105,16 @@ async getProduct(productId) {
         ...hit._source,
         _score: hit._score,
       }));
+      const hydratedItems = await hydrateLatestSearchProducts(
+        items,
+        ProductModel,
+        applyPublicProductFilter(),
+      );
       return {
-        items: await hydrateMissingSearchMedia(items, ProductModel),
-        total: response.hits.total?.value ?? response.hits.hits.length,
+        items: hydratedItems,
+        total: hydratedItems.length < items.length
+          ? hydratedItems.length
+          : response.hits.total?.value ?? response.hits.hits.length,
         source: "elasticsearch",
       };
     } catch (error) {

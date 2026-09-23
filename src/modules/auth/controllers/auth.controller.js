@@ -82,6 +82,11 @@ class AuthController {
     res.json(okResponse(result));
   };
 
+  androidFirebaseLogin = async (req, res) => {
+    const result = await this.authService.androidFirebaseLogin(req.body, getRequestInfo(req));
+    res.json(okResponse(result));
+  };
+
   sendOtp = async (req, res) => {
     const result = await this.authService.sendOtp(req.body, getRequestInfo(req));
     res.json(okResponse(result, { message: result?.message }));

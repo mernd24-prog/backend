@@ -1101,6 +1101,21 @@ class AuthService {
       throw error;
     }
   }
+
+  async androidFirebaseLogin(payload, requestContext = {}) {
+    return this.socialLogin(
+      {
+        ...payload,
+        provider: "firebase",
+        role: payload.role || ROLES.BUYER,
+      },
+      {
+        ...requestContext,
+        platform: requestContext.platform || "android",
+      },
+    );
+  }
+
   normalizeBuyerOtpIdentity(payload = {}) {
     const rawEmail = String(payload?.email || "").trim();
 

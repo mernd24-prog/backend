@@ -15,7 +15,7 @@ const {
 } = require("../catalog/public-product-filter");
 const {
   buildProductSearchDocument,
-  hydrateMissingSearchMedia,
+  hydrateLatestSearchProducts,
 } = require("../search/product-search-document");
 
 const AUTOCOMPLETE_CACHE_TTL_MS = 2 * 60 * 1000;
@@ -365,10 +365,17 @@ class AdvancedSearchService {
         score: hit._score,
         ...hit._source,
       }));
+      const hydratedResults = await hydrateLatestSearchProducts(
+        results,
+        ProductModel,
+        applyPublicProductFilter(),
+      );
 
       return {
-        results: await hydrateMissingSearchMedia(results, ProductModel),
-        total: response.hits.total.value,
+        results: hydratedResults,
+        total: hydratedResults.length < results.length
+          ? hydratedResults.length
+          : response.hits.total.value,
         page,
         limit,
         facets: {

@@ -11,6 +11,7 @@ const {
   registerWithOtpSchema,
   verifyRegistrationSchema,
   socialLoginSchema,
+  androidFirebaseLoginSchema,
   sendOtpSchema,
   verifyOtpSchema,
   resendOtpSchema,
@@ -54,6 +55,11 @@ authRoutes.post("/influencer/forgot-password", checkInput(forgotPasswordSchema),
 authRoutes.post("/influencer/verify-reset-otp", checkInput(verifyOtpSchema), catchErrors(authController.influencerVerifyResetOtp));
 authRoutes.post("/influencer/reset-password", checkInput(resetPasswordSchema), catchErrors(authController.influencerResetPassword));
 authRoutes.post("/social", checkInput(socialLoginSchema), catchErrors(authController.socialLogin));
+authRoutes.post(
+  "/android/firebase",
+  checkInput(androidFirebaseLoginSchema),
+  catchErrors(authController.androidFirebaseLogin),
+);
 authRoutes.post("/refresh", checkInput(refreshSchema), catchErrors(authController.refresh));
 authRoutes.post(
   "/otp-auth",
