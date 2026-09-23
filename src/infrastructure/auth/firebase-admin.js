@@ -12,13 +12,19 @@ function getFirebaseApp() {
     return null;
   }
 
-  firebaseApp = admin.initializeApp({
-    credential: admin.credential.cert({
+  const appConfig = {
+    projectId: env.firebase.projectId,
+  };
+
+  if (env.firebase.serviceAccountConfigured) {
+    appConfig.credential = admin.credential.cert({
       projectId: env.firebase.projectId,
       clientEmail: env.firebase.clientEmail,
       privateKey: env.firebase.privateKey.replace(/\\n/g, "\n"),
-    }),
-  });
+    });
+  }
+
+  firebaseApp = admin.initializeApp(appConfig);
 
   return firebaseApp;
 }

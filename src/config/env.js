@@ -186,11 +186,13 @@ const googleOAuthRedirectUris = (
   .split(",")
   .map((value) => value.trim().replace(/\/+$/, ""))
   .filter(hasEnvValue);
-const firebaseConfigured = findMissingConfig([
+const firebaseServiceAccountConfigured = findMissingConfig([
   { key: "FIREBASE_PROJECT_ID", value: process.env.FIREBASE_PROJECT_ID },
   { key: "FIREBASE_CLIENT_EMAIL", value: process.env.FIREBASE_CLIENT_EMAIL },
   { key: "FIREBASE_PRIVATE_KEY", value: process.env.FIREBASE_PRIVATE_KEY },
 ]).length === 0;
+const firebaseProjectConfigured = hasEnvValue(process.env.FIREBASE_PROJECT_ID);
+const firebaseConfigured = firebaseProjectConfigured;
 const socialAuthLiveRequested = readBooleanFlag(
   ["ENABLE_LIVE_SOCIAL_AUTH", "USE_LIVE_SOCIAL_AUTH"],
   isProductionMode,
@@ -290,6 +292,7 @@ const env = {
     clientEmail: process.env.FIREBASE_CLIENT_EMAIL || "",
     privateKey: process.env.FIREBASE_PRIVATE_KEY || "",
     configured: firebaseConfigured,
+    serviceAccountConfigured: firebaseServiceAccountConfigured,
   },
   razorpay: {
     keyId: cleanEnvValue(process.env.RAZORPAY_KEY_ID),
