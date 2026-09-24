@@ -1838,6 +1838,12 @@ resolveSellerFeeTaxAmount(
       const taxBreakup = this.parseJson(row.tax_breakup, {});
       const orderMetadata = this.parseJson(row.order_metadata, {});
       const financeSnapshot = orderMetadata?.commerceSettings?.finance || {};
+      const sellerFundedDiscountAmount = this.firstNumber(
+        pricing.sellerFundedDiscountAmount,
+      );
+      const snapshotSellerGrossLineTotal = this.numberOrNull(
+        pricing.sellerGrossLineTotal,
+      );
       // Product amount excluding GST.
       // Use this for commission, TCS and TDS calculation.
       const productTaxableAmount = this.round(
@@ -1863,7 +1869,14 @@ resolveSellerFeeTaxAmount(
       // The order line total is the authoritative customer-facing amount.
       // Never rebuild gross from independently rounded taxable and GST
       // components: doing that can introduce one-paise drift per line.
-      const grossSellerInvoiceAmount = this.round(grossAfterDiscount);
+      const grossSellerInvoiceAmount = this.round(
+        snapshotSellerGrossLineTotal !== null
+          ? Math.max(
+            snapshotSellerGrossLineTotal - sellerFundedDiscountAmount,
+            0,
+          )
+          : grossAfterDiscount,
+      );
 
       // Keep this separately because commission may be calculated excluding GST.
       const commissionBaseAmount = this.firstNumber(
@@ -1878,13 +1891,18 @@ resolveSellerFeeTaxAmount(
         pricing.customerFeeTotal,
       );
       const customerFeeTaxAmount = this.firstNumber(pricing.customerPlatformFeeTaxAmount);
+      const snapshotSellerReceivable = this.numberOrNull(
+        pricing.sellerReceivable,
+      );
       const itemSellerReceivable = this.round(
-        Math.max(
-          0,
-          grossSellerInvoiceAmount -
-          sellerFeeAmount -
-          sellerFeeTaxAmount,
-        ),
+        snapshotSellerReceivable !== null
+          ? Math.max(snapshotSellerReceivable, 0)
+          : Math.max(
+            0,
+            grossSellerInvoiceAmount -
+            sellerFeeAmount -
+            sellerFeeTaxAmount,
+          ),
       );
       current.orderItemIds.push(row.id);
       current.amount += grossSellerInvoiceAmount;
@@ -2245,6 +2263,44 @@ gstTcsAmount,
     );
 
     return result;
+  }
+
+  async reconcileMissingEligibleCommissions({ limit = 500, sellerId = null } = {}) {
+    const cappedLimit = Math.min(Math.max(Number(limit || 500), 1), 1000);
+    const missingOrders = await knex({ orderItem: "order_items" })
+      .leftJoin(
+        { commission: "seller_commissions" },
+        "commission.order_item_id",
+        "orderItem.id",
+      )
+      .where("orderItem.payout_status", "eligible")
+      .whereNull("commission.id")
+      .modify((builder) => {
+        if (sellerId) builder.where("orderItem.seller_id", sellerId);
+      })
+      .distinct("orderItem.order_id")
+      .limit(cappedLimit);
+
+    const results = { checked: missingOrders.length, repaired: 0, failed: [] };
+    for (const row of missingOrders) {
+      try {
+        const calculation = await this.calculateCommission(row.order_id, {
+          sellerId: sellerId || undefined,
+          actor: {
+            userId: "system:eligible-commission-reconciliation",
+            role: "system",
+          },
+          sourceStatus: "return_window_closed",
+        });
+        results.repaired += Number(calculation?.created || 0);
+      } catch (error) {
+        results.failed.push({
+          orderId: String(row.order_id),
+          reason: error?.message || "commission_reconciliation_failed",
+        });
+      }
+    }
+    return results;
   }
 
   summarizeCommissions(commissions = []) {
@@ -3376,7 +3432,11 @@ gstTcsAmount,
       ELSE COALESCE(
         (
           SELECT GREATEST(
-            COALESCE(oi.line_total, 0) - COALESCE(oi.discount_amount, 0),
+            COALESCE(
+              (oi.pricing_snapshot->>'sellerGrossLineTotal')::numeric
+                - COALESCE((oi.pricing_snapshot->>'sellerFundedDiscountAmount')::numeric, 0),
+              COALESCE(oi.line_total, 0) - COALESCE(oi.discount_amount, 0)
+            ),
             0
           )
           FROM order_items oi
@@ -3432,8 +3492,13 @@ gstTcsAmount,
       const release = releaseById.get(String(item.id)) || {};
       const orderItem = orderItemsById.get(String(item.order_item_id || "")) || {};
       const isImmutable = ["paid", "refunded"].includes(String(item.status || "")) || Boolean(item.payout_id);
+      const orderItemPricing = this.parseJson(orderItem.pricing_snapshot, {});
+      const snapshotSellerGross = this.numberOrNull(orderItemPricing.sellerGrossLineTotal);
+      const sellerFundedDiscount = this.firstNumber(orderItemPricing.sellerFundedDiscountAmount);
       const authoritativeAmount = this.round(
-        Math.max(Number(orderItem.line_total || 0) - Number(orderItem.discount_amount || 0), 0),
+        snapshotSellerGross !== null
+          ? Math.max(snapshotSellerGross - sellerFundedDiscount, 0)
+          : Math.max(Number(orderItem.line_total || 0) - Number(orderItem.discount_amount || 0), 0),
       );
       const amount = !isImmutable && orderItem.id ? authoritativeAmount : this.round(item.amount || 0);
       const amountCorrection = this.round(amount - Number(item.amount || 0));

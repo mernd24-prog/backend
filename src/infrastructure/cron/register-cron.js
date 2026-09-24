@@ -6,6 +6,7 @@ const { CommissionService } = require("../../modules/seller/services/commission.
 const { settlementLifecycleService } = require("../../modules/seller/services/settlement-lifecycle.service");
 const { CancellationService } = require("../../modules/cancellation/services/cancellation.service");
 const { OrderService } = require("../../modules/order/services/order.service");
+const { ReferralService } = require("../../modules/referral/services/referral.service");
 const { knex, postgresPool } = require("../postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
 const os = require("os");
@@ -101,6 +102,7 @@ function registerCronJobs() {
   const productService = new ProductService();
   const cancellationService = new CancellationService();
   const orderService = new OrderService();
+  const referralService = new ReferralService();
 
   runPeriodicJob("order-cleanup", async () =>
     orderService.reconcileExpiredPaymentReservations({ limit: 200 }), 5 * 60 * 1000);
@@ -121,11 +123,19 @@ function registerCronJobs() {
   runPeriodicJob("return-window-fulfillment", async () => {
     const eligibleItems = await settlementLifecycleService.markEligibleOrderItems();
     const fulfilledOrders = await settlementLifecycleService.finalizeEligibleOrders();
+    const referralOrders = await referralService.reconcileInfluencerReferralOrderStatuses();
+    const sellerCommissions = await CommissionService.reconcileMissingEligibleCommissions();
     const autoPayouts = await CommissionService.processScheduledPayouts({
       force: true,
       actor: { userId: "system:return-window", role: "system" },
     });
-    return { eligibleItems, fulfilledOrders, autoPayouts };
+    return {
+      eligibleItems,
+      fulfilledOrders,
+      referralOrders,
+      sellerCommissions,
+      autoPayouts,
+    };
   }, 15 * 60 * 1000);
   runPeriodicJob("cancellation-refund-reconciliation", async () => {
     return cancellationService.reconcileProviderRefunds({ limit: 100 });

@@ -1079,10 +1079,10 @@ class ReferralService {
     const referralOrder = await this.referralRepository.getReferralOrderByOrderId(orderId);
     if (!referralOrder) return null;
 
-    const cancelled = ["cancelled", "payment_failed", "returned"].includes(orderStatus);
+    const cancelled = ["cancelled", "payment_failed", "returned", "refunded"].includes(orderStatus);
     const completed = orderStatus === "fulfilled";
     const nextReferralStatus = cancelled
-      ? (orderStatus === "returned" ? "refunded" : "cancelled")
+      ? (["returned", "refunded"].includes(orderStatus) ? "refunded" : "cancelled")
       : completed ? "completed" : referralOrder.status;
     const ledgers = await this.referralRepository.listCommissionLedgerByReferralOrder(
       this.getRecordId(referralOrder),
@@ -1129,6 +1129,51 @@ class ReferralService {
       ...(paymentStatus ? { paymentStatus } : {}),
       ...(completed ? { completedAt: new Date() } : {}),
     });
+  }
+
+  async reconcileInfluencerReferralOrderStatuses(limit = 500) {
+    const pending = await this.referralRepository.listReferralOrders({
+      status: "pending",
+      page: 1,
+      limit: Math.min(Math.max(Number(limit || 500), 1), 1000),
+    });
+    const referralOrders = pending.items || [];
+    if (!referralOrders.length) {
+      return { checked: 0, updated: 0, failed: [] };
+    }
+
+    const orderIds = referralOrders.map((entry) => String(entry.orderId));
+    const orders = await knex("orders")
+      .whereIn("id", orderIds)
+      .select("id", "status", "payment_status");
+    const terminalStatuses = new Set([
+      "fulfilled",
+      "cancelled",
+      "payment_failed",
+      "returned",
+      "refunded",
+    ]);
+    const results = { checked: referralOrders.length, updated: 0, failed: [] };
+
+    for (const order of orders) {
+      const orderStatus = String(order.status || "").toLowerCase();
+      if (!terminalStatuses.has(orderStatus)) continue;
+      try {
+        await this.syncInfluencerReferralOrderStatus(
+          order.id,
+          orderStatus,
+          order.payment_status || null,
+        );
+        results.updated += 1;
+      } catch (error) {
+        results.failed.push({
+          orderId: String(order.id),
+          reason: error?.message || "referral_status_sync_failed",
+        });
+      }
+    }
+
+    return results;
   }
 
   async releaseMaturedInfluencerCoins(influencerId) {
