@@ -3,7 +3,7 @@ const { env } = require("../../config/env");
 const { AppError } = require("../../shared/errors/app-error");
 const { logger } = require("../../shared/logger/logger");
 
-const thirdPartyMailEnabled = env.smtp.live;
+const thirdPartyMailEnabled = env.smtp.live && (env.mail.sendEmails || env.mail.sendAuthOtpEmails);
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const transporter = thirdPartyMailEnabled
   ? nodemailer.createTransport({
@@ -14,10 +14,10 @@ const transporter = thirdPartyMailEnabled
     })
   : null;
 
-function buildStaticMailResult({ to, subject, html, text, from, reason }) {
+function buildStaticMailResult({ to, subject, html, text, from, reason, accepted = [to], rejected = [] }) {
   return {
-    accepted: [to],
-    rejected: [],
+    accepted,
+    rejected,
     messageId: `static-${Date.now()}`,
     response: reason,
     envelope: { from, to: [to] },
@@ -26,10 +26,43 @@ function buildStaticMailResult({ to, subject, html, text, from, reason }) {
   };
 }
 
-async function sendMail({ to, subject, html, text, from = env.defaultFromEmail }) {
+function isAuthOtpMail(type) {
+  return type === "auth_otp";
+}
+
+function canSendByType(type) {
+  if (isAuthOtpMail(type)) {
+    return env.mail.sendAuthOtpEmails;
+  }
+
+  return env.mail.sendEmails;
+}
+
+async function sendMail({ to, subject, html, text, from = env.defaultFromEmail, type = "general" }) {
   const recipient = String(to || "").trim();
   if (!emailPattern.test(recipient)) {
     throw new AppError("A valid recipient email address is required.", 400);
+  }
+
+  if (!canSendByType(type)) {
+    logger.warn({
+      to: recipient,
+      subject,
+      from,
+      mailType: type,
+      sendEmails: env.mail.sendEmails,
+      sendAuthOtpEmails: env.mail.sendAuthOtpEmails,
+    }, "Email delivery skipped by mail switch");
+    return buildStaticMailResult({
+      to: recipient,
+      subject,
+      html,
+      text,
+      from,
+      accepted: [],
+      rejected: [recipient],
+      reason: `Email skipped: ${isAuthOtpMail(type) ? "SEND_AUTH_OTP_EMAILS" : "SEND_EMAILS"} is false.`,
+    });
   }
 
   if (!thirdPartyMailEnabled) {

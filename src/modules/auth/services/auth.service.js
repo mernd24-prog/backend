@@ -275,6 +275,7 @@ class AuthService {
       subject: `OTP for ${this.getOtpPurposeLabel(purpose)}`,
       text: `Your Sam Global verification code is ${otp}. It will expire in 15 minutes. Please do not share it with anyone.`,
       html,
+      type: "auth_otp",
     });
   }
 
@@ -1478,6 +1479,7 @@ class AuthService {
             `Your Sam Global verification code is ${otp}. It will expire in 15 minutes. Please do not share it with anyone.`,
 
           html,
+          type: "auth_otp",
         });
       }
 

@@ -407,6 +407,10 @@ const env = {
       retryBackoffMs: parsePositiveInteger(process.env.EMAIL_QUEUE_RETRY_BACKOFF_MS, 60000),
     },
   },
+  mail: {
+    sendEmails: readBooleanFlag(["SEND_EMAILS"], true),
+    sendAuthOtpEmails: readBooleanFlag(["SEND_AUTH_OTP_EMAILS"], true),
+  },
   defaultFromEmail,
   auth: {
     staticOtp: String(process.env.AUTH_STATIC_OTP || process.env.STATIC_OTP || process.env.DEV_OTP || "123456").trim(),
