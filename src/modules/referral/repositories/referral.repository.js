@@ -424,9 +424,24 @@ class ReferralRepository {
     const ledgers = await ReferralCommissionLedgerModel.find({
       influencerId: String(influencerId),
       status: { $in: ["pending", "locked"] },
-      releaseAt: { $lte: now },
     }).limit(500);
     if (!ledgers.length) return [];
+    const completedOrders = await ReferralOrderModel.find({
+      _id: { $in: ledgers.map((entry) => entry.referralOrderId) },
+      status: "completed",
+    }).select("_id");
+    const completedIds = new Set(completedOrders.map((order) => String(order._id)));
+    return ledgers.filter((entry) => completedIds.has(String(entry.referralOrderId)));
+  }
+
+  async listMaturedCommissionLedgerEntries(now = new Date(), limit = 500) {
+    const ledgers = await ReferralCommissionLedgerModel.find({
+      status: { $in: ["pending", "locked"] },
+    })
+      .sort({ releaseAt: 1 })
+      .limit(Math.min(Math.max(Number(limit || 500), 1), 1000));
+    if (!ledgers.length) return [];
+
     const completedOrders = await ReferralOrderModel.find({
       _id: { $in: ledgers.map((entry) => entry.referralOrderId) },
       status: "completed",

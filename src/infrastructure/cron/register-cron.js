@@ -124,6 +124,7 @@ function registerCronJobs() {
     const eligibleItems = await settlementLifecycleService.markEligibleOrderItems();
     const fulfilledOrders = await settlementLifecycleService.finalizeEligibleOrders();
     const referralOrders = await referralService.reconcileInfluencerReferralOrderStatuses();
+    const releasedReferralCoins = await referralService.releaseAllMaturedInfluencerCoins();
     const sellerCommissions = await CommissionService.reconcileMissingEligibleCommissions();
     const autoPayouts = await CommissionService.processScheduledPayouts({
       force: true,
@@ -133,6 +134,7 @@ function registerCronJobs() {
       eligibleItems,
       fulfilledOrders,
       referralOrders,
+      releasedReferralCoins,
       sellerCommissions,
       autoPayouts,
     };

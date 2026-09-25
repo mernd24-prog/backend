@@ -971,7 +971,6 @@ class ReferralService {
 
     const referralOrderId = this.getRecordId(referralOrder);
     const coinValue = Math.max(Number(rule.coinValue || 1), 0.000001);
-    const releaseAt = this.addDays(new Date(), Number(rule.releaseDelayDays || 0));
     const allocations = [
       {
         influencerId: context.influencerId,
@@ -1002,7 +1001,9 @@ class ReferralService {
         percent: allocation.sharePercent,
         amount: coins,
         status: "locked",
-        releaseAt,
+        // Order commission release is governed by fulfillment and the
+        // purchased return window, not by an additional referral delay.
+        releaseAt: null,
         metadata: {
           code: context.code,
           referralPoolAmount: Number(context.referralPoolAmount || 0),
@@ -1108,17 +1109,17 @@ class ReferralService {
       } else if (
         completed &&
         ["pending", "locked"].includes(ledger.status) &&
-        (!ledger.releaseAt || new Date(ledger.releaseAt) <= new Date()) &&
         await this.isReferralOrderEligibleForRelease(orderId)
       ) {
-        await this.referralRepository.updateWallet(ledger.influencerId, {
+        const claimed = await this.referralRepository.claimCommissionAsAvailable(
+          this.getRecordId(ledger),
+        );
+        if (!claimed) continue;
+        await this.referralRepository.updateWallet(claimed.influencerId, {
           $inc: {
-            pendingBalance: -Number(ledger.amount || 0),
-            availableBalance: Number(ledger.amount || 0),
+            pendingBalance: -Number(claimed.amount || 0),
+            availableBalance: Number(claimed.amount || 0),
           },
-        });
-        await this.referralRepository.updateCommissionLedgerEntry(this.getRecordId(ledger), {
-          status: "available",
         });
       }
     }
@@ -1195,6 +1196,41 @@ class ReferralService {
       releasedCoins += amount;
     }
     return this.roundCoins(releasedCoins);
+  }
+
+  async releaseAllMaturedInfluencerCoins(limit = 500) {
+    const matured = await this.referralRepository.listMaturedCommissionLedgerEntries(
+      new Date(),
+      limit,
+    );
+    let releasedCoins = 0;
+    let releasedEntries = 0;
+    const skippedOrderIds = new Set();
+
+    for (const entry of matured) {
+      const orderId = String(entry.orderId || "");
+      if (skippedOrderIds.has(orderId)) continue;
+      if (!await this.isReferralOrderEligibleForRelease(orderId)) {
+        skippedOrderIds.add(orderId);
+        continue;
+      }
+      const claimed = await this.referralRepository.claimCommissionAsAvailable(
+        this.getRecordId(entry),
+      );
+      if (!claimed) continue;
+      const amount = Number(claimed.amount || 0);
+      await this.referralRepository.updateWallet(claimed.influencerId, {
+        $inc: { pendingBalance: -amount, availableBalance: amount },
+      });
+      releasedCoins += amount;
+      releasedEntries += 1;
+    }
+
+    return {
+      checked: matured.length,
+      releasedEntries,
+      releasedCoins: this.roundCoins(releasedCoins),
+    };
   }
 
   async isReferralOrderEligibleForRelease(orderId, now = new Date()) {
@@ -2973,6 +3009,11 @@ class ReferralService {
   }
 
   async getSummaryReport() {
+    // Keep the admin overview consistent with the influencer dashboard even
+    // when the periodic worker has not run yet (for example after a restart).
+    await this.reconcileInfluencerReferralOrderStatuses();
+    await this.releaseAllMaturedInfluencerCoins();
+
     const [
       totalInfluencers,
       activeInfluencers,
