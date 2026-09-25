@@ -995,12 +995,15 @@ class NotificationService {
     if (SELLER_ROLES.has(actor.role) && actor.ownerSellerId) {
       userIds.push(actor.ownerSellerId);
     }
+    const rawFeedRequested = ["1", "true", "yes"].includes(String(query.raw || "").toLowerCase());
+    const compactOrderGroups = actor.role === ROLES.BUYER && !rawFeedRequested;
 
     return this.notificationRepository.listByUser([...new Set(userIds.filter(Boolean))], {
       channel: query.type || query.channel || null,
       page: query.page,
       limit: query.limit,
       search: query.search || query.q || query.keyWord,
+      compactOrderGroups,
     });
   }
 
