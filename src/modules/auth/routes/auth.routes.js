@@ -4,6 +4,8 @@ const { checkInput } = require("../../../shared/middleware/check-input");
 const { catchErrors } = require("../../../shared/middleware/catch-errors");
 const { authRateLimit } = require("../../../shared/middleware/auth-rate-limit");
 const { authenticate, authenticateForStatus } = require("../../../shared/middleware/authenticate");
+const { allowRoles } = require("../../../shared/middleware/access");
+const { ROLES } = require("../../../shared/constants/roles");
 const {
   loginSchema,
   refreshSchema,
@@ -37,6 +39,11 @@ authRoutes.post("/register-otp", checkInput(registerWithOtpSchema), catchErrors(
 authRoutes.post("/verify-registration", checkInput(verifyRegistrationSchema), catchErrors(authController.verifyRegistration));
 authRoutes.post("/login", checkInput(loginSchema), catchErrors(authController.login));
 authRoutes.post(
+  "/customer/login",
+  checkInput(loginSchema),
+  catchErrors(authController.customerLogin),
+);
+authRoutes.post(
   "/influencer/login",
   checkInput(loginSchema),
   catchErrors(authController.influencerLogin),
@@ -62,6 +69,11 @@ authRoutes.post(
 );
 authRoutes.post("/refresh", checkInput(refreshSchema), catchErrors(authController.refresh));
 authRoutes.post(
+  "/customer/refresh",
+  checkInput(refreshSchema),
+  catchErrors(authController.customerRefresh),
+);
+authRoutes.post(
   "/otp-auth",
   checkInput(buyerOtpAuthSchema),
   catchErrors(authController.buyerOtpAuth),
@@ -73,5 +85,11 @@ authRoutes.post("/forgot-password", checkInput(forgotPasswordSchema), catchError
 authRoutes.post("/reset-password", checkInput(resetPasswordSchema), catchErrors(authController.resetPassword));
 authRoutes.post("/change-password", authenticate, checkInput(changePasswordSchema), catchErrors(authController.changePassword));
 authRoutes.get("/status", authenticateForStatus, catchErrors(authController.status));
+authRoutes.get(
+  "/customer/status",
+  authenticateForStatus,
+  allowRoles(ROLES.BUYER),
+  catchErrors(authController.status),
+);
 
 module.exports = { authRoutes };

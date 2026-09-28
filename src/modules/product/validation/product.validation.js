@@ -5,6 +5,7 @@ const {
   PRODUCT_TYPE,
   PRODUCT_VISIBILITY,
   PRODUCT_REVISION_STATUS,
+  PRODUCT_REVISION_WORKFLOW_STATUS,
   DIGITAL_FILE_TYPE,
   SUBSCRIPTION_BILLING_CYCLE,
 } = require("../../../shared/domain/commerce-constants");
@@ -317,7 +318,9 @@ const listProductSchema = Joi.object({
     category_id: Joi.string(),
     status: Joi.string(),
     approvalStatus: Joi.string().valid(...Object.values(PRODUCT_APPROVAL_STATUS)),
-    revisionStatus: Joi.string().valid(...Object.values(PRODUCT_REVISION_STATUS)),
+    revisionStatus: Joi.string().valid(
+      ...Object.values(PRODUCT_REVISION_WORKFLOW_STATUS),
+    ),
     stockStatus: Joi.string().valid("in_stock", "low_stock", "out_of_stock", "all", ""),
     productType: Joi.string().valid(...Object.values(PRODUCT_TYPE)),
     hasVariants: Joi.boolean(),

@@ -452,6 +452,77 @@ class PlatformRepository {
     });
   }
 
+  async resolveBrandReferences(values = []) {
+    const normalizedValues = Array.from(
+      new Set(values.map((value) => String(value || "").trim()).filter(Boolean)),
+    );
+    if (!normalizedValues.length) return new Map();
+
+    const objectIds = normalizedValues
+      .filter((value) => mongoose.Types.ObjectId.isValid(value))
+      .map((value) => new mongoose.Types.ObjectId(value));
+    const lowerValues = normalizedValues.map((value) => value.toLowerCase());
+    const brands = await PlatformBrandModel.find({
+      $or: [
+        ...(objectIds.length ? [{ _id: { $in: objectIds } }] : []),
+        { nameKey: { $in: lowerValues } },
+        { slug: { $in: lowerValues } },
+        { name: { $in: normalizedValues } },
+      ],
+    })
+      .collation({ locale: "en", strength: 2 })
+      .lean();
+
+    const references = new Map();
+    for (const brand of brands) {
+      const reference = {
+        id: String(brand._id),
+        name: brand.name || "",
+        slug: brand.slug || "",
+        active: brand.active !== false,
+        approvalStatus: brand.approvalStatus || null,
+      };
+      [brand._id, brand.name, brand.nameKey, brand.slug]
+        .map((value) => String(value || "").trim().toLowerCase())
+        .filter(Boolean)
+        .forEach((key) => references.set(key, reference));
+    }
+    return references;
+  }
+
+  async resolveCategoryReferences(values = []) {
+    const normalizedValues = Array.from(
+      new Set(values.map((value) => String(value || "").trim()).filter(Boolean)),
+    );
+    if (!normalizedValues.length) return new Map();
+
+    const objectIds = normalizedValues
+      .filter((value) => mongoose.Types.ObjectId.isValid(value))
+      .map((value) => new mongoose.Types.ObjectId(value));
+    const categories = await CategoryTreeModel.find({
+      $or: [
+        ...(objectIds.length ? [{ _id: { $in: objectIds } }] : []),
+        { categoryKey: { $in: normalizedValues } },
+      ],
+    }).lean();
+
+    const references = new Map();
+    for (const category of categories) {
+      const reference = {
+        id: String(category._id),
+        key: category.categoryKey || "",
+        name: category.title || "",
+        active: category.active !== false,
+        approvalStatus: category.approvalStatus || null,
+      };
+      [category._id, category.categoryKey]
+        .map((value) => String(value || "").trim().toLowerCase())
+        .filter(Boolean)
+        .forEach((key) => references.set(key, reference));
+    }
+    return references;
+  }
+
   async findBrandByName(name, excludeBrandId = null) {
     const normalized = String(name || "").trim();
     if (!normalized) return null;

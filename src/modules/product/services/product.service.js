@@ -786,6 +786,41 @@ class ProductService {
       .toArray();
   }
 
+  async decorateProductMasterReferences(products = []) {
+    if (!Array.isArray(products) || !products.length) return [];
+
+    const [brands, categories] = await Promise.all([
+      this.platformRepository.resolveBrandReferences(products.map((product) => product.brand)),
+      this.platformRepository.resolveCategoryReferences(
+        products.flatMap((product) => [product.categoryId, product.category]),
+      ),
+    ]);
+
+    return products.map((product) => {
+      const rawBrand = String(product.brand || "").trim();
+      const rawCategoryId = String(product.categoryId || "").trim();
+      const rawCategory = String(product.category || "").trim();
+      const brandRef = brands.get(rawBrand.toLowerCase()) || null;
+      const categoryRef =
+        categories.get(rawCategoryId.toLowerCase()) ||
+        categories.get(rawCategory.toLowerCase()) ||
+        null;
+
+      return {
+        ...product,
+        brandId: brandRef?.id || null,
+        brandName: brandRef?.name || rawBrand,
+        brandRef,
+        brandReferenceResolved: Boolean(brandRef),
+        categoryId: categoryRef?.id || product.categoryId || null,
+        categoryKey: categoryRef?.key || rawCategory,
+        categoryName: categoryRef?.name || rawCategory,
+        categoryRef,
+        categoryReferenceResolved: Boolean(categoryRef),
+      };
+    });
+  }
+
   async getProductPrefillData(query = {}, actor = {}) {
     const includeInactive = query.includeInactive === true || query.includeInactive === "true";
     const includeProducts = query.includeProducts !== false && query.includeProducts !== "false";
@@ -794,7 +829,7 @@ class ProductService {
       ? actor.ownerSellerId || actor.userId
       : query.sellerId || null;
 
-    const cacheKey = `products:prefill:${JSON.stringify({
+    const cacheKey = `products:prefill:v2:${JSON.stringify({
       includeInactive,
       includeProducts,
       sellerId,
@@ -848,7 +883,7 @@ class ProductService {
           : { status: { $in: [PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.INACTIVE, PRODUCT_STATUS.DRAFT, PRODUCT_STATUS.PENDING_APPROVAL] } }),
       };
       const relatedProducts = includeProducts
-        ? (await this.productRepository.paginate(relatedProductFilter, {
+        ? await this.decorateProductMasterReferences((await this.productRepository.paginate(relatedProductFilter, {
             page: 1,
             limit: productLimit,
             skip: 0,
@@ -862,6 +897,7 @@ class ProductService {
               status: 1,
               brand: 1,
               category: 1,
+              categoryId: 1,
               images: 1,
             },
             lean: true,
@@ -875,8 +911,9 @@ class ProductService {
             status: product.status,
             brand: product.brand || "",
             category: product.category || "",
+            categoryId: product.categoryId || "",
             image: product.images?.[0] || null,
-          }))
+          })))
         : [];
 
       const optionValuesByOptionId = (catalog.optionValues || []).reduce((acc, item) => {
@@ -1117,7 +1154,7 @@ class ProductService {
       ? actor.ownerSellerId || actor.userId
       : query.sellerId || null;
 
-    const cacheKey = `products:prefill:products:${JSON.stringify({ includeInactive, sellerId, productLimit })}`;
+    const cacheKey = `products:prefill:products:v2:${JSON.stringify({ includeInactive, sellerId, productLimit })}`;
     return remember(cacheKey, 300, async () => {
       const relatedProductFilter = {
         ...(sellerId ? { sellerId } : {}),
@@ -1127,7 +1164,7 @@ class ProductService {
           : { status: { $in: [PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.INACTIVE, PRODUCT_STATUS.DRAFT, PRODUCT_STATUS.PENDING_APPROVAL] } }),
       };
 
-      const relatedProducts = (await this.productRepository.paginate(relatedProductFilter, {
+      const relatedProducts = await this.decorateProductMasterReferences((await this.productRepository.paginate(relatedProductFilter, {
         page: 1,
         limit: productLimit,
         skip: 0,
@@ -1141,6 +1178,7 @@ class ProductService {
           status: 1,
           brand: 1,
           category: 1,
+          categoryId: 1,
           images: 1,
         },
         lean: true,
@@ -1154,8 +1192,9 @@ class ProductService {
         status: product.status,
         brand: product.brand || "",
         category: product.category || "",
+        categoryId: product.categoryId || "",
         image: product.images?.[0] || null,
-      }));
+      })));
 
       return {
         relatedProducts,

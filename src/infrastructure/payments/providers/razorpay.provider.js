@@ -9,7 +9,25 @@ const { env } = require("../../../config/env");
 class RazorpayProvider {
   normalizeProviderError(error, operation) {
     if (error?.statusCode && error?.error) {
-      return new AppError(error.error.description || `Razorpay ${operation} failed`, error.statusCode >= 500 ? 503 : 400);
+      const providerMessage = String(
+        error.error.description || error.error.reason || error.error.code || "",
+      ).trim();
+      const message =
+        !providerMessage || providerMessage.toLowerCase() === "invalid request sent"
+          ? `Razorpay rejected the ${operation}. Verify the captured payment ID and remaining refundable amount, or complete this refund manually.`
+          : `Razorpay ${operation} failed: ${providerMessage}`;
+      return new AppError(
+        message,
+        error.statusCode >= 500 ? 503 : 400,
+        {
+          provider: "razorpay",
+          operation,
+          providerCode: error.error.code || null,
+          providerField: error.error.field || null,
+          providerReason: providerMessage || null,
+        },
+        "RAZORPAY_REQUEST_REJECTED",
+      );
     }
     return new AppError(
       `Razorpay ${operation} could not be confirmed. Please check the transaction status before retrying.`,

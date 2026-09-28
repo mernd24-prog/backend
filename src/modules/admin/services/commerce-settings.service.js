@@ -61,7 +61,7 @@ const DEFAULT_SETTINGS = {
         fullCancellation: true,
         itemCancellation: false,
         sellerCancellation: true,
-        rtoDeliveryFailed: false,
+        rtoDeliveryFailed: true,
         customerReturn: false,
         partialReturn: false,
       },

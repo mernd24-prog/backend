@@ -849,6 +849,22 @@ class AuthService {
       throw new AppError("Invalid credentials", 401);
     }
 
+    if (options.requireBuyer && user.role !== ROLES.BUYER) {
+      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
+        userId: user.id,
+        email: user.email,
+        provider: "password",
+        ...requestContext,
+        metadata: { reason: "non_buyer_customer_login", role: user.role },
+      });
+      throw new AppError(
+        "This account cannot sign in to the customer store. Please use the Admin or Seller portal.",
+        403,
+        { requiredRole: ROLES.BUYER },
+        "CUSTOMER_LOGIN_BUYER_ONLY",
+      );
+    }
+
     await this.assertAdminPanelLoginAllowed(user, requestContext);
 
     const influencerSession = options.requireInfluencer
@@ -1080,6 +1096,14 @@ class AuthService {
         await this.assignDefaultRbacRole(user);
         await this.referralService.rewardReferral(payload.referralCode, user);
       } else {
+        if (payload.role === ROLES.BUYER && user.role !== ROLES.BUYER) {
+          throw new AppError(
+            "This account cannot sign in to the customer store. Please use the Admin or Seller portal.",
+            403,
+            { requiredRole: ROLES.BUYER },
+            "CUSTOMER_LOGIN_BUYER_ONLY",
+          );
+        }
         user = await this.authRepository.linkSocialProvider(user.id, providerProfile);
       }
 
@@ -2256,7 +2280,7 @@ class AuthService {
     return { message: "Password changed successfully" };
   }
 
-  async refreshToken(refreshToken, requestContext = {}) {
+  async refreshToken(refreshToken, requestContext = {}, options = {}) {
     if (!refreshToken) {
       throw new AppError("Refresh token is required", 400);
     }
@@ -2276,6 +2300,15 @@ class AuthService {
           ? AUTH_ERROR_CODES.TOKEN_EXPIRED
           : AUTH_ERROR_CODES.TOKEN_INVALID,
         401,
+      );
+    }
+
+    if (options.requireBuyer && payload.role !== ROLES.BUYER) {
+      throw new AppError(
+        "This account cannot use the customer store. Please use the Admin or Seller portal.",
+        403,
+        { requiredRole: ROLES.BUYER },
+        "CUSTOMER_LOGIN_BUYER_ONLY",
       );
     }
 

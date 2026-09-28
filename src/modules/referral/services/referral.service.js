@@ -1264,8 +1264,39 @@ class ReferralService {
       page: Number(query.page || 1),
       limit: Number(query.limit || 50),
     });
+    const customerIds = result.items
+      .map((item) => item.customerId)
+      .filter(Boolean);
+    const customers = await this.referralRepository.listUsersByIds(customerIds);
+    const customersById = new Map(
+      customers.map((customer) => [
+        this.getRecordId(customer),
+        this.toPlainObject(customer),
+      ]),
+    );
+
     return {
-      items: result.items.map((item) => this.toPlainObject(item)),
+      items: result.items.map((item) => {
+        const order = this.toPlainObject(item);
+        const customer = customersById.get(String(order.customerId)) || {};
+        const profile = customer.profile || {};
+        const customerName = [profile.firstName, profile.lastName]
+          .map((value) => String(value || "").trim())
+          .filter(Boolean)
+          .join(" ");
+        const customerEmail = customer.email || "";
+
+        return {
+          ...order,
+          customerName: customerName || customerEmail || "",
+          customerEmail,
+          customer: {
+            id: String(order.customerId || ""),
+            name: customerName || "",
+            email: customerEmail,
+          },
+        };
+      }),
       total: result.total,
       page: Number(query.page || 1),
       limit: Number(query.limit || 50),

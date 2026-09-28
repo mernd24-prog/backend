@@ -336,8 +336,12 @@ class CancellationService {
         : fullCancellation
           ? "fullCancellation"
           : "itemCancellation";
-    const shippingRefundEnabled = componentPolicies.shipping?.[scenario] === true;
-    const platformFeeRefundEnabled = componentPolicies.platformFee?.[scenario] === true;
+    // A customer must not lose fulfilment-related charges when the seller or
+    // delivery flow is responsible. Enforce this even for installations that
+    // still have an older persisted policy with these flags disabled.
+    const merchantFaultScenario = scenario === "sellerCancellation" || scenario === "rtoDeliveryFailed";
+    const shippingRefundEnabled = merchantFaultScenario || componentPolicies.shipping?.[scenario] === true;
+    const platformFeeRefundEnabled = merchantFaultScenario || componentPolicies.platformFee?.[scenario] === true;
     const shippingRefundAmount = shippingRefundEnabled
       ? fullCancellation
         ? this.round(order.shipping_fee_amount || order.summary?.shippingFeeAmount || 0)
@@ -399,7 +403,7 @@ class CancellationService {
       status: rtoSettlement ? "approved" : "requested",
       metadata: {
         fullCancellation,
-        sellerSupplyCancellation: rtoSettlement,
+        sellerSupplyCancellation: scenario === "sellerCancellation" || rtoSettlement,
         reverseSellerShipping: rtoSettlement,
         rtoSettlement,
         shipmentId: payload.shipmentId || null,
@@ -979,10 +983,17 @@ class CancellationService {
     try {
       refundResult = await this.processProviderRefund(cancellation, order);
     } catch (error) {
+      const requiresManualReview =
+        error?.code === "RAZORPAY_REQUEST_REJECTED" ||
+        Number(error?.statusCode || error?.status) === 400;
       await this.cancellationRepository.update(cancellationId, {
-        status: "failed",
-        refundStatus: "failed",
+        status: requiresManualReview ? "manual_review" : "failed",
+        refundStatus: requiresManualReview ? "manual_review" : "failed",
         lastError: error.message,
+        metadata: {
+          refundProviderFailure: error.details || null,
+          manualRefundRequired: requiresManualReview,
+        },
       });
       throw error;
     }

@@ -42,6 +42,13 @@ class AuthController {
     res.json(okResponse(result));
   };
 
+  customerLogin = async (req, res) => {
+    const result = await this.authService.login(req.body, getRequestInfo(req), {
+      requireBuyer: true,
+    });
+    res.json(okResponse(result));
+  };
+
   influencerLogin = async (req, res) => {
     const result = await this.authService.loginInfluencer(req.body, getRequestInfo(req));
     res.json(okResponse(result));
@@ -74,6 +81,15 @@ class AuthController {
 
   refresh = async (req, res) => {
     const result = await this.authService.refreshToken(req.body.refreshToken, getRequestInfo(req));
+    res.json(okResponse(result));
+  };
+
+  customerRefresh = async (req, res) => {
+    const result = await this.authService.refreshToken(
+      req.body.refreshToken,
+      getRequestInfo(req),
+      { requireBuyer: true },
+    );
     res.json(okResponse(result));
   };
 
