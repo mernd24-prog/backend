@@ -38,6 +38,14 @@ class ReferralRepository {
     return date;
   }
 
+  filterValidObjectIds(ids = []) {
+    return Array.from(new Set(
+      (ids || [])
+        .map((value) => String(value ?? ""))
+        .filter((value) => value && /^[0-9a-fA-F]{24}$/.test(value)),
+    ));
+  }
+
   applyMongoDateRange(filter, field, { fromDate = null, toDate = null } = {}) {
     if (!fromDate && !toDate) return;
     filter[field] = {};
@@ -426,12 +434,21 @@ class ReferralRepository {
       status: { $in: ["pending", "locked"] },
     }).limit(500);
     if (!ledgers.length) return [];
+
+    const validReferralOrderIds = this.filterValidObjectIds(
+      ledgers.map((entry) => entry.referralOrderId),
+    );
+    if (!validReferralOrderIds.length) return [];
+
     const completedOrders = await ReferralOrderModel.find({
-      _id: { $in: ledgers.map((entry) => entry.referralOrderId) },
+      _id: { $in: validReferralOrderIds },
       status: "completed",
     }).select("_id");
     const completedIds = new Set(completedOrders.map((order) => String(order._id)));
-    return ledgers.filter((entry) => completedIds.has(String(entry.referralOrderId)));
+    return ledgers.filter((entry) => {
+      const referralOrderId = String(entry.referralOrderId || "");
+      return this.filterValidObjectIds([referralOrderId]).length > 0 && completedIds.has(referralOrderId);
+    });
   }
 
   async listMaturedCommissionLedgerEntries(now = new Date(), limit = 500) {
@@ -442,12 +459,20 @@ class ReferralRepository {
       .limit(Math.min(Math.max(Number(limit || 500), 1), 1000));
     if (!ledgers.length) return [];
 
+    const validReferralOrderIds = this.filterValidObjectIds(
+      ledgers.map((entry) => entry.referralOrderId),
+    );
+    if (!validReferralOrderIds.length) return [];
+
     const completedOrders = await ReferralOrderModel.find({
-      _id: { $in: ledgers.map((entry) => entry.referralOrderId) },
+      _id: { $in: validReferralOrderIds },
       status: "completed",
     }).select("_id");
     const completedIds = new Set(completedOrders.map((order) => String(order._id)));
-    return ledgers.filter((entry) => completedIds.has(String(entry.referralOrderId)));
+    return ledgers.filter((entry) => {
+      const referralOrderId = String(entry.referralOrderId || "");
+      return this.filterValidObjectIds([referralOrderId]).length > 0 && completedIds.has(referralOrderId);
+    });
   }
 
   async claimCommissionAsAvailable(entryId) {

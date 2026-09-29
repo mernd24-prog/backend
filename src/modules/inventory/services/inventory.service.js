@@ -633,6 +633,90 @@ class InventoryService {
     return this.getProductInventory(productId, { variantSku: payload.showAllHistory ? "" : sku }, actor);
   }
 
+  async bulkSetVariantInventory(updates = [], actor = {}) {
+    if (!Array.isArray(updates) || !updates.length) {
+      throw new AppError("No inventory updates were provided", 400);
+    }
+
+    // Validate the complete import before writing anything, so a bad row cannot
+    // leave the file half-applied.
+    const products = new Map();
+    const plans = [];
+    const seen = new Set();
+
+    for (const entry of updates) {
+      const productId = normalizeText(entry?.productId);
+      if (!products.has(productId)) {
+        const product = await this.productRepository.findById(productId);
+        if (!product) throw new AppError(`Product "${productId}" was not found`, 404);
+        this.assertInventoryProductAccess(product, actor);
+        products.set(productId, product);
+      }
+
+      const product = products.get(productId);
+      const requestedId = normalizeText(entry?.variantId);
+      const requestedSku = normalizeText(entry?.variantSku);
+      const variant = (product.variants || []).find((candidate) => {
+        const candidateId = normalizeText(candidate?._id || candidate?.id);
+        return (requestedId && candidateId === requestedId) ||
+          (requestedSku && normalizeText(candidate?.sku) === requestedSku);
+      });
+
+      if (!variant) {
+        throw new AppError(
+          `Variant "${requestedSku || requestedId}" was not found for product "${productId}"`,
+          404,
+        );
+      }
+      if (requestedId && normalizeText(variant?._id || variant?.id) !== requestedId) {
+        throw new AppError(`Variant identity does not match SKU "${requestedSku}"`, 400);
+      }
+      if (requestedSku && normalizeText(variant?.sku) !== requestedSku) {
+        throw new AppError(`Variant SKU does not match identity "${requestedId}"`, 400);
+      }
+
+      const key = `${productId}::${normalizeText(variant.sku)}`;
+      if (seen.has(key)) throw new AppError(`Duplicate inventory row for SKU "${variant.sku}"`, 400);
+      seen.add(key);
+
+      const stock = Number(entry.stock);
+      const reservedStock = Number(variant.reservedStock || 0);
+      if (!Number.isInteger(stock) || stock < 0) {
+        throw new AppError(`Stock for SKU "${variant.sku}" must be a non-negative whole number`, 400);
+      }
+      if (stock < reservedStock) {
+        throw new AppError(
+          `Stock for SKU "${variant.sku}" cannot be below its reserved stock (${reservedStock})`,
+          400,
+        );
+      }
+      plans.push({ productId, variant, stock, entry });
+    }
+
+    let updated = 0;
+    let unchanged = 0;
+    for (const plan of plans) {
+      if (Number(plan.variant.stock || 0) === plan.stock) {
+        unchanged += 1;
+        continue;
+      }
+      await this.adjustProductInventory(
+        plan.productId,
+        {
+          variantSku: plan.variant.sku,
+          adjustmentType: "set",
+          quantity: plan.stock,
+          reason: plan.entry.reason || "Inventory spreadsheet import",
+          note: plan.entry.note || "Stock-only bulk update",
+        },
+        actor,
+      );
+      updated += 1;
+    }
+
+    return { requested: plans.length, updated, unchanged };
+  }
+
   resolveManualAdjustment(product, payload = {}) {
     const requestedVariantSku = payload.variantSku || "";
     const defaultVariant = Array.isArray(product.variants) && product.variants.length

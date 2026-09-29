@@ -244,6 +244,24 @@ const env = {
     origin: parseOriginList(process.env.CORS_ORIGIN || process.env.CORS_ORIGINS),
   },
   mongoUri: process.env.MONGO_URI || "mongodb://localhost:27017/ecommerce",
+  mongo: {
+    minPoolSize: Number.isFinite(Number(process.env.MONGO_MIN_POOL_SIZE)) && Number(process.env.MONGO_MIN_POOL_SIZE) >= 0
+      ? Math.floor(Number(process.env.MONGO_MIN_POOL_SIZE))
+      : 0,
+    maxPoolSize: parsePositiveInteger(process.env.MONGO_MAX_POOL_SIZE, 20),
+    serverSelectionTimeoutMS: parsePositiveInteger(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS, 10000),
+    socketTimeoutMS: parsePositiveInteger(process.env.MONGO_SOCKET_TIMEOUT_MS, 45000),
+    connectTimeoutMS: parsePositiveInteger(process.env.MONGO_CONNECT_TIMEOUT_MS, 10000),
+    maxIdleTimeMS: parsePositiveInteger(process.env.MONGO_MAX_IDLE_TIME_MS, 60000),
+  },
+  runtime: {
+    role: cleanEnvValue(process.env.PROCESS_ROLE || "all").toLowerCase(),
+    enableWorkers: readBooleanFlag(["ENABLE_WORKERS"], true),
+    enableCron: readBooleanFlag(["ENABLE_CRON"], true),
+    enableRealtimeSubscribers: readBooleanFlag(["ENABLE_REALTIME_SUBSCRIBERS"], true),
+    enableDomainHandlers: readBooleanFlag(["ENABLE_DOMAIN_HANDLERS"], true),
+    exposeOperationalDetails: readBooleanFlag(["EXPOSE_OPERATIONAL_DETAILS"], false),
+  },
   postgresUrl:
     process.env.POSTGRES_URL || "postgresql://postgres:postgres@localhost:5432/ecommerce",
   postgres: {

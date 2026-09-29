@@ -68,6 +68,54 @@ const SELLER_BLOCKED_COMPLIANCE_FIELDS = [
   "sellerTier",
 ];
 
+const buildRevisionPendingConditions = ({
+  pendingRevisionProductIds = [],
+  latestPendingRevisionProductIds = [],
+} = {}) => {
+  const pendingIds = [
+    ...new Set(
+      [...pendingRevisionProductIds, ...latestPendingRevisionProductIds]
+        .filter(Boolean)
+        .map(String),
+    ),
+  ];
+
+  return [
+    { revisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING },
+    { pendingRevisionId: { $exists: true, $nin: [null, ""] } },
+    ...(pendingIds.length ? [{ _id: { $in: pendingIds } }] : []),
+  ];
+};
+
+const normalizeRevisionWorkflowStatus = (value = "") => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!normalized || normalized === "all") return "";
+  const withoutPrefix = normalized.startsWith("workflow:")
+    ? normalized.replace(/^workflow:/, "")
+    : normalized;
+  return Object.values(PRODUCT_REVISION_WORKFLOW_STATUS).includes(withoutPrefix)
+    ? withoutPrefix
+    : "";
+};
+
+const buildRevisionStatusFilter = ({
+  revisionStatus,
+  pendingRevisionProductIds = [],
+  latestPendingRevisionProductIds = [],
+} = {}) => {
+  const normalizedStatus = normalizeRevisionWorkflowStatus(revisionStatus);
+  if (!normalizedStatus) return {};
+
+  const pendingConditions = buildRevisionPendingConditions({
+    pendingRevisionProductIds,
+    latestPendingRevisionProductIds,
+  });
+
+  return normalizedStatus === PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING
+    ? { $or: pendingConditions }
+    : { $nor: pendingConditions };
+};
+
 const PRODUCT_LIST_PROJECTION = {
   sellerId: 1,
   organizationId: 1,
@@ -2227,6 +2275,7 @@ class ProductService {
   async listProducts(query, { publicOnly = true, actor = null } = {}) {
     const pagination = { ...getPage(query), sortBy: query.sortBy || query.sort, sortDir: query.sortDir };
     const filter = {};
+    let revisionFilterPendingIds = [];
 
     const category = query.category_id || query.categoryId || query.categorySlug || query.category;
     if (category) {
@@ -2334,7 +2383,41 @@ class ProductService {
       filter.approvalStatus = query.approvalStatus;
     }
     if (query.revisionStatus) {
-      filter.revisionStatus = query.revisionStatus;
+      const normalizedRevisionStatus = normalizeRevisionWorkflowStatus(query.revisionStatus);
+      if (!normalizedRevisionStatus) {
+        delete filter.$and;
+      } else {
+        const pendingRevisionProductIds =
+          await this.productRepository.findPendingRevisionProductIds();
+        const latestPendingRevisionProductIds =
+          await this.productRepository.findLatestRevisionProductIdsByStatus(
+            PRODUCT_REVISION_STATUS.PENDING,
+          );
+        revisionFilterPendingIds = [
+          ...new Set(
+            [...pendingRevisionProductIds, ...latestPendingRevisionProductIds].map(String),
+          ),
+        ];
+        const revisionFilter = buildRevisionStatusFilter({
+          revisionStatus: normalizedRevisionStatus,
+          pendingRevisionProductIds,
+          latestPendingRevisionProductIds,
+        });
+
+        if (Object.keys(revisionFilter).length) {
+          filter.$and = [
+            ...(filter.$and || []),
+            revisionFilter,
+          ];
+        }
+      }
+    }
+    if (query.revisionReviewStatus) {
+      const productIds =
+        await this.productRepository.findLatestRevisionProductIdsByStatus(
+          query.revisionReviewStatus,
+        );
+      filter._id = { $in: productIds };
     }
 
     this.applyAttributeFilters(filter, query);
@@ -2383,13 +2466,40 @@ class ProductService {
       }
 
       const projection = buildProductListProjection(query);
-      const cacheKey = `products:management:${JSON.stringify({ filter, pagination, projection })}`;
-      return remember(cacheKey, 30, () =>
+      const cacheKey = `products:management:v3:${JSON.stringify({ filter, pagination, projection })}`;
+      const result = await remember(cacheKey, 30, () =>
         this.productRepository.paginate(filter, pagination, {
           projection,
           lean: true,
         }),
       );
+      const normalizedRevisionStatus = normalizeRevisionWorkflowStatus(query.revisionStatus);
+      if (normalizedRevisionStatus === PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING) {
+        const pendingIds = new Set(revisionFilterPendingIds);
+        result.items = (result.items || []).map((product) =>
+          pendingIds.has(String(product?._id || product?.id))
+            ? { ...product, revisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING }
+            : product,
+        );
+      }
+      const latestRevisions = await this.productRepository.findLatestRevisionsByProductIds(
+        (result.items || []).map((product) => product?._id || product?.id),
+      );
+      const latestByProduct = new Map(
+        latestRevisions.map((revision) => [String(revision.productId), revision]),
+      );
+      result.items = (result.items || []).map((product) => {
+        const latestRevision = latestByProduct.get(String(product?._id || product?.id));
+        return latestRevision
+          ? {
+              ...product,
+              latestRevisionStatus: latestRevision.status,
+              latestRevisionId: latestRevision.revisionId,
+              latestRevisionAt: latestRevision.createdAt,
+            }
+          : product;
+      });
+      return result;
     }
 
     const publicFilter = applyPublicProductFilter(filter);
@@ -2428,8 +2538,9 @@ class ProductService {
 
   async listSellerProducts(query, actor) {
     const pagination = { ...getPage(query), sortBy: query.sortBy || query.sort, sortDir: query.sortDir };
-    const sellerId = actor.ownerSellerId || actor.userId;
+    const sellerId = actor?.ownerSellerId || actor?.userId || null;
     const filter = {};
+    let revisionFilterPendingIds = [];
     if (isScopedSellerRole(actor)) filter.createdBy = actor.userId;
     if (query.includeAllStatuses === true || query.includeAllStatuses === "true") {
       if (query.status) filter.status = query.status;
@@ -2446,6 +2557,43 @@ class ProductService {
       filter.status = { $in: Object.values(PRODUCT_STATUS) };
     }
     if (query.approvalStatus) filter.approvalStatus = query.approvalStatus;
+    if (query.revisionStatus) {
+      const normalizedRevisionStatus = normalizeRevisionWorkflowStatus(query.revisionStatus);
+      if (!normalizedRevisionStatus) {
+        delete filter.$and;
+      } else {
+        const pendingRevisionProductIds =
+          await this.productRepository.findPendingRevisionProductIds();
+        const latestPendingRevisionProductIds =
+          await this.productRepository.findLatestRevisionProductIdsByStatus(
+            PRODUCT_REVISION_STATUS.PENDING,
+          );
+        revisionFilterPendingIds = [
+          ...new Set(
+            [...pendingRevisionProductIds, ...latestPendingRevisionProductIds].map(String),
+          ),
+        ];
+        const revisionFilter = buildRevisionStatusFilter({
+          revisionStatus: normalizedRevisionStatus,
+          pendingRevisionProductIds,
+          latestPendingRevisionProductIds,
+        });
+
+        if (Object.keys(revisionFilter).length) {
+          filter.$and = [
+            ...(filter.$and || []),
+            revisionFilter,
+          ];
+        }
+      }
+    }
+    if (query.revisionReviewStatus) {
+      const productIds =
+        await this.productRepository.findLatestRevisionProductIdsByStatus(
+          query.revisionReviewStatus,
+        );
+      filter._id = { $in: productIds };
+    }
     if (query.category) {
       const categoryKeys = await this.platformRepository.getCategoryDescendantKeys(query.category);
       filter.category = categoryKeys.length ? { $in: categoryKeys } : query.category;
@@ -2466,10 +2614,37 @@ class ProductService {
     this.applyStockFilters(filter, query);
     this.applyAttributeFilters(filter, query);
     this.applySearchFilter(filter, query);
-    return this.productRepository.paginateBySeller(sellerId, filter, pagination, {
+    const result = await this.productRepository.paginateBySeller(sellerId, filter, pagination, {
       projection: buildProductListProjection(query),
       lean: true,
     });
+    const normalizedRevisionStatus = normalizeRevisionWorkflowStatus(query.revisionStatus);
+    if (normalizedRevisionStatus === PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING) {
+      const pendingIds = new Set(revisionFilterPendingIds);
+      result.items = (result.items || []).map((product) =>
+        pendingIds.has(String(product?._id || product?.id))
+          ? { ...product, revisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING }
+          : product,
+      );
+    }
+    const latestRevisions = await this.productRepository.findLatestRevisionsByProductIds(
+      (result.items || []).map((product) => product?._id || product?.id),
+    );
+    const latestByProduct = new Map(
+      latestRevisions.map((revision) => [String(revision.productId), revision]),
+    );
+    result.items = (result.items || []).map((product) => {
+      const latestRevision = latestByProduct.get(String(product?._id || product?.id));
+      return latestRevision
+        ? {
+            ...product,
+            latestRevisionStatus: latestRevision.status,
+            latestRevisionId: latestRevision.revisionId,
+            latestRevisionAt: latestRevision.createdAt,
+          }
+        : product;
+    });
+    return result;
   }
 
   applySearchFilter(filter, query = {}) {
@@ -2728,6 +2903,8 @@ class ProductService {
       "minRating",
       "min_rating",
       "approvalStatus",
+      "revisionStatus",
+      "revisionReviewStatus",
     ]);
 
     Object.entries(query).forEach(([key, value]) => {
@@ -4705,4 +4882,9 @@ function parseFilterValue(value) {
   return parts[0] || value;
 }
 
-module.exports = { ProductService };
+module.exports = {
+  ProductService,
+  buildRevisionPendingConditions,
+  buildRevisionStatusFilter,
+  normalizeRevisionWorkflowStatus,
+};

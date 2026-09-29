@@ -23,10 +23,17 @@ const { createMetricsMiddleware } = require("../infrastructure/observability/met
 const { RedisRateLimitStore } = require("../shared/middleware/redis-rate-limit-store");
 
 function registerBackgroundServices() {
-  registerWorkers();
-  registerCronJobs();
-  registerRealtimeSubscribers();
-  registerDomainHandlers();
+  const role = env.runtime.role;
+  const roleAllows = (target) => role === "all" || role === target;
+  if (env.runtime.enableWorkers && roleAllows("worker")) registerWorkers();
+  if (env.runtime.enableCron && roleAllows("scheduler")) registerCronJobs();
+  if (env.runtime.enableRealtimeSubscribers && (roleAllows("api") || roleAllows("realtime"))) {
+    registerRealtimeSubscribers();
+  }
+  if (env.runtime.enableDomainHandlers && (roleAllows("api") || roleAllows("worker"))) {
+    registerDomainHandlers();
+  }
+  logger.info({ role, runtime: env.runtime }, "Runtime process capabilities registered");
 }
 
 function requestLoggerOptions() {
@@ -175,11 +182,30 @@ async function createApp({ startBackgroundServices = true } = {}) {
       names[index], result.status === "fulfilled" ? "ok" : "unavailable",
     ]));
     const ready = checks.every((result) => result.status === "fulfilled");
+    const memoryUsage = process.memoryUsage();
     res.status(ready ? 200 : 503).json({
       success: ready,
       service: env.appName,
       status: ready ? "ready" : "not_ready",
+      role: env.runtime.role,
       dependencies,
+      ...(env.runtime.exposeOperationalDetails
+        ? {
+            capacity: {
+              postgres: {
+                total: postgresPool.totalCount,
+                idle: postgresPool.idleCount,
+                waiting: postgresPool.waitingCount,
+                max: env.postgres.poolMax,
+              },
+              process: {
+                uptimeSeconds: Math.floor(process.uptime()),
+                rssBytes: memoryUsage.rss,
+                heapUsedBytes: memoryUsage.heapUsed,
+              },
+            },
+          }
+        : {}),
     });
   });
 

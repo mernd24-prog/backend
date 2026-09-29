@@ -121,7 +121,7 @@ const bulkSetVariantInventorySchema = Joi.object({
         reason: Joi.string().trim().max(500).allow("", null),
         note: Joi.string().trim().max(1000).allow("", null),
       }).or("variantId", "variantSku").required(),
-    ).min(1).max(500).required(),
+    ).min(1).max(5000).required(),
   }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),

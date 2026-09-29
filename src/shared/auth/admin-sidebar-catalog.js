@@ -468,7 +468,7 @@ const SIDEBAR_MODULES = [
     parentModule: "referral-commerce",
     requiredModule: "referral",
   },
-   
+
   {
     moduleName: "Rules & Coins",
     moduleKey: "referral-rules",
@@ -502,17 +502,7 @@ const SIDEBAR_MODULES = [
     parentModule: "referral-commerce",
     requiredModule: "referral-orders",
   },
-  {
-    moduleName: "Wallet Ledger",
-    moduleKey: "referral-ledger",
-    moduleSlug: "referral-ledger",
-    icon: "MdAccountBalanceWallet",
-    routePath: "/app/referral-commerce/commissions",
-    moduleType: "page",
-    order: 139,
-    parentModule: "referral-commerce",
-    requiredModule: "referral-ledger",
-  },
+
   {
     moduleName: "Payout Requests",
     moduleKey: "referral-payouts",
@@ -524,7 +514,7 @@ const SIDEBAR_MODULES = [
     parentModule: "referral-commerce",
     requiredModule: "referral-payouts",
   },
- 
+
   {
     moduleName: "Fraud Review",
     moduleKey: "referral-fraud",
@@ -635,10 +625,10 @@ const SIDEBAR_MODULES = [
 
   // Users & Access additions
   // { moduleName: "Seller Sub-Admins", moduleKey: "seller-sub-admins", moduleSlug: "seller-sub-admins", icon: "MdSupervisorAccount", routePath: "/app/seller-sub-admins", moduleType: "page", order: 214, parentModule: "users-access", requiredModule: "sellers" },
- 
+
   // Festival Management
 
-  
+
   // Reports & Analytics additions
   {
     moduleName: "Analytics Dashboard",
@@ -1056,7 +1046,7 @@ const ROUTE_METADATA_BY_KEY = {
   users: {
     supportedRoutes: [
       "/app/users/view/:id",
- 
+
       "/app/transactions",
       "/app/transactions/view/:id",
     ],

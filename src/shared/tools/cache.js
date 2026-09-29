@@ -1,6 +1,7 @@
 const { redis } = require("../../infrastructure/redis/redis-client");
 
 const memoryCache = new Map();
+const inFlightFetches = new Map();
 const REDIS_CACHE_TIMEOUT_MS = 75;
 
 function withTimeout(promise, ms = REDIS_CACHE_TIMEOUT_MS) {
@@ -53,14 +54,26 @@ async function remember(key, ttlSeconds, fetcher) {
     }
   }
 
-  const value = await fetcher();
-  setMemoryCache(key, value, ttlSeconds);
+  if (inFlightFetches.has(key)) return inFlightFetches.get(key);
+
+  const pending = (async () => {
+    const value = await fetcher();
+    setMemoryCache(key, value, ttlSeconds);
+    try {
+      const jitteredTtl = Math.max(1, ttlSeconds + Math.floor(Math.random() * Math.max(2, ttlSeconds * 0.1)));
+      await withTimeout(redis.set(key, JSON.stringify(value), "EX", jitteredTtl));
+    } catch (err) {
+      // Cache should never make the backing flow unavailable.
+    }
+    return value;
+  })();
+
+  inFlightFetches.set(key, pending);
   try {
-    await withTimeout(redis.set(key, JSON.stringify(value), "EX", ttlSeconds));
-  } catch (err) {
-    // Cache should never make the backing product flow unavailable.
+    return await pending;
+  } finally {
+    if (inFlightFetches.get(key) === pending) inFlightFetches.delete(key);
   }
-  return value;
 }
 
 function patternFromInput(input) {

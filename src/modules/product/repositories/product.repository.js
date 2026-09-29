@@ -120,7 +120,11 @@ class ProductRepository {
   }
 
   async paginateBySeller(sellerId, filter, pagination, options = {}) {
-    return this.paginate({ ...filter, sellerId }, pagination, options);
+    const baseFilter = { ...filter };
+    if (sellerId) {
+      baseFilter.sellerId = sellerId;
+    }
+    return this.paginate(baseFilter, pagination, options);
   }
 
   async aggregatePublicCatalog(filter = {}, pagination = {}, projection = null) {
@@ -496,6 +500,44 @@ class ProductRepository {
       productId: String(productId),
       status: "pending",
     }).sort({ createdAt: -1 });
+  }
+
+  async findPendingRevisionProductIds() {
+    return ProductRevisionModel.distinct("productId", { status: "pending" });
+  }
+
+  async findLatestRevisionProductIdsByStatus(status) {
+    const rows = await ProductRevisionModel.aggregate([
+      { $sort: { productId: 1, createdAt: -1 } },
+      {
+        $group: {
+          _id: "$productId",
+          latestStatus: { $first: "$status" },
+        },
+      },
+      { $match: { latestStatus: status } },
+      { $project: { _id: 1 } },
+    ]);
+    return rows.map((row) => String(row._id));
+  }
+
+  async findLatestRevisionsByProductIds(productIds = []) {
+    const ids = [...new Set(productIds.filter(Boolean).map(String))];
+    if (!ids.length) return [];
+    return ProductRevisionModel.aggregate([
+      { $match: { productId: { $in: ids } } },
+      { $sort: { productId: 1, createdAt: -1 } },
+      { $group: { _id: "$productId", revision: { $first: "$$ROOT" } } },
+      {
+        $project: {
+          _id: 0,
+          productId: "$_id",
+          status: "$revision.status",
+          revisionId: { $toString: "$revision._id" },
+          createdAt: "$revision.createdAt",
+        },
+      },
+    ]);
   }
 
   async listRevisions(productId, { page = 1, limit = 20, status = null } = {}) {

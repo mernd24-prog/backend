@@ -15,6 +15,7 @@ const {
   listVariantInventorySchema,
   productInventorySchema,
   adjustVariantInventorySchema,
+  bulkSetVariantInventorySchema,
 } = require("../validation/warehouse.validation");
 
 const adminInventoryRoutes = express.Router();
@@ -37,6 +38,12 @@ adminInventoryRoutes.patch(
   allowPermissions("inventory:adjust"),
   checkInput(adjustVariantInventorySchema),
   catchErrors(warehouseController.adjustVariantInventory),
+);
+adminInventoryRoutes.post(
+  "/variants/bulk-set",
+  allowPermissions("inventory:adjust"),
+  checkInput(bulkSetVariantInventorySchema),
+  catchErrors(warehouseController.bulkSetVariantInventory),
 );
 adminInventoryRoutes.patch(
   "/products/:productId/variants/adjust",
