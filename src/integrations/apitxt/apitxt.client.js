@@ -2,6 +2,9 @@ const { ApitxtError } = require("./apitxt.errors");
 
 const SENSITIVE_QUERY_KEYS = new Set([
   "authkey",
+  "apikey",
+  "api_key",
+  "password",
   "otp",
   "mobile",
   "phone",
@@ -28,7 +31,7 @@ const maskValue = (key, value) => {
   if (["phone", "from", "to", "wa_id", "customer_phone"].includes(normalizedKey)) return maskMobile(value);
   if (["message", "text", "body"].includes(normalizedKey)) return "[REDACTED_MESSAGE]";
   if (normalizedKey === "otp") return "******";
-  if (normalizedKey === "authkey") return "***redacted***";
+  if (["authkey", "apikey", "api_key", "password"].includes(normalizedKey)) return "***redacted***";
   if (normalizedKey.includes("aadhaar")) return "************";
   if (normalizedKey.includes("pan")) return "*****redacted*****";
   if (["name", "fullname", "full_name"].includes(normalizedKey)) return "*****redacted*****";

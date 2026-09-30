@@ -293,6 +293,14 @@ const sendOtpSchema = Joi.object({
       .email()
       .required(),
 
+    mobile: Joi.string()
+      .trim()
+      .pattern(/^\+?\d{10,15}$/)
+      .messages({
+        "string.pattern.base":
+          "Mobile number must contain 10 to 15 digits and may start with +",
+      }),
+
     purpose: Joi.string()
       .valid(
         "registration",

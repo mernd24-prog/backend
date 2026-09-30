@@ -51,6 +51,57 @@ function getLocalIp() {
   return "localhost";
 }
 
+function sanitizeServiceUrl(value, fallback = "Not configured") {
+  if (!value) return fallback;
+  try {
+    const url = new URL(String(value));
+    if (url.username) url.username = "***";
+    if (url.password) url.password = "***";
+    for (const key of [...url.searchParams.keys()]) {
+      if (/key|token|secret|password|auth/i.test(key)) {
+        url.searchParams.set(key, "***");
+      }
+    }
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return String(value);
+  }
+}
+
+function logStartupUrls(localIp) {
+  const localBase = `http://localhost:${env.port}`;
+  const networkBase = `http://${localIp}:${env.port}`;
+  const localApi = `${localBase}${env.apiPrefix}`;
+  const networkApi = `${networkBase}${env.apiPrefix}`;
+  const origins = env.cors.origin === "*"
+    ? "*"
+    : env.cors.origin.join(", ") || "Not configured";
+
+  console.log("\n========================================");
+  console.log("APPLICATION URLS");
+  console.log("========================================");
+  console.log("Local server    :", localBase);
+  console.log("Network server  :", networkBase);
+  console.log("Local API       :", localApi);
+  console.log("Network API     :", networkApi);
+  console.log("Health          :", `${localBase}/health`);
+  console.log("Liveness        :", `${localBase}/live`);
+  console.log("Readiness       :", `${localBase}/ready`);
+  if (!env.production) console.log("Uploads         :", `${localBase}/uploads`);
+  console.log("Public API      :", env.publicBaseUrl || "Not configured");
+  console.log("Allowed apps    :", origins);
+  console.log("Influencer app  :", env.influencerPortalUrl || "Not configured");
+  console.log("MongoDB         :", sanitizeServiceUrl(env.mongoUri));
+  console.log("PostgreSQL      :", sanitizeServiceUrl(env.postgresUrl));
+  console.log("Redis           :", sanitizeServiceUrl(env.redisUrl));
+  console.log("Elasticsearch   :", sanitizeServiceUrl(env.elasticsearchUrl));
+  console.log("APITXT base     :", sanitizeServiceUrl(env.apitxt.baseUrl));
+  console.log("APITXT PAN      :", sanitizeServiceUrl(env.apitxt.panVerifyUrl));
+  console.log("APITXT SMS OTP  :", sanitizeServiceUrl(env.apitxt.smsOtpUrl));
+  console.log("APITXT WA OTP   :", sanitizeServiceUrl(env.apitxt.whatsappOtpUrl));
+  console.log("========================================\n");
+}
+
 async function bootstrap() {
   // Fail before opening database connections, workers, or cron jobs when a
   // nodemon/cluster instance is already serving the configured port.
@@ -77,6 +128,8 @@ async function bootstrap() {
     httpServer.once("listening", onListening);
     httpServer.listen(env.port);
   });
+
+  logStartupUrls(localIp);
 
   logger.info(
     {

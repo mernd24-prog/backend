@@ -3,6 +3,7 @@ const {
 } = require("../../shared/errors/app-error");
 const { env } = require("../../config/env");
 const { apitxtService } = require("../../integrations/apitxt");
+const { smsService, SMS_TEMPLATE_KEYS } = require("./sms");
 const { logger } = require("../../shared/logger/logger");
 
 const DAILY_TTL_SECONDS = 24 * 60 * 60;
@@ -17,7 +18,16 @@ const maskMobile = (mobile = "") => {
 };
 
 const makeDailyLimitKey = (mobile, purpose) =>
-  `apitxt:sms-otp:daily:${purpose}:${mobile}`;
+  `apitxt:sms-otp:daily:v2:${purpose}:${mobile}`;
+
+const rollbackProviderQuota = async (redis, key) => {
+  try {
+    const next = await redis.decr(key);
+    if (next <= 0) await redis.del(key);
+  } catch {
+    // Best effort only; never hide the original provider error.
+  }
+};
 
 const makeWhatsappDailyLimitKey = (mobile, purpose) =>
   `apitxt:whatsapp-otp:daily:${purpose}:${mobile}`;
@@ -26,6 +36,8 @@ const sendSmsOtp = async ({
   mobile,
   otp,
   purpose = "buyer_auth",
+  template,
+  validityMinutes = 5,
 }) => {
   const mobileNumber =
     normalizeMobile(mobile);
@@ -44,7 +56,14 @@ const sendSmsOtp = async ({
     "SMS OTP delivery requested",
   );
 
-  if (!env.apitxt.smsOtpEnabled) {
+  if (!env.sms.enabled) {
+    if (env.auth.otpMode === "live") {
+      throw new AppError(
+        "APITXT SMS OTP is disabled. Enable APITXT_SMS_OTP_ENABLED or change the OTP channel.",
+        503,
+      );
+    }
+
     logger.info(
       {
         provider: "static",
@@ -70,20 +89,20 @@ const sendSmsOtp = async ({
     };
   }
 
-  if (!env.apitxt.enabled || !env.apitxt.authKey) {
+  if (!env.sms.apiKey) {
     logger.warn(
       {
         provider: "apitxt",
         purpose,
         mobile: maskMobile(mobileNumber),
-        apitxtEnabled: env.apitxt.enabled,
-        hasAuthKey: Boolean(env.apitxt.authKey),
+        smsEnabled: env.sms.enabled,
+        hasAuthKey: Boolean(env.sms.apiKey),
       },
-      "APITXT SMS OTP provider is not configured",
+      "APITXT SMS OTP provider is not configured. Set a valid APITXT auth key.",
     );
 
     throw new AppError(
-      "APITXT SMS OTP provider is not configured",
+      "APITXT SMS OTP requires a valid auth key",
       503,
     );
   }
@@ -95,6 +114,7 @@ const sendSmsOtp = async ({
     await redis.expire(limitKey, DAILY_TTL_SECONDS);
   }
   if (nextCount > env.apitxt.smsOtpDailyLimit) {
+    await rollbackProviderQuota(redis, limitKey);
     logger.warn(
       {
         provider: "apitxt",
@@ -126,17 +146,23 @@ const sendSmsOtp = async ({
       "Sending SMS OTP through APITXT",
     );
 
-    responseData = await apitxtService.sendSmsOtp({
-      url: env.apitxt.smsOtpUrl,
+    const purposeTemplates = {
+      buyer_auth: SMS_TEMPLATE_KEYS.LOGIN_OTP,
+      login: SMS_TEMPLATE_KEYS.LOGIN_OTP,
+      registration: SMS_TEMPLATE_KEYS.REGISTER_OTP,
+      forgot_password: SMS_TEMPLATE_KEYS.FORGOT_PASSWORD_OTP,
+      reset_password: SMS_TEMPLATE_KEYS.RESET_PASSWORD_OTP,
+      verify_mobile: SMS_TEMPLATE_KEYS.VERIFY_MOBILE_OTP,
+      change_mobile: SMS_TEMPLATE_KEYS.CHANGE_MOBILE_OTP,
+      account_recovery: SMS_TEMPLATE_KEYS.ACCOUNT_RECOVERY_OTP,
+    };
+    responseData = await smsService.sendTemplate({
+      template: template || purposeTemplates[purpose] || SMS_TEMPLATE_KEYS.ACCOUNT_RECOVERY_OTP,
       mobile: mobileNumber,
-      otp: String(otp),
-      channel: env.apitxt.smsOtpChannel,
-      templateId: env.apitxt.smsOtpTemplateId,
-      country: env.apitxt.smsOtpCountry,
-      templateName: env.apitxt.smsOtpTemplateName,
-      projectRefId: env.apitxt.smsOtpProjectRefId,
+      variables: { otp: String(otp), validityMinutes },
     });
   } catch (error) {
+    await rollbackProviderQuota(redis, limitKey);
     logger.error(
       {
         err: error,

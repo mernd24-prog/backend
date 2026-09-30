@@ -141,8 +141,8 @@ function applyCatalogSubmissionVisibility(filter = {}, actor = {}) {
   if (context.isAdmin) return filter;
   // Seller-owned pending submissions remain available through the dedicated
   // submission endpoints, but generic catalog consumers only receive records
-  // that have explicitly completed approval.
-  const visibility = { approvalStatus: "approved" };
+  // that have explicitly completed approval and are active.
+  const visibility = { active: true, approvalStatus: "approved" };
   return Object.keys(filter).length ? { $and: [filter, visibility] } : visibility;
 }
 
@@ -1612,6 +1612,7 @@ class PlatformService {
   }
 
   async listBrands(query, actor = {}) {
+    const actorContext = catalogActorContext(actor);
     const page = Math.max(Number(query.page || 1), 1);
     const limit = Math.min(Math.max(Number(query.limit || 20), 1), 5000);
     const pagination = {
@@ -1635,7 +1636,14 @@ class PlatformService {
         filter.approvalStatus = query.approvalStatus;
       }
     }
-    return this.platformRepository.listBrands(applyCatalogSubmissionVisibility(filter, actor), pagination);
+    return this.platformRepository.listBrands(
+      applyCatalogSubmissionVisibility(filter, actor),
+      pagination,
+      {
+        hasProducts: query.hasProducts === true || query.hasProducts === "true",
+        publicProductsOnly: !actorContext.isAdmin && !actorContext.isSeller,
+      },
+    );
   }
 
   async submitBrand(payload, actor = {}, req) {

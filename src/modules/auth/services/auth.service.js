@@ -34,6 +34,7 @@ const {
   sendSmsOtp,
   sendWhatsappOtp,
 } = require("../../../infrastructure/msg/msg-otp");
+const { SMS_TEMPLATE_KEYS } = require("../../../infrastructure/msg/sms");
 const {
   SELLER_ONBOARDING_STATUS,
   makeSellerOnboardingState,
@@ -219,6 +220,7 @@ class AuthService {
       await redis.expire(key, OTP_DAILY_TTL_SECONDS);
     }
     if (count > OTP_DAILY_LIMIT) {
+      await this.rollbackDailyOtpQuota(key);
       throw new AppError(
         `OTP daily limit reached. You can request only ${OTP_DAILY_LIMIT} OTPs per day.`,
         429,
@@ -1414,9 +1416,7 @@ class AuthService {
       BUYER_OTP_PURPOSE,
     );
 
-    const isStaticOtp =
-      env.auth.otpMode === "static" ||
-      (identity.channel === "mobile" && !env.apitxt.smsOtpEnabled);
+    const isStaticOtp = env.auth.otpMode === "static";
 
     const otp = String(
       isStaticOtp
@@ -1518,6 +1518,10 @@ class AuthService {
           mobile: identity.mobile,
           otp,
           purpose: BUYER_OTP_PURPOSE,
+          template: existingUser
+            ? SMS_TEMPLATE_KEYS.LOGIN_OTP
+            : SMS_TEMPLATE_KEYS.REGISTER_OTP,
+          validityMinutes: Math.ceil(BUYER_OTP_TTL_SECONDS / 60),
         });
       }
     } catch (error) {
@@ -1540,6 +1544,13 @@ class AuthService {
         },
         "Buyer OTP delivery failed; local OTP state removed",
       );
+
+      if (
+        error instanceof AppError &&
+        [429, 503].includes(error.statusCode)
+      ) {
+        throw error;
+      }
 
       throw new AppError(
         "Unable to send OTP. Please try again.",
@@ -1778,9 +1789,7 @@ class AuthService {
         email:
           identity.channel === "email"
             ? identity.email
-            : this.makeMobileOnlyInternalEmail(
-              identity.mobile,
-            ),
+            : "",
 
         phone:
           identity.channel === "mobile"
@@ -2037,6 +2046,13 @@ class AuthService {
             mobile: mobileNumber,
             otp,
             purpose,
+            template: {
+              registration: SMS_TEMPLATE_KEYS.REGISTER_OTP,
+              login: SMS_TEMPLATE_KEYS.LOGIN_OTP,
+              forgot_password: SMS_TEMPLATE_KEYS.FORGOT_PASSWORD_OTP,
+              influencer_forgot_password: SMS_TEMPLATE_KEYS.ACCOUNT_RECOVERY_OTP,
+            }[purpose] || SMS_TEMPLATE_KEYS.ACCOUNT_RECOVERY_OTP,
+            validityMinutes: 10,
           });
           if (delivery?.skipped) {
             throw new AppError("SMS OTP delivery was skipped", 503);

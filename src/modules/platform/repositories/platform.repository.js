@@ -533,7 +533,7 @@ class PlatformRepository {
     return PlatformBrandModel.findOne(filter);
   }
 
-  async listBrands(filter = {}, pagination = {}) {
+  async listBrands(filter = {}, pagination = {}, options = {}) {
     const sort = buildSort(
       pagination.sortBy,
       pagination.sortDir,
@@ -547,13 +547,28 @@ class PlatformRepository {
       },
       { sortOrder: 1, name: 1 },
     );
-    const [items, total] = await Promise.all([
-      PlatformBrandModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
-      PlatformBrandModel.countDocuments(filter),
-    ]);
-    const productCounts = await this.getProductCountsByBrands(items);
+    const hasProducts = options.hasProducts === true;
+    const allItems = hasProducts
+      ? await PlatformBrandModel.find(filter).sort(sort)
+      : null;
+    const [items, unfilteredTotal] = hasProducts
+      ? [allItems, allItems.length]
+      : await Promise.all([
+          PlatformBrandModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
+          PlatformBrandModel.countDocuments(filter),
+        ]);
+    const productCounts = await this.getProductCountsByBrands(items, {
+      publicOnly: options.publicProductsOnly === true,
+    });
+    const eligibleItems = hasProducts
+      ? items.filter((item) => productCounts.get(String(item._id)) > 0)
+      : items;
+    const paginatedItems = hasProducts
+      ? eligibleItems.slice(pagination.skip, pagination.skip + pagination.limit)
+      : eligibleItems;
+    const total = hasProducts ? eligibleItems.length : unfilteredTotal;
     return {
-      items: items.map((item) => {
+      items: paginatedItems.map((item) => {
         const needsApprovalReview =
           typeof item.$isDefault === "function" &&
           item.$isDefault("approvalStatus");
@@ -568,7 +583,7 @@ class PlatformRepository {
     };
   }
 
-  async getProductCountsByBrands(brands = []) {
+  async getProductCountsByBrands(brands = [], { publicOnly = false } = {}) {
     const brandKeys = new Map();
     for (const brand of brands) {
       const plainBrand = typeof brand.toObject === "function" ? brand.toObject() : brand;
@@ -591,6 +606,13 @@ class PlatformRepository {
         $match: {
           brand: { $type: "string", $ne: "" },
           $expr: { $in: [{ $toLower: "$brand" }, lookupKeys] },
+          ...(publicOnly
+            ? {
+                status: "active",
+                approvalStatus: "approved",
+                visibility: "public",
+              }
+            : {}),
         },
       },
       {

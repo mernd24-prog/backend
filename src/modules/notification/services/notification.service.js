@@ -10,6 +10,7 @@ const { UserModel } = require("../../user/models/user.model");
 const { ORDER_STATUS, PAYMENT_PROVIDER, PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const { env } = require("../../../config/env");
 const { renderEmailTemplate } = require("./email-template-catalog");
+const { SMS_TEMPLATE_KEYS } = require("../../../infrastructure/msg/sms");
 
 const notificationQueue = createQueue("notifications");
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -121,6 +122,10 @@ class NotificationService {
             recipientType: "buyer",
             payload: customerPayload,
           });
+        }
+
+        if (userId) {
+          await this.queueCommerceSmsForUser(userId, eventName, event.id, customerPayload);
         }
 
         const sellerIds = this.extractSellerRecipientIds(event.payload)
@@ -701,6 +706,57 @@ class NotificationService {
     }
 
     return user?.email || user?.sellerProfile?.supportEmail || null;
+  }
+
+  resolveCommerceSms(eventName, payload = {}) {
+    const orderNumber = payload.orderNumber || payload.order_number || payload.orderId || payload.order_id;
+    const amount = payload.amount ?? payload.totalAmount ?? payload.total_amount ?? payload.refundAmount ?? payload.refund_amount;
+    const paymentReference = payload.paymentReference || payload.payment_reference || payload.transactionId || payload.transaction_id;
+    const refundReference = payload.refundReference || payload.refund_reference || payload.referenceId || payload.reference_id;
+    const trackingNumber = payload.trackingNumber || payload.tracking_number || payload.awb || payload.awbNumber;
+    const status = String(payload.status || payload.shipmentStatus || "").toLowerCase();
+    const definitions = {
+      [DOMAIN_EVENTS.ORDER_CREATED_V1]: [SMS_TEMPLATE_KEYS.ORDER_PLACED, { orderNumber, amount }],
+      [DOMAIN_EVENTS.ORDER_PAID_V1]: [SMS_TEMPLATE_KEYS.PAYMENT_SUCCESS, { amount, orderNumber, paymentReference }],
+      [DOMAIN_EVENTS.ORDER_PAYMENT_FAILED_V1]: [SMS_TEMPLATE_KEYS.PAYMENT_FAILED, { orderNumber }],
+      [DOMAIN_EVENTS.PAYMENT_FAILED_V1]: [SMS_TEMPLATE_KEYS.PAYMENT_FAILED, { orderNumber }],
+      [DOMAIN_EVENTS.ORDER_CANCELLED_V1]: [SMS_TEMPLATE_KEYS.ORDER_CANCELLED, { orderNumber }],
+      [DOMAIN_EVENTS.RETURN_REFUNDED_V1]: [SMS_TEMPLATE_KEYS.REFUND_COMPLETED, { amount, orderNumber, refundReference }],
+      [DOMAIN_EVENTS.REFUND_PROCESSED_V1]: [SMS_TEMPLATE_KEYS.REFUND_COMPLETED, { amount, orderNumber, refundReference }],
+      [DOMAIN_EVENTS.PAYMENT_REFUNDED_V1]: [SMS_TEMPLATE_KEYS.REFUND_COMPLETED, { amount, orderNumber, refundReference }],
+      [DOMAIN_EVENTS.SHIPMENT_CREATED_V1]: [SMS_TEMPLATE_KEYS.SHIPMENT_DISPATCHED, { orderNumber, trackingNumber }],
+      [DOMAIN_EVENTS.SHIPMENT_DELIVERED_V1]: [SMS_TEMPLATE_KEYS.ORDER_DELIVERED, { orderNumber }],
+      [DOMAIN_EVENTS.SHIPMENT_FAILED_V1]: [SMS_TEMPLATE_KEYS.DELIVERY_FAILED, { orderNumber }],
+    };
+    if (eventName === DOMAIN_EVENTS.SHIPMENT_TRACKING_UPDATED_V1) {
+      if (["out_for_delivery", "out-for-delivery"].includes(status)) return [SMS_TEMPLATE_KEYS.OUT_FOR_DELIVERY, { orderNumber }];
+      if (["dispatched", "shipped", "in_transit"].includes(status)) return [SMS_TEMPLATE_KEYS.SHIPMENT_DISPATCHED, { orderNumber, trackingNumber }];
+      if (["delivered"].includes(status)) return [SMS_TEMPLATE_KEYS.ORDER_DELIVERED, { orderNumber }];
+      if (["failed", "delivery_failed"].includes(status)) return [SMS_TEMPLATE_KEYS.DELIVERY_FAILED, { orderNumber }];
+      return null;
+    }
+    return definitions[eventName] || null;
+  }
+
+  async queueCommerceSmsForUser(userId, eventName, eventId, payload = {}) {
+    if (!env.sms.transactionalEnabled) return;
+    const resolved = this.resolveCommerceSms(eventName, payload);
+    if (!resolved) return;
+    const preference = await NotificationPreferenceModel.findOne({ userId }).select("sms").lean().catch(() => null);
+    if (preference?.sms !== true) return;
+    const id = String(userId || "");
+    const user = UserModel.db.base.Types.ObjectId.isValid(id)
+      ? await UserModel.findById(id).select("phone phoneNormalized").lean().catch(() => null)
+      : null;
+    const mobile = payload.recipientPhone || payload.customerPhone || payload.buyerPhone || user?.phoneNormalized || user?.phone;
+    if (!mobile) return;
+    const [template, variables] = resolved;
+    if (Object.values(variables).some((value) => value === undefined || value === null || String(value).trim() === "")) return;
+    await notificationQueue.add("templated-sms", { mobile, template, variables, idempotencyKey: `${eventName}:${eventId}:${userId}` }, {
+      jobId: ["sms", eventName, eventId, userId].join("|"),
+      attempts: 3,
+      backoff: { type: "exponential", delay: 60000 },
+    });
   }
 
   async queueDirectEmail({ to, subject, html, text, from, idempotencyKey }) {

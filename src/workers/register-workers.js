@@ -7,6 +7,7 @@ const { env } = require("../config/env");
 const { TaxService } = require("../modules/tax/services/tax.service");
 const { NotificationQueueModel } = require("../modules/notification/models/notification-preference.model");
 const { StockNotificationRepository } = require("../modules/stock-notification/repositories/stock-notification.repository");
+const { smsService } = require("../infrastructure/msg/sms");
 
 let registered = false;
 let workers = [];
@@ -39,6 +40,9 @@ function registerWorkers() {
         }
         if (job.name === "direct-email") {
           return sendMail(job.data);
+        }
+        if (job.name === "templated-sms") {
+          return smsService.sendTemplate(job.data);
         }
         if (job.name === "stock-notification-email") {
           const repository = new StockNotificationRepository();

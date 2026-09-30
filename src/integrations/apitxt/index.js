@@ -3,16 +3,24 @@ const { logger } = require("../../shared/logger/logger");
 const { ApitxtClient } = require("./apitxt.client");
 const { ApitxtService } = require("./apitxt.service");
 
-console.log("\n========================================");
-console.log("APITXT CONFIG");
-console.log("========================================");
-console.log("Base URL      :", env.apitxt.baseUrl);
-console.log("API Key       :", env.apitxt.apiKey ? "Loaded" : "Missing");
-console.log("Auth Key      :", env.apitxt.authKey ? "Loaded" : "Missing");
-console.log("PAN URL       :", env.apitxt.panVerifyUrl);
-console.log("Timeout (ms)  :", env.apitxt.timeoutMs);
-console.log("Retries       :", env.apitxt.retries);
-console.log("========================================\n");
+logger.info(
+  {
+    enabled: env.apitxt.enabled,
+    features: {
+      aadhaar: env.apitxt.enabled && env.apitxt.verifyAadhaar,
+      pan: env.apitxt.enabled && env.apitxt.verifyPan,
+      gst: env.apitxt.enabled && env.apitxt.verifyGst,
+      bank: env.apitxt.enabled && env.apitxt.verifyBank,
+      drivingLicense: env.apitxt.enabled && env.apitxt.verifyDrivingLicense,
+      smsOtp: env.apitxt.enabled && env.apitxt.smsOtpEnabled,
+      whatsappOtp: env.apitxt.enabled && env.apitxt.whatsappOtpEnabled,
+    },
+    smsOtpConfigured: env.apitxt.smsOtpConfigured,
+    smsOtpUsesDefaultTemplate: env.apitxt.smsOtpUsesDefaultTemplate,
+    hasAuthKey: Boolean(env.apitxt.authKey),
+  },
+  "APITXT configuration loaded",
+);
 
 const apitxtClient = new ApitxtClient({
   baseUrl: env.apitxt.baseUrl,

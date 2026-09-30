@@ -615,6 +615,7 @@ const listBrandsSchema = Joi.object({
     Joi.object({
       active: Joi.boolean(),
       approvalStatus: Joi.string().valid("pending", "approved", "rejected"),
+      hasProducts: Joi.boolean(),
     }),
   ),
   params: Joi.object({}).required(),

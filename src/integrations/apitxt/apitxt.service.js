@@ -171,6 +171,7 @@ class ApitxtService {
   }
 
   async sendSmsOtp({
+    authKey,
     mobile,
     otp,
     channel,
@@ -178,9 +179,12 @@ class ApitxtService {
     country,
     templateName,
     projectRefId,
+    sender,
+    peId,
     url,
   } = {}) {
-    if (!this.authKey) {
+    const resolvedAuthKey = authKey || this.authKey;
+    if (!resolvedAuthKey) {
       throw new ApitxtError(
         "APITXT auth key is not configured.",
         {
@@ -206,7 +210,7 @@ class ApitxtService {
     const response = await this.client.get(
       url || APITXT_ENDPOINTS.SEND_SMS_OTP,
       {
-        authkey: this.authKey,
+        authkey: resolvedAuthKey,
         mobile,
         otp,
         channel,
@@ -214,6 +218,8 @@ class ApitxtService {
         country,
         template_name: templateName,
         project_ref_id: projectRefId,
+        sender,
+        DLT_PE_ID: peId,
       },
     );
 
@@ -267,6 +273,52 @@ class ApitxtService {
         null,
       mobile: response?.data?.mobile || mobile,
       cost: response?.data?.cost || null,
+      providerResponse: response,
+    };
+  }
+
+  async sendDltSms({
+    url,
+    method = "POST",
+    mobile,
+    message,
+    sender,
+    templateId,
+    peId,
+    route,
+    country,
+    username,
+    password,
+    apiKey,
+  } = {}) {
+    const payload = {
+      authkey: apiKey || this.authKey,
+      username,
+      password,
+      mobiles: mobile,
+      message,
+      sender,
+      route,
+      country,
+      DLT_TE_ID: templateId,
+      DLT_PE_ID: peId,
+    };
+    logger.debug({ provider: "apitxt", mobile: maskMobile(mobile), hasTemplateId: Boolean(templateId), hasPeId: Boolean(peId), hasSender: Boolean(sender) }, "APITXT DLT SMS request prepared");
+    const response = String(method).toUpperCase() === "GET"
+      ? await this.client.get(url, payload)
+      : await this.client.post(url, payload);
+    const status = String(response?.status || response?.type || "").toLowerCase();
+    if (response?.success === false || ["error", "failed", "failure"].includes(status)) {
+      throw new ApitxtError(response?.message || "APITXT DLT SMS request failed.", {
+        statusCode: 502,
+        providerCode: response?.code || response?.status || null,
+        response,
+        retryable: false,
+      });
+    }
+    return {
+      success: true,
+      requestId: response?.request_id || response?.requestId || response?.data?.request_id || null,
       providerResponse: response,
     };
   }

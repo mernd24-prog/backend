@@ -215,6 +215,16 @@ const normalizeOtpMode = (value) => {
   return "";
 };
 
+const isConfiguredValue = (value) => {
+  const normalized = cleanEnvValue(value).toLowerCase();
+  return Boolean(
+    normalized &&
+    !normalized.startsWith("your_") &&
+    !normalized.startsWith("<") &&
+    !["changeme", "placeholder", "example"].includes(normalized)
+  );
+};
+
 const configuredOtpMode = normalizeOtpMode(process.env.AUTH_OTP_MODE);
 const liveOtpRequested = configuredOtpMode
   ? configuredOtpMode === "live"
@@ -358,7 +368,7 @@ const env = {
     smsOtpEnabled: readBooleanFlag(["APITXT_SMS_OTP_ENABLED", "ENABLE_APITXT_SMS_OTP"], false),
     smsOtpDailyLimit: parsePositiveInteger(process.env.APITXT_SMS_OTP_DAILY_LIMIT, 1),
     smsOtpChannel: process.env.APITXT_SMS_OTP_CHANNEL || process.env.APITXT_CHANNEL || "",
-    smsOtpTemplateId: process.env.APITXT_SMS_OTP_TEMPLATE_ID || process.env.APITXT_TEMPLATE_ID || "",
+    smsOtpTemplateId: cleanEnvValue(process.env.APITXT_SMS_OTP_TEMPLATE_ID || process.env.APITXT_TEMPLATE_ID || ""),
     smsOtpTemplateName: process.env.APITXT_SMS_OTP_TEMPLATE_NAME || process.env.APITXT_TEMPLATE_NAME || "",
     smsOtpCountry: process.env.APITXT_SMS_OTP_COUNTRY || process.env.APITXT_COUNTRY || "91",
     smsOtpProjectRefId: process.env.APITXT_SMS_OTP_PROJECT_REF_ID || process.env.APITXT_PROJECT_REF_ID || "",
@@ -374,9 +384,57 @@ const env = {
     timeoutMs: parsePositiveInteger(process.env.APITXT_TIMEOUT_MS, 5000),
     retries: parsePositiveInteger(process.env.APITXT_RETRIES, 2),
     enabled: readBooleanFlag(["ENABLE_APITXT", "USE_APITXT"], false),
-    verifyAadhaar: readBooleanFlag(["APITXT_VERIFY_AADHAAR"], false),
-    verifyPan: readBooleanFlag(["APITXT_VERIFY_PAN"], true),
-    verifyGst: readBooleanFlag(["APITXT_VERIFY_GST"], false),
+    verifyAadhaar: readBooleanFlag(["APITXT_AADHAAR_ENABLED", "APITXT_VERIFY_AADHAAR"], false),
+    verifyPan: readBooleanFlag(["APITXT_PAN_ENABLED", "APITXT_VERIFY_PAN"], false),
+    verifyGst: readBooleanFlag(["APITXT_GST_ENABLED", "APITXT_VERIFY_GST"], false),
+    verifyBank: readBooleanFlag(["APITXT_BANK_VERIFY_ENABLED"], false),
+    verifyDrivingLicense: readBooleanFlag(["APITXT_DRIVING_LICENSE_VERIFY_ENABLED"], false),
+    smsOtpConfigured: isConfiguredValue(
+      process.env.APITXT_AUTH_KEY || process.env.APITXT_API_KEY,
+    ),
+    smsOtpUsesDefaultTemplate: !isConfiguredValue(
+      process.env.APITXT_SMS_OTP_TEMPLATE_ID || process.env.APITXT_TEMPLATE_ID,
+    ),
+  },
+  sms: {
+    provider: String(process.env.SMS_PROVIDER || "apitxt").trim().toLowerCase(),
+    enabled: readBooleanFlag(["SMS_ENABLED", "APITXT_SMS_OTP_ENABLED", "ENABLE_APITXT_SMS_OTP"], false),
+    transactionalEnabled: readBooleanFlag(["SMS_TRANSACTIONAL_ENABLED"], false),
+    enforceDlt: readBooleanFlag(["SMS_ENFORCE_DLT"], isProductionMode),
+    apiUrl: cleanEnvValue(process.env.SMS_API_URL || ""),
+    otpApiUrl: cleanEnvValue(process.env.SMS_OTP_API_URL || process.env.APITXT_SMS_OTP_URL || process.env.APITXT_OTP_URL || "https://apitxt.com/api/sendOTP"),
+    apiMethod: String(process.env.SMS_API_METHOD || "POST").trim().toUpperCase(),
+    apiKey: cleanEnvValue(process.env.SMS_API_KEY || process.env.APITXT_AUTH_KEY || process.env.APITXT_API_KEY || ""),
+    username: cleanEnvValue(process.env.SMS_USERNAME || ""),
+    password: cleanEnvValue(process.env.SMS_PASSWORD || ""),
+    peId: cleanEnvValue(process.env.DLT_PE_ID || ""),
+    brandName: cleanEnvValue(process.env.SMS_BRAND_NAME || process.env.INVOICE_BRAND_NAME || "Sam Global"),
+    headers: {
+      service: cleanEnvValue(process.env.DLT_HEADER_SERVICE || ""),
+      transactional: cleanEnvValue(process.env.DLT_HEADER_TRANSACTIONAL || ""),
+    },
+    route: cleanEnvValue(process.env.SMS_ROUTE || ""),
+    country: cleanEnvValue(process.env.SMS_COUNTRY || "91"),
+    timeoutMs: parsePositiveInteger(process.env.SMS_TIMEOUT_MS, 5000),
+    templateIds: {
+      loginOtp: cleanEnvValue(process.env.DLT_TEMPLATE_LOGIN_OTP || ""),
+      registerOtp: cleanEnvValue(process.env.DLT_TEMPLATE_REGISTER_OTP || ""),
+      forgotPasswordOtp: cleanEnvValue(process.env.DLT_TEMPLATE_FORGOT_PASSWORD_OTP || ""),
+      resetPasswordOtp: cleanEnvValue(process.env.DLT_TEMPLATE_RESET_PASSWORD_OTP || ""),
+      verifyMobileOtp: cleanEnvValue(process.env.DLT_TEMPLATE_VERIFY_MOBILE_OTP || ""),
+      changeMobileOtp: cleanEnvValue(process.env.DLT_TEMPLATE_CHANGE_MOBILE_OTP || ""),
+      accountRecoveryOtp: cleanEnvValue(process.env.DLT_TEMPLATE_ACCOUNT_RECOVERY_OTP || ""),
+      orderPlaced: cleanEnvValue(process.env.DLT_TEMPLATE_ORDER_PLACED || ""),
+      paymentSuccess: cleanEnvValue(process.env.DLT_TEMPLATE_PAYMENT_SUCCESS || ""),
+      paymentFailed: cleanEnvValue(process.env.DLT_TEMPLATE_PAYMENT_FAILED || ""),
+      orderCancelled: cleanEnvValue(process.env.DLT_TEMPLATE_ORDER_CANCELLED || ""),
+      refundInitiated: cleanEnvValue(process.env.DLT_TEMPLATE_REFUND_INITIATED || ""),
+      refundCompleted: cleanEnvValue(process.env.DLT_TEMPLATE_REFUND_COMPLETED || ""),
+      shipmentDispatched: cleanEnvValue(process.env.DLT_TEMPLATE_SHIPMENT_DISPATCHED || ""),
+      outForDelivery: cleanEnvValue(process.env.DLT_TEMPLATE_OUT_FOR_DELIVERY || ""),
+      orderDelivered: cleanEnvValue(process.env.DLT_TEMPLATE_ORDER_DELIVERED || ""),
+      deliveryFailed: cleanEnvValue(process.env.DLT_TEMPLATE_DELIVERY_FAILED || ""),
+    },
   },
   delivery: {
     webhookSecret: process.env.DELIVERY_WEBHOOK_SECRET || "",
@@ -489,6 +547,11 @@ function assertProductionEnvironment() {
   }
   if (env.cors.origin === "*") errors.push("CORS_ORIGIN must be an explicit allowlist in production");
   if (env.auth.otpMode === "static" || env.auth.exposeStaticOtp) errors.push("Static or exposed OTP is forbidden in production");
+  if (env.sms.enabled && env.sms.enforceDlt) {
+    if (!env.sms.apiKey) errors.push("SMS_API_KEY is required when production SMS is enabled");
+    if (!env.sms.peId) errors.push("DLT_PE_ID is required when production SMS is enabled");
+    if (!env.sms.headers.service) errors.push("DLT_HEADER_SERVICE is required when production SMS is enabled");
+  }
   if (env.upload.localStorageEnabled) errors.push("Local upload storage is not supported in production; configure Cloudinary");
   if (env.razorpay.live && !env.razorpay.webhookSecret) errors.push("RAZORPAY_WEBHOOK_SECRET is required for live Razorpay");
   if (errors.length) {
