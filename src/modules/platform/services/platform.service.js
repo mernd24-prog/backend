@@ -287,12 +287,13 @@ class PlatformService {
         navigationFilter,
         { page: 1, limit: 50, skip: 0 },
         "categoryKey title parentKey level active sortOrder imageUrl bannerUrl iconUrl isDashboardVisible",
+        { hasProducts: query.hasProducts === true || query.hasProducts === "true", includeProductCounts: true },
       );
     }
 
     if (isTreeRequested) {
       const maxDepth = query.maxDepth || 3;
-      const cacheKey = JSON.stringify({ filter, maxDepth });
+      const cacheKey = JSON.stringify({ filter, maxDepth, hasProducts: query.hasProducts === true || query.hasProducts === "true" });
       const cached = this.categoryTreeCache.get(cacheKey);
       if (cached && cached.expiresAt > Date.now()) {
         return cached.value;
@@ -302,6 +303,7 @@ class PlatformService {
         visibleFilter,
         pagination,
         "categoryKey title parentKey level active approvalStatus submittedBySellerId sortOrder bannerUrl iconUrl isDashboardVisible",
+        { hasProducts: query.hasProducts === true || query.hasProducts === "true", includeProductCounts: true },
       );
       const tree = this.buildCategoryTree(result.items || [], maxDepth);
       const value = { items: tree, total: tree.length };
@@ -312,7 +314,11 @@ class PlatformService {
       return value;
     }
 
-    const result = await this.platformRepository.listCategories(visibleFilter, pagination);
+    const result = await this.platformRepository.listCategories(
+      visibleFilter,
+      pagination,
+      { hasProducts: query.hasProducts === true || query.hasProducts === "true", includeProductCounts: true },
+    );
 
     return result;
   }

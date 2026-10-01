@@ -10,6 +10,7 @@ const { PlatformProductOptionModel } = require("../models/platform-product-optio
 const { PlatformProductOptionValueModel } = require("../models/platform-product-option-value.model");
 const { ProductReviewModel } = require("../models/product-review.model");
 const { ProductModel } = require("../../product/models/product.model");
+const { applyPublicProductFilter } = require("../../../shared/catalog/public-product-filter");
 const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
 
 function makeCodeOrIdFilter(value, codeField = "code") {
@@ -17,6 +18,10 @@ function makeCodeOrIdFilter(value, codeField = "code") {
     return { $or: [{ _id: value }, { [codeField]: value }] };
   }
   return { [codeField]: value };
+}
+
+function escapeRegExp(value = "") {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function buildSort(sortBy, sortDir, allowed = {}, fallback = { createdAt: -1 }) {
@@ -97,34 +102,137 @@ class PlatformRepository {
     return (result?.keys || []).filter(Boolean);
   }
 
+  async getProductCountsByCategoryKeys(categoryKeys = []) {
+    const normalizedKeys = Array.from(
+      new Set(
+        categoryKeys
+          .map((value) => String(value || "").trim())
+          .filter(Boolean)
+          .map((value) => value.toLowerCase()),
+      ),
+    );
+
+    if (!normalizedKeys.length) return new Map();
+
+    const result = new Map();
+    for (const key of normalizedKeys) {
+      result.set(key, 0);
+    }
+
+    const products = await ProductModel.aggregate([
+      {
+        $match: {
+          ...applyPublicProductFilter({}),
+          $or: [
+            { category: { $in: normalizedKeys } },
+            { category: { $in: categoryKeys } },
+            { category: { $in: categoryKeys.map((value) => String(value || "").trim()) } },
+            { categoryId: { $in: normalizedKeys } },
+            { categoryId: { $in: categoryKeys } },
+          ],
+        },
+      },
+      {
+        $project: {
+          category: 1,
+          categoryId: 1,
+        },
+      },
+    ]);
+
+    for (const product of products) {
+      const categoryValue = String(product.category || product.categoryId || "").trim();
+      if (!categoryValue) continue;
+
+      for (const key of normalizedKeys) {
+        const keyValue = String(key || "").trim();
+        const exactMatches =
+          String(product.category || "").trim().toLowerCase() === keyValue ||
+          String(product.categoryId || "").trim().toLowerCase() === keyValue;
+        const descendantMatches = new RegExp(`^${escapeRegExp(keyValue)}(?:-|$)`, "i").test(
+          String(product.category || "").trim(),
+        );
+
+        if (exactMatches || descendantMatches) {
+          result.set(keyValue, (result.get(keyValue) || 0) + 1);
+        }
+      }
+    }
+
+    return result;
+  }
+
   async listCategories(filter = {}, pagination = {}, options = {}) {
-    const itemsQuery = CategoryTreeModel.find(filter)
-      .sort({ sortOrder: 1, title: 1 })
-      .skip(pagination.skip)
-      .limit(pagination.limit)
-      .lean();
+    const sort = { sortOrder: 1, title: 1 };
+    const allItems = await CategoryTreeModel.find(filter).sort(sort).lean();
+
+    const withCounts = options.includeProductCounts || options.hasProducts
+      ? allItems.map((item) => ({
+          ...item,
+          productCount: 0,
+        }))
+      : allItems;
+
+    if (options.includeProductCounts || options.hasProducts) {
+      const counts = await this.getProductCountsByCategoryKeys(
+        withCounts.map((item) => item.categoryKey || item.key || ""),
+      );
+
+      for (const item of withCounts) {
+        const key = String(item.categoryKey || item.key || "").trim();
+        item.productCount = Number(counts.get(key.toLowerCase()) || 0);
+      }
+    }
+
+    const filteredItems = options.hasProducts
+      ? withCounts.filter((item) => Number(item.productCount || 0) > 0)
+      : withCounts;
+
+    const total = filteredItems.length;
+    const items = filteredItems.slice(
+      Number(pagination.skip || 0),
+      Number(pagination.skip || 0) + Number(pagination.limit || filteredItems.length),
+    );
 
     if (options.includeTotal === false) {
-      const items = await itemsQuery;
       return { items, total: items.length };
     }
 
-    const [items, total] = await Promise.all([
-      itemsQuery,
-      CategoryTreeModel.countDocuments(filter),
-    ]);
     return { items, total };
   }
 
-  async listCategoriesFast(filter = {}, pagination = {}, projection = null) {
+  async listCategoriesFast(filter = {}, pagination = {}, projection = null, options = {}) {
     let query = CategoryTreeModel.find(filter)
       .sort({ level: 1, sortOrder: 1, title: 1 })
-      .skip(pagination.skip || 0)
-      .limit(pagination.limit || 5000)
       .lean();
     if (projection) query = query.select(projection);
-    const items = await query;
-    return { items, total: items.length };
+    const allItems = await query;
+
+    let items = allItems;
+    if (options.includeProductCounts || options.hasProducts) {
+      const counts = await this.getProductCountsByCategoryKeys(
+        allItems.map((item) => item.categoryKey || item.key || ""),
+      );
+      items = allItems.map((item) => {
+        const categoryKey = String(item.categoryKey || item.key || "").trim();
+        return {
+          ...item,
+          productCount: Number(counts.get(categoryKey.toLowerCase()) || 0),
+        };
+      });
+    }
+
+    if (options.hasProducts) {
+      items = items.filter((item) => Number(item.productCount || 0) > 0);
+    }
+
+    const total = items.length;
+    const pageItems = items.slice(
+      Number(pagination.skip || 0),
+      Number(pagination.skip || 0) + Number(pagination.limit || items.length),
+    );
+
+    return { items: pageItems, total };
   }
 
   async deleteCategory(categoryKey) {
@@ -547,43 +655,102 @@ class PlatformRepository {
       },
       { sortOrder: 1, name: 1 },
     );
-    const hasProducts = options.hasProducts === true;
-    const allItems = hasProducts
-      ? await PlatformBrandModel.find(filter).sort(sort)
-      : null;
-    const [items, unfilteredTotal] = hasProducts
-      ? [allItems, allItems.length]
-      : await Promise.all([
-          PlatformBrandModel.find(filter).sort(sort).skip(pagination.skip).limit(pagination.limit),
-          PlatformBrandModel.countDocuments(filter),
-        ]);
-    const productCounts = await this.getProductCountsByBrands(items, {
-      publicOnly: options.publicProductsOnly === true,
-    });
-    const eligibleItems = hasProducts
-      ? items.filter((item) => productCounts.get(String(item._id)) > 0)
-      : items;
-    const paginatedItems = hasProducts
-      ? eligibleItems.slice(pagination.skip, pagination.skip + pagination.limit)
-      : eligibleItems;
-    const total = hasProducts ? eligibleItems.length : unfilteredTotal;
+
+    const platformItems = await PlatformBrandModel.find(filter).sort(sort).lean();
+    const productBrandCounts = await this.getProductCountsByBrands(platformItems);
+
+    const mergeBrand = (brand, fallbackName = "") => {
+      const brandName = String(brand?.name || fallbackName || brand?.slug || "").trim();
+      if (!brandName) return null;
+
+      const slug = String(brand?.slug || brandName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "").trim();
+      const normalizedName = brandName.toLowerCase();
+      const base = {
+        _id: String(brand?._id || normalizedName),
+        name: brandName,
+        slug,
+        logo: brand?.logo || "",
+        logoUrl: brand?.logoUrl || "",
+        imageUrl: brand?.imageUrl || "",
+        active: brand?.active !== false,
+        approvalStatus: brand?.approvalStatus || "approved",
+        sortOrder: Number(brand?.sortOrder || 0),
+        productCount: Number(brand?.productCount || productBrandCounts.get(normalizedName) || 0),
+      };
+
+      for (const key of [brand?._id, brand?.slug, brandName, normalizedName]) {
+        if (key) {
+          productBrandCounts.set(String(key).toLowerCase(), base.productCount);
+        }
+      }
+
+      return base;
+    };
+
+    const mergedItems = platformItems.map((item) => mergeBrand(item, item?.name)).filter(Boolean);
+
+    const brandCounts = await ProductModel.aggregate([
+      {
+        $match: {
+          ...applyPublicProductFilter({}),
+          brand: { $type: "string", $ne: "" },
+        },
+      },
+      {
+        $group: {
+          _id: { $toLower: "$brand" },
+          name: { $first: "$brand" },
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    for (const item of brandCounts) {
+      const brandName = String(item.name || "").trim();
+      const normalizedName = brandName.toLowerCase();
+      const existing = mergedItems.find((entry) => String(entry.name || "").trim().toLowerCase() === normalizedName);
+      if (existing) {
+        existing.productCount = Number(existing.productCount || 0) + Number(item.count || 0);
+        continue;
+      }
+
+      mergedItems.push({
+        _id: normalizedName,
+        name: brandName,
+        slug: brandName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
+        logo: "",
+        logoUrl: "",
+        imageUrl: "",
+        active: true,
+        approvalStatus: "approved",
+        sortOrder: 9999,
+        productCount: Number(item.count || 0),
+      });
+    }
+
+    const filteredItems = options.hasProducts
+      ? mergedItems.filter((item) => Number(item.productCount || 0) > 0)
+      : mergedItems;
+
+    const total = filteredItems.length;
+    const pagedItems = filteredItems.slice(
+      Number(pagination.skip || 0),
+      Number(pagination.skip || 0) + Number(pagination.limit || filteredItems.length),
+    );
+
     return {
-      items: paginatedItems.map((item) => {
-        const needsApprovalReview =
-          typeof item.$isDefault === "function" &&
-          item.$isDefault("approvalStatus");
+      items: pagedItems.map((item) => {
         const plainItem = typeof item.toObject === "function" ? item.toObject() : item;
         return {
           ...plainItem,
-          ...(needsApprovalReview ? { approvalStatus: null, needsApprovalReview: true } : {}),
-          productCount: productCounts.get(String(plainItem._id)) || 0,
+          productCount: Number(plainItem.productCount || 0),
         };
       }),
       total,
     };
   }
 
-  async getProductCountsByBrands(brands = [], { publicOnly = false } = {}) {
+  async getProductCountsByBrands(brands = []) {
     const brandKeys = new Map();
     for (const brand of brands) {
       const plainBrand = typeof brand.toObject === "function" ? brand.toObject() : brand;
@@ -604,15 +771,9 @@ class PlatformRepository {
     const counts = await ProductModel.aggregate([
       {
         $match: {
+          ...applyPublicProductFilter({}),
           brand: { $type: "string", $ne: "" },
           $expr: { $in: [{ $toLower: "$brand" }, lookupKeys] },
-          ...(publicOnly
-            ? {
-                status: "active",
-                approvalStatus: "approved",
-                visibility: "public",
-              }
-            : {}),
         },
       },
       {
