@@ -16,7 +16,7 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/svg+xml",
 ]);
 const SVG_IMAGE_MIME_TYPE = "image/svg+xml";
-const SVG_IMAGE_MODULES = new Set(["thumbnails"]);
+const SVG_IMAGE_MODULES = new Set(["thumbnails", "cms"]);
 
 const ALLOWED_VIDEO_MIME_TYPES = new Set([
   "video/mp4",
@@ -125,7 +125,7 @@ class FileUploadService {
       file.mimetype === SVG_IMAGE_MIME_TYPE &&
       !SVG_IMAGE_MODULES.has(moduleName)
     ) {
-      throw new AppError("SVG images are only supported for category uploads", 400);
+      throw new AppError("SVG images are only supported for category and CMS uploads", 400);
     }
   }
 
