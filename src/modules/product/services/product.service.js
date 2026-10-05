@@ -194,7 +194,12 @@ const PRODUCT_CARD_PROJECTION = {
   slug: 1,
   shortDescription: 1,
   category: 1,
+  categoryId: 1,
+  categoryKey: 1,
+  categoryName: 1,
   brand: 1,
+  brandId: 1,
+  brandName: 1,
   price: 1,
   mrp: 1,
   salePrice: 1,
@@ -857,16 +862,37 @@ class ProductService {
       return {
         ...product,
         brandId: brandRef?.id || null,
-        brandName: brandRef?.name || rawBrand,
+        brandName:
+          brandRef?.name || (/^[a-f\d]{24}$/i.test(rawBrand) ? "" : rawBrand),
         brandRef,
         brandReferenceResolved: Boolean(brandRef),
         categoryId: categoryRef?.id || product.categoryId || null,
         categoryKey: categoryRef?.key || rawCategory,
-        categoryName: categoryRef?.name || rawCategory,
+        categoryName:
+          categoryRef?.name || (/^[a-f\d]{24}$/i.test(rawCategory) ? "" : rawCategory),
         categoryRef,
         categoryReferenceResolved: Boolean(categoryRef),
       };
     });
+  }
+
+  async decorateBrandFacets(facets = {}) {
+    const brandFacets = Array.isArray(facets.brands) ? facets.brands : [];
+    if (!brandFacets.length) return facets;
+    const references = await this.platformRepository.resolveBrandReferences(
+      brandFacets.map((brand) => brand.value),
+    );
+    return {
+      ...facets,
+      brands: brandFacets
+        .map((brand) => {
+          const record = references.get(String(brand.value || "").trim().toLowerCase());
+          const rawLabel = String(brand.label || brand.value || "").trim();
+          const label = record?.name || (/^[a-f\d]{24}$/i.test(rawLabel) ? "" : rawLabel);
+          return { ...brand, label };
+        })
+        .filter((brand) => brand.label),
+    };
   }
 
   async getProductPrefillData(query = {}, actor = {}) {
@@ -2123,6 +2149,40 @@ class ProductService {
     return splitFilterValues(value);
   }
 
+  async resolveBrandFilterValues(value) {
+    const rawValues = this.parseProductFilterValues(value);
+    const matches = new Set();
+
+    const addCandidate = (candidate) => {
+      const normalized = String(candidate || "").trim();
+      if (!normalized) return;
+      matches.add(normalized);
+      matches.add(normalized.toLowerCase());
+      const slug = normalized.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+      if (slug) matches.add(slug);
+    };
+
+    for (const candidate of rawValues) {
+      addCandidate(candidate);
+    }
+
+    const primaryValue = rawValues[0] || value;
+    const brandRecord = await this.platformRepository.getBrandByValue(primaryValue).catch(() => null);
+    if (brandRecord) {
+      for (const candidate of [
+        brandRecord?._id,
+        brandRecord?._id ? String(brandRecord._id) : "",
+        brandRecord?.name,
+        brandRecord?.nameKey,
+        brandRecord?.slug,
+      ]) {
+        addCandidate(candidate);
+      }
+    }
+
+    return [...matches].filter(Boolean);
+  }
+
   normalizeProductFilterText(value) {
     return String(value || "").trim().toLowerCase();
   }
@@ -2247,6 +2307,10 @@ class ProductService {
       }),
     );
 
+    const brandReferences = await this.platformRepository.resolveBrandReferences(
+      [...brandCounts.keys()],
+    );
+
     return {
       total: items.length,
       categories: [...categoryCounts.entries()].map(([value, count]) => ({
@@ -2254,11 +2318,16 @@ class ProductService {
         label: categoryLabelByKey.get(value) || value,
         count,
       })),
-      brands: [...brandCounts.entries()].map(([value, count]) => ({
-        value,
-        label: value,
-        count,
-      })),
+      brands: [...brandCounts.entries()]
+        .map(([value, count]) => {
+          const record = brandReferences.get(value.toLowerCase());
+          return {
+            value,
+            label: record?.name || (/^[a-f\d]{24}$/i.test(value) ? "" : value),
+            count,
+          };
+        })
+        .filter((brand) => brand.label),
       ratings: [...ratingCounts.entries()].map(([value, count]) => ({
         value,
         label: `${value}★ & up`,
@@ -2333,10 +2402,9 @@ class ProductService {
     }
     if (query.sku) filter.sku = query.sku;
     if (query.brand) {
-      const brands = this.parseProductFilterValues(query.brand);
-      filter.brand = brands.length > 1
-        ? { $in: brands.map((brand) => new RegExp(`^${escapeRegExp(brand)}$`, "i")) }
-        : new RegExp(`^${escapeRegExp(brands[0] || query.brand)}$`, "i");
+      const brands = await this.resolveBrandFilterValues(query.brand);
+      const regexes = brands.map((brand) => new RegExp(`^${escapeRegExp(brand)}$`, "i"));
+      filter.brand = regexes.length > 1 ? { $in: regexes } : regexes[0];
     }
     if (query.sellerId) filter.sellerId = query.sellerId;
     const organizationId = query.organizationId || actor?.organizationId;
@@ -2531,8 +2599,10 @@ class ProductService {
       ...result,
       items: discoveryView === "facets"
         ? []
-        : await this.enrichProductsWithActiveDeals(result.items || []),
-      facets: result.facets || {},
+        : await this.enrichProductsWithActiveDeals(
+            await this.decorateProductMasterReferences(result.items || []),
+          ),
+      facets: await this.decorateBrandFacets(result.facets || {}),
     };
   }
 
@@ -2599,7 +2669,11 @@ class ProductService {
       filter.category = categoryKeys.length ? { $in: categoryKeys } : query.category;
     }
     if (query.sku) filter.sku = query.sku;
-    if (query.brand) filter.brand = new RegExp(`^${escapeRegExp(query.brand)}$`, "i");
+    if (query.brand) {
+      const brands = await this.resolveBrandFilterValues(query.brand);
+      const regexes = brands.map((brand) => new RegExp(`^${escapeRegExp(brand)}$`, "i"));
+      filter.brand = regexes.length > 1 ? { $in: regexes } : regexes[0];
+    }
     if (query.organizationId) filter.organizationId = query.organizationId;
     if (query.storeId) filter.storeId = query.storeId;
     if (query.warehouseId) filter.warehouseId = query.warehouseId;
@@ -2985,7 +3059,19 @@ class ProductService {
     }
 
     if (query.brand) {
-      filter.brand = new RegExp(`^${escapeRegExp(query.brand)}$`, "i");
+      const brands = this.parseProductFilterValues(query.brand).flatMap((brand) => {
+        const value = String(brand || "").trim();
+        if (!value) return [];
+        return [...new Set([
+          value,
+          value.toLowerCase(),
+          value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
+        ])];
+      });
+      const regexes = brands.map((brand) => new RegExp(`^${escapeRegExp(brand)}$`, "i"));
+      if (regexes.length) {
+        filter.brand = regexes.length > 1 ? { $in: regexes } : regexes[0];
+      }
     }
 
     if (query.productType) {

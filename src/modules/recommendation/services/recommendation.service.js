@@ -1,5 +1,6 @@
 const { RecommendationModel } = require("../models/recommendation.model");
 const { ProductModel } = require("../../product/models/product.model");
+const { PlatformRepository } = require("../../platform/repositories/platform.repository");
 const {
   applyPublicProductFilter,
 } = require("../../../shared/catalog/public-product-filter");
@@ -28,6 +29,36 @@ const PRODUCT_CARD_FIELDS = [
  * Recommendation Engine
  */
 class RecommendationService {
+  constructor() {
+    this.platformRepository = new PlatformRepository();
+  }
+
+  async decorateProductReferences(products = []) {
+    if (!Array.isArray(products) || !products.length) return [];
+    const [brands, categories] = await Promise.all([
+      this.platformRepository.resolveBrandReferences(
+        products.map((product) => product.brand),
+      ),
+      this.platformRepository.resolveCategoryReferences(
+        products.flatMap((product) => [product.categoryId, product.category]),
+      ),
+    ]);
+
+    return products.map((product) => {
+      const brand = brands.get(String(product.brand || "").trim().toLowerCase());
+      const category =
+        categories.get(String(product.categoryId || "").trim().toLowerCase()) ||
+        categories.get(String(product.category || "").trim().toLowerCase());
+      return {
+        ...product,
+        brandId: brand?.id || null,
+        brandName: brand?.name || "",
+        categoryKey: category?.key || "",
+        categoryName: category?.name || "",
+      };
+    });
+  }
+
   escapeRegex(value = "") {
     return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
@@ -73,7 +104,9 @@ class RecommendationService {
     }).select(PRODUCT_CARD_FIELDS).lean();
 
     const byId = new Map(products.map((product) => [String(product._id), product]));
-    return ids.map((id) => byId.get(id)).filter(Boolean);
+    return this.decorateProductReferences(
+      ids.map((id) => byId.get(id)).filter(Boolean),
+    );
   }
 
   async getFallbackProducts({ category = null, period = "week", limit = 10, excludeIds = [] } = {}) {
@@ -96,7 +129,7 @@ class RecommendationService {
         .lean();
     }
 
-    return products;
+    return this.decorateProductReferences(products);
   }
 
   // ==============================

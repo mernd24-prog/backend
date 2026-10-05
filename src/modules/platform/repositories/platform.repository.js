@@ -102,64 +102,78 @@ class PlatformRepository {
     return (result?.keys || []).filter(Boolean);
   }
 
-  async getProductCountsByCategoryKeys(categoryKeys = []) {
-    const normalizedKeys = Array.from(
-      new Set(
-        categoryKeys
-          .map((value) => String(value || "").trim())
-          .filter(Boolean)
-          .map((value) => value.toLowerCase()),
-      ),
+  async getProductCountsByCategories(categories = []) {
+    const requestedItems = categories
+      .map((category) =>
+        typeof category?.toObject === "function" ? category.toObject() : category,
+      )
+      .filter((category) => category?.categoryKey);
+    if (!requestedItems.length) return new Map();
+
+    // Navigation queries often contain only level-0 rows. Load the complete
+    // public tree so products assigned to a leaf can increment every ancestor.
+    const publicTree = await CategoryTreeModel.find({
+      active: true,
+      approvalStatus: "approved",
+    }).lean();
+    const itemByKey = new Map(
+      [...publicTree, ...requestedItems].map((category) => [
+        String(category.categoryKey),
+        category,
+      ]),
     );
+    const items = [...itemByKey.values()];
 
-    if (!normalizedKeys.length) return new Map();
-
-    const result = new Map();
-    for (const key of normalizedKeys) {
-      result.set(key, 0);
+    const byKey = new Map();
+    const keyByReference = new Map();
+    const counts = new Map();
+    for (const category of items) {
+      const key = String(category.categoryKey).trim();
+      byKey.set(key, category);
+      counts.set(key.toLowerCase(), 0);
+      [key, category._id]
+        .map((value) => String(value || "").trim().toLowerCase())
+        .filter(Boolean)
+        .forEach((reference) => keyByReference.set(reference, key));
     }
 
-    const products = await ProductModel.aggregate([
-      {
-        $match: {
-          ...applyPublicProductFilter({}),
-          $or: [
-            { category: { $in: normalizedKeys } },
-            { category: { $in: categoryKeys } },
-            { category: { $in: categoryKeys.map((value) => String(value || "").trim()) } },
-            { categoryId: { $in: normalizedKeys } },
-            { categoryId: { $in: categoryKeys } },
-          ],
-        },
-      },
-      {
-        $project: {
-          category: 1,
-          categoryId: 1,
-        },
-      },
-    ]);
+    const references = [
+      ...new Set([
+        ...keyByReference.keys(),
+        ...items.flatMap((category) => [
+          String(category.categoryKey || "").trim(),
+          String(category._id || "").trim(),
+        ]),
+      ]),
+    ].filter(Boolean);
+    const products = await ProductModel.find({
+      ...applyPublicProductFilter({}),
+      $or: [
+        { category: { $in: references } },
+        { categoryId: { $in: references } },
+      ],
+    })
+      .select("category categoryId")
+      .lean();
 
     for (const product of products) {
-      const categoryValue = String(product.category || product.categoryId || "").trim();
-      if (!categoryValue) continue;
+      const directKey = [product.categoryId, product.category]
+        .map((value) => String(value || "").trim().toLowerCase())
+        .map((reference) => keyByReference.get(reference))
+        .find(Boolean);
+      if (!directKey) continue;
 
-      for (const key of normalizedKeys) {
-        const keyValue = String(key || "").trim();
-        const exactMatches =
-          String(product.category || "").trim().toLowerCase() === keyValue ||
-          String(product.categoryId || "").trim().toLowerCase() === keyValue;
-        const descendantMatches = new RegExp(`^${escapeRegExp(keyValue)}(?:-|$)`, "i").test(
-          String(product.category || "").trim(),
-        );
-
-        if (exactMatches || descendantMatches) {
-          result.set(keyValue, (result.get(keyValue) || 0) + 1);
-        }
+      let key = directKey;
+      const visited = new Set();
+      while (key && byKey.has(key) && !visited.has(key)) {
+        visited.add(key);
+        const normalizedKey = key.toLowerCase();
+        counts.set(normalizedKey, (counts.get(normalizedKey) || 0) + 1);
+        key = String(byKey.get(key)?.parentKey || "").trim();
       }
     }
 
-    return result;
+    return counts;
   }
 
   async listCategories(filter = {}, pagination = {}, options = {}) {
@@ -174,9 +188,7 @@ class PlatformRepository {
       : allItems;
 
     if (options.includeProductCounts || options.hasProducts) {
-      const counts = await this.getProductCountsByCategoryKeys(
-        withCounts.map((item) => item.categoryKey || item.key || ""),
-      );
+      const counts = await this.getProductCountsByCategories(withCounts);
 
       for (const item of withCounts) {
         const key = String(item.categoryKey || item.key || "").trim();
@@ -210,9 +222,7 @@ class PlatformRepository {
 
     let items = allItems;
     if (options.includeProductCounts || options.hasProducts) {
-      const counts = await this.getProductCountsByCategoryKeys(
-        allItems.map((item) => item.categoryKey || item.key || ""),
-      );
+      const counts = await this.getProductCountsByCategories(allItems);
       items = allItems.map((item) => {
         const categoryKey = String(item.categoryKey || item.key || "").trim();
         return {
@@ -658,15 +668,45 @@ class PlatformRepository {
 
     const platformItems = await PlatformBrandModel.find(filter).sort(sort).lean();
     const productBrandCounts = await this.getProductCountsByBrands(platformItems);
+    const productBrandNameLookup = new Map();
+    const brandNameSeeds = await PlatformBrandModel.find({}).select("_id name nameKey slug").lean();
+
+    for (const brand of brandNameSeeds) {
+      const name = String(brand?.name || "").trim();
+      const keys = [brand?._id, brand?.name, brand?.nameKey, brand?.slug]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
+
+      for (const key of keys) {
+        productBrandNameLookup.set(String(key).toLowerCase(), name || key);
+      }
+    }
+
+    const normalizeDisplayBrandName = (value = "") => {
+      const candidate = String(value || "").trim();
+      if (!candidate) return "";
+      if (/^[a-f\d]{24}$/i.test(candidate)) return "";
+      return candidate;
+    };
+
+    const stableBrandId = (rawId, fallbackValue = "") => {
+      const raw = String(rawId || "").trim();
+      if (!raw) return String(fallbackValue || "").trim();
+      if (/^[a-f\d]{24}$/i.test(raw)) {
+        const fallback = String(fallbackValue || "").trim();
+        return fallback || raw.toLowerCase();
+      }
+      return raw;
+    };
 
     const mergeBrand = (brand, fallbackName = "") => {
-      const brandName = String(brand?.name || fallbackName || brand?.slug || "").trim();
+      const brandName = normalizeDisplayBrandName(brand?.name || brand?.nameKey || fallbackName || "");
       if (!brandName) return null;
 
       const slug = String(brand?.slug || brandName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "").trim();
       const normalizedName = brandName.toLowerCase();
       const base = {
-        _id: String(brand?._id || normalizedName),
+        _id: stableBrandId(brand?._id, slug || normalizedName),
         name: brandName,
         slug,
         logo: brand?.logo || "",
@@ -706,7 +746,13 @@ class PlatformRepository {
     ]);
 
     for (const item of brandCounts) {
-      const brandName = String(item.name || "").trim();
+      const rawBrandKey = String(item?._id || item?.name || "").trim();
+      const resolvedBrandName =
+        productBrandNameLookup.get(String(rawBrandKey).toLowerCase()) ||
+        String(item.name || "").trim();
+      const brandName = normalizeDisplayBrandName(resolvedBrandName);
+      if (!brandName) continue;
+
       const normalizedName = brandName.toLowerCase();
       const existing = mergedItems.find((entry) => String(entry.name || "").trim().toLowerCase() === normalizedName);
       if (existing) {
@@ -715,7 +761,7 @@ class PlatformRepository {
       }
 
       mergedItems.push({
-        _id: normalizedName,
+        _id: stableBrandId(null, brandName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || normalizedName),
         name: brandName,
         slug: brandName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
         logo: "",

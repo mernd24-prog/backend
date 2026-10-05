@@ -8,6 +8,7 @@ const {
 } = require("../search/elasticsearch-client");
 const { logger } = require("../logger/logger");
 const { ProductModel } = require("../../modules/product/models/product.model");
+const { PlatformRepository } = require("../../modules/platform/repositories/platform.repository");
 const {
   applyPublicProductFilter,
   buildPublicSearchFilters,
@@ -179,6 +180,31 @@ function scoreAutocompleteSuggestion(term, product = {}) {
 }
 
 class AdvancedSearchService {
+  constructor() {
+    this.platformRepository = new PlatformRepository();
+  }
+
+  async resolveSuggestionLabels(products = []) {
+    if (!products.length) return [];
+    const [brands, categories] = await Promise.all([
+      this.platformRepository.resolveBrandReferences(products.map((product) => product.brand)),
+      this.platformRepository.resolveCategoryReferences(
+        products.flatMap((product) => [product.categoryId, product.category]),
+      ),
+    ]);
+    return products.map((product) => {
+      const brand = brands.get(String(product.brand || "").trim().toLowerCase());
+      const category =
+        categories.get(String(product.categoryId || "").trim().toLowerCase()) ||
+        categories.get(String(product.category || "").trim().toLowerCase());
+      return {
+        ...product,
+        brandName: brand?.name || "",
+        categoryName: category?.name || "",
+      };
+    });
+  }
+
   buildSearchDocument(product) {
     return buildProductSearchDocument(product);
   }
@@ -709,15 +735,18 @@ class AdvancedSearchService {
               },
             },
           });
-          const suggestions = response.hits.hits.map((hit) => ({
-            title: hit._source?.title || "",
-            brandName: hit._source?.brand || "",
-            categoryName: hit._source?.category || hit._source?.categoryId || "",
+          const resolvedHits = await this.resolveSuggestionLabels(
+            response.hits.hits.map((hit) => hit._source || {}),
+          );
+          const suggestions = resolvedHits.map((source) => ({
+            title: source.title || "",
+            brandName: source.brandName || "",
+            categoryName: source.categoryName || "",
             image:
-              hit._source?.image ||
-              hit._source?.imageUrl ||
-              hit._source?.images?.[0] ||
-              hit._source?.commonImages?.[0] ||
+              source.image ||
+              source.imageUrl ||
+              source.images?.[0] ||
+              source.commonImages?.[0] ||
               "",
           })).filter((item) => item.title);
           if (suggestions.length) {
@@ -753,7 +782,7 @@ class AdvancedSearchService {
         .sort((a, b) => b.score - a.score);
 
       const seen = new Set();
-      const suggestions = scored
+      const suggestionProducts = scored
         .filter(({ product }) => {
           const title = String(product.title || "").trim();
           const key = title.toLowerCase();
@@ -762,10 +791,12 @@ class AdvancedSearchService {
           return true;
         })
         .slice(0, maxLimit)
-        .map(({ product }) => ({
+        .map(({ product }) => product);
+      const resolvedProducts = await this.resolveSuggestionLabels(suggestionProducts);
+      const suggestions = resolvedProducts.map((product) => ({
           title: product.title,
-          brandName: product.brand || "",
-          categoryName: product.category || product.categoryId || "",
+          brandName: product.brandName || "",
+          categoryName: product.categoryName || "",
           image: product.images?.[0] || product.commonImages?.[0] || "",
         }));
 
