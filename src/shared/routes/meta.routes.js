@@ -248,7 +248,11 @@ metaRoutes.get(
           label: [item.code, item.description].filter(Boolean).join(" - "),
           value: item.code,
           id: itemId(item) || item.code,
-          meta: { category: item.category || "" },
+          meta: {
+            category: item.category || "",
+            description: item.description || "",
+            gstRate: Number(item.gstRate || item.IGST || 0),
+          },
         }));
         break;
       case "product-options":

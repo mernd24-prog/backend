@@ -25,6 +25,7 @@ const {
   DEFAULT_SELLER_MODULES,
   cleanModuleName,
 } = require("../../../shared/auth/module-access");
+const { SIDEBAR_MODULES } = require("../../../shared/auth/admin-sidebar-catalog");
 const {
   PERMISSION_ACTIONS,
   normalizePermissionAction: normalizeRbacPermissionAction,
@@ -1659,13 +1660,31 @@ class AdminService {
   }
 
   getAssignableModuleSlugs(role) {
+    const sidebarScope = new Set(
+      SIDEBAR_MODULES
+        .filter((module) =>
+          SELLER_SIDE_ROLES.includes(role)
+            ? String(module.moduleKey || "").startsWith("seller-")
+            : !String(module.moduleKey || "").startsWith("seller-"),
+        )
+        .flatMap((module) => [
+          module.requiredModule,
+          module.metadata?.requiredModule,
+        ])
+        .map(cleanModuleName)
+        .filter(Boolean),
+    );
     if (SELLER_SIDE_ROLES.includes(role)) {
-      return DEFAULT_SELLER_MODULES;
+      return DEFAULT_SELLER_MODULES.filter((module) =>
+        sidebarScope.has(cleanModuleName(module)),
+      );
     }
     if (role === ROLES.BUYER) {
       return [];
     }
-    return DEFAULT_PLATFORM_MODULES;
+    return DEFAULT_PLATFORM_MODULES.filter((module) =>
+      sidebarScope.has(cleanModuleName(module)),
+    );
   }
 
   roleUsesAssignedModules(role) {

@@ -23,6 +23,7 @@ const permissionActions = [
   "status",
   "restore",
   "bulk_action",
+  "adjust",
   "action",
 ];
 const sellerOnboardingStatuses = [

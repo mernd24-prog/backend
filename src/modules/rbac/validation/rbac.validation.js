@@ -13,6 +13,7 @@ const permissionActions = [
   "status_change",
   "restore",
   "bulk_action",
+  "adjust",
 ];
 
 const createModuleSchema = {

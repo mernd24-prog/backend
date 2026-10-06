@@ -174,6 +174,36 @@ function hasGrantedPermission(auth = {}, moduleName, action = "view") {
   );
 }
 
+// Some management screens need a narrow read-only lookup from another
+// module (for example Referral Product Amounts needs the product picker).
+// This must not grant navigation or mutation access to that dependency.
+const READ_DEPENDENCIES = {
+  products: new Set([
+    "referral",
+    "referral-overview",
+    "influencer-management",
+    "referral-rules",
+    "referral-bonus-rules",
+    "referral-orders",
+    "referral-payouts",
+    "referral-fraud",
+    "deals",
+  ]),
+};
+
+function hasReadDependencyAccess(req, moduleName) {
+  if (String(req.method || "GET").toUpperCase() !== "GET") return false;
+  const dependencies = READ_DEPENDENCIES[cleanModuleName(moduleName)];
+  if (!dependencies?.size) return false;
+  return Array.isArray(req.auth?.permissions) && req.auth.permissions.some((slug) => {
+    const [permissionModule, permissionAction] = String(slug || "").split(":");
+    return (
+      permissionAction === "view" &&
+      dependencies.has(cleanModuleName(permissionModule))
+    );
+  });
+}
+
 function enforceModuleScope(req) {
   if (!usesModuleAccess(req.auth)) {
     return null;
@@ -191,7 +221,10 @@ function enforceModuleScope(req) {
     return new AppError("Forbidden: no modules assigned", 403);
   }
 
-  if (!allowedModules.has(normalizedRequestModule)) {
+  if (
+    !allowedModules.has(normalizedRequestModule) &&
+    !hasReadDependencyAccess(req, normalizedRequestModule)
+  ) {
     return new AppError(
       `Forbidden: module access denied for ${requestModule}`,
       403,
@@ -212,7 +245,10 @@ function enforceRequestPermission(req) {
   }
 
   const requestAction = inferRequestAction(req);
-  if (hasGrantedPermission(req.auth, requestModule, requestAction)) {
+  if (
+    hasGrantedPermission(req.auth, requestModule, requestAction) ||
+    (requestAction === "view" && hasReadDependencyAccess(req, requestModule))
+  ) {
     return null;
   }
 
@@ -288,7 +324,8 @@ function allowActions(...actions) {
       const requestModule = getRequestModule(req);
       const requestAction = inferRequestAction(req);
       const allowed = requestModule
-        ? hasGrantedPermission(req.auth, requestModule, requestAction)
+        ? hasGrantedPermission(req.auth, requestModule, requestAction) ||
+          (requestAction === "view" && hasReadDependencyAccess(req, requestModule))
         : actions.every((action) =>
             Array.isArray(req.auth.permissions) &&
             req.auth.permissions.includes(action),

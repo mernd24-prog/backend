@@ -178,10 +178,13 @@ class RbacService {
       actor.role === ROLES.SELLER
         ? DEFAULT_SELLER_MODULES.map(cleanModuleName)
         : [];
-    const ownerPlatformModules =
-      isSuperAdmin || actor.role === ROLES.ADMIN
-        ? DEFAULT_PLATFORM_MODULES.map(cleanModuleName)
-        : [];
+    // A regular admin can be scoped to a subset of modules. Giving every
+    // `admin` the platform defaults made the sidebar advertise routes that
+    // the permission middleware correctly rejected with 403. Only the true
+    // super-admin bypass receives the complete platform navigation.
+    const ownerPlatformModules = isSuperAdmin
+      ? DEFAULT_PLATFORM_MODULES.map(cleanModuleName)
+      : [];
     const viewModuleScope = new Set([
       ...viewModules,
       ...allowedModules,
