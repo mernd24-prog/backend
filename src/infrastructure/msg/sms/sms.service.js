@@ -27,18 +27,27 @@ class SmsService {
       hasPeId: Boolean(this.config.peId),
       variableNames: Object.keys(variables),
       validityMinutes: variables.validityMinutes,
+      headerHasLowercase: /[a-z]/.test(this.config.headers[template?.header] || ""),
     };
     logger.debug(diagnostic, "SMS template configuration selected");
     try {
       if (!this.config.enabled) throw new SmsConfigurationError("SMS delivery is disabled");
       validateTemplateRequest({ templateKey, template, variables, config: this.config });
     } catch (error) {
-      logger.warn({ ...diagnostic, errorType: error.name }, "SMS template validation failed; check template variables and DLT configuration");
+      logger.warn({ ...diagnostic, errorType: error.name, missingVariableNames: template?.variables.filter((name) => variables[name] === undefined || variables[name] === null || String(variables[name]).trim() === ""), hasTemplate: Boolean(template) }, "SMS template validation failed; check template variables and DLT configuration");
       throw error;
     }
-    const normalizedMobile = normalizeMobile(mobile, this.config.country);
-    const text = template.buildMessage(variables);
-    const provider = this.provider || createSmsProvider(this.config);
+    let normalizedMobile;
+    let text;
+    let provider;
+    try {
+      normalizedMobile = normalizeMobile(mobile, this.config.country);
+      text = template.buildMessage(variables);
+      provider = this.provider || createSmsProvider(this.config);
+    } catch (error) {
+      logger.warn({ ...diagnostic, errorType: error.name }, "SMS mobile normalization, rendering or provider setup failed");
+      throw error;
+    }
     logger.info({ provider: provider.name, templateKey, category: template.category, headerType: template.header, mobile: maskMobile(normalizedMobile), idempotencyKey: idempotencyKey || null }, "SMS template delivery requested");
     try {
       const response = await provider.send({
@@ -51,7 +60,7 @@ class SmsService {
       logger.info({ provider: provider.name, templateKey, mobile: maskMobile(normalizedMobile), requestId: response?.requestId || null }, "SMS template delivered to provider");
       return { success: true, provider: provider.name, template: templateKey, requestId: response?.requestId || null, providerResponse: response?.providerResponse || response };
     } catch (error) {
-      logger.error({ err: error, provider: provider.name, templateKey, mobile: maskMobile(normalizedMobile) }, "SMS template delivery failed");
+      logger.error({ ...diagnostic, errorType: error.name, statusCode: error.statusCode || null, providerCode: error.providerCode || null, retryable: error.retryable === true, mobile: maskMobile(normalizedMobile) }, "SMS template delivery failed");
       throw error;
     }
   }

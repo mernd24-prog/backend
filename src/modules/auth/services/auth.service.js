@@ -1514,6 +1514,13 @@ class AuthService {
         !isStaticOtp &&
         identity.channel === "mobile"
       ) {
+        logger.debug({
+          purpose: BUYER_OTP_PURPOSE,
+          channel: identity.channel,
+          existingBuyerFound: Boolean(existingUser),
+          templateKey: existingUser ? SMS_TEMPLATE_KEYS.LOGIN_OTP : SMS_TEMPLATE_KEYS.REGISTER_OTP,
+          validityMinutes: Math.ceil(BUYER_OTP_TTL_SECONDS / 60),
+        }, "Buyer mobile OTP template selected");
         delivery = await sendSmsOtp({
           mobile: identity.mobile,
           otp,
