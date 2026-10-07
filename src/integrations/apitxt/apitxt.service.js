@@ -200,6 +200,14 @@ class ApitxtService {
         mobile: maskMobile(mobile),
         hasChannel: Boolean(channel),
         hasTemplateId: Boolean(templateId),
+        channel: channel || null,
+        templateId: templateId || null,
+        templateName: templateName || null,
+        sender: sender || null,
+        hasPeId: Boolean(peId),
+        hasAuthKey: Boolean(resolvedAuthKey),
+        hasOtp: Boolean(otp),
+        method: "GET",
         country,
         hasTemplateName: Boolean(templateName),
         hasProjectRefId: Boolean(projectRefId),
@@ -207,6 +215,7 @@ class ApitxtService {
       "APITXT SMS OTP request prepared",
     );
 
+    const startedAt = Date.now();
     const response = await this.client.get(
       url || APITXT_ENDPOINTS.SEND_SMS_OTP,
       {
@@ -222,6 +231,16 @@ class ApitxtService {
         DLT_PE_ID: peId,
       },
     );
+
+    logger.debug({
+      provider: "apitxt",
+      mobile: maskMobile(mobile),
+      templateId: templateId || null,
+      status: response?.status || null,
+      success: response?.success === true,
+      durationMs: Date.now() - startedAt,
+      requestId: response?.data?.request_id || response?.request_id || response?.requestId || null,
+    }, "APITXT SMS OTP response received");
 
     if (
       String(response?.status || "").toLowerCase() !== "success" &&

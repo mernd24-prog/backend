@@ -15,9 +15,27 @@ class SmsService {
   }
 
   async sendTemplate({ template: templateKey, mobile, variables = {}, idempotencyKey } = {}) {
-    if (!this.config.enabled) throw new SmsConfigurationError("SMS delivery is disabled");
     const template = this.templates[templateKey];
-    validateTemplateRequest({ templateKey, template, variables, config: this.config });
+    const diagnostic = {
+      provider: this.config.provider,
+      templateKey,
+      templateId: template?.templateId || null,
+      header: this.config.headers[template?.header] || null,
+      smsEnabled: this.config.enabled,
+      enforceDlt: this.config.enforceDlt,
+      hasApiKey: Boolean(this.config.apiKey),
+      hasPeId: Boolean(this.config.peId),
+      variableNames: Object.keys(variables),
+      validityMinutes: variables.validityMinutes,
+    };
+    logger.debug(diagnostic, "SMS template configuration selected");
+    try {
+      if (!this.config.enabled) throw new SmsConfigurationError("SMS delivery is disabled");
+      validateTemplateRequest({ templateKey, template, variables, config: this.config });
+    } catch (error) {
+      logger.warn({ ...diagnostic, errorType: error.name }, "SMS template validation failed; check template variables and DLT configuration");
+      throw error;
+    }
     const normalizedMobile = normalizeMobile(mobile, this.config.country);
     const text = template.buildMessage(variables);
     const provider = this.provider || createSmsProvider(this.config);
