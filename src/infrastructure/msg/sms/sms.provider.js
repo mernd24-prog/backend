@@ -8,15 +8,24 @@ class ApitxtSmsProvider {
     this.name = SMS_PROVIDER_NAMES.APITXT;
   }
 
-  async send({ mobile, message, template, header }) {
+  async send({ mobile, message, template, templateKey, header }) {
     if (template.otp) {
+      const providerTemplate = this.config.otpProviderTemplates?.[templateKey];
+      const validityParameter = this.config.otpValidityParameter;
+      const reservedParameters = new Set(["authkey", "mobile", "otp", "channel", "template_id", "country", "template_name", "project_ref_id", "sender", "dlt_pe_id"]);
+      if (validityParameter && (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(validityParameter) || reservedParameters.has(validityParameter.toLowerCase()))) {
+        throw new SmsConfigurationError("APITXT_OTP_VALIDITY_PARAMETER must be a separate provider variable name");
+      }
       return apitxtService.sendSmsOtp({
         authKey: this.config.apiKey,
         url: this.config.otpApiUrl || undefined,
         mobile,
         otp: message.variables.otp,
         channel: "sms",
-        templateId: template.templateId,
+        templateId: providerTemplate?.referenceId || template.templateId,
+        templateName: providerTemplate?.name || undefined,
+        validityMinutes: message.variables.validityMinutes,
+        validityParameter: this.config.otpValidityParameter,
         country: this.config.country,
         sender: header,
         peId: this.config.peId,

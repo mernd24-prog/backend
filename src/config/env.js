@@ -416,6 +416,13 @@ const env = {
     route: cleanEnvValue(process.env.SMS_ROUTE || ""),
     country: cleanEnvValue(process.env.SMS_COUNTRY || "91"),
     timeoutMs: parsePositiveInteger(process.env.SMS_TIMEOUT_MS, 5000),
+    otpProviderTemplates: {
+      LOGIN_OTP: {
+        referenceId: cleanEnvValue(process.env.APITXT_LOGIN_OTP_REFERENCE_ID || ""),
+        name: cleanEnvValue(process.env.APITXT_LOGIN_OTP_TEMPLATE_NAME || ""),
+      },
+    },
+    otpValidityParameter: cleanEnvValue(process.env.APITXT_OTP_VALIDITY_PARAMETER || ""),
     templateIds: {
       loginOtp: cleanEnvValue(process.env.DLT_TEMPLATE_LOGIN_OTP || ""),
       registerOtp: cleanEnvValue(process.env.DLT_TEMPLATE_REGISTER_OTP || ""),

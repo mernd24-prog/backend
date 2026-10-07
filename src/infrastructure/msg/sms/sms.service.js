@@ -20,6 +20,7 @@ class SmsService {
       provider: this.config.provider,
       templateKey,
       templateId: template?.templateId || null,
+      providerTemplateReference: this.config.otpProviderTemplates?.[templateKey]?.referenceId || null,
       header: this.config.headers[template?.header] || null,
       smsEnabled: this.config.enabled,
       enforceDlt: this.config.enforceDlt,
@@ -54,6 +55,7 @@ class SmsService {
         mobile: normalizedMobile,
         message: { text, variables },
         template,
+        templateKey,
         header: this.config.headers[template.header],
         idempotencyKey,
       });

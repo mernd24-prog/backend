@@ -181,6 +181,8 @@ class ApitxtService {
     projectRefId,
     sender,
     peId,
+    validityMinutes,
+    validityParameter,
     url,
   } = {}) {
     const resolvedAuthKey = authKey || this.authKey;
@@ -207,6 +209,8 @@ class ApitxtService {
         hasPeId: Boolean(peId),
         hasAuthKey: Boolean(resolvedAuthKey),
         hasOtp: Boolean(otp),
+        validityMinutes,
+        validityParameter: validityParameter || null,
         method: "GET",
         country,
         hasTemplateName: Boolean(templateName),
@@ -229,6 +233,10 @@ class ApitxtService {
         project_ref_id: projectRefId,
         sender,
         DLT_PE_ID: peId,
+        // Provider variable naming is configurable until its API contract is confirmed.
+        ...(validityParameter && validityMinutes !== undefined
+          ? { [validityParameter]: String(validityMinutes) }
+          : {}),
       },
     );
 

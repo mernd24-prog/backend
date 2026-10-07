@@ -20,6 +20,8 @@ const smsConfig = Object.freeze({
   route: env.sms.route,
   country: env.sms.country,
   timeoutMs: env.sms.timeoutMs,
+  otpProviderTemplates: env.sms.otpProviderTemplates,
+  otpValidityParameter: env.sms.otpValidityParameter,
 });
 
 module.exports = { smsConfig };
