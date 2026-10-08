@@ -19,6 +19,7 @@ const userRoutes = express.Router();
 const userController = new UserController();
 
 userRoutes.get("/me", authenticate, catchErrors(userController.getMe));
+userRoutes.get("/me/profile-image", authenticate, catchErrors(userController.profileImage));
 userRoutes.patch(
   "/me",
   authenticate,

@@ -10,6 +10,8 @@ const { okResponse } = require("../http/reply");
 const { authenticate } = require("../middleware/authenticate");
 const { RedisRateLimitStore } = require("../middleware/redis-rate-limit-store");
 const { catchErrors } = require("../middleware/catch-errors");
+const { ROLES } = require("../constants/roles");
+const { PROFILE_IMAGE_MODULE, saveProfileImage } = require("../upload/profile-image.service");
 const {
   ALLOWED_DOCUMENT_MIME_TYPES,
   ALLOWED_IMAGE_MIME_TYPES,
@@ -121,6 +123,12 @@ fileUploaderRoutes.post(
       req,
     });
 
+    if (image.module === PROFILE_IMAGE_MODULE) {
+      if (req.auth.role !== ROLES.BUYER) throw new AppError("Secure customer profile uploads require a customer account", 403);
+      await saveProfileImage(req.auth.sub, image);
+      res.set("Cache-Control", "no-store");
+    }
+
     return res.status(201).json(okResponse({
       imageURL: image.url,
       url: image.url,
@@ -134,6 +142,10 @@ fileUploaderRoutes.post(
   runUpload(upload.array("file", 10)),
   catchErrors(async (req, res) => {
     const files = req.files || [];
+    if (String(req.body.module || "").trim().toLowerCase() === PROFILE_IMAGE_MODULE) {
+      await Promise.all(files.map((file) => fs.promises.unlink(file.path).catch(() => {})));
+      throw new AppError("Please upload one profile image at a time", 400);
+    }
     if (!files.length) {
       throw new AppError("At least one image file is required", 400);
     }

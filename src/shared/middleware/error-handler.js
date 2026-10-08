@@ -163,7 +163,8 @@ function errorHandler(error, req, res, next) {
       { err: error, statusCode, errorCode: code || "INTERNAL_ERROR" },
       `${req.method} ${req.originalUrl || req.url} -> ${statusCode} ${code || "INTERNAL_ERROR"}: ${message}`,
     );
-    if (!postgresResult) message = "An unexpected error occurred. Please try again later.";
+    const profileImageError = error.name === "AppError" && ["PROFILE_IMAGE_UNAVAILABLE", "PROFILE_IMAGE_UPLOAD_FAILED"].includes(code);
+    if (!postgresResult && !profileImageError) message = "An unexpected error occurred. Please try again later.";
   } else {
     req.log?.warn(
       {

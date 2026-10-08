@@ -108,6 +108,7 @@ class AuthService {
       influencer_forgot_password: "Influencer Password Reset",
       login: "Seller Login",
       buyer_auth: "Sam Global Login",
+      change_password: "Password Change",
 
     };
     return labels[purpose] || "Verification";
@@ -251,7 +252,7 @@ class AuthService {
         action: payload.action || "password_changed",
       },
     });
-    return sendMail({
+    const delivery = await sendMail({
       to,
       subject: template.subject,
       text: template.text,
@@ -263,6 +264,7 @@ class AuthService {
       );
       return null;
     });
+    return delivery;
   }
 
   async sendOtpEmail({ email, existingUser = null, firstName = "", otp, purpose }) {
@@ -272,13 +274,17 @@ class AuthService {
       otp,
       purpose: this.getOtpPurposeLabel(purpose),
     });
-    return sendMail({
+    const delivery = await sendMail({
       to: email,
       subject: `OTP for ${this.getOtpPurposeLabel(purpose)}`,
       text: `Your Sam Global verification code is ${otp}. It will expire in 15 minutes. Please do not share it with anyone.`,
       html,
       type: "auth_otp",
     });
+    if (env.auth.otpMode === "live" && (String(delivery?.messageId || "").startsWith("static-") || delivery?.accepted?.length === 0)) {
+      throw new AppError("OTP email delivery is unavailable. Please try again later.", 503);
+    }
+    return delivery;
   }
 
   makeInitialSellerProfile(payload = {}) {
@@ -546,6 +552,10 @@ class AuthService {
   }
 
   async register(payload, requestContext = {}) {
+    if (payload.role === ROLES.BUYER || !payload.role) {
+      return this.registerWithOtp({ ...payload, role: ROLES.BUYER }, requestContext);
+    }
+
     this.validateSelfSignupRole(payload.role);
     await this.referralService.getReferrerByCode(payload.referralCode);
     await this.assertSignupIdentityAvailable(payload, requestContext);
@@ -617,7 +627,7 @@ class AuthService {
 
       return {
         ...result,
-        message: result?.deliveryMode === "third_party_whatsapp"
+        message: payload.role === ROLES.BUYER ? result.message : result?.deliveryMode === "third_party_whatsapp"
           ? `${this.getSignupRoleLabel(payload.role)} registration OTP sent successfully on WhatsApp.`
           : this.getRegistrationOtpMessage(payload.role),
       };
@@ -1352,6 +1362,10 @@ class AuthService {
     const existingUser =
       await this.findBuyerOtpUser(identity);
 
+    if (!existingUser && identity.channel === "mobile") {
+      throw new AppError("This mobile number is not registered. Please create an account with your email and mobile number first.", 404);
+    }
+
     /*
      * Buyer OTP endpoint must never authenticate seller,
      * admin, influencer or other account types.
@@ -1769,6 +1783,10 @@ class AuthService {
     if (!user) {
       authAction = "register";
 
+      if (identity.channel === "mobile") {
+        throw new AppError("This mobile number is not registered. Please create an account first.", 404);
+      }
+
       const profile = {
         firstName:
           String(
@@ -1983,7 +2001,7 @@ class AuthService {
       Boolean(mobileNumber) &&
       selectedOtpChannel === "whatsapp";
     const useSmsOtp =
-      selectedOtpChannel === "sms" &&
+      (selectedOtpChannel === "sms" || purpose === "change_password" || (purpose === "registration" && role === ROLES.BUYER)) &&
       Boolean(mobileNumber);
     const isStaticOtp = env.auth.otpMode === "static";
     const otp = isStaticOtp ? env.auth.staticOtp : createOtp();
@@ -2005,7 +2023,9 @@ class AuthService {
     );
 
     try {
-      if (useSellerRegistrationWhatsapp) {
+      if (isStaticOtp) {
+        delivery = { testMode: true };
+      } else if (useSellerRegistrationWhatsapp) {
         logger.info(
           {
             purpose,
@@ -2057,6 +2077,7 @@ class AuthService {
               registration: SMS_TEMPLATE_KEYS.REGISTER_OTP,
               login: SMS_TEMPLATE_KEYS.LOGIN_OTP,
               forgot_password: SMS_TEMPLATE_KEYS.FORGOT_PASSWORD_OTP,
+              change_password: SMS_TEMPLATE_KEYS.RESET_PASSWORD_OTP,
               influencer_forgot_password: SMS_TEMPLATE_KEYS.ACCOUNT_RECOVERY_OTP,
             }[purpose] || SMS_TEMPLATE_KEYS.ACCOUNT_RECOVERY_OTP,
             validityMinutes: 10,
@@ -2130,7 +2151,11 @@ class AuthService {
     );
 
     return {
-      message: deliveryMode === "third_party_whatsapp"
+      message: deliveryMode === "static"
+        ? "Testing mode: use the configured test OTP to verify your account."
+        : deliveryMode === "fallback_email"
+          ? "Mobile OTP delivery failed. OTP has been sent to your email instead."
+          : deliveryMode === "third_party_whatsapp"
         ? "OTP sent successfully on WhatsApp"
         : deliveryMode === "third_party_sms" || deliveryMode === "static_sms"
           ? "OTP sent successfully on mobile"
@@ -2191,7 +2216,12 @@ class AuthService {
   }
 
   async resendOtp(payload, requestContext = {}) {
-    // Resend is same as send, but we'll check if there's already an OTP
+    if (payload.purpose === "registration") {
+      const registration = await redis.get(`registration:${payload.email}`);
+      if (!registration) throw new AppError("Registration session expired. Please register again.", 400);
+      const data = JSON.parse(registration);
+      return this.sendOtp({ ...payload, mobile: data.phone, role: data.role, profile: data.profile }, requestContext);
+    }
     return this.sendOtp(payload, requestContext);
   }
 
@@ -2279,7 +2309,7 @@ class AuthService {
   }
 
   async changePassword(payload, requestContext = {}) {
-    const { userId, currentPassword, newPassword } = payload;
+    const { userId, currentPassword, newPassword, otp } = payload;
 
     const user = await this.authRepository.findUserWithPasswordById(userId);
     if (!user) {
@@ -2295,6 +2325,27 @@ class AuthService {
     if (!isMatch) {
       throw new AppError("Current password is incorrect", 400);
     }
+
+    const otpKey = this.makeOtpKey(user.email, "change_password");
+    const contextKey = `password_change:${user.id}`;
+    const passwordDigest = createHash("sha256").update(newPassword).digest("hex");
+    if (!otp) {
+      const delivery = await this.sendOtp({
+        email: user.email,
+        mobile: user.phone,
+        role: user.role,
+        purpose: "change_password",
+      }, requestContext);
+      await redis.setex(contextKey, 600, passwordDigest);
+      return { ...delivery, otpRequired: true };
+    }
+
+    // Consume only a matching OTP issued for this account and new password.
+    const verified = await redis.eval(
+      "if redis.call('GET', KEYS[1]) == ARGV[1] and redis.call('GET', KEYS[2]) == ARGV[2] then redis.call('DEL', KEYS[1], KEYS[2]); return 1 else return 0 end",
+      2, otpKey, contextKey, String(otp), passwordDigest,
+    );
+    if (verified !== 1) throw new AppError("Invalid or expired OTP. Please request a new OTP.", 400);
 
     const passwordHash = await hashText(newPassword);
     await this.authRepository.updatePassword(user.id, passwordHash);

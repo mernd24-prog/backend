@@ -1,6 +1,7 @@
 const { getPage } = require("../../../shared/tools/page");
 const { AppError } = require("../../../shared/errors/app-error");
 const { CmsRepository } = require("../repositories/cms.repository");
+const { storageService } = require("../../../shared/storage/storage-service");
 
 class CmsService {
   constructor({ cmsRepository = new CmsRepository() } = {}) {
@@ -213,7 +214,15 @@ class CmsService {
     if (!page) {
       throw new AppError("Page not found", 404);
     }
-    return this.cmsRepository.delete(slug);
+    const result = await this.cmsRepository.delete(slug);
+    // Fire-and-forget: clean up CMS page images from Cloudinary
+    storageService.deleteByUrls([
+      page.image?.url,
+      page.heroImage,
+      page.coverImage,
+      page.thumbnailUrl,
+    ]);
+    return result;
   }
 }
 

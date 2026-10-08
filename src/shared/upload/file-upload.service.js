@@ -163,11 +163,21 @@ class FileUploadService {
 
     const imageType = sanitizeSegment(options.imageType, "image");
     const publicId = `${imageType}-${uuidv4()}`;
+    const secureProfile = moduleName === "customer-profiles";
+    if (secureProfile && options.req?.auth?.role !== "buyer") {
+      await fs.unlink(file.path).catch(() => {});
+      throw new AppError("Secure customer profile uploads require a customer account", 403);
+    }
+    if (secureProfile && !hasCloudinaryConfig()) {
+      await fs.unlink(file.path).catch(() => {});
+      throw new AppError("Secure profile uploads require configured Cloudinary storage", 503);
+    }
 
     if (hasCloudinaryConfig()) {
       try {
         const upload = await storageService.upload(file.path, {
           resource_type: "image",
+          ...(secureProfile ? { type: "authenticated" } : {}),
           folder: `ecommerce/uploads/${moduleName}`,
           public_id: publicId,
           overwrite: false,
@@ -180,11 +190,14 @@ class FileUploadService {
           },
         });
 
-        const url = upload.secure_url || upload.url;
+        const url = secureProfile
+          ? `${getRequestBaseUrl(options.req)}/api/v1/users/me/profile-image`
+          : upload.secure_url || upload.url;
         return {
           imageURL: url,
           url,
           publicId: upload.public_id,
+          ...(secureProfile ? { format: upload.format, deliveryType: "authenticated", protected: true } : {}),
           assetId: upload.asset_id,
           storage: "cloudinary",
           folder: `ecommerce/uploads/${moduleName}`,
@@ -194,6 +207,12 @@ class FileUploadService {
           mimeType: file.mimetype,
           size: file.size,
         };
+      } catch (error) {
+        if (secureProfile && !(error instanceof AppError)) {
+          options.req?.log?.error({ providerCode: error.http_code, reason: error.message }, "Secure profile image upload failed");
+          throw new AppError("Profile image upload is temporarily unavailable. Please try again.", 502, null, "PROFILE_IMAGE_UPLOAD_FAILED");
+        }
+        throw error;
       } finally {
         await fs.unlink(file.path).catch(() => {});
       }
