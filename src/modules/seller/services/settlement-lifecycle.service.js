@@ -7,14 +7,19 @@ const { ORDER_STATUS, PAYMENT_PROVIDER, PAYMENT_STATUS } = require("../../../sha
 const { commerceSettingsService } = require("../../admin/services/commerce-settings.service");
 const { ReturnModel } = require("../../returns/models/return.model");
 const { ReferralService } = require("../../referral/services/referral.service");
+const { NotificationService } = require("../../notification/services/notification.service");
 
 const ADMIN_ROLES = new Set(["admin", "sub-admin", "super-admin"]);
 const OPEN_RETURN_STATUSES = ["requested", "approved", "picked_up", "received", "qc_pending", "refund_pending"];
 const FINAL_COLLECTION_STATUSES = ["verified", "remitted"];
 
 class SettlementLifecycleService {
-  constructor({ referralService = new ReferralService() } = {}) {
+  constructor({
+    referralService = new ReferralService(),
+    notificationService = new NotificationService(),
+  } = {}) {
     this.referralService = referralService;
+    this.notificationService = notificationService;
   }
 
   isAdmin(actor = {}) {
@@ -59,6 +64,10 @@ class SettlementLifecycleService {
       returnWindowDays: Math.max(Number(settings.returns?.defaultWindowDays ?? 0), 0),
       payoutSchedule: settings.finance?.payoutSchedule || "manual",
       payoutRequiresCapture: settings.cod?.payoutRequiresCapture !== false,
+      codSubmissionHours: Math.max(
+        Number(settings.cod?.collectionSubmissionHours ?? 72),
+        1,
+      ),
     };
   }
 
@@ -190,7 +199,10 @@ class SettlementLifecycleService {
     const existing = await knex("cod_collections")
       .where({ order_id: order.id, shipment_id: shipment.id, seller_id: shipment.seller_id })
       .first();
-    if (existing) return existing;
+    if (existing) {
+      await this.syncSettlementForVerifiedCollection(existing, {}, { provisional: true });
+      return existing;
+    }
 
     const [items, sellerShipmentCount, payment] = await Promise.all([
       knex("order_items").select("seller_id", "line_total", "discount_amount").where("order_id", order.id),
@@ -203,8 +215,22 @@ class SettlementLifecycleService {
       .reduce((sum, item) => sum + this.number(item.line_total) - this.number(item.discount_amount), 0);
     const shipmentCount = Math.max(Number(sellerShipmentCount?.count || 1), 1);
     const expectedAmount = this.number((this.number(order.payable_amount || order.total_amount) * (sellerBase / Math.max(totalBase, 1))) / shipmentCount);
-    const collectionMode = "seller_direct";
+    const shipmentMetadata = this.parseJson(shipment.metadata, {});
+    const requestedCollectionMode = String(
+      shipmentMetadata.codCollectionMode ||
+        shipmentMetadata.collectionMode ||
+        shipment.cod_collection_mode ||
+        "seller_direct",
+    ).toLowerCase();
+    const collectionMode = ["seller_direct", "platform_or_courier", "hybrid"].includes(
+      requestedCollectionMode,
+    )
+      ? requestedCollectionMode
+      : "seller_direct";
 
+    const dueAt = new Date(
+      Date.now() + Number(policy.codSubmissionHours || 72) * 60 * 60 * 1000,
+    );
     const [collection] = await knex("cod_collections").insert({
       id: uuidv4(),
       order_id: order.id,
@@ -219,8 +245,39 @@ class SettlementLifecycleService {
       currency: order.currency || "INR",
       status: payment?.status === PAYMENT_STATUS.CAPTURED && collectionMode !== "seller_direct" ? "verified" : "pending",
       verified_at: payment?.status === PAYMENT_STATUS.CAPTURED && collectionMode !== "seller_direct" ? knex.fn.now() : null,
-      metadata: { createdFrom: "delivery_verified", shipmentId: shipment.id, paymentAlreadyCaptured: payment?.status === PAYMENT_STATUS.CAPTURED },
+      metadata: {
+        createdFrom: "delivery_verified",
+        shipmentId: shipment.id,
+        paymentAlreadyCaptured: payment?.status === PAYMENT_STATUS.CAPTURED,
+        liabilityStatus: "provisional",
+        sellerActionRequired: collectionMode === "seller_direct",
+        dueAt: dueAt.toISOString(),
+      },
     }).returning("*");
+    // The seller already holds customer cash at delivery. Book the recovery
+    // immediately; seller acknowledgement is evidence, not the accounting
+    // event that creates the platform receivable.
+    await this.syncSettlementForVerifiedCollection(collection, {}, { provisional: true });
+    if (collectionMode === "seller_direct") {
+      await this.notificationService.createNotification({
+        userId: String(shipment.seller_id),
+        channel: "in_app",
+        subject: "COD collection requires your response",
+        template: `A delivered COD shipment created a liability of ${order.currency || "INR"} ${expectedAmount.toFixed(2)}. Confirm collection, report remittance, or dispute it before the due date.`,
+        payload: {
+          orderId: order.id,
+          orderNumber: order.order_number || null,
+          shipmentId: shipment.id,
+          codCollectionId: collection.id,
+          amount: expectedAmount,
+          dueAt: dueAt.toISOString(),
+          viewUrl: "/app/seller-cod-collections",
+          targetType: "seller_cod_collection",
+        },
+        status: "queued",
+        idempotencyKey: `seller.cod.collection.action:${collection.id}`,
+      }).catch(() => null);
+    }
     return collection;
   }
 
@@ -239,8 +296,9 @@ class SettlementLifecycleService {
       throw new AppError("This shipment uses platform/courier COD collection", 409);
     }
     if (FINAL_COLLECTION_STATUSES.includes(collection.status)) return collection;
+    const submissionType = payload.submissionType || "retained";
     const amount = this.number(payload.collectedAmount);
-    if (amount <= 0) throw new AppError("Collected COD amount must be greater than zero", 400);
+    if (submissionType !== "dispute" && amount <= 0) throw new AppError("Collected COD amount must be greater than zero", 400);
     if (amount > this.number(collection.expected_amount) + 0.01) {
       throw new AppError("Collected COD amount cannot exceed the expected COD amount", 400);
     }
@@ -250,13 +308,18 @@ class SettlementLifecycleService {
       reference_id: payload.referenceId || null,
       proof_url: payload.proofUrl || null,
       notes: payload.notes || null,
-      status: "submitted",
+      status: submissionType === "dispute" ? "disputed" : "submitted",
       collected_by: "seller",
       submitted_by: actor.userId || actor.sub || null,
       submitted_at: knex.fn.now(),
-      metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({ submittedFrom: "seller" })]),
+      metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({
+        submittedFrom: "seller",
+        sellerSubmissionType: submissionType,
+        liabilityStatus: submissionType === "dispute" ? "disputed" : "acknowledged",
+      })]),
       updated_at: knex.fn.now(),
     }).returning("*");
+    await this.syncSettlementForVerifiedCollection(updated, actor, { provisional: true });
     return updated;
   }
 
@@ -338,23 +401,54 @@ class SettlementLifecycleService {
     }, actor)));
   }
 
-  async syncSettlementForVerifiedCollection(collection, actor = {}) {
-    if (collection.collected_by !== "seller" || !FINAL_COLLECTION_STATUSES.includes(collection.status)) return null;
-    // If the platform has actually received the full remittance, there is no
-    // seller-held cash to recover through payout/negative-balance offset.
-    if (collection.status === "remitted") return null;
-    const adjustmentAmount = -Math.abs(this.number(collection.collected_amount));
+  async syncSettlementForVerifiedCollection(collection, actor = {}, options = {}) {
+    if (collection.collected_by !== "seller") return null;
+    const isFinal = FINAL_COLLECTION_STATUSES.includes(collection.status);
+    const liabilityAmount = this.number(
+      isFinal && this.number(collection.collected_amount) > 0
+        ? collection.collected_amount
+        : collection.expected_amount,
+    );
+    if (liabilityAmount <= 0) return null;
+    const adjustmentAmount = -Math.abs(liabilityAmount);
+    const isRemitted = collection.status === "remitted";
+    const liabilityStatus = isRemitted
+      ? "remitted"
+      : isFinal
+        ? "recoverable"
+        : options.provisional
+          ? "provisional"
+          : "recoverable";
     const payload = {
       id: uuidv4(), seller_id: collection.seller_id, organization_id: collection.organization_id || null,
       order_id: collection.order_id, cod_collection_id: collection.id, type: "cod_recovery",
-      amount: adjustmentAmount, currency: collection.currency || "INR", status: "pending",
+      amount: isRemitted ? 0 : adjustmentAmount,
+      currency: collection.currency || "INR",
+      status: isRemitted ? "completed" : "pending",
       reference_id: collection.reference_id || null, notes: collection.notes || null,
-      metadata: { source: "seller_direct_cod", collectedAmount: this.number(collection.collected_amount) },
+      metadata: {
+        source: "seller_direct_cod",
+        expectedAmount: this.number(collection.expected_amount),
+        collectedAmount: this.number(collection.collected_amount),
+        liabilityStatus,
+        provisional: liabilityStatus === "provisional",
+      },
       created_by: actor.userId || actor.sub || null,
+      resolved_by: isRemitted ? actor.userId || actor.sub || null : null,
+      resolved_at: isRemitted ? knex.fn.now() : null,
     };
     await knex("seller_settlement_adjustments").insert(payload)
       .onConflict(["cod_collection_id", "type"])
-      .merge({ amount: adjustmentAmount, reference_id: payload.reference_id, notes: payload.notes, metadata: payload.metadata, updated_at: knex.fn.now() });
+      .merge({
+        amount: payload.amount,
+        status: payload.status,
+        reference_id: payload.reference_id,
+        notes: payload.notes,
+        metadata: payload.metadata,
+        resolved_by: payload.resolved_by,
+        resolved_at: payload.resolved_at,
+        updated_at: knex.fn.now(),
+      });
     // seller_settlements is the existing finance recovery queue. Keep this projection so
     // the current Payout Operations and Negative Balances screens work without a second queue.
     const existingRecovery = await knex("seller_settlements")
@@ -364,17 +458,23 @@ class SettlementLifecycleService {
       source: "seller_direct_cod_recovery",
       codCollectionId: collection.id,
       orderId: collection.order_id,
+      expectedAmount: this.number(collection.expected_amount),
       collectedAmount: this.number(collection.collected_amount),
+      liabilityStatus,
+      provisional: liabilityStatus === "provisional",
       adjustmentType: "cod_recovery",
-      originalLiabilityAmount: this.number(collection.collected_amount),
-      recoveredAmount: 0,
-      remainingAmount: this.number(collection.collected_amount),
+      originalLiabilityAmount: liabilityAmount,
+      recoveredAmount: isRemitted ? liabilityAmount : 0,
+      remainingAmount: isRemitted ? 0 : liabilityAmount,
     };
     if (existingRecovery) {
       await knex("seller_settlements").where("id", existingRecovery.id).update({
-        adjustment_amount: adjustmentAmount,
-        net_amount: adjustmentAmount,
-        notes: "Seller-direct COD collection recovery",
+        adjustment_amount: isRemitted ? 0 : adjustmentAmount,
+        net_amount: isRemitted ? 0 : adjustmentAmount,
+        status: isRemitted ? "completed" : "pending",
+        notes: isRemitted
+          ? "Seller-direct COD remittance received"
+          : "Seller-direct COD collection recovery",
         metadata: recoveryMetadata,
         updated_at: knex.fn.now(),
       });
@@ -382,9 +482,15 @@ class SettlementLifecycleService {
       await knex("seller_settlements").insert({
         id: uuidv4(), seller_id: collection.seller_id, organization_id: collection.organization_id || null,
         settlement_date: new Date().toISOString().slice(0, 10), gross_amount: 0,
-        commission_amount: 0, tax_amount: 0, refund_amount: 0, adjustment_amount: adjustmentAmount,
-        net_amount: adjustmentAmount, currency: collection.currency || "INR", status: "pending",
-        notes: "Seller-direct COD collection recovery", metadata: recoveryMetadata,
+        commission_amount: 0, tax_amount: 0, refund_amount: 0,
+        adjustment_amount: isRemitted ? 0 : adjustmentAmount,
+        net_amount: isRemitted ? 0 : adjustmentAmount,
+        currency: collection.currency || "INR",
+        status: isRemitted ? "completed" : "pending",
+        notes: isRemitted
+          ? "Seller-direct COD remittance received"
+          : "Seller-direct COD collection recovery",
+        metadata: recoveryMetadata,
         created_at: knex.fn.now(), updated_at: knex.fn.now(),
       });
     }
@@ -404,7 +510,26 @@ class SettlementLifecycleService {
     if (query.status) builder.where("c.status", query.status);
     if (query.orderId) builder.where("c.order_id", query.orderId);
     if (query.sellerId && this.isAdmin(actor)) builder.where("c.seller_id", query.sellerId);
-    return builder.orderBy("c.created_at", "desc").limit(Math.min(Math.max(Number(query.limit || 100), 1), 500));
+    const rows = await builder.orderBy("c.created_at", "desc").limit(Math.min(Math.max(Number(query.limit || 100), 1), 500));
+    const now = Date.now();
+    return rows.map((row) => {
+      const metadata = this.parseJson(row.metadata, {});
+      const dueAt = metadata.dueAt || null;
+      const sellerActionRequired =
+        ["seller_direct", "hybrid"].includes(row.collection_mode) &&
+        ["pending", "disputed"].includes(row.status);
+      return {
+        ...row,
+        due_at: dueAt,
+        is_overdue: Boolean(
+          sellerActionRequired && dueAt && new Date(dueAt).getTime() < now,
+        ),
+        seller_action_required: sellerActionRequired,
+        liability_status:
+          metadata.liabilityStatus ||
+          (row.status === "remitted" ? "remitted" : "provisional"),
+      };
+    });
   }
 
   async finalizeEligibleOrders() {

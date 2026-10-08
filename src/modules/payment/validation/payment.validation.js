@@ -128,11 +128,24 @@ const codCollectionListSchema = Joi.object({
 
 const codCollectionSubmitSchema = Joi.object({
   body: Joi.object({
-    collectedAmount: Joi.number().positive().required(),
+    submissionType: Joi.string().valid("retained", "remittance", "dispute").default("retained"),
+    collectedAmount: Joi.when("submissionType", {
+      is: "dispute",
+      then: Joi.number().min(0).default(0),
+      otherwise: Joi.number().positive().required(),
+    }),
     collectionDate: Joi.date().iso().allow(null),
-    referenceId: Joi.string().trim().min(3).max(180).required(),
+    referenceId: Joi.when("submissionType", {
+      is: "dispute",
+      then: Joi.string().trim().max(180).allow("", null),
+      otherwise: Joi.string().trim().min(3).max(180).required(),
+    }),
     proofUrl: Joi.string().uri().allow("", null),
-    notes: Joi.string().max(1000).allow("", null),
+    notes: Joi.when("submissionType", {
+      is: "dispute",
+      then: Joi.string().trim().min(5).max(1000).required(),
+      otherwise: Joi.string().max(1000).allow("", null),
+    }),
   }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({ shipmentId: uuid.required() }).required(),

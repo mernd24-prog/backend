@@ -2303,6 +2303,108 @@ gstTcsAmount,
     return results;
   }
 
+  async reconcileMissingDeliveredCommissions({ limit = 500, sellerId = null, organizationId = null } = {}) {
+    const cappedLimit = Math.min(Math.max(Number(limit || 500), 1), 1000);
+    const missingOrders = await knex({ orderItem: "order_items" })
+      .leftJoin({ commission: "seller_commissions" }, function joinCommission() {
+        this.on("commission.order_item_id", "=", "orderItem.id")
+          .andOn("commission.seller_id", "=", "orderItem.seller_id");
+      })
+      .whereNotNull("orderItem.delivered_at")
+      .whereNull("commission.id")
+      .modify((builder) => {
+        if (sellerId) builder.where("orderItem.seller_id", sellerId);
+        if (organizationId) builder.where("orderItem.organization_id", organizationId);
+      })
+      .distinct("orderItem.order_id")
+      .limit(cappedLimit);
+
+    const results = { checked: missingOrders.length, repaired: 0, failed: [] };
+    for (const row of missingOrders) {
+      try {
+        const calculation = await this.calculateCommission(row.order_id, {
+          sellerId: sellerId || undefined,
+          organizationId: organizationId || undefined,
+          actor: { userId: "system:delivered-commission-reconciliation", role: "system" },
+          sourceStatus: ORDER_STATUS.DELIVERED,
+        });
+        results.repaired += Number(calculation?.created || 0);
+      } catch (error) {
+        results.failed.push({
+          orderId: String(row.order_id),
+          reason: error?.message || "delivered_commission_reconciliation_failed",
+        });
+      }
+    }
+    return results;
+  }
+
+  async getCodFinanceReconciliation(sellerId, query = {}) {
+    const orderRows = await knex({ order: "orders" })
+      .join({ orderItem: "order_items" }, "orderItem.order_id", "order.id")
+      .where("orderItem.seller_id", sellerId)
+      .where("order.payment_provider", PAYMENT_PROVIDER.COD)
+      .modify((builder) => {
+        if (query.organizationId) builder.where("orderItem.organization_id", query.organizationId);
+        if (query.fromDate) builder.where("order.created_at", ">=", query.fromDate);
+        if (query.toDate) builder.where("order.created_at", "<=", query.toDate);
+      })
+      .groupBy("order.id", "order.order_number", "order.status", "order.currency")
+      .select(
+        "order.id",
+        "order.order_number",
+        "order.status",
+        "order.currency",
+        knex.raw("MAX(\"orderItem\".delivered_at) AS delivered_at"),
+        knex.raw("SUM(GREATEST(COALESCE(\"orderItem\".line_total, 0) - COALESCE(\"orderItem\".discount_amount, 0), 0)) AS seller_order_amount"),
+      );
+    const orderIds = orderRows.map((row) => row.id);
+    const [collections, commissionRows] = orderIds.length
+      ? await Promise.all([
+        knex("cod_collections").where("seller_id", sellerId).whereIn("order_id", orderIds),
+        knex("seller_commissions").where("seller_id", sellerId).whereIn("order_id", orderIds).select("order_id"),
+      ])
+      : [[], []];
+    const collectionByOrder = new Map();
+    collections.forEach((row) => {
+      const key = String(row.order_id);
+      const current = collectionByOrder.get(key) || { count: 0, amount: 0, statuses: [] };
+      current.count += 1;
+      current.amount = this.round(current.amount + Number(row.expected_amount || row.collected_amount || 0));
+      current.statuses.push(row.status);
+      collectionByOrder.set(key, current);
+    });
+    const commissionedOrders = new Set(commissionRows.map((row) => String(row.order_id)));
+    const items = orderRows.map((row) => {
+      const collection = collectionByOrder.get(String(row.id));
+      const delivered = Boolean(row.delivered_at) || [ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED].includes(row.status);
+      return {
+        orderId: row.id,
+        orderNumber: row.order_number,
+        orderStatus: row.status,
+        delivered,
+        hasEarning: commissionedOrders.has(String(row.id)),
+        hasCollection: Boolean(collection),
+        collectionCount: collection?.count || 0,
+        collectionAmount: collection?.amount || 0,
+        collectionStatuses: collection?.statuses || [],
+        sellerOrderAmount: this.round(row.seller_order_amount || 0),
+        currency: row.currency || "INR",
+      };
+    });
+    return {
+      totalOrders: items.length,
+      deliveredOrders: items.filter((item) => item.delivered).length,
+      awaitingDeliveryOrders: items.filter((item) => !item.delivered).length,
+      ordersWithLiability: items.filter((item) => item.hasCollection).length,
+      ordersWithEarnings: items.filter((item) => item.hasEarning).length,
+      missingCollectionOrders: items.filter((item) => item.delivered && !item.hasCollection).length,
+      missingEarningOrders: items.filter((item) => item.delivered && !item.hasEarning).length,
+      liabilityAmount: this.round(items.reduce((sum, item) => sum + item.collectionAmount, 0)),
+      items,
+    };
+  }
+
   summarizeCommissions(commissions = []) {
     return commissions.reduce(
       (acc, row) => {
@@ -3142,7 +3244,14 @@ gstTcsAmount,
   }
 
   async getSellerCommissions(sellerId, query = {}) {
-    return this.listSellerCommissions({ ...query, sellerId });
+    const commissionReconciliation = await this.reconcileMissingDeliveredCommissions({
+      sellerId,
+      organizationId: query.organizationId || null,
+    });
+    const result = await this.listSellerCommissions({ ...query, sellerId });
+    result.codReconciliation = await this.getCodFinanceReconciliation(sellerId, query);
+    result.commissionReconciliation = commissionReconciliation;
+    return result;
   }
 
   async getSellerPayouts(sellerId, query = {}) {
@@ -3186,6 +3295,10 @@ gstTcsAmount,
   }
 
   async getSellerWalletSummary(sellerId, query = {}) {
+    const commissionRepair = await this.reconcileMissingDeliveredCommissions({
+      sellerId,
+      organizationId: query.organizationId || null,
+    });
     const { limit, offset } = this.normalizePagination(query);
     const buildCommissionQuery = () => knex("seller_commissions")
       .where("seller_id", sellerId)
@@ -3329,6 +3442,7 @@ gstTcsAmount,
       updatedAt: commission.updated_at,
     }));
 
+    const codReconciliation = await this.getCodFinanceReconciliation(sellerId, query);
     return {
       sellerId,
       organizationId: query.organizationId || null,
@@ -3368,6 +3482,8 @@ gstTcsAmount,
         inProcessCount: Number(inProcessPayoutRow?.count || 0),
         inProcessAmount: this.round(inProcessPayoutRow?.in_process_amount || 0),
       },
+      codReconciliation,
+      commissionReconciliation: commissionRepair,
       items,
       total: evaluations.length,
       limit,

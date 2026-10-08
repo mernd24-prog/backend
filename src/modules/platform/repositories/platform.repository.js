@@ -691,12 +691,10 @@ class PlatformRepository {
 
     const stableBrandId = (rawId, fallbackValue = "") => {
       const raw = String(rawId || "").trim();
-      if (!raw) return String(fallbackValue || "").trim();
-      if (/^[a-f\d]{24}$/i.test(raw)) {
-        const fallback = String(fallbackValue || "").trim();
-        return fallback || raw.toLowerCase();
-      }
-      return raw;
+      // Master brands must retain their database identity. Replacing a valid
+      // ObjectId with the slug made approval URLs use values such as
+      // `/brands/testing/approval`, which cannot be resolved by findById.
+      return raw || String(fallbackValue || "").trim();
     };
 
     const mergeBrand = (brand, fallbackName = "") => {
