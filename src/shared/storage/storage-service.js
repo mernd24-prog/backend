@@ -123,6 +123,19 @@ function buildLocalFolderSegments(folder = "ecommerce/documents") {
 }
 
 class StorageService {
+  signProfileImage({ publicId, format }) {
+    ensureCloudinaryConfigured();
+    if (!publicId || !format) throw new AppError("Profile image metadata is incomplete", 500);
+    const expiresAt = Math.floor(Date.now() / 1000) + 300;
+    return {
+      url: cloudinary.utils.private_download_url(publicId, format, {
+        resource_type: "image", type: "authenticated", attachment: false,
+        expires_at: expiresAt, secure: true,
+      }),
+      expiresAt,
+    };
+  }
+
   async upload(filePath, options = {}) {
     ensureCloudinaryConfigured();
     return cloudinary.uploader.upload(filePath, options);

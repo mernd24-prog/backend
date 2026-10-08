@@ -137,6 +137,10 @@ phoneVerified: {
       lastName: String,
       avatarUrl: String,
     },
+    profileImageAsset: {
+      type: new mongoose.Schema({ publicId: String, format: String }, { _id: false }),
+      select: false,
+    },
     addresses: [userAddressSchema],
     sellerProfile: sellerProfileSchema,
     sellerSettings: {

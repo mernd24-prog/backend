@@ -1,4 +1,5 @@
 const { AppError } = require("../../../shared/errors/app-error");
+const { withProfileImage, getProfileImageAsset } = require("../../../shared/upload/profile-image.service");
 const { UserRepository } = require("../repositories/user.repository");
 const { UserKycRepository } = require("../repositories/user-kyc.repository");
 const { KYC_STATUS } = require("../../../shared/domain/commerce-constants");
@@ -41,7 +42,7 @@ class UserService {
       throw new AppError("User not found", 404);
     }
 
-    return this.withSellerProfileState(user);
+    return withProfileImage(userId, await this.withSellerProfileState(user));
   }
 
   toPlainObject(value = {}) {
@@ -136,6 +137,7 @@ class UserService {
       ...(payload.lastName !== undefined ? { lastName: payload.lastName } : {}),
       ...(payload.avatarUrl !== undefined ? { avatarUrl: payload.avatarUrl } : {}),
     };
+    if ((await getProfileImageAsset(userId))?.publicId) delete profilePayload.avatarUrl;
     const hasDescription = Object.prototype.hasOwnProperty.call(payload, "description") ||
       Object.prototype.hasOwnProperty.call(payload.profile || {}, "description");
     const description = Object.prototype.hasOwnProperty.call(payload, "description")
@@ -187,7 +189,7 @@ class UserService {
       }
     }
 
-    return this.withSellerProfileState(updatedUser);
+    return withProfileImage(userId, await this.withSellerProfileState(updatedUser));
   }
 
   async addAddress(userId, payload) {

@@ -1,6 +1,7 @@
 const { okResponse } = require("../../../shared/http/reply");
 const { UserService } = require("../services/user.service");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
+const { readProfileImage } = require("../../../shared/upload/profile-image.service");
 
 class UserController {
   constructor({ userService = new UserService() } = {}) {
@@ -8,12 +9,21 @@ class UserController {
   }
 
   getMe = async (req, res) => {
+    res.set("Cache-Control", "no-store");
     const actor = getCurrentUser(req);
     const user = await this.userService.getProfile(actor.userId);
     res.json(okResponse(user));
   };
 
+  profileImage = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const image = await readProfileImage(actor.userId);
+    res.set({ "Content-Type": image.contentType, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Vary": "Authorization" });
+    res.send(image.body);
+  };
+
   updateMe = async (req, res) => {
+    res.set("Cache-Control", "no-store");
     const actor = getCurrentUser(req);
     const user = await this.userService.updateProfile(actor.userId, req.body);
     res.json(okResponse(user));
