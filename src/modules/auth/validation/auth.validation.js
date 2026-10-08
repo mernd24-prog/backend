@@ -390,6 +390,7 @@ const resetPasswordSchema = Joi.object({
 
 const changePasswordSchema = Joi.object({
   body: Joi.object({
+    otp: Joi.string().trim().pattern(/^\d{6}$/),
     currentPassword: Joi.string()
       .required(),
 
