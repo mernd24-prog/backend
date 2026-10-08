@@ -141,6 +141,66 @@ class StorageService {
     return cloudinary.uploader.upload(filePath, options);
   }
 
+  /**
+   * Extract the Cloudinary public_id from a secure_url.
+   * e.g. "https://res.cloudinary.com/demo/image/upload/v123/ecommerce/products/img-abc.jpg"
+   *       → "ecommerce/products/img-abc"
+   */
+  publicIdFromUrl(url) {
+    if (!url || typeof url !== "string") return null;
+    try {
+      const u = new URL(url);
+      // Only handle known Cloudinary hostnames
+      if (!u.hostname.endsWith("cloudinary.com") && !u.hostname.endsWith("cloudinary.net")) {
+        return null;
+      }
+      // pathname: /<cloud>/image/upload/[v<ver>/]<public_id>.<ext>
+      const parts = u.pathname.split("/");
+      // Find the index after "upload" or "authenticated"
+      const uploadIdx = parts.findIndex((p) => p === "upload" || p === "authenticated");
+      if (uploadIdx === -1) return null;
+      let afterUpload = parts.slice(uploadIdx + 1);
+      // Skip version segment like "v1234567890"
+      if (afterUpload[0] && /^v\d+$/.test(afterUpload[0])) {
+        afterUpload = afterUpload.slice(1);
+      }
+      const joined = afterUpload.join("/");
+      // Strip file extension
+      return joined.replace(/\.[^/.]+$/, "") || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fire-and-forget: delete a single asset from Cloudinary by its URL.
+   * Silently ignores errors and non-Cloudinary URLs.
+   * @param {string} url - Cloudinary secure_url
+   * @param {"image"|"video"|"raw"} [resourceType="image"]
+   */
+  deleteByUrl(url, resourceType = "image") {
+    if (!env.cloudinary.enabled) return;
+    const publicId = this.publicIdFromUrl(url);
+    if (!publicId) return;
+    cloudinary.uploader
+      .destroy(publicId, { resource_type: resourceType, invalidate: true })
+      .catch((err) => {
+        // Non-critical – log but never block the main flow
+        console.error("[Cloudinary] deleteByUrl failed", { publicId, err: err?.message });
+      });
+  }
+
+  /**
+   * Fire-and-forget: delete multiple assets from Cloudinary by their URLs.
+   * @param {string[]} urls
+   * @param {"image"|"video"|"raw"} [resourceType="image"]
+   */
+  deleteByUrls(urls, resourceType = "image") {
+    if (!env.cloudinary.enabled) return;
+    const validUrls = (urls || []).filter(Boolean);
+    validUrls.forEach((url) => this.deleteByUrl(url, resourceType));
+  }
+
   isUploadPayload(value) {
     if (!value) {
       return false;

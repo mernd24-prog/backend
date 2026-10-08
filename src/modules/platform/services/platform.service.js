@@ -10,6 +10,7 @@ const { UserModel } = require("../../user/models/user.model");
 const { ProductReviewModel } = require("../models/product-review.model");
 const { PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const { ROLES } = require("../../../shared/constants/roles");
+const { storageService } = require("../../../shared/storage/storage-service");
 const {
   AdminTaxModel,
   AdminSubTaxModel,
@@ -331,6 +332,8 @@ class PlatformService {
     const category = await this.platformRepository.getCategory(categoryKey);
     if (!category) throw AppError.notFound("Category");
     const result = await this.platformRepository.deleteCategory(categoryKey);
+    // Fire-and-forget: clean up category images from Cloudinary
+    storageService.deleteByUrls([category.bannerUrl, category.iconUrl]);
     this.invalidateCatalogCaches();
     auditService.remove(req, { module: "categories", entityId: categoryKey, entityType: "Category", oldData: category });
     return result;
@@ -1781,10 +1784,13 @@ class PlatformService {
     const item = await this.platformRepository.getBrand(brandId);
     if (!item) throw AppError.notFound("Brand");
     const result = await this.platformRepository.deleteBrand(brandId);
+    // Fire-and-forget: clean up brand images from Cloudinary
+    storageService.deleteByUrls([item.logo, item.logoUrl, item.imageUrl]);
     this.invalidateCatalogCaches();
     auditService.remove(req, { module: "brands", entityId: brandId, entityType: "Brand", oldData: item });
     return result;
   }
+
 
   async createBatch(payload, req) {
     const createPayload = withCreateActor(payload, req);
