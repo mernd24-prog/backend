@@ -97,9 +97,7 @@ class PricingService {
           throw new AppError(`Deal quantity limit is ${activeDeal.maxQuantityPerOrder} for ${product.title}`, 409);
         }
         const hasActiveDealPrice = activeDeal?.dealId && activeDeal.dealType !== "sponsored_placement";
-        const unitPrice = hasActiveDealPrice
-          ? Number(activeDeal.dealPrice)
-          : baseUnitPrice;
+        const unitPrice = baseUnitPrice;
         const lineTotal = unitPrice * item.quantity;
         const gstInclusive = Boolean(product.gstInclusive ?? product.gst_inclusive ?? true);
 

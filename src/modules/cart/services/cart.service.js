@@ -204,7 +204,6 @@ class CartService {
 
   resolvePrice(product = {}, variant = null, deal = null) {
     return Number(
-      deal?.dealPrice ??
       variant?.salePrice ??
       variant?.price ??
       product.salePrice ??
@@ -214,7 +213,7 @@ class CartService {
   }
 
   resolveMrp(product = {}, variant = null, deal = null) {
-    return Number(deal?.originalPrice ?? variant?.mrp ?? product.mrp ?? this.resolvePrice(product, variant, deal) ?? 0);
+    return Number(variant?.mrp ?? product.mrp ?? this.resolvePrice(product, variant, deal) ?? 0);
   }
 
   async findActiveDeal(product = {}, variant = null, item = {}) {

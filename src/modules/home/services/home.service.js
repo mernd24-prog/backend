@@ -1,3 +1,4 @@
+const { projectDealVariant } = require("../../deal/services/deal-variant");
 "use strict";
 
 const { ProductRepository } = require("../../product/repositories/product.repository");
@@ -277,7 +278,8 @@ class HomeService {
 
   productLink(product = {}) {
     const productId = firstDefined(product._id, product.id, product.productId, product.slug);
-    return productId ? `/products/${productId}` : "/products";
+    const variantKey = product.selectedVariant?.sku || product.variantSku || product.variantId;
+    return productId ? `/products/${productId}${variantKey ? `?variant=${encodeURIComponent(variantKey)}` : ""}` : "/products";
   }
 
   productLabel(product = {}) {
@@ -306,6 +308,8 @@ class HomeService {
       rating: Number(product.rating || 0),
       reviewCount: Number(product.reviewCount || 0),
       source: product?.metadata?.isDealProduct ? "deal" : "product",
+      variantId: product.selectedVariant?._id || product.variantId || null,
+      variantSku: product.selectedVariant?.sku || product.variantSku || null,
     };
   }
 
@@ -313,7 +317,7 @@ class HomeService {
     const seen = new Set();
     const unique = [];
     items.forEach((item) => {
-      const key = item.productId || item.link || item.image;
+      const key = item.variantSku ? `${item.productId}:${item.variantSku}` : item.productId || item.link || item.image;
       if (!key || seen.has(key)) return;
       seen.add(key);
       unique.push(item);
@@ -404,14 +408,15 @@ class HomeService {
       .map((deal) => {
         const product = productById.get(String(deal.productId || ""));
         if (!product || !isPublicProduct(product)) return null;
-        const productObject = typeof product.toObject === "function" ? product.toObject() : product;
+        const productObject = projectDealVariant(product, deal);
+        if (!productObject) return null;
         return {
           ...productObject,
-          price: Number(deal.dealPrice || productObject.salePrice || productObject.price || 0),
-          salePrice: Number(deal.dealPrice || productObject.salePrice || productObject.price || 0),
-          mrp: Number(deal.originalPrice || productObject.mrp || productObject.price || 0),
-          originalPrice: Number(deal.originalPrice || productObject.mrp || productObject.price || 0),
-          discountPercent: Number(deal.discountPercent || 0),
+          price: Number(productObject.salePrice || productObject.salePrice || productObject.price || 0),
+          salePrice: Number(productObject.salePrice || productObject.salePrice || productObject.price || 0),
+          mrp: Number(productObject.mrp || productObject.mrp || productObject.price || 0),
+          originalPrice: Number(productObject.mrp || productObject.mrp || productObject.price || 0),
+          discountPercent: Number(productObject.discountPercent || 0),
           dealCategory: deal.category,
           metadata: {
             ...(productObject.metadata || {}),
@@ -420,8 +425,10 @@ class HomeService {
           },
           deal: {
             dealId: deal.id || deal.dealId,
+            variantId: deal.variantId, variantSku: deal.variantSku,
+            sellingPrice: productObject.salePrice, catalogPrice: productObject.mrp,
             title: deal.title,
-            discountPercent: Number(deal.discountPercent || 0),
+            discountPercent: Number(productObject.discountPercent || 0),
             endAt: deal.endAt,
           },
         };

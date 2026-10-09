@@ -39,8 +39,9 @@ class DealRepository {
 
   normalizeDealRow(row) {
     if (!row) return null;
+    const { original_price, deal_price, discount_percent, ...rest } = row;
     return {
-      ...row,
+      ...rest,
       dealId: row.id,
       dealNumber: row.deal_number,
       sellerId: row.seller_id,
@@ -48,9 +49,9 @@ class DealRepository {
       variantId: row.variant_id,
       variantSku: row.variant_sku,
       dealType: row.deal_type,
-      originalPrice: Number(row.original_price || 0),
-      dealPrice: row.deal_price === null || row.deal_price === undefined ? null : Number(row.deal_price),
-      discountPercent: row.discount_percent === null || row.discount_percent === undefined ? null : Number(row.discount_percent),
+      catalogPrice: Number(row.original_price || 0),
+      sellingPrice: row.deal_price === null || row.deal_price === undefined ? null : Number(row.deal_price),
+      discountRate: row.discount_percent === null || row.discount_percent === undefined ? null : Number(row.discount_percent),
       allocatedQuantity: Number(row.allocated_quantity || 0),
       reservedQuantity: Number(row.reserved_quantity || 0),
       soldQuantity: Number(row.sold_quantity || 0),
@@ -79,9 +80,9 @@ class DealRepository {
       category: payload.category || null,
       deal_type: payload.dealType,
       status: payload.status,
-      original_price: payload.originalPrice,
-      deal_price: payload.dealPrice ?? null,
-      discount_percent: payload.discountPercent ?? null,
+      original_price: payload.catalogPrice,
+      deal_price: payload.sellingPrice ?? null,
+      discount_percent: payload.discountRate ?? null,
       allocated_quantity: payload.allocatedQuantity || 0,
       reserved_quantity: payload.reservedQuantity || 0,
       sold_quantity: payload.soldQuantity || 0,
@@ -196,10 +197,13 @@ class DealRepository {
       .andWhere("end_at", ">", now)
       .andWhereRaw("(allocated_quantity = 0 OR sold_quantity + reserved_quantity < allocated_quantity)");
     if (sellerId) query.andWhere("seller_id", String(sellerId));
+    if (!variantId && !variantSku) return null;
     query.andWhere((builder) => {
-      builder.whereNull("variant_id").whereNull("variant_sku");
-      if (variantId) builder.orWhere("variant_id", String(variantId));
-      if (variantSku) builder.orWhere("variant_sku", String(variantSku));
+      if (variantId) builder.where("variant_id", String(variantId));
+      if (variantSku) {
+        if (variantId) builder.orWhere("variant_sku", String(variantSku));
+        else builder.where("variant_sku", String(variantSku));
+      }
     });
     const [row] = await query.orderByRaw("CASE WHEN variant_id IS NOT NULL OR variant_sku IS NOT NULL THEN 0 ELSE 1 END").orderBy("created_at", "desc").limit(1);
     return this.normalizeDealRow(row);
@@ -218,12 +222,7 @@ class DealRepository {
       .orderByRaw("COALESCE((metadata->>'priority')::int, 100) asc")
       .orderBy("created_at", "desc");
 
-    const byProductId = new Map();
-    rows.forEach((row) => {
-      const productId = String(row.product_id || "");
-      if (!byProductId.has(productId)) byProductId.set(productId, this.normalizeDealRow(row));
-    });
-    return Array.from(byProductId.values());
+    return rows.filter((row) => row.variant_id || row.variant_sku).map((row) => this.normalizeDealRow(row));
   }
 
   async createDeal(payload, timeline) {
@@ -386,7 +385,7 @@ class DealRepository {
     const now = new Date();
     return knex("deal_sponsorships as sp")
       .innerJoin("deals as d", "d.id", "sp.deal_id")
-      .select("sp.*", "d.title as deal_title", "d.deal_number", "d.product_id", "d.variant_id", "d.variant_sku", "d.deal_price", "d.original_price", "d.discount_percent", "d.end_at as deal_end_at")
+      .select("sp.*", "d.title as deal_title", "d.deal_number", "d.product_id", "d.variant_id", "d.variant_sku", "d.deal_price as selling_price", "d.original_price as catalog_price", "d.discount_percent as discount_rate", "d.end_at as deal_end_at")
       .where("sp.placement", placement)
       .where("sp.status", "active")
       .where("d.status", "active")

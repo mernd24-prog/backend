@@ -1,3 +1,4 @@
+const { resolveDealVariant, variantPrices, projectDealVariant } = require("./deal-variant");
 "use strict";
 
 const { AppError } = require("../../../shared/errors/app-error");
@@ -117,36 +118,28 @@ class DealService {
     return Number(Number(value || 0).toFixed(2));
   }
 
-  calculateDealPrice(payload = {}) {
-    const originalPrice = this.normalizeMoney(payload.originalPrice);
-    if (payload.dealType === DEAL_TYPE.SPONSORED_PLACEMENT) {
-      return { dealPrice: originalPrice, discountPercent: 0 };
-    }
-    if (payload.dealPrice !== null && payload.dealPrice !== undefined) {
-      const dealPrice = this.normalizeMoney(payload.dealPrice);
-      const discountPercent = originalPrice > 0
-        ? this.normalizeMoney(((originalPrice - dealPrice) / originalPrice) * 100)
-        : 0;
-      return { dealPrice, discountPercent: payload.discountPercent ?? discountPercent };
-    }
-    const discountPercent = Number(payload.discountPercent || 0);
-    const dealPrice = this.normalizeMoney(originalPrice - ((originalPrice * discountPercent) / 100));
-    return { dealPrice, discountPercent };
-  }
-
-  normalizeDealPayload(payload = {}, actor = {}) {
+  async normalizeDealPayload(payload = {}, actor = {}) {
     const isAdmin = this.isAdmin(actor);
     const sellerId = payload.sellerId || this.sellerIdFor(actor);
-    const price = this.calculateDealPrice(payload);
-    if (!sellerId) throw new AppError("Seller ID is required", 400);
-    if (payload.dealType !== DEAL_TYPE.SPONSORED_PLACEMENT && price.dealPrice >= Number(payload.originalPrice || 0)) {
-      throw new AppError("Deal price must be lower than original price", 400);
+    const product = await this.productRepository.findById(payload.productId);
+    if (!product) throw new AppError("Product not found", 404);
+    if (!this.isAdmin(actor) && String(sellerId) !== String(this.sellerIdFor(actor))) {
+      throw new AppError("You cannot create a deal for another seller", 403);
     }
+    if (String(product.sellerId) !== String(sellerId)) throw new AppError("Product does not belong to the selected seller", 400);
+    const variant = resolveDealVariant(product, payload);
+    if (!variant) throw new AppError("Select a valid product variant for this deal", 400);
+    if (variant.status === "inactive") throw new AppError("Selected variant is inactive", 400);
+    const price = variantPrices(product, variant);
+    const availableStock = Math.max(0, Number(variant.stock || 0) - Number(variant.reservedStock || 0));
+    if (Number(payload.allocatedQuantity || 0) > availableStock) throw new AppError("Deal quantity exceeds selected variant stock", 400);
+    if (!sellerId) throw new AppError("Seller ID is required", 400);
     return {
       ...payload,
       sellerId,
-      dealPrice: price.dealPrice,
-      discountPercent: price.discountPercent,
+      variantId: String(variant._id || variant.id),
+      variantSku: variant.sku,
+      ...price,
       status: payload.status && isAdmin ? payload.status : DEAL_STATUS.DRAFT,
       fulfillmentModel: payload.fulfillmentModel || DEAL_FULFILLMENT_MODEL.SELLER_FULFILLED,
       createdBy: actor.userId,
@@ -175,7 +168,7 @@ class DealService {
   }
 
   async createDeal(payload = {}, actor = {}) {
-    const normalized = this.normalizeDealPayload(payload, actor);
+    const normalized = await this.normalizeDealPayload(payload, actor);
     const deal = await this.dealRepository.createDeal(normalized, {
       eventType: DEAL_TIMELINE_EVENT.CREATED,
       toStatus: normalized.status,
@@ -204,14 +197,13 @@ class DealService {
       ...payload,
       sellerId: payload.sellerId || existing.sellerId,
       productId: payload.productId || existing.productId,
-      originalPrice: payload.originalPrice ?? existing.originalPrice,
       startAt: payload.startAt || existing.startAt,
       endAt: payload.endAt || existing.endAt,
       dealType: payload.dealType || existing.dealType,
       fulfillmentModel: payload.fulfillmentModel || existing.fulfillmentModel,
       updatedBy: actor.userId,
     };
-    const priced = this.normalizeDealPayload(normalized, { ...actor, userId: existing.created_by || actor.userId });
+    const priced = await this.normalizeDealPayload(normalized, { ...actor, userId: existing.created_by || actor.userId });
     const deal = await this.dealRepository.updateDeal(dealId, {
       ...priced,
       status: existing.status,
@@ -680,13 +672,14 @@ class DealService {
 
     const items = dealRows
       .map((deal) => {
-        const product = productById.get(String(deal.productId));
+        const baseProduct = productById.get(String(deal.productId));
+        const product = baseProduct ? projectDealVariant(baseProduct, deal) : null;
         if (!product || product.status !== "active") return null;
         if (!this.productMatchesDealFilters({
           ...product,
-          price: Number(deal.dealPrice || 0),
-          salePrice: Number(deal.dealPrice || 0),
-          sellingPrice: Number(deal.dealPrice || 0),
+          price: Number(product.salePrice || 0),
+          salePrice: Number(product.salePrice || 0),
+          sellingPrice: Number(product.salePrice || 0),
         }, normalizedQuery)) return null;
 
         const dealBadge = deal.metadata?.dealBadge || deal.metadata?.badge || "Deal";
@@ -700,14 +693,15 @@ class DealService {
         return {
           ...product,
           id: String(product._id || product.id),
+          listingKey: `${deal.id}:${deal.variantId || deal.variantSku}`,
           productId: String(product._id || product.id),
-          price: Number(deal.dealPrice || 0),
-          salePrice: Number(deal.dealPrice || 0),
-          sellingPrice: Number(deal.dealPrice || 0),
-          mrp: Number(deal.originalPrice || product.mrp || product.price || 0),
-          originalPrice: Number(deal.originalPrice || product.price || 0),
-          compareAtPrice: Number(deal.originalPrice || product.mrp || product.price || 0),
-          discountPercent: Number(deal.discountPercent || 0),
+          price: Number(product.salePrice || 0),
+          salePrice: Number(product.salePrice || 0),
+          sellingPrice: Number(product.salePrice || 0),
+          mrp: Number(product.mrp || product.price || 0),
+          originalPrice: Number(product.mrp || product.price || 0),
+          compareAtPrice: Number(product.mrp || product.price || 0),
+          discountPercent: Number(product.discountPercent || 0),
           metadata: {
             ...(product.metadata || {}),
             isDealProduct: true,
@@ -721,9 +715,8 @@ class DealService {
             badge: dealBadge,
             source: deal.metadata?.dealSource || null,
             dealType: deal.dealType,
-            originalPrice: Number(deal.originalPrice || 0),
-            dealPrice: Number(deal.dealPrice || 0),
-            discountPercent: Number(deal.discountPercent || 0),
+            variantId: deal.variantId, variantSku: deal.variantSku,
+            catalogPrice: product.mrp, sellingPrice: product.salePrice,
             allocatedQuantity: Number(deal.allocatedQuantity || 0),
             soldQuantity: Number(deal.soldQuantity || 0),
             reservedQuantity: Number(deal.reservedQuantity || 0),
@@ -787,9 +780,8 @@ class DealService {
       variantId: deal.variantId || null,
       variantSku: deal.variantSku || null,
       dealType: deal.dealType,
-      originalPrice: deal.originalPrice,
-      dealPrice: deal.dealPrice,
-      discountPercent: deal.discountPercent,
+      catalogPrice: deal.catalogPrice,
+      sellingPrice: deal.sellingPrice,
       startAt: deal.startAt,
       endAt: deal.endAt,
       allocatedQuantity: deal.allocatedQuantity,

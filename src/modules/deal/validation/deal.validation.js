@@ -51,9 +51,6 @@ const dealBodySchema = Joi.object({
   category: Joi.string().trim().allow("", null).max(180).optional(),
   dealType: Joi.string().valid(...Object.values(DEAL_TYPE)).default(DEAL_TYPE.FIXED_PRICE),
   status: Joi.string().valid(...Object.values(DEAL_STATUS)).optional(),
-  originalPrice: money.required(),
-  dealPrice: money.allow(null).optional(),
-  discountPercent: Joi.number().precision(4).min(0).max(100).allow(null).optional(),
   allocatedQuantity: Joi.number().integer().min(0).default(0),
   maxQuantityPerOrder: Joi.number().integer().min(1).allow(null).default(null),
   startAt: Joi.date().iso().required(),
@@ -68,7 +65,7 @@ const dealBodySchema = Joi.object({
   sponsorship: sponsorshipSchema.optional(),
 });
 
-const updateDealBodySchema = dealBodySchema.fork(["title", "productId", "originalPrice", "startAt", "endAt"], (schema) => schema.optional());
+const updateDealBodySchema = dealBodySchema.fork(["title", "productId", "startAt", "endAt"], (schema) => schema.optional());
 
 const listDealsSchema = {
   query: Joi.object({

@@ -1,3 +1,4 @@
+const { projectDealVariant } = require("../../deal/services/deal-variant");
 const { productMedia, deleteUnreferencedMedia } = require("../../../shared/storage/media-cleanup");
 const slugify = require("slugify");
 const { getPage } = require("../../../shared/tools/page");
@@ -2085,49 +2086,27 @@ class ProductService {
   buildProductWithActiveDeal(product = {}, deal = null) {
     const plain = this.toPlainObject(product);
     if (!deal) return plain;
-
-    const dealBadge = deal.metadata?.dealBadge || deal.metadata?.badge || "Deal";
-    const dealPrice = Number(deal.dealPrice || 0);
-    const originalPrice = Number(deal.originalPrice || plain.mrp || plain.price || 0);
-    const remainingQuantity = Math.max(
-      0,
-      Number(deal.allocatedQuantity || 0) -
-        Number(deal.soldQuantity || 0) -
-        Number(deal.reservedQuantity || 0),
-    );
-
+    const projected = projectDealVariant(plain, deal);
+    if (!projected) return plain;
+    const badge = deal.metadata?.dealBadge || deal.metadata?.badge || "Deal";
     return {
-      ...plain,
-      price: dealPrice || plain.price,
-      salePrice: dealPrice || plain.salePrice || plain.price,
-      sellingPrice: dealPrice || plain.sellingPrice || plain.salePrice || plain.price,
-      mrp: originalPrice || plain.mrp,
-      originalPrice: originalPrice || plain.originalPrice || plain.price,
-      compareAtPrice: originalPrice || plain.compareAtPrice || plain.mrp || plain.price,
-      discountPercent: Number(deal.discountPercent || 0),
-      metadata: {
-        ...(plain.metadata || {}),
-        isDealProduct: true,
-        dealBadge,
-        dealSource: deal.metadata?.dealSource || null,
-      },
+      ...projected,
+      // Product detail retains the product title; cards identify the selected variant.
+      title: plain.title,
+      metadata: { ...(plain.metadata || {}), isDealProduct: true, dealBadge: badge },
       deal: {
-        dealId: deal.id || deal.dealId,
+        dealId: deal.id || deal.dealId, title: deal.title, badge,
         dealNumber: deal.dealNumber,
-        title: deal.title,
-        badge: dealBadge,
         source: deal.metadata?.dealSource || null,
         dealType: deal.dealType,
-        originalPrice,
-        dealPrice,
-        discountPercent: Number(deal.discountPercent || 0),
         allocatedQuantity: Number(deal.allocatedQuantity || 0),
         soldQuantity: Number(deal.soldQuantity || 0),
         reservedQuantity: Number(deal.reservedQuantity || 0),
-        remainingQuantity,
+        remainingQuantity: Math.max(0, Number(deal.allocatedQuantity || 0) - Number(deal.soldQuantity || 0) - Number(deal.reservedQuantity || 0)),
         maxQuantityPerOrder: deal.maxQuantityPerOrder,
-        startAt: deal.startAt,
-        endAt: deal.endAt,
+        variantId: deal.variantId, variantSku: deal.variantSku,
+        sellingPrice: projected.salePrice, catalogPrice: projected.mrp,
+        startAt: deal.startAt, endAt: deal.endAt,
       },
     };
   }
