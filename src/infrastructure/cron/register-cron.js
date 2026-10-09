@@ -1,3 +1,4 @@
+const { retryMediaCleanup } = require("../../shared/storage/media-cleanup-task");
 const { env } = require("../../config/env");
 const { logger } = require("../../shared/logger/logger");
 const { outboxProcessor } = require("../events/outbox-processor");
@@ -98,6 +99,8 @@ function registerCronJobs() {
     return;
   }
   registered = true;
+
+  runPeriodicJob("deleted-media-cleanup", retryMediaCleanup, 60 * 1000);
 
   const productService = new ProductService();
   const cancellationService = new CancellationService();

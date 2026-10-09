@@ -1,3 +1,4 @@
+const { prepareMediaCleanup, finishMediaCleanup } = require("../../../shared/storage/media-cleanup-task");
 const { getPage } = require("../../../shared/tools/page");
 const { buildMongoFilter } = require("../../../shared/tools/query-builder");
 const { PlatformRepository } = require("../repositories/platform.repository");
@@ -10,7 +11,7 @@ const { UserModel } = require("../../user/models/user.model");
 const { ProductReviewModel } = require("../models/product-review.model");
 const { PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const { ROLES } = require("../../../shared/constants/roles");
-const { storageService } = require("../../../shared/storage/storage-service");
+const { deleteUnreferencedMedia } = require("../../../shared/storage/media-cleanup");
 const {
   AdminTaxModel,
   AdminSubTaxModel,
@@ -332,10 +333,10 @@ class PlatformService {
     const category = await this.platformRepository.getCategory(categoryKey);
     if (!category) throw AppError.notFound("Category");
     const result = await this.platformRepository.deleteCategory(categoryKey);
-    // Fire-and-forget: clean up category images from Cloudinary
-    storageService.deleteByUrls([category.bannerUrl, category.iconUrl]);
     this.invalidateCatalogCaches();
     auditService.remove(req, { module: "categories", entityId: categoryKey, entityType: "Category", oldData: category });
+    await deleteUnreferencedMedia(result?.mediaUrls || [category.bannerUrl, category.iconUrl]);
+    if (result) delete result.mediaUrls;
     return result;
   }
 
@@ -1783,12 +1784,12 @@ class PlatformService {
   async deleteBrand(brandId, req) {
     const item = await this.platformRepository.getBrand(brandId);
     if (!item) throw AppError.notFound("Brand");
+    const cleanupTask = await prepareMediaCleanup([item.logo, item.logoUrl, item.imageUrl], "Brand", brandId);
     const result = await this.platformRepository.deleteBrand(brandId);
-    // Fire-and-forget: clean up brand images from Cloudinary
-    storageService.deleteByUrls([item.logo, item.logoUrl, item.imageUrl]);
     this.invalidateCatalogCaches();
     auditService.remove(req, { module: "brands", entityId: brandId, entityType: "Brand", oldData: item });
-    return result;
+    const mediaCleanupPending = await finishMediaCleanup(cleanupTask);
+    return { ...(result?.toObject ? result.toObject() : result), mediaCleanupPending };
   }
 
 
@@ -2254,10 +2255,12 @@ class PlatformService {
     const references = [String(item._id), item.slug, item.name];
     const productCount = await ProductModel.countDocuments({ collectionIds: { $in: references } });
     if (productCount) throw new AppError(`Collection is assigned to ${productCount} product(s). Remove those assignments first.`, 409);
+    const cleanupTask = await prepareMediaCleanup([item.bannerImage, item.thumbnailImage], "Collection", String(item._id));
     await this.platformRepository.deleteCollection(collectionId);
     this.invalidateCatalogCaches();
     auditService.remove(req, { module: "collections", entityId: item._id, entityType: "Collection", oldData: item });
-    return item;
+    const mediaCleanupPending = await finishMediaCleanup(cleanupTask);
+    return { ...(item.toObject ? item.toObject() : item), mediaCleanupPending };
   }
 
 }

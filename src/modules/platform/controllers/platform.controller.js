@@ -276,7 +276,9 @@ class PlatformController {
 
   deleteBrand = async (req, res) => {
     const item = await this.platformService.deleteBrand(req.params.brandId, req);
-    res.json(okResponse(item, { message: "Brand deleted successfully." }));
+    res.json(okResponse(item, { message: item.mediaCleanupPending
+      ? "Brand deleted. Image cleanup is pending and will be retried."
+      : "Brand deleted successfully." }));
   };
 
   // ── Batches ─────────────────────────────────────────────────────────────────
@@ -406,8 +408,10 @@ class PlatformController {
   };
 
   deleteCollection = async (req, res) => {
-    await this.platformService.deleteCollection(req.params.collectionId, req);
-    res.json(okResponse(null, { message: "Collection deleted successfully." }));
+    const result = await this.platformService.deleteCollection(req.params.collectionId, req);
+    res.json(okResponse({ mediaCleanupPending: result.mediaCleanupPending }, { message: result.mediaCleanupPending
+      ? "Collection deleted. Image cleanup is pending and will be retried."
+      : "Collection deleted successfully." }));
   };
 
 }

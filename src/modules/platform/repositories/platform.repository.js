@@ -257,8 +257,13 @@ class PlatformRepository {
       });
     }
 
+    const categories = await CategoryTreeModel.find({ categoryKey: { $in: keysToDelete } })
+      .select("bannerUrl iconUrl").lean();
     await CategoryTreeModel.deleteMany({ categoryKey: { $in: keysToDelete } });
-    return { ...category.toObject(), deletedCount: keysToDelete.length };
+    return {
+      ...category.toObject(), deletedCount: keysToDelete.length,
+      mediaUrls: categories.flatMap((item) => [item.bannerUrl, item.iconUrl]).filter(Boolean),
+    };
   }
 
   async createProductFamily(payload) {

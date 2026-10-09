@@ -141,43 +141,81 @@ class StorageService {
     return cloudinary.uploader.upload(filePath, options);
   }
 
-  /**
-   * Extract the Cloudinary public_id from a secure_url.
-   * e.g. "https://res.cloudinary.com/demo/image/upload/v123/ecommerce/products/img-abc.jpg"
-   *       → "ecommerce/products/img-abc"
-   */
-  publicIdFromUrl(url) {
-    if (!url || typeof url !== "string") return null;
+  assetFromUrl(url) {
+    if (typeof url !== "string" || !url) return null;
     try {
-      const u = new URL(url);
-      // Only handle known Cloudinary hostnames
-      if (!u.hostname.endsWith("cloudinary.com") && !u.hostname.endsWith("cloudinary.net")) {
-        return null;
+      const parsed = new URL(url);
+      if (!["res.cloudinary.com", "res.cloudinary.net"].includes(parsed.hostname)) return null;
+      const parts = parsed.pathname.split("/").filter(Boolean);
+      const [cloudName, resourceType, type] = parts;
+      if (cloudName !== env.cloudinary.cloudName) return null;
+      if (!["image", "video", "raw"].includes(resourceType) ||
+          !["upload", "authenticated", "private"].includes(type)) return null;
+      let assetParts = parts.slice(3);
+      // A version follows signatures and transformations in delivery URLs.
+      const versionIndex = assetParts.findIndex((part) => /^v\d+$/.test(part));
+      if (versionIndex >= 0) assetParts = assetParts.slice(versionIndex + 1);
+      else {
+        while (assetParts.length && (/^s--.*--$/.test(assetParts[0]) ||
+          /^(?:c|w|h|ar|g|q|f|dpr|e|a|b|bo|r|o|x|y|z|fl|t)_/.test(assetParts[0]))) {
+          assetParts.shift();
+        }
       }
-      // pathname: /<cloud>/image/upload/[v<ver>/]<public_id>.<ext>
-      const parts = u.pathname.split("/");
-      // Find the index after "upload" or "authenticated"
-      const uploadIdx = parts.findIndex((p) => p === "upload" || p === "authenticated");
-      if (uploadIdx === -1) return null;
-      let afterUpload = parts.slice(uploadIdx + 1);
-      // Skip version segment like "v1234567890"
-      if (afterUpload[0] && /^v\d+$/.test(afterUpload[0])) {
-        afterUpload = afterUpload.slice(1);
-      }
-      const joined = afterUpload.join("/");
-      // Strip file extension
-      return joined.replace(/\.[^/.]+$/, "") || null;
+      let publicId = decodeURIComponent(assetParts.join("/"));
+      if (resourceType !== "raw") publicId = publicId.replace(/\.[^/.]+$/, "");
+      return publicId ? { publicId, resourceType, type } : null;
     } catch {
       return null;
     }
   }
 
-  /**
-   * Fire-and-forget: delete a single asset from Cloudinary by its URL.
-   * Silently ignores errors and non-Cloudinary URLs.
-   * @param {string} url - Cloudinary secure_url
-   * @param {"image"|"video"|"raw"} [resourceType="image"]
-   */
+  publicIdFromUrl(url) {
+    return this.assetFromUrl(url)?.publicId || null;
+  }
+
+  async deleteImageByUrl(url, resourceType) {
+    const asset = this.assetFromUrl(url);
+    if (!asset) return { skipped: true };
+    // Cleanup must also work for older uploads when new uploads use local storage.
+    if (!env.cloudinary.configured) {
+      throw new AppError("Cloudinary credentials are required to delete uploaded media", 503);
+    }
+    let lastError;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const result = await cloudinary.uploader.destroy(asset.publicId, {
+          resource_type: resourceType || asset.resourceType,
+          type: asset.type,
+          invalidate: true,
+          timeout: 10000,
+        });
+        if (!["ok", "not found"].includes(result?.result)) {
+          throw new Error("Cloudinary did not confirm media deletion");
+        }
+        return result;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    console.error("[Cloudinary] Media deletion failed", { publicId: asset.publicId, error: lastError?.message });
+    throw new AppError("Data was deleted, but Cloudinary media cleanup failed. Please retry media cleanup.", 502);
+  }
+
+  async deleteImageByUrls(urls, resourceType) {
+    const assets = new Map();
+    for (const url of urls || []) {
+      const asset = this.assetFromUrl(url);
+      if (asset) assets.set(`${asset.resourceType}/${asset.type}/${asset.publicId}`, url);
+    }
+    // Try every asset even if one fails; never silently report cleanup success.
+    const results = await Promise.allSettled(
+      [...assets.values()].map((url) => this.deleteImageByUrl(url, resourceType)),
+    );
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure) throw failure.reason;
+    return results.map((result) => result.value);
+  }
+
   deleteByUrl(url, resourceType = "image") {
     if (!env.cloudinary.enabled) return;
     const publicId = this.publicIdFromUrl(url);

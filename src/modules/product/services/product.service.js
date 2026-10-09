@@ -1,3 +1,4 @@
+const { productMedia, deleteUnreferencedMedia } = require("../../../shared/storage/media-cleanup");
 const slugify = require("slugify");
 const { getPage } = require("../../../shared/tools/page");
 const { decodeProductRouteToken } = require("../../../shared/tools/route-token");
@@ -3858,16 +3859,10 @@ async getProduct(productId) {
     await this.productRepository.deleteRevisions(productId);
     const deletedProduct = await this.productRepository.delete(productId);
     this._deleteFromIndex(productId);
-    // Fire-and-forget: remove all product images from Cloudinary
-    const productImages = [
-      ...(existingProduct.images || []),
-      existingProduct.thumbnailUrl,
-    ].filter(Boolean);
-    if (productImages.length) {
-      const { storageService: storage } = require("../../../shared/storage/storage-service");
-      storage.deleteByUrls(productImages);
-    }
     this._invalidateProductCache();
+    await deleteUnreferencedMedia([
+      ...productMedia(deletedProduct || existingProduct),
+    ]);
     return {
       deleted: true,
       productId: String(productId),
@@ -3897,14 +3892,10 @@ async getProduct(productId) {
     await this.productRepository.deleteManyRevisions(normalizedIds);
     const result = await this.productRepository.deleteMany(normalizedIds);
     Promise.allSettled(normalizedIds.map((id) => this._deleteFromIndex(id)));
-    // Fire-and-forget: remove all images of deleted products from Cloudinary
-    const { storageService: storage } = require("../../../shared/storage/storage-service");
-    const allImageUrls = products.flatMap((p) => [
-      ...(p.images || []),
-      p.thumbnailUrl,
-    ]).filter(Boolean);
-    if (allImageUrls.length) storage.deleteByUrls(allImageUrls);
     this._invalidateProductCache();
+    await deleteUnreferencedMedia([
+      ...products.flatMap(productMedia),
+    ]);
     return { deleted: Number(result?.deletedCount || 0), productIds: normalizedIds };
   }
 
