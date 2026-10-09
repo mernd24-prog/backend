@@ -576,6 +576,17 @@ const MODULE_CATALOG = [
     forSeller: true,
     apiPath: "/admin/tax/credit-notes",
   },
+  {
+    tab: "Invoices & Taxation",
+    slug: "tax-reports",
+    name: "Tax Reports",
+    description: "Summarized tax ledger entries by store and tax component",
+    icon: "bar-chart",
+    order: 21.3,
+    forPlatform: true,
+    forSeller: false,
+    apiPath: "/tax/reports",
+  },
 
   // ── Shipping & Fulfilment ─────────────────────────────────────────────────
   {

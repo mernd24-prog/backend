@@ -51,6 +51,10 @@ const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
 
+// Temporarily disabled: sellers should update approved products directly.
+// Set to true when the product-revision approval workflow is reintroduced.
+const PRODUCT_REVISIONS_ENABLED = false;
+
 const SELLER_BLOCKED_COMPLIANCE_FIELDS = [
   "gstRate",
   "cessRate",
@@ -1754,9 +1758,15 @@ class ProductService {
       version: (existingProduct.version || 1) + 1,
     };
 
+    if (!PRODUCT_REVISIONS_ENABLED) {
+      updatePayload.revisionStatus = PRODUCT_REVISION_WORKFLOW_STATUS.NONE;
+      updatePayload.pendingRevisionId = null;
+    }
+
     // An approved product remains unchanged and customer-visible while the
     // seller's edits wait in a separate revision for admin review.
     if (
+      PRODUCT_REVISIONS_ENABLED &&
       isSellerRole(actor) &&
       existingProduct.status === PRODUCT_STATUS.ACTIVE &&
       existingProduct.approvalStatus === PRODUCT_APPROVAL_STATUS.APPROVED

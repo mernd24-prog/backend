@@ -271,7 +271,7 @@ const SIDEBAR_MODULES = [
   { moduleName: "Taxes", moduleKey: "tax", moduleSlug: "tax", icon: "MdReceiptLong", routePath: "/app/tax", moduleType: "page", order: 98, parentModule: "invoices-taxation", requiredModule: "tax" },
   { moduleName: "Sub Taxes", moduleKey: "subTax", moduleSlug: "subTax", icon: "MdReceiptLong", routePath: "/app/subTax", moduleType: "page", order: 99, parentModule: "invoices-taxation", requiredModule: "tax" },
   { moduleName: "Tax Rules", moduleKey: "tax-rule", moduleSlug: "tax-rule", icon: "MdRule", routePath: "/app/tax-rule", moduleType: "page", order: 99.1, parentModule: "invoices-taxation", requiredModule: "tax" },
-  { moduleName: "Tax Documents", moduleKey: "tax-documents", moduleSlug: "tax-documents", icon: "MdDescription", routePath: "/app/tax-documents", moduleType: "page", order: 99.2, parentModule: "invoices-taxation", requiredModule: "tax" },
+  { moduleName: "Tax Reports", moduleKey: "tax-reports", moduleSlug: "tax-reports", icon: "MdDescription", routePath: "/app/tax-reports", moduleType: "page", order: 99.2, parentModule: "invoices-taxation", requiredModule: "tax" },
 
   {
     moduleName: "Seller Finance & Payouts",
