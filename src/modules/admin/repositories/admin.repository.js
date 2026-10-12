@@ -338,10 +338,19 @@ class AdminRepository {
     };
   }
 
-  async listVendors({ q = "", status = null, onboardingStatus = null, limit = 50, page = 1, ownerAdminId = null, ownerSellerId = null, parentAdminId = null, parentSellerId = null } = {}) {
+  async listVendors({ liveOnly = false, q = "", status = null, onboardingStatus = null, limit = 50, page = 1, ownerAdminId = null, ownerSellerId = null, parentAdminId = null, parentSellerId = null } = {}) {
     const filter = { role: "seller" };
     if (status) {
       filter.accountStatus = status;
+    }
+    if (liveOnly) {
+      if (status && status !== "active") return { items: [], total: 0 };
+      const { rows: liveOrganizations } = await postgresPool.query(
+        "SELECT DISTINCT seller_id FROM seller_organizations WHERE go_live_status IN ($1, $2)",
+        ["live", "ready"],
+      );
+      filter.accountStatus = "active";
+      filter._id = { $in: liveOrganizations.map((organization) => String(organization.seller_id)) };
     }
     if (onboardingStatus) {
       filter["sellerProfile.onboardingStatus"] = onboardingStatus;
