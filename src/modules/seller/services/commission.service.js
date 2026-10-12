@@ -60,6 +60,18 @@ class SellerCommissionService {
     return Math.round(Number(value || 0) * 100) / 100;
   }
 
+  isDateOnly(value) {
+    return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  }
+
+  normalizeDateRangeStart(value) {
+    return this.isDateOnly(value) ? `${value} 00:00:00` : value;
+  }
+
+  normalizeDateRangeEnd(value) {
+    return this.isDateOnly(value) ? `${value} 23:59:59.999` : value;
+  }
+
   sanitizeRazorpayXName(value, fallback = "Seller") {
     const cleaned = String(value || "")
       .replace(/@/g, " ")
@@ -1057,8 +1069,8 @@ class SellerCommissionService {
     if (filters.fundingType) {
       base.whereRaw("oi.pricing_snapshot->>'discountFundingType' = ?", [String(filters.fundingType)]);
     }
-    if (filters.fromDate) base.where("o.created_at", ">=", new Date(filters.fromDate));
-    if (filters.toDate) base.where("o.created_at", "<=", new Date(filters.toDate));
+    if (filters.fromDate) base.where("o.created_at", ">=", this.normalizeDateRangeStart(filters.fromDate));
+    if (filters.toDate) base.where("o.created_at", "<=", this.normalizeDateRangeEnd(filters.toDate));
     if (filters.search) {
       const search = `%${String(filters.search).trim()}%`;
       base.where((builder) => builder
@@ -2346,8 +2358,8 @@ gstTcsAmount,
       .where("order.payment_provider", PAYMENT_PROVIDER.COD)
       .modify((builder) => {
         if (query.organizationId) builder.where("orderItem.organization_id", query.organizationId);
-        if (query.fromDate) builder.where("order.created_at", ">=", query.fromDate);
-        if (query.toDate) builder.where("order.created_at", "<=", query.toDate);
+        if (query.fromDate) builder.where("order.created_at", ">=", this.normalizeDateRangeStart(query.fromDate));
+        if (query.toDate) builder.where("order.created_at", "<=", this.normalizeDateRangeEnd(query.toDate));
       })
       .groupBy("order.id", "order.order_number", "order.status", "order.currency")
       .select(
@@ -3304,8 +3316,8 @@ gstTcsAmount,
       .where("seller_id", sellerId)
       .modify((builder) => {
         if (query.organizationId) builder.where("organization_id", query.organizationId);
-        if (query.fromDate) builder.where("created_at", ">=", query.fromDate);
-        if (query.toDate) builder.where("created_at", "<=", query.toDate);
+        if (query.fromDate) builder.where("created_at", ">=", this.normalizeDateRangeStart(query.fromDate));
+        if (query.toDate) builder.where("created_at", "<=", this.normalizeDateRangeEnd(query.toDate));
       });
 
     const [commerceSettings, commissions, paidPayoutRow, inProcessPayoutRow, adjustmentRow, codLiabilityRow, walletRow, walletTransactions] = await Promise.all([
@@ -3513,8 +3525,8 @@ gstTcsAmount,
     else if (status) query.where("status", status);
     if (orderId) query.where("order_id", orderId);
     if (payoutId) query.where("payout_id", payoutId);
-    if (fromDate) query.where("created_at", ">=", fromDate);
-    if (toDate) query.where("created_at", "<=", toDate);
+    if (fromDate) query.where("created_at", ">=", this.normalizeDateRangeStart(fromDate));
+    if (toDate) query.where("created_at", "<=", this.normalizeDateRangeEnd(toDate));
     if (search) {
       const rawSearch = String(search).trim();
       const normalizedSearch = rawSearch.replace(/^#/, "");
@@ -3663,8 +3675,8 @@ gstTcsAmount,
     if (statusMap[status]) query.whereIn("status", statusMap[status]);
     else if (status) query.where("status", status);
     if (payoutId) query.where("id", payoutId);
-    if (fromDate) query.where("created_at", ">=", fromDate);
-    if (toDate) query.where("created_at", "<=", toDate);
+    if (fromDate) query.where("created_at", ">=", this.normalizeDateRangeStart(fromDate));
+    if (toDate) query.where("created_at", "<=", this.normalizeDateRangeEnd(toDate));
     if (search) {
       const term = `%${String(search).trim()}%`;
       query.where((builder) => {
@@ -3959,8 +3971,8 @@ gstTcsAmount,
       const builder = knex("seller_payouts").where("status", status);
       if (query.sellerId) builder.where("seller_id", query.sellerId);
       if (query.organizationId) builder.where("organization_id", query.organizationId);
-      if (query.fromDate) builder.where("created_at", ">=", query.fromDate);
-      if (query.toDate) builder.where("created_at", "<=", query.toDate);
+      if (query.fromDate) builder.where("created_at", ">=", this.normalizeDateRangeStart(query.fromDate));
+      if (query.toDate) builder.where("created_at", "<=", this.normalizeDateRangeEnd(query.toDate));
       if (query.search) {
         const term = `%${String(query.search).trim()}%`;
         builder.where((searchBuilder) => {
@@ -4475,8 +4487,8 @@ gstTcsAmount,
       this.applyCommissionFilters(builder, query);
     };
     const applyDates = (builder, column = "created_at") => {
-      if (query.fromDate) builder.where(column, ">=", query.fromDate);
-      if (query.toDate) builder.where(column, "<=", query.toDate);
+      if (query.fromDate) builder.where(column, ">=", this.normalizeDateRangeStart(query.fromDate));
+      if (query.toDate) builder.where(column, "<=", this.normalizeDateRangeEnd(query.toDate));
       if (query.sellerId) builder.where("seller_id", query.sellerId);
       if (query.organizationId) builder.where("organization_id", query.organizationId);
     };
@@ -4510,8 +4522,8 @@ gstTcsAmount,
         .first(),
       knex("payments")
         .modify((builder) => {
-          if (query.fromDate) builder.where("created_at", ">=", query.fromDate);
-          if (query.toDate) builder.where("created_at", "<=", query.toDate);
+          if (query.fromDate) builder.where("created_at", ">=", this.normalizeDateRangeStart(query.fromDate));
+          if (query.toDate) builder.where("created_at", "<=", this.normalizeDateRangeEnd(query.toDate));
         })
         .sum({ captured_amount: "amount" })
         .count({ count: "*" })
