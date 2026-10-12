@@ -66,6 +66,9 @@ const listVendorsSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
     q: Joi.string().allow(""),
+    keyWord: Joi.string().trim().allow("").max(180),
+    liveOnly: Joi.boolean().optional(),
+    searchFields: Joi.string().trim().allow("").max(300),
     status: Joi.string().valid(...accountStatuses),
     onboardingStatus: Joi.string().valid(...sellerOnboardingStatuses),
     page: Joi.number().integer().min(1),

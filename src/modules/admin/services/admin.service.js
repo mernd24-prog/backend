@@ -636,7 +636,12 @@ class AdminService {
 
   async listVendors(query, actor = {}) {
     const result = await this.adminRepository.listVendors(
-      this.withActorHierarchyFilter(query, actor),
+      this.withActorHierarchyFilter({
+        ...query,
+        q: query.q || query.keyWord || "",
+        // Explicit dropdown scope; keep ordinary management lists unfiltered.
+        liveOnly: query.liveOnly === true || Boolean(query.searchFields),
+      }, actor),
     );
     return {
       ...result,
