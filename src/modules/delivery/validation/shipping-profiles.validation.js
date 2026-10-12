@@ -27,7 +27,7 @@ const etaRange = (value, helpers) => {
     value?.etaMax !== null &&
     Number(value.etaMin) > Number(value.etaMax)
   ) {
-    return helpers.error("any.invalid", { message: "etaMin cannot be greater than etaMax" });
+    return helpers.message({ custom: "ETA Min cannot be greater than ETA Max" });
   }
   return value;
 };

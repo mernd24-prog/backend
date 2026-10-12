@@ -1338,6 +1338,8 @@ resolveSellerFeeTaxAmount(
       return [String(user._id), {
         id: String(user._id),
         displayName,
+        fullName: fullName || null,
+        storeName: user.sellerProfile?.displayName || user.sellerProfile?.businessName || null,
         businessName: user.sellerProfile?.businessName || null,
         email: user.email || null,
         phone: user.phone || null,
@@ -1347,7 +1349,7 @@ resolveSellerFeeTaxAmount(
     return records.map((record) => ({
       ...record,
       seller: usersById.get(String(record.seller_id || record.sellerId || "")) || null,
-      sellerName: usersById.get(String(record.seller_id || record.sellerId || ""))?.displayName || null,
+      sellerName: usersById.get(String(record.seller_id || record.sellerId || ""))?.fullName || usersById.get(String(record.seller_id || record.sellerId || ""))?.displayName || null,
       orderNumber: ordersById.get(String(record.order_id || record.orderId || "")) || null,
     }));
   }

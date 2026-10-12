@@ -40,7 +40,7 @@ const listPaymentsSchema = Joi.object({
     status: Joi.string(),
     provider: Joi.string().valid(...Object.values(PAYMENT_PROVIDER)),
     buyerId: Joi.string().max(64),
-    orderId: uuid,
+    orderId: Joi.string().trim().max(128),
     search: Joi.string().max(128),
     fromDate: Joi.date().iso(),
     toDate: Joi.date().iso(),
