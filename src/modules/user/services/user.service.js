@@ -129,6 +129,7 @@ class UserService {
 
     const {
       description: nestedDescription,
+      businessWebsite: nestedBusinessWebsite,
       ...nestedProfilePayload
     } = payload.profile || {};
     const profilePayload = {
@@ -143,11 +144,18 @@ class UserService {
     const description = Object.prototype.hasOwnProperty.call(payload, "description")
       ? payload.description
       : nestedDescription;
+    const hasBusinessWebsite = Object.prototype.hasOwnProperty.call(payload, "businessWebsite") ||
+      Object.prototype.hasOwnProperty.call(payload.profile || {}, "businessWebsite");
+    const businessWebsite = (Object.prototype.hasOwnProperty.call(payload, "businessWebsite")
+      ? payload.businessWebsite : nestedBusinessWebsite) || null;
     const isSeller = [
       ROLES.SELLER,
       ROLES.SELLER_ADMIN,
       ROLES.SELLER_SUB_ADMIN,
     ].includes(existingUser.role);
+    if (hasBusinessWebsite && !isSeller) {
+      throw new AppError("Only sellers can update a business website", 403);
+    }
     const existingProfile = existingUser.profile?.toObject?.() || existingUser.profile || {};
     const existingSellerProfile =
       existingUser.sellerProfile?.toObject?.() || existingUser.sellerProfile || {};
@@ -160,10 +168,11 @@ class UserService {
       };
     }
 
-    if (isSeller && hasDescription) {
+    if (isSeller && (hasDescription || hasBusinessWebsite)) {
       setPayload.sellerProfile = {
         ...existingSellerProfile,
-        description,
+        ...(hasDescription ? { description } : {}),
+        ...(hasBusinessWebsite ? { businessWebsite } : {}),
       };
     }
 
@@ -179,11 +188,12 @@ class UserService {
       throw new AppError("User not found", 404);
     }
 
-    if (isSeller && hasDescription) {
+    if (isSeller && (hasDescription || hasBusinessWebsite)) {
       const organization = await sellerOrganizationService.getDefaultOrOnlyOrganization(userId);
       if (organization?.id) {
         await sellerOrganizationService.organizationRepository.update(organization.id, {
-          description,
+          ...(hasDescription ? { description } : {}),
+          ...(hasBusinessWebsite ? { businessWebsite } : {}),
           updatedBy: userId,
         });
       }

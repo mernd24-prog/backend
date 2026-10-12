@@ -248,12 +248,13 @@ class PaymentRepository {
       values.push(buyerId);
     }
     if (orderId) {
-      clauses.push(`order_id = $${index++}`);
-      values.push(orderId);
+      clauses.push(`(order_id::text ILIKE $${index} OR EXISTS (SELECT 1 FROM orders search_order WHERE search_order.id = payments.order_id AND search_order.order_number ILIKE $${index}))`);
+      values.push(`%${String(orderId).trim().replace(/^#/, "")}%`);
+      index += 1;
     }
     if (search) {
-      clauses.push(`(transaction_reference ILIKE $${index} OR provider_order_id ILIKE $${index} OR provider_payment_id ILIKE $${index} OR order_id::text ILIKE $${index})`);
-      values.push(`%${search}%`);
+      clauses.push(`(id::text ILIKE $${index} OR transaction_reference ILIKE $${index} OR provider_order_id ILIKE $${index} OR provider_payment_id ILIKE $${index} OR provider ILIKE $${index} OR (replace(provider, '_', '') || 'Payment') ILIKE $${index} OR order_id::text ILIKE $${index} OR EXISTS (SELECT 1 FROM orders search_order WHERE search_order.id = payments.order_id AND search_order.order_number ILIKE $${index}))`);
+      values.push(`%${String(search).trim().replace(/^#/, "")}%`);
       index += 1;
     }
     if (fromDate) {

@@ -18,6 +18,7 @@ const userProfileFieldsSchema = {
   lastName: Joi.string().trim().min(2).max(50),
   avatarUrl: Joi.string().trim().uri().allow("", null),
   description: Joi.string().trim().max(2000).allow("", null),
+  businessWebsite: Joi.string().trim().uri({ scheme: ["http", "https"] }).max(2048).allow("", null),
 };
 
 const updateProfileSchema = Joi.object({
@@ -25,7 +26,7 @@ const updateProfileSchema = Joi.object({
     profile: Joi.object(userProfileFieldsSchema).min(1),
     ...userProfileFieldsSchema,
   })
-    .or("profile", "firstName", "lastName", "avatarUrl", "description")
+    .or("profile", "firstName", "lastName", "avatarUrl", "description", "businessWebsite")
     .required(),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),
