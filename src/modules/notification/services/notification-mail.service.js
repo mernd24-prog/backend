@@ -1,3 +1,4 @@
+const { shouldNotify } = require("./notification-policy");
 const { sendMail } = require("../../../infrastructure/mail/mailer");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { logger } = require("../../../shared/logger/logger");
@@ -496,7 +497,7 @@ const buildTemplate = ({ subject, message, payload = {}, recipientType = "custom
 
 class NotificationMailService {
   async sendTemplatedMail({ to, subject, message, payload = {}, recipientType, eventName, templateKey }) {
-    if (!to) return null;
+    if (!to || !shouldNotify(eventName || payload.eventName, payload)) return null;
     if (String(recipientType || "") === "admin" && isOrderEmailEvent(eventName, payload)) {
       logger.info({
         to,

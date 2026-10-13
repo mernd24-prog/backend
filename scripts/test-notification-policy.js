@@ -1,0 +1,41 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+const { shouldNotify } = require('../src/modules/notification/services/notification-policy');
+const { DOMAIN_EVENTS: E } = require('../src/contracts/events/domain-events');
+(async () => {
+  for (const event of [E.SHIPMENT_CREATED_V1, E.INVOICE_GENERATED_V1]) assert.equal(shouldNotify(event), false);
+  for (const status of ['in_transit', 'manifested', 'delivered', 'unknown']) assert.equal(shouldNotify(E.SHIPMENT_TRACKING_UPDATED_V1, { status }), false);
+  assert.equal(shouldNotify(E.SHIPMENT_TRACKING_UPDATED_V1, { status: 'out-for-delivery' }), true);
+  for (const status of ['pending', 'confirmed', 'processing', 'delivered']) assert.equal(shouldNotify(E.ORDER_STATUS_UPDATED_V1, { status }), false);
+  assert.equal(shouldNotify(E.ORDER_STATUS_UPDATED_V1, { status: 'shipped' }), true);
+  for (const event of [E.ORDER_CREATED_V1, E.ORDER_PAID_V1, E.ORDER_PAYMENT_FAILED_V1, E.ORDER_CANCELLED_V1, E.RETURN_APPROVED_V1, E.RETURN_REJECTED_V1, E.REFUND_PROCESSED_V1, E.REFUND_FAILED_V1, E.SHIPMENT_DELIVERED_V1, E.KYC_STATUS_UPDATED_V1, E.PRODUCT_REJECTED_V1, E.INVENTORY_LOW_STOCK_V1, E.OTP_SENT_V1]) assert.equal(shouldNotify(event), true);
+  assert.equal(shouldNotify(E.AUTH_USER_REGISTERED_V1), false);
+  assert.equal(shouldNotify(E.SELLER_PAYOUT_STATUS_UPDATED_V1, { status: 'processing' }), false);
+  assert.equal(shouldNotify(E.SELLER_PAYOUT_STATUS_UPDATED_V1, { status: 'completed' }), true);
+  const { notificationIdentity } = require('../src/modules/notification/services/notification-policy');
+  assert.equal(notificationIdentity(E.REFUND_PROCESSED_V1, { refundId: 'r1' }), notificationIdentity(E.PAYMENT_REFUNDED_V1, { refundId: 'r1' }));
+  assert.notEqual(notificationIdentity(E.REFUND_PROCESSED_V1, { refundId: 'r1' }), notificationIdentity(E.REFUND_PROCESSED_V1, { refundId: 'r2' }));
+  assert.equal(notificationIdentity(E.REFUND_PROCESSED_V1, { orderId: 'o1' }), null);
+  assert.equal(notificationIdentity(E.INVENTORY_LOW_STOCK_V1, { productId: 'p1' }, 100), notificationIdentity(E.INVENTORY_LOW_STOCK_V1, { productId: 'p1' }, 200));
+  let sent = 0;
+  const env = { smtp: { live: true, mode: 'live' }, mail: { sendEmails: false, sendAuthOtpEmails: true } };
+  const modules = {
+    nodemailer: { createTransport: () => ({ sendMail: async () => { sent++; return { messageId: 'mock-provider-id', accepted: ['test@example.com'] }; } }) },
+    '../../config/env': { env }, '../../shared/errors/app-error': { AppError: Error },
+    '../../shared/logger/logger': { logger: { warn() {}, info() {}, error() {} } },
+  };
+  const context = { module: { exports: {} }, process: { env: {} }, require: key => modules[key] };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/infrastructure/mail/mailer.js'), 'utf8'), context);
+  const { sendMail } = context.module.exports;
+  await sendMail({ to: 'test@example.com', subject: 'General' });
+  assert.equal(sent, 0, 'general mail disabled');
+  await sendMail({ to: 'test@example.com', subject: 'OTP', type: 'auth_otp' });
+  assert.equal(sent, 1, 'OTP remains enabled independently of general mail');
+  env.mail.sendAuthOtpEmails = false;
+  await sendMail({ to: 'test@example.com', subject: 'OTP', type: 'auth_otp' });
+  assert.equal(sent, 1, 'OTP disable flag is respected');
+  await assert.rejects(sendMail({ to: 'invalid', type: 'auth_otp' }), /valid recipient/);
+  console.log('Notification policy and isolated OTP mail tests passed; no external mail/SMS sent.');
+})().catch(error => { console.error(error); process.exitCode = 1; });

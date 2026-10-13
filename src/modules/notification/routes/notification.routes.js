@@ -17,6 +17,17 @@ notificationRoutes.get(
   allowActions(ACTIONS.NOTIFICATION_MANAGE),
   catchErrors(notificationController.listAdmin),
 );
+// Campaign routes share the same management permission as broadcast creation.
+notificationRoutes.get("/campaigns/:campaignId", authenticate,
+  allowActions(ACTIONS.NOTIFICATION_MANAGE), catchErrors(async (req, res) => {
+    const { campaignService } = require("../services/notification-campaign.service");
+    res.json({ success: true, data: await campaignService.inspect(req.params.campaignId) });
+  }));
+notificationRoutes.post("/campaigns/:campaignId/retry", authenticate,
+  allowActions(ACTIONS.NOTIFICATION_MANAGE), catchErrors(async (req, res) => {
+    const { campaignService } = require("../services/notification-campaign.service");
+    res.status(202).json({ success: true, data: await campaignService.retry(req.params.campaignId) });
+  }));
 notificationRoutes.post(
   "/",
   authenticate,

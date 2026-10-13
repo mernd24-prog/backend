@@ -15,7 +15,7 @@ const { SMS_TEMPLATE_KEYS } = require("../../../infrastructure/msg/sms");
 const notificationQueue = createQueue("notifications");
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 let subscribersRegistered = false;
-const EMAIL_SUPPRESSED_EVENTS = new Set();
+const { shouldNotify, notificationIdentity } = require("./notification-policy");
 const SELLER_ROLES = new Set([
   ROLES.SELLER,
   ROLES.SELLER_ADMIN,
@@ -36,6 +36,7 @@ class NotificationService {
     subscribersRegistered = true;
 
     eventBus.subscribe(DOMAIN_EVENTS.AUTH_USER_REGISTERED_V1, async (event) => {
+      if (!shouldNotify(DOMAIN_EVENTS.AUTH_USER_REGISTERED_V1, event.payload)) return;
       const { userId, email, role } = event.payload;
       if (!email || !emailPattern.test(String(email).trim())) return;
       await notificationQueue.add("welcome-email", { userId, email }, {
@@ -85,6 +86,7 @@ class NotificationService {
 
     definitions.forEach(([eventName, subject, templateBuilder]) => {
       eventBus.subscribe(eventName, async (event) => {
+        if (!shouldNotify(eventName, event.payload)) return;
         const userId = event.payload.buyerId || event.payload.userId;
         const customerPayload = this.withViewMetadata(event.payload, "buyer");
         const hasCustomerEmail = Boolean(
@@ -652,6 +654,7 @@ class NotificationService {
   }
 
   async queueEmailForUser(userId, { subject, message, eventName, eventId, recipientType, payload = {} }) {
+    if (!shouldNotify(eventName, payload)) return;
     const isBuyerRecipient = ["buyer", "customer"].includes(String(recipientType || ""));
     const directEmail = isBuyerRecipient
       ? payload.recipientEmail || payload.recipient_email || payload.customerEmail || payload.customer_email || payload.buyerEmail || payload.buyer_email || payload.email
@@ -660,7 +663,8 @@ class NotificationService {
     if (!to || !emailPattern.test(String(to).trim())) return;
     const referenceId = payload.emailDedupeKey || payload.orderId || payload.returnId || payload.payoutId || eventId;
     const statusKey = this.emailJobStatusKey(eventName, payload);
-    const jobId = [
+    const identity = notificationIdentity(eventName, payload);
+    const jobId = identity ? require("node:crypto").createHash("sha256").update([identity, recipientType, userId || to].join("|")).digest("hex") : [
       payload.emailDedupeEventName || eventName,
       referenceId,
       statusKey,
@@ -739,6 +743,7 @@ class NotificationService {
   }
 
   async queueCommerceSmsForUser(userId, eventName, eventId, payload = {}) {
+    if (!shouldNotify(eventName, payload)) return;
     if (!env.sms.transactionalEnabled) return;
     const resolved = this.resolveCommerceSms(eventName, payload);
     if (!resolved) return;
@@ -799,7 +804,7 @@ class NotificationService {
   }
 
   shouldQueueEmail(eventName, recipientType = "buyer", payload = {}) {
-    if (EMAIL_SUPPRESSED_EVENTS.has(eventName)) return false;
+    if (!shouldNotify(eventName, payload)) return false;
 
     const isBuyerRecipient = ["buyer", "customer"].includes(
       String(recipientType || ""),
@@ -898,46 +903,8 @@ class NotificationService {
   }
 
   async createBroadcastNotifications(payload = {}) {
-    const recipients = await this.findBroadcastRecipients(payload.audience, payload.userIds);
-    const subject = payload.title;
-    const message = payload.body;
-    const channel = payload.channel || "in_app";
-    const data = payload.data || {};
-    const results = [];
-
-    for (const recipient of recipients) {
-      const userId = String(recipient._id || recipient.id);
-      const itemPayload = {
-        ...data,
-        recipientType: recipient.role,
-        targetType: data.targetType || "broadcast",
-        templateKey: data.templateKey || null,
-      };
-      results.push(await this.createNotification({
-        userId,
-        channel,
-        subject,
-        template: message,
-        payload: itemPayload,
-        email: channel === "email" ? recipient.email : undefined,
-        status: "queued",
-        idempotencyKey: [
-          "broadcast",
-          subject,
-          channel,
-          payload.audience,
-          userId,
-          data.idempotencyKey || data.campaignId || "",
-        ].filter(Boolean).join(":"),
-      }));
-    }
-
-    return {
-      sent: results.length,
-      channel,
-      audience: payload.audience,
-      items: results,
-    };
+    const { campaignService } = require("./notification-campaign.service");
+    return campaignService.create(payload);
   }
 
   extractSellerRecipientIds(payload = {}) {
@@ -1008,6 +975,9 @@ class NotificationService {
       return this.createBroadcastNotifications(payload);
     }
 
+    if (!shouldNotify(payload.payload?.eventName, payload.payload || {})) return { skipped: true };
+    const identity = notificationIdentity(payload.payload?.eventName, payload.payload || {});
+    if (identity) payload = { ...payload, idempotencyKey: `${identity}:${payload.userId}:${payload.channel}` };
     const notification = await this.notificationRepository.create(payload);
 
     if (notification.channel === "email" && payload.email) {

@@ -18,7 +18,30 @@ function registerWorkers() {
   }
 
   registered = true;
+  const { campaignService } = require("../modules/notification/services/notification-campaign.service");
+  const { NotificationDeliveryModel, NotificationCampaignModel } = require("../modules/notification/models/notification-campaign.model");
+  const campaignWorker = createWorker("notification-campaigns", job =>
+    job.name === "retry-failed" ? campaignService.retryFailed(job.data) : campaignService.expand(job.data),
+    { concurrency: 1, limiter: { max: 1, duration: 1000 } });
+  const bulkWorker = createWorker("notification-bulk-delivery", job => campaignService.deliver(job.data),
+    { concurrency: 2, limiter: { max: 5, duration: 1000 } });
+  bulkWorker.on("failed", (job, error) => {
+    if (job && job.attemptsMade >= (job.opts.attempts || 1)) {
+      NotificationDeliveryModel.updateOne({ _id: job.data.deliveryId },
+        { status: "failed", lastError: String(error.message).slice(0, 1000) })
+        .catch(err => logger.error({ err }, "Failed to persist bulk delivery failure"));
+    }
+  });
+  campaignWorker.on("failed", (job, error) => {
+    if (job && job.attemptsMade >= (job.opts.attempts || 1)) {
+      NotificationCampaignModel.updateOne({ _id: job.data.campaignId },
+        { status: "failed", lastError: String(error.message).slice(0, 1000) })
+        .catch(err => logger.error({ err }, "Failed to persist campaign failure"));
+    }
+  });
   workers = [
+    campaignWorker,
+    bulkWorker,
     createWorker(
       "notifications",
       async (job) => {
@@ -91,7 +114,30 @@ function registerWorkers() {
 
 async function closeWorkers() {
   const activeWorkers = [...workers];
-  workers = [];
+  const { campaignService } = require("../modules/notification/services/notification-campaign.service");
+  const { NotificationDeliveryModel, NotificationCampaignModel } = require("../modules/notification/models/notification-campaign.model");
+  const campaignWorker = createWorker("notification-campaigns", job =>
+    job.name === "retry-failed" ? campaignService.retryFailed(job.data) : campaignService.expand(job.data),
+    { concurrency: 1, limiter: { max: 1, duration: 1000 } });
+  const bulkWorker = createWorker("notification-bulk-delivery", job => campaignService.deliver(job.data),
+    { concurrency: 2, limiter: { max: 5, duration: 1000 } });
+  bulkWorker.on("failed", (job, error) => {
+    if (job && job.attemptsMade >= (job.opts.attempts || 1)) {
+      NotificationDeliveryModel.updateOne({ _id: job.data.deliveryId },
+        { status: "failed", lastError: String(error.message).slice(0, 1000) })
+        .catch(err => logger.error({ err }, "Failed to persist bulk delivery failure"));
+    }
+  });
+  campaignWorker.on("failed", (job, error) => {
+    if (job && job.attemptsMade >= (job.opts.attempts || 1)) {
+      NotificationCampaignModel.updateOne({ _id: job.data.campaignId },
+        { status: "failed", lastError: String(error.message).slice(0, 1000) })
+        .catch(err => logger.error({ err }, "Failed to persist campaign failure"));
+    }
+  });
+  workers = [
+    campaignWorker,
+    bulkWorker,];
   registered = false;
   await Promise.allSettled(activeWorkers.map((worker) => worker.close()));
 }

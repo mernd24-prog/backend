@@ -1,0 +1,144 @@
+
+name: Backend CI & Security Checks
+
+run-name: Backend CI - ${{ github.ref_name }} - ${{ github.sha }}
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-production-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Validate Backend
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Test Deal Variant Regression
+        run: node scripts/test-deal-variants.js
+
+      - name: Test Media Cleanup Safety
+        run: node scripts/test-media-cleanup.js
+
+      - name: Test Secure Profile Image Handling
+        run: node scripts/test-secure-profile-images.js
+
+  deploy:
+    name: Deploy Backend to Port 4000
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: devlopment
+
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            set -Eeuo pipefail
+
+            APP="/home/ubuntu/ecommerce/backend"
+            PROCESS="sam-global-backend"
+            LOG="/home/ubuntu/ecommerce/backend-deploy.log"
+            HEALTH_URL="http://127.0.0.1:4000/health"
+
+            mkdir -p "$(dirname "$LOG")"
+            touch "$LOG"
+            exec >> "$LOG" 2>&1
+
+            echo "===== DEPLOY START $(date -Is) ====="
+
+            cd "$APP"
+
+            # Refuse to overwrite local changes.
+            if [ -n "$(git status --porcelain)" ]; then
+              echo "ERROR: Working tree is not clean"
+              git status --short
+              exit 1
+            fi
+
+            # Verify correct PM2 process exists.
+            pm2 describe "$PROCESS" >/dev/null
+
+            OLD_COMMIT="$(git rev-parse HEAD)"
+            echo "Previous commit: $OLD_COMMIT"
+
+            rollback() {
+              echo "ERROR: Deployment failed. Rolling back."
+
+              git reset --hard "$OLD_COMMIT" || return 1
+              npm ci --omit=dev || return 1
+              pm2 restart "$PROCESS" --update-env || return 1
+
+              for i in $(seq 1 12); do
+                if curl -fsS --max-time 3 "$HEALTH_URL"; then
+                  echo "ROLLBACK HEALTH CHECK PASSED"
+                  pm2 logs "$PROCESS" --nostream --lines 80 || true
+                  return 0
+                fi
+                sleep 5
+              done
+
+              echo "CRITICAL: Rollback health check failed"
+              pm2 describe "$PROCESS" || true
+              pm2 logs "$PROCESS" --nostream --lines 150 || true
+              return 1
+            }
+
+            trap 'rc=$?; trap - ERR; echo "DEPLOY FAILED at line $LINENO (exit $rc)"; rollback || echo "CRITICAL: Manual recovery required"; exit "$rc"' ERR
+
+            git fetch origin main
+            NEW_COMMIT="$(git rev-parse origin/main)"
+            echo "Target commit: $NEW_COMMIT"
+
+            git reset --hard "$NEW_COMMIT"
+            npm ci --omit=dev
+
+            pm2 restart "$PROCESS" --update-env
+
+            HEALTHY=0
+            for i in $(seq 1 12); do
+              if curl -fsS --max-time 3 "$HEALTH_URL"; then
+                HEALTHY=1
+                break
+              fi
+              sleep 5
+            done
+
+            if [ "$HEALTHY" -ne 1 ]; then
+              echo "ERROR: Port 4000 health check failed"
+              false
+            fi
+
+            echo "DEPLOY SUCCESS: $NEW_COMMIT"
+            pm2 describe "$PROCESS"
+            pm2 logs "$PROCESS" --nostream --lines 30 || true
+            trap - ERR
+            echo "===== DEPLOY END $(date -Is) ====="
