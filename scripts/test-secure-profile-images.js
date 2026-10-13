@@ -15,7 +15,17 @@ async function load(relativePath, mocks) {
 }
 
 async function main() {
-  const { storageService } = require("../src/shared/storage/storage-service");
+  // Signing is local SDK logic: use dummy configuration, never deployment secrets.
+  const { storageService } = await load("src/shared/storage/storage-service.js", {
+    "../../config/env": { env: {
+      cloudinary: {
+        enabled: true,
+        cloudName: "ci-test-cloud",
+        apiKey: "ci-test-key",
+        apiSecret: "ci-test-secret",
+      },
+    } },
+  });
   const before = Math.floor(Date.now() / 1000);
   const signed = storageService.signProfileImage({ publicId: "test/private-avatar", format: "png" });
   const url = new URL(signed.url);
