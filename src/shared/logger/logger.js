@@ -1,14 +1,25 @@
 const pino = require("pino");
 const { env } = require("../../config/env");
 
-const prettyLogs = ["1", "true", "yes", "on"].includes(
-  String(process.env.LOG_PRETTY || "").trim().toLowerCase(),
-) || env.nodeEnv !== "production";
+const prettySetting = String(process.env.LOG_PRETTY || "").trim().toLowerCase();
+const prettyLogs = prettySetting
+  ? ["1", "true", "yes", "on"].includes(prettySetting)
+  : env.nodeEnv !== "production";
+
+// Production installs omit devDependencies; JSON logging must still start.
+let prettyTarget;
+if (prettyLogs) {
+  try {
+    prettyTarget = require.resolve("pino-pretty");
+  } catch (error) {
+    if (error.code !== "MODULE_NOT_FOUND") throw error;
+  }
+}
 
 const transport =
-  prettyLogs
+  prettyTarget
     ? pino.transport({
-        target: "pino-pretty",
+        target: prettyTarget,
         options: {
           colorize: true,
           translateTime: "SYS:yyyy-mm-dd HH:MM:ss.l",
