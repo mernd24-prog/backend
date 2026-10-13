@@ -18,7 +18,7 @@ class NotificationController {
 
   create = async (req, res) => {
     const notification = await this.notificationService.createNotification(req.body);
-    res.status(201).json(okResponse(notification));
+    res.status(notification.campaignId ? 202 : 201).json(okResponse(notification));
   };
 
   listMine = async (req, res) => {

@@ -48,6 +48,9 @@ services:
 
   redis:
     image: redis:7
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis-data:/data
     ports:
       - "6379:6379"
     volumes:
@@ -71,6 +74,7 @@ services:
       - "8025:8025"
 
 volumes:
+  redis-data:
   mongo-data:
   postgres-data:
   redis-data:
