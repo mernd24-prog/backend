@@ -45,6 +45,12 @@ jobs:
       - name: Test Secure Profile Image Handling
         run: node scripts/test-secure-profile-images.js
 
+      - name: Test Notification Policy and OTP Mail
+        run: node scripts/test-notification-policy.js
+
+      - name: Test Notification Campaign Batching
+        run: node scripts/test-notification-campaigns.js
+
   deploy:
     name: Deploy Backend to Port 4000
     needs: test
