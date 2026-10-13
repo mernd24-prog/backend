@@ -249,6 +249,77 @@ class CancellationService {
     };
   }
 
+  async previewCancellation(orderId, payload = {}, actor = {}) {
+    const order = await this.orderRepository.findByIdWithItems(orderId);
+    if (!order) throw new AppError("Order not found", 404);
+    const [returnReservedByItem, cancellationReservedByItem] = await Promise.all([
+      this.getReturnReservedQuantities(orderId),
+      this.getPendingCancellationReservedQuantities(orderId),
+    ]);
+    const reservedByItem = new Map(returnReservedByItem);
+    cancellationReservedByItem.forEach((quantity, itemId) => {
+      reservedByItem.set(itemId, (reservedByItem.get(itemId) || 0) + quantity);
+    });
+    const items = this.normalizeItems(order, payload.items || [], reservedByItem);
+    await this.assertCanCancel(order, items, actor);
+    await this.assertShipmentsCancellable(order, items);
+
+    const fullCancellation = this.isFullCancellation(order, items);
+    const payment = await this.orderRepository.findRefundablePaymentByOrderId(orderId);
+    const commerceSettings = await commerceSettingsService.getSettings();
+    const componentPolicies = commerceSettings.returns?.refundPolicy || {};
+    const scenario = this.isSeller(actor)
+      ? "sellerCancellation"
+      : fullCancellation ? "fullCancellation" : "itemCancellation";
+    const merchantFaultScenario = scenario === "sellerCancellation";
+    const shippingRefundEnabled = merchantFaultScenario || componentPolicies.shipping?.[scenario] === true;
+    const platformFeeRefundEnabled = merchantFaultScenario || componentPolicies.platformFee?.[scenario] === true;
+    const shippingRefundAmount = shippingRefundEnabled
+      ? fullCancellation
+        ? this.round(order.shipping_fee_amount || order.summary?.shippingFeeAmount || 0)
+        : this.getCompletedSellerGroupShippingAmount(order, items)
+      : 0;
+    const itemBase = items.reduce((sum, item) => sum + Number(item.itemAmount || 0), 0);
+    const proportion = Number(order.subtotal_amount || 0) > 0
+      ? Math.min(itemBase / Number(order.subtotal_amount), 1)
+      : 0;
+    const platformFeeRefundAmount = platformFeeRefundEnabled
+      ? this.round(this.getCustomerPlatformFeeAmount(order) * proportion)
+      : 0;
+    const refund = this.calculateRefund(
+      order,
+      items,
+      payment,
+      fullCancellation,
+      shippingRefundAmount + platformFeeRefundAmount,
+    );
+    const refundDestination = commerceSettings.payments?.refundDestination || "original_payment_method";
+    if (refundDestination === "wallet" && refund.captured && refund.refundAmount > 0) {
+      refund.walletRefundAmount = refund.refundAmount;
+      refund.providerRefundAmount = 0;
+      refund.refundRequired = true;
+    }
+    const cancellationRefundMode = commerceSettings.payments?.cancellationRefundMode || "manual_after_approval";
+    return {
+      orderId,
+      scope: fullCancellation ? "full" : "partial",
+      scenario,
+      items,
+      itemRefundAmount: this.round(items.reduce((sum, item) => sum + Number(item.refundAmount || 0), 0)),
+      shippingRefundAmount,
+      platformFeeRefundAmount,
+      totalRefundAmount: refund.refundAmount,
+      walletRefundAmount: refund.walletRefundAmount,
+      providerRefundAmount: refund.providerRefundAmount,
+      refundRequired: refund.refundRequired,
+      refundDestination,
+      refundHandling: refund.refundRequired
+        ? cancellationRefundMode === "automatic_after_approval" ? "automatic" : "platform_review"
+        : "not_required",
+      paymentProvider: payment?.provider || order.payment_provider || null,
+    };
+  }
+
   async cancelOrder(orderId, payload = {}, actor = {}) {
     const order = await this.orderRepository.findByIdWithItems(orderId);
     if (!order) throw new AppError("Order not found", 404);
@@ -393,14 +464,16 @@ class CancellationService {
       refundAmount: refund.refundAmount,
       walletRefundAmount: refund.walletRefundAmount,
       providerRefundAmount: refund.providerRefundAmount,
-      refundMethod: payload.refundMethod || "auto",
+      // Sellers report fulfilment failure; only the platform policy may choose
+      // the customer's refund rail or manual-review requirement.
+      refundMethod: this.isSeller(actor) ? "auto" : payload.refundMethod || "auto",
       refundStatus: refund.refundRequired || refund.walletRefundAmount > 0 ? "not_started" : "not_required",
       paymentId: payment?.id || null,
       paymentProvider: payment?.provider || order.payment_provider || null,
       idempotencyKey,
       requestedBy: actor.userId,
       requestedByRole: actor.role,
-      status: rtoSettlement ? "approved" : "requested",
+      status: rtoSettlement || this.isSeller(actor) || this.isAdmin(actor) ? "approved" : "requested",
       metadata: {
         fullCancellation,
         sellerSupplyCancellation: scenario === "sellerCancellation" || rtoSettlement,
@@ -415,9 +488,16 @@ class CancellationService {
         refundDestination,
         refundPolicySnapshot: componentPolicies,
         requestedAt: new Date().toISOString(),
+        approvalRequired: !(rtoSettlement || this.isSeller(actor) || this.isAdmin(actor)),
+        initiatedByRole: actor.role || null,
+        ...(rtoSettlement || this.isSeller(actor) || this.isAdmin(actor)
+          ? { approvedAt: new Date().toISOString(), approvalNote: "Initiator is authorized to cancel these items" }
+          : {}),
       },
     });
-    return rtoSettlement ? this.processCancellation(cancellation.id, actor) : cancellation;
+    return rtoSettlement || this.isSeller(actor) || this.isAdmin(actor)
+      ? this.processCancellation(cancellation.id, actor)
+      : cancellation;
   }
 
   async approveCancellation(cancellationId, payload = {}, actor = {}) {

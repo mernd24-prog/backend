@@ -88,6 +88,12 @@ class OrderController {
     res.json(orderResponse(cancellation, "Cancellation request processed successfully"));
   };
 
+  previewCancellation = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const preview = await this.cancellationService.previewCancellation(req.params.orderId, req.body, actor);
+    res.json(orderResponse(preview, "Cancellation impact calculated successfully"));
+  };
+
   updateStatus = async (req, res) => {
     const actor = getCurrentUser(req);
     if (req.body.status === "cancelled") {

@@ -12,6 +12,7 @@ const {
   updateOrderStatusSchema,
   orderParamSchema,
   cancelOrderSchema,
+  cancellationPreviewSchema,
   listOrdersSchema,
   addOrderNoteSchema,
 } = require("../validation/order.validation");
@@ -53,6 +54,12 @@ orderRoutes.get(
   "/:orderId/shipments/:shipmentId/box-label",
   authenticate,
   catchErrors(orderController.downloadBoxLabel),
+);
+orderRoutes.post(
+  "/:orderId/cancellation-preview",
+  authenticate,
+  checkInput(cancellationPreviewSchema),
+  catchErrors(orderController.previewCancellation),
 );
 orderRoutes.post(
   "/:orderId/cancel",

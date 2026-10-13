@@ -1264,6 +1264,21 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
       if (returnStatus === "approved") return "return_approved";
       return returnStatus || null;
     };
+    const resolveCancellationDisplayStatus = (cancellation = {}, item = {}) => {
+      const status = String(cancellation.status || "").toLowerCase();
+      const refundStatus = String(cancellation.refund_status || cancellation.refundStatus || "").toLowerCase();
+      if (status === "requested") return "cancellation_requested";
+      if (status === "rejected") return "cancellation_rejected";
+      if (status === "failed" || refundStatus === "failed") return "cancellation_failed";
+      if (status === "completed") return item.cancellation_status || "cancelled";
+      if (
+        ["refund_pending", "manual_review"].includes(status) ||
+        ["pending", "provider_pending", "manual_review"].includes(refundStatus)
+      ) return "refund_pending";
+      if (status === "processing") return "cancellation_processing";
+      if (status === "approved") return "cancellation_approved";
+      return status ? `cancellation_${status}` : null;
+    };
     const sanitizeReturn = (returnRequest = {}) => ({
       id: String(returnRequest._id || returnRequest.id || ""),
       _id: String(returnRequest._id || returnRequest.id || ""),
@@ -1327,13 +1342,7 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
       );
       const latestCancellation = itemCancellations[0] || null;
       const itemCancellationStatus = latestCancellation
-        ? latestCancellation.status === "requested"
-          ? "cancellation_requested"
-          : latestCancellation.status === "rejected"
-            ? null
-            : latestCancellation.status === "completed"
-              ? (item.cancellation_status || "cancelled")
-              : "cancellation_approved"
+        ? resolveCancellationDisplayStatus(latestCancellation, item)
         : null;
       const itemReturn = returnRequests.find((returnRequest) => returnMatchesItem(returnRequest, item));
       const itemReturnStatus = itemReturn ? resolveReturnDisplayStatus(itemReturn) : null;
@@ -1360,20 +1369,8 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
         ),
         ...itemCancellations.map((cancellation) => ({
           id: `cancellation:${cancellation.id}:${item.id}`,
-          status: cancellation.status === "requested"
-            ? "cancellation_requested"
-            : cancellation.status === "rejected"
-              ? "cancellation_rejected"
-              : cancellation.status === "completed"
-                ? (item.cancellation_status || "cancelled")
-                : "cancellation_approved",
-          to_status: cancellation.status === "requested"
-            ? "cancellation_requested"
-            : cancellation.status === "rejected"
-              ? "cancellation_rejected"
-              : cancellation.status === "completed"
-                ? (item.cancellation_status || "cancelled")
-                : "cancellation_approved",
+          status: resolveCancellationDisplayStatus(cancellation, item),
+          to_status: resolveCancellationDisplayStatus(cancellation, item),
           note: cancellation.status === "rejected"
             ? cancellation.metadata?.rejectionReason || "Cancellation request rejected"
             : cancellation.reason || "Item cancellation request updated",
@@ -1409,8 +1406,8 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
           refundAmount: Number(itemReturn.refund?.refundedAmount || itemReturn.refundAmount || 0),
         } : null,
         effective_status:
-          item.cancellation_status ||
           itemCancellationStatus ||
+          item.cancellation_status ||
           itemReturnStatus ||
           item.return_status ||
           forwardItemStatus,

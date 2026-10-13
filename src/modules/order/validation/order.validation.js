@@ -128,6 +128,13 @@ const cancelOrderSchema = Joi.object({
       "inventory_unavailable",
       "delivery_delay",
       "pricing_issue",
+      "item_damaged",
+      "quality_check_failed",
+      "warehouse_unavailable",
+      "catalog_issue",
+      "delivery_restricted",
+      "compliance_hold",
+      "customer_support_request",
       "other",
     ).default("other"),
     refundMethod: Joi.string().valid("auto", "original_source", "wallet", "manual").default("auto"),
@@ -136,6 +143,19 @@ const cancelOrderSchema = Joi.object({
       orderItemId: Joi.string().uuid().required(),
       quantity: Joi.number().integer().min(1),
     })).min(1),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({
+    orderId: Joi.string().required(),
+  }).required(),
+});
+
+const cancellationPreviewSchema = Joi.object({
+  body: Joi.object({
+    items: Joi.array().items(Joi.object({
+      orderItemId: Joi.string().uuid().required(),
+      quantity: Joi.number().integer().min(1),
+    })).min(1).required(),
   }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({
@@ -161,6 +181,7 @@ module.exports = {
   updateOrderStatusSchema,
   orderParamSchema,
   cancelOrderSchema,
+  cancellationPreviewSchema,
   listOrdersSchema,
   addOrderNoteSchema,
 };
