@@ -22,11 +22,13 @@ const { DOMAIN_EVENTS: E } = require('../src/contracts/events/domain-events');
   const notificationSource = fs.readFileSync(path.join(__dirname, '../src/modules/notification/services/notification.service.js'), 'utf8');
   const queueMethod = notificationSource.slice(notificationSource.indexOf('  async queueEmailForUser('), notificationSource.indexOf('  async findUserEmail('));
   const jobs = [];
+  const jobOptions = [];
   const recipientContext = {
     shouldNotify, notificationIdentity,
     emailPattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
     env: { smtp: { queue: { initialDelayMs: 0, retryBackoffMs: 1000 } } },
-    notificationQueue: { add: async (name, data) => jobs.push(data) },
+    require,
+    notificationQueue: { add: async (name, data, options) => { jobs.push(data); jobOptions.push(options); } },
   };
   const recipientService = vm.runInNewContext(`({${queueMethod}})`, recipientContext);
   recipientService.findUserEmail = async () => 'admin@example.com';
@@ -34,10 +36,18 @@ const { DOMAIN_EVENTS: E } = require('../src/contracts/events/domain-events');
   recipientService.emailJobStatusKey = () => '';
   const onboardingEmail = {
     eventName: E.SELLER_KYC_SUBMITTED_V1, eventId: 'submission-1',
-    recipientType: 'admin', payload: { sellerEmail: 'seller@example.com' },
+    recipientType: 'admin', payload: { sellerEmail: 'seller@example.com', emailDedupeKey: 'seller-onboarding:seller-id', emailDedupeEventName: 'seller.onboarding_submitted.admin' },
   };
   await recipientService.queueEmailForUser('admin-id', onboardingEmail);
   assert.equal(jobs.at(-1).to, 'admin@example.com', 'admin onboarding email must not go to seller');
+  const firstOnboardingJobId = jobOptions.at(-1).jobId;
+  assert.equal(firstOnboardingJobId.includes(':'), false, 'onboarding job ID must be accepted by BullMQ');
+  const { Job } = require('bullmq');
+  const validateQueueId = jobId => Job.prototype.validateOptions.call({ opts: { jobId } }, { data: '{}' });
+  assert.throws(() => validateQueueId('seller.onboarding_submitted.admin|seller-onboarding:seller-id|admin|admin-id'), /Custom Id cannot contain/);
+  assert.doesNotThrow(() => validateQueueId(firstOnboardingJobId), 'fixed onboarding ID passes installed BullMQ validation');
+  await recipientService.queueEmailForUser('admin-id', { ...onboardingEmail, eventName: E.SELLER_ORGANIZATION_CREATED_V1, eventId: 'submission-2' });
+  assert.equal(jobOptions.at(-1).jobId, firstOnboardingJobId, 'equivalent onboarding events remain deduplicated');
   await recipientService.queueEmailForUser('seller-id', { ...onboardingEmail, recipientType: 'seller' });
   assert.equal(jobs.at(-1).to, 'seller@example.com', 'seller email still goes to seller');
   await recipientService.queueEmailForUser('admin-id', { ...onboardingEmail, payload: { sellerEmail: 'seller@example.com', recipientEmail: 'override@example.com' } });

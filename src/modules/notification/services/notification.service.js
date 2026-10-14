@@ -667,13 +667,16 @@ class NotificationService {
     const referenceId = payload.emailDedupeKey || payload.orderId || payload.returnId || payload.payoutId || eventId;
     const statusKey = this.emailJobStatusKey(eventName, payload);
     const identity = notificationIdentity(eventName, payload);
-    const jobId = identity ? require("node:crypto").createHash("sha256").update([identity, recipientType, userId || to].join("|")).digest("hex") : [
+    const jobIdentity = identity ? [identity, recipientType, userId || to].join("|") : [
       payload.emailDedupeEventName || eventName,
       referenceId,
       statusKey,
       recipientType,
       userId || to,
     ].filter(Boolean).join("|");
+    const jobId = identity || jobIdentity.includes(":")
+      ? require("node:crypto").createHash("sha256").update(jobIdentity).digest("hex")
+      : jobIdentity;
     await notificationQueue.add("templated-email", {
       to,
       subject,
