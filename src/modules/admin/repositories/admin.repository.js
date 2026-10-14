@@ -583,6 +583,7 @@ class AdminRepository {
   async listOrders({
     status = null,
     paymentStatus = null,
+    paymentProvider = null,
     deliveryStatus = null,
     sellerId = null,
     buyerId = null,
@@ -603,6 +604,10 @@ class AdminRepository {
     if (paymentStatus) {
       clauses.push(`orders.payment_status = $${idx++}`);
       values.push(paymentStatus);
+    }
+    if (paymentProvider) {
+      clauses.push(`orders.payment_provider = $${idx++}`);
+      values.push(paymentProvider);
     }
     if (deliveryStatus) {
       clauses.push(`orders.delivery_status = $${idx++}`);

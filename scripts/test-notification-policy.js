@@ -8,18 +8,28 @@ const { DOMAIN_EVENTS: E } = require('../src/contracts/events/domain-events');
   for (const event of [E.SHIPMENT_CREATED_V1, E.INVOICE_GENERATED_V1]) assert.equal(shouldNotify(event), false);
   for (const status of ['in_transit', 'manifested', 'delivered', 'unknown']) assert.equal(shouldNotify(E.SHIPMENT_TRACKING_UPDATED_V1, { status }), false);
   assert.equal(shouldNotify(E.SHIPMENT_TRACKING_UPDATED_V1, { status: 'out-for-delivery' }), true);
-  for (const status of ['pending', 'confirmed', 'processing', 'delivered']) assert.equal(shouldNotify(E.ORDER_STATUS_UPDATED_V1, { status }), false);
+  for (const status of ['pending', 'processing', 'delivered']) assert.equal(shouldNotify(E.ORDER_STATUS_UPDATED_V1, { status }), false);
   assert.equal(shouldNotify(E.ORDER_STATUS_UPDATED_V1, { status: 'shipped' }), true);
   for (const event of [E.ORDER_CREATED_V1, E.ORDER_PAID_V1, E.ORDER_PAYMENT_FAILED_V1, E.ORDER_CANCELLED_V1, E.RETURN_APPROVED_V1, E.RETURN_REJECTED_V1, E.REFUND_PROCESSED_V1, E.REFUND_FAILED_V1, E.SHIPMENT_DELIVERED_V1, E.KYC_STATUS_UPDATED_V1, E.PRODUCT_REJECTED_V1, E.INVENTORY_LOW_STOCK_V1, E.OTP_SENT_V1]) assert.equal(shouldNotify(event), true);
   assert.equal(shouldNotify(E.AUTH_USER_REGISTERED_V1), false);
   assert.equal(shouldNotify(E.SELLER_PAYOUT_STATUS_UPDATED_V1, { status: 'processing' }), false);
   assert.equal(shouldNotify(E.SELLER_PAYOUT_STATUS_UPDATED_V1, { status: 'completed' }), true);
+  assert.equal(shouldNotify(E.ORDER_STATUS_UPDATED_V1, { status: 'confirmed' }), true);
   const { notificationIdentity } = require('../src/modules/notification/services/notification-policy');
+  assert.equal(notificationIdentity(E.ORDER_PAID_V1, { orderId: 'order-1' }), notificationIdentity(E.ORDER_STATUS_UPDATED_V1, { orderId: 'order-1', status: 'confirmed' }));
   assert.equal(notificationIdentity(E.REFUND_PROCESSED_V1, { refundId: 'r1' }), notificationIdentity(E.PAYMENT_REFUNDED_V1, { refundId: 'r1' }));
   assert.notEqual(notificationIdentity(E.REFUND_PROCESSED_V1, { refundId: 'r1' }), notificationIdentity(E.REFUND_PROCESSED_V1, { refundId: 'r2' }));
   assert.equal(notificationIdentity(E.REFUND_PROCESSED_V1, { orderId: 'o1' }), null);
   assert.equal(notificationIdentity(E.INVENTORY_LOW_STOCK_V1, { productId: 'p1' }, 100), notificationIdentity(E.INVENTORY_LOW_STOCK_V1, { productId: 'p1' }, 200));
   const notificationSource = fs.readFileSync(path.join(__dirname, '../src/modules/notification/services/notification.service.js'), 'utf8');
+  const emailPolicyMethod = notificationSource.slice(notificationSource.indexOf('  shouldQueueEmail('), notificationSource.indexOf('  shouldQueueAdminEmail('));
+  const emailPolicyService = vm.runInNewContext(`({${emailPolicyMethod}})`, {
+    shouldNotify, DOMAIN_EVENTS: E, ORDER_STATUS: { CONFIRMED: 'confirmed' },
+  });
+  emailPolicyService.isOnlinePaymentProvider = () => false;
+  for (const paymentProvider of ['cod', 'razorpay', 'stripe']) {
+    assert.equal(emailPolicyService.shouldQueueEmail(E.ORDER_STATUS_UPDATED_V1, 'buyer', { status: 'confirmed', paymentProvider }), true, 'customer confirmation email enabled for all payment types');
+  }
   const queueMethod = notificationSource.slice(notificationSource.indexOf('  async queueEmailForUser('), notificationSource.indexOf('  async findUserEmail('));
   const jobs = [];
   const jobOptions = [];

@@ -10,7 +10,7 @@ function shouldNotify(eventName, payload = {}) {
   if (eventName === E.SELLER_PAYOUT_STATUS_UPDATED_V1) return ["completed", "paid", "failed", "rejected", "cancelled"].includes(statusOf(payload));
   const status = statusOf(payload);
   if (eventName === E.SHIPMENT_TRACKING_UPDATED_V1) return status === 'out_for_delivery';
-  if (eventName === E.ORDER_STATUS_UPDATED_V1) return ['shipped', 'dispatched', 'out_for_delivery'].includes(status);
+  if (eventName === E.ORDER_STATUS_UPDATED_V1) return ['confirmed', 'shipped', 'dispatched', 'out_for_delivery'].includes(status);
   if (eventName === E.RETURN_STATUS_UPDATED_V1) return ['pickup_scheduled', 'picked_up', 'pickup_failed'].includes(status);
   return true;
 }
@@ -19,6 +19,7 @@ module.exports = { shouldNotify };
 // Stable identities merge equivalent domain events; never use orderId alone for refunds.
 function notificationIdentity(eventName, payload = {}, now = Date.now()) {
   const orderId = payload.orderId || payload.order_id;
+  if (orderId && (eventName === E.ORDER_PAID_V1 || (eventName === E.ORDER_STATUS_UPDATED_V1 && statusOf(payload) === 'confirmed'))) return `order:${orderId}:confirmed`;
   const refundId = payload.refundId || payload.refund_id || payload.refundReference || payload.paymentReference || payload.referenceId;
   if ([E.RETURN_REFUNDED_V1, E.REFUND_PROCESSED_V1, E.PAYMENT_REFUNDED_V1].includes(eventName) && refundId) return `refund:${refundId}:processed`;
   if (eventName === E.SHIPMENT_DELIVERED_V1 && orderId) return `shipment:${payload.shipmentId || orderId}:delivered`;

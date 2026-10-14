@@ -87,6 +87,9 @@ class NotificationService {
     definitions.forEach(([eventName, subject, templateBuilder]) => {
       eventBus.subscribe(eventName, async (event) => {
         if (!shouldNotify(eventName, event.payload)) return;
+        const notificationSubject = eventName === DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1 &&
+          String(event.payload.status || event.payload.orderStatus || "").toLowerCase() === ORDER_STATUS.CONFIRMED
+          ? "Order Confirmed" : subject;
         const userId = event.payload.buyerId || event.payload.userId;
         const customerPayload = this.withViewMetadata(event.payload, "buyer");
         const hasCustomerEmail = Boolean(
@@ -102,7 +105,7 @@ class NotificationService {
           await this.createNotification({
             userId,
             channel: "in_app",
-            subject,
+            subject: notificationSubject,
             template: templateBuilder(event.payload),
             payload: {
               eventName,
@@ -117,7 +120,7 @@ class NotificationService {
 
         if ((userId || hasCustomerEmail) && this.shouldQueueEmail(eventName, "buyer", event.payload)) {
           await this.queueEmailForUser(userId, {
-            subject,
+            subject: notificationSubject,
             message: templateBuilder(event.payload),
             eventName,
             eventId: event.id,
@@ -138,7 +141,7 @@ class NotificationService {
           await this.createNotification({
             userId: sellerId,
             channel: "in_app",
-            subject,
+            subject: notificationSubject,
             template: sellerMessage,
             payload: {
               eventName,
@@ -151,7 +154,7 @@ class NotificationService {
           });
           if (this.shouldQueueEmail(eventName, "seller", event.payload)) {
             await this.queueEmailForUser(sellerId, {
-              subject,
+              subject: notificationSubject,
               message: sellerMessage,
               eventName,
               eventId: event.id,
@@ -165,7 +168,7 @@ class NotificationService {
           const admins = await this.findAdminRecipients();
           const adminPayload = this.withViewMetadata(event.payload, "admin");
           await Promise.all(admins.map((admin) => this.queueEmailForUser(String(admin._id || admin.id), {
-            subject,
+            subject: notificationSubject,
             message: templateBuilder(event.payload),
             eventName,
             eventId: event.id,
@@ -824,7 +827,6 @@ class NotificationService {
       String(recipientType || ""),
     );
     const isSellerRecipient = String(recipientType || "") === "seller";
-    const status = String(payload.status || payload.orderStatus || "");
 
     if (isBuyerRecipient && eventName === DOMAIN_EVENTS.INVOICE_GENERATED_V1) {
       return false;
@@ -838,21 +840,6 @@ class NotificationService {
       if ([DOMAIN_EVENTS.ORDER_PAID_V1, DOMAIN_EVENTS.ORDER_CANCELLED_V1, DOMAIN_EVENTS.ORDER_PAYMENT_FAILED_V1].includes(eventName)) {
         return true;
       }
-      return false;
-    }
-
-    if (this.isOnlinePaymentProvider(payload)) {
-      const paymentStatus = String(payload.paymentStatus || payload.payment_status || "");
-      if (
-        eventName === DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1 &&
-        String(payload.status || "") === ORDER_STATUS.CONFIRMED &&
-        [PAYMENT_STATUS.CAPTURED, PAYMENT_STATUS.AUTHORIZED, ""].includes(paymentStatus)
-      ) {
-        return false;
-      }
-    }
-
-    if (eventName === DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1 && status === ORDER_STATUS.CONFIRMED) {
       return false;
     }
 

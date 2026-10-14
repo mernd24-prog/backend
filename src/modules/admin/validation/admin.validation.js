@@ -3,6 +3,7 @@ const {
   PRODUCT_STATUS,
   ORDER_STATUS,
   PAYMENT_STATUS,
+  PAYMENT_PROVIDER,
 } = require("../../../shared/domain/commerce-constants");
 
 const accountStatuses = ["active", "suspended", "pending_approval"];
@@ -324,6 +325,7 @@ const listOrdersSchema = Joi.object({
   query: Joi.object({
     status: Joi.string().valid(...Object.values(ORDER_STATUS)),
     paymentStatus: Joi.string().valid(...Object.values(PAYMENT_STATUS)),
+    paymentProvider: Joi.string().valid(...Object.values(PAYMENT_PROVIDER)),
     deliveryStatus: Joi.string().max(64),
     sellerId: Joi.string(),
     organizationId: Joi.string().guid({ version: "uuidv4" }),

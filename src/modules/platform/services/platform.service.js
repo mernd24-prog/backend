@@ -1154,6 +1154,32 @@ class PlatformService {
     const q = String(query.q || query.search || "").trim();
     if (q) {
       const pattern = new RegExp(escapeRegex(q), "i");
+      // The table resolves buyer names from users; search those same records
+      // before pagination, including full names split across profile fields.
+      const matchingUsers = await UserModel.find({
+        $or: [
+          { email: pattern },
+          { displayName: pattern },
+          { full_name: pattern },
+          { name: pattern },
+          { "profile.firstName": pattern },
+          { "profile.lastName": pattern },
+          { "profile.fullName": pattern },
+          { "profile.name": pattern },
+          { "addresses.fullName": pattern },
+          { $expr: { $regexMatch: {
+            input: { $trim: { input: { $concat: [
+              { $ifNull: ["$profile.firstName", ""] }, " ",
+              { $ifNull: ["$profile.lastName", ""] },
+            ] } } },
+            regex: escapeRegex(q), options: "i",
+          } } },
+        ],
+      }).select("_id").lean();
+      const matchingBuyerIds = matchingUsers.flatMap((user) => {
+        const id = String(user._id);
+        return [id, `admin:${id}`];
+      });
       filter.$and = [{
         $or: [
           { buyerName: pattern },
@@ -1161,6 +1187,7 @@ class PlatformService {
           { reviewText: pattern },
           { orderId: pattern },
           { buyerId: pattern },
+          ...(matchingBuyerIds.length ? [{ buyerId: { $in: matchingBuyerIds } }] : []),
         ],
       }];
     }

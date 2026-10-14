@@ -235,7 +235,7 @@ class OrderRepository {
       clauses.push(`oi.organization_id = $${index++}::uuid`);
       values.push(filters.organizationId);
     }
-    this.applyOrderFilters(clauses, values, filters, () => index++);
+    this.applyOrderFilters(clauses, values, { ...filters, sellerId }, () => index++);
     values.push(Number(filters.limit || 50), Number(filters.offset || 0));
 
     const { rows } = await postgresPool.query(
@@ -725,8 +725,33 @@ class OrderRepository {
       values.push(paymentProvider);
     }
     if (deliveryStatus) {
-      clauses.push(`o.delivery_status = $${nextIndex()}`);
+      const statusParameter = `$${nextIndex()}`;
       values.push(deliveryStatus);
+      const shipmentScope = [
+        "ds.order_id = o.id",
+        "COALESCE(ds.direction, 'forward') <> 'reverse'",
+        "COALESCE(ds.shipment_type, 'forward') <> 'return'",
+      ];
+      if (filters.sellerId) {
+        shipmentScope.push(`ds.seller_id = $${nextIndex()}`);
+        values.push(filters.sellerId);
+      }
+      if (organizationId) {
+        shipmentScope.push(`ds.organization_id = $${nextIndex()}::uuid`);
+        values.push(organizationId);
+      }
+      const scopeSql = shipmentScope.join(" AND ");
+      const shipmentMatch = deliveryStatus === "partially_delivered"
+        ? `EXISTS (SELECT 1 FROM shipments ds WHERE ${scopeSql} AND ds.status = 'delivered')
+           AND EXISTS (SELECT 1 FROM shipments ds WHERE ${scopeSql} AND ds.status IS DISTINCT FROM 'delivered')`
+        : `EXISTS (SELECT 1 FROM shipments ds WHERE ${scopeSql} AND ds.status = ${statusParameter})`;
+      clauses.push(`(
+        (${shipmentMatch})
+        OR (
+          NOT EXISTS (SELECT 1 FROM shipments ds WHERE ${scopeSql})
+          AND o.delivery_status = ${statusParameter}
+        )
+      )`);
     }
     if (buyerId) {
       clauses.push(`o.buyer_id = $${nextIndex()}`);
