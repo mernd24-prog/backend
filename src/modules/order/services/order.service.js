@@ -871,6 +871,8 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
     seller.business_address ||
     seller.billingAddress ||
     seller.billing_address ||
+    seller.sellerProfile?.pickupAddress ||
+    seller.sellerProfile?.businessAddress ||
     {};
 
   const shipmentItems =
@@ -911,7 +913,7 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
     shipment.awb ||
     shipment.trackingId ||
     shipment.tracking_id ||
-    shipmentNumber;
+    "";
 
   const paymentMethod =
     order.paymentMethod ||
@@ -963,6 +965,8 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
       item.order_item?.product_sku ||
       "",
 
+    unitPrice: item.unitPrice ?? item.unit_price ?? item.orderItem?.unitPrice ?? item.orderItem?.unit_price ?? item.order_item?.unit_price ?? null,
+    lineTotal: item.lineTotal ?? item.line_total ?? item.orderItem?.lineTotal ?? item.orderItem?.line_total ?? item.order_item?.line_total ?? null,
     quantity: Number(
       item.quantity ??
       item.shippedQuantity ??
@@ -1051,7 +1055,11 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
 
       sender: {
         ...pickupAddress,
+        email: seller.sellerProfile?.supportEmail || seller.email || "",
+        gstin: seller.gstin || seller.sellerProfile?.gstNumber || "",
         fullName:
+          seller.sellerProfile?.legalBusinessName ||
+          seller.sellerProfile?.businessName ||
           seller.legalBusinessName ||
           seller.legal_business_name ||
           seller.displayName ||

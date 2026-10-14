@@ -1368,6 +1368,14 @@ getBoxLabelView(document = {}) {
     ].filter(Boolean);
   };
 
+  const publicReference = (value) => {
+    const reference = String(value || "").trim();
+    return /^[a-f0-9]{24}$/i.test(reference) || /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(reference) ? "" : reference;
+  };
+  const dateTime = (value) => {
+    const date = new Date(value);
+    return !value || Number.isNaN(date.getTime()) ? "-" : new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(date) + " IST";
+  };
   const itemSource = Array.isArray(data.items) ? data.items : [];
 
   const items = itemSource.map((item) => ({
@@ -1389,6 +1397,8 @@ getBoxLabelView(document = {}) {
         item.sku,
       ) || "",
 
+    unitPrice: firstValue(item.unitPrice, item.unit_price, item.price),
+    lineTotal: firstValue(item.lineTotal, item.line_total, item.totalAmount, item.total_amount),
     quantity: Number(
       firstValue(
         item.quantity,
@@ -1468,14 +1478,13 @@ getBoxLabelView(document = {}) {
       ) || "",
 
     orderNumber:
-      firstValue(
+      publicReference(firstValue(
         order.number,
         order.orderNumber,
         order.order_number,
-        order.id,
-      ) || "-",
+      )) || "Not available",
 
-    orderDate: this.formatDate(
+    orderDate: dateTime(
       firstValue(
         order.placedAt,
         order.placed_at,
@@ -1493,14 +1502,13 @@ getBoxLabelView(document = {}) {
       ) || "-",
 
     trackingNumber:
-      firstValue(
+      publicReference(firstValue(
         shipment.trackingNumber,
         shipment.tracking_number,
         shipment.awbNumber,
         shipment.awb_number,
         shipment.awb,
-        shipment.id,
-      ) || "-",
+      )) || "",
 
     carrier:
       firstValue(
@@ -1554,6 +1562,8 @@ getBoxLabelView(document = {}) {
       ) || "",
 
     senderAddress: addressLines(sender),
+    senderEmail: sender.email || sender.supportEmail || "",
+    senderGstin: sender.gstin || sender.gstNumber || "",
 
     destinationPincode:
       firstValue(
@@ -1808,7 +1818,11 @@ renderBoxLabelPdf(document = {}) {
   ) => {
     const safe = this.escapePdfText(value);
     const widthFactor = bold ? 0.62 : 0.52;
-    const approximateWidth = safe.length * size * widthFactor;
+    // PDF Helvetica glyph widths keep right-aligned values inside the rule.
+    const boldWidths = { A:722,B:722,C:722,D:722,E:667,F:611,G:778,H:722,I:278,J:556,K:722,L:611,M:833,N:722,O:778,P:667,Q:778,R:722,S:667,T:611,U:722,V:667,W:944,X:667,Y:667,Z:611,c:556,p:611," ":278,".":278,",":278,"/":278,"-":333 };
+    const approximateWidth = align === "right" && bold
+      ? Array.from(String(value)).reduce((width, char) => width + (/^[0-9]$/.test(char) ? 556 : boldWidths[char] ?? 520), 0) * size / 1000
+      : safe.length * size * widthFactor;
  
     let tx = x;
  
@@ -1988,26 +2002,6 @@ renderBoxLabelPdf(document = {}) {
     "0.10 0.11 0.38",
   );
  
-  text(
-    "DESTINATION",
-    264,
-    358,
-    6,
-    true,
-    "right",
-    "0.40 0.42 0.48",
-  );
- 
-  text(
-    compact(label.destinationPincode, 10),
-    264,
-    338,
-    16,
-    true,
-    "right",
-    "0.10 0.11 0.38",
-  );
- 
   let addressY = 326;
  
   label.recipientAddress
@@ -2030,58 +2024,13 @@ renderBoxLabelPdf(document = {}) {
  
   line(12, 279, 276, 279, 1, 0.11);
  
-  // Tracking details.
-  text(
-    "TRACKING NUMBER / AWB",
-    16,
-    265,
-    7,
-    true,
-    "left",
-    "0.81 0.62 0.18",
-  );
- 
-  const trackingLines = wrapText(
-    label.trackingNumber,
-    34,
-    2,
-  );
- 
-  trackingLines.forEach((trackingLine, index) => {
-    text(
-      trackingLine,
-      16,
-      248 - index * 14,
-      index === 0 ? 12 : 10,
-      true,
-      "left",
-      "0.10 0.11 0.38",
-    );
-  });
- 
-  const trackingBottom = 248 - (trackingLines.length - 1) * 14;
-  const carrierY = trackingBottom - 22;
-  const shipmentY = carrierY - 11;
- 
-  text(
-    `Carrier: ${compact(label.carrier, 30)}`,
-    16,
-    carrierY,
-    7.5,
-  );
- 
-  text(
-    `Shipment: ${compact(label.shipmentNumber, 34)}`,
-    16,
-    shipmentY,
-    7,
-    false,
-    "left",
-    "0.40 0.42 0.48",
-  );
- 
-  // Payment banner.
-  const bannerTop = shipmentY - 12;
+  // Only actual courier references are useful on the parcel label.
+  let bannerTop = 267;
+  if (label.trackingNumber) {
+    text("TRACKING / AWB", 16, 265, 7, true, "left", "0.81 0.62 0.18");
+    wrapText(label.trackingNumber, 38, 2).forEach((value, index) => text(value, 16, 250 - index * 12, 9, true));
+    bannerTop = 225;
+  }
   const bannerHeight = 26;
   const bannerBottomY = bannerTop - bannerHeight;
   const bannerTextY = bannerBottomY + (bannerHeight / 2) - 3.5;
@@ -2132,7 +2081,7 @@ renderBoxLabelPdf(document = {}) {
  
   text(
     "PACKAGE",
-    264,
+    272,
     orderLabelY,
     6.5,
     true,
@@ -2141,8 +2090,8 @@ renderBoxLabelPdf(document = {}) {
   );
  
   text(
-    `${label.itemCount} pc / ${compact(label.weight, 12)}`,
-    264,
+    `${label.itemCount} pc${label.weight !== "-" ? ` / ${compact(label.weight, 12)}` : ""}`,
+    272,
     orderValueY,
     8,
     true,
@@ -2150,22 +2099,12 @@ renderBoxLabelPdf(document = {}) {
   );
  
   text(
-    `Order Date: ${compact(label.orderDate, 18)}`,
+    `Order Date: ${label.orderDate}`,
     16,
     orderDateY,
-    7,
+    6,
     false,
     "left",
-    "0.40 0.42 0.48",
-  );
- 
-  text(
-    `Dimensions: ${compact(label.dimensions, 30)}`,
-    264,
-    orderDateY,
-    7,
-    false,
-    "right",
     "0.40 0.42 0.48",
   );
  
@@ -2184,9 +2123,10 @@ renderBoxLabelPdf(document = {}) {
     "0.81 0.62 0.18",
   );
  
+  text("QTY", 182, contentsLabelY, 7.5, true, "center", "0.81 0.62 0.18");
   text(
-    "QTY",
-    264,
+    "AMOUNT",
+    272,
     contentsLabelY,
     7,
     true,
@@ -2194,7 +2134,7 @@ renderBoxLabelPdf(document = {}) {
     "0.81 0.62 0.18",
   );
  
-  const visibleItems = label.items.slice(0, 4);
+  const visibleItems = label.items.slice(0, Math.max(1, Math.min(4, Math.floor((contentsLabelY - 116) / 42))));
   let itemY = contentsLabelY - 14;
  
   if (!visibleItems.length) {
@@ -2209,28 +2149,24 @@ renderBoxLabelPdf(document = {}) {
     );
   } else {
     visibleItems.forEach((item) => {
-      text(
-        compact(item.title, 36),
-        16,
-        itemY,
-        7.5,
-        true,
-      );
- 
+      const titleLines = wrapText(item.title, 27, 2);
+      titleLines.forEach((value, index) => text(value, 16, itemY - index * 9, 7.5, true));
+      const detailsY = itemY - titleLines.length * 9;
+
       text(
         String(item.quantity || 0),
-        264,
+        182,
         itemY,
-        8,
+        10,
         true,
-        "right",
+        "center",
       );
  
       if (item.sku) {
         text(
           `SKU: ${compact(item.sku, 26)}`,
           16,
-          itemY - 9,
+          detailsY,
           6,
           false,
           "left",
@@ -2238,7 +2174,11 @@ renderBoxLabelPdf(document = {}) {
         );
       }
  
-      itemY -= item.sku ? 23 : 15;
+      const unitPrice = item.unitPrice == null ? null : Number(item.unitPrice);
+      const total = item.lineTotal == null ? (unitPrice == null ? null : unitPrice * item.quantity) : Number(item.lineTotal);
+      if (total != null && Number.isFinite(total)) text(`INR ${total.toFixed(2)}`, 272, itemY, 8.5, true, "right");
+      if (unitPrice != null && Number.isFinite(unitPrice)) text(`Unit: INR ${unitPrice.toFixed(2)}`, 16, detailsY - 10, 7, false);
+      itemY -= 42;
     });
   }
  
@@ -2246,7 +2186,7 @@ renderBoxLabelPdf(document = {}) {
     text(
       `+ ${label.items.length - visibleItems.length} additional product(s)`,
       16,
-      Math.max(53, itemY),
+      Math.max(110, itemY),
       6.5,
       false,
       "left",
@@ -2254,39 +2194,14 @@ renderBoxLabelPdf(document = {}) {
     );
   }
  
-  // Sender and footer.
-  line(12, 46, 276, 46, 0.6, 0.65);
- 
-  text(
-    `Shipped by: ${compact(label.senderName, 38)}`,
-    16,
-    34,
-    6.5,
-    true,
-    "left",
-    "0.10 0.11 0.38",
-  );
- 
-  text(
-    `Generated: ${compact(label.generatedAt, 18)}`,
-    264,
-    34,
-    6,
-    false,
-    "right",
-    "0.40 0.42 0.48",
-  );
- 
-  text(
-    "Handle package carefully. Verify recipient address before dispatch.",
-    144,
-    20,
-    5.8,
-    false,
-    "center",
-    "0.40 0.42 0.48",
-  );
- 
+  // Seller contact details in a dedicated footer block.
+  line(12, 103, 276, 103, 0.6, 0.65);
+  text("SHIPPED BY", 16, 91, 7, true, "left", "0.81 0.62 0.18");
+  let senderY = 79;
+  const senderLines = [label.senderName, ...label.senderAddress, label.senderPhone ? `Phone: ${label.senderPhone}` : "", label.senderEmail, label.senderGstin ? `GSTIN: ${label.senderGstin}` : ""].filter(Boolean).flatMap(value => wrapText(value, 58, 2));
+  senderLines.slice(0, 7).forEach((value, index) => { text(value, 16, senderY, 6.5, index === 0); senderY -= 9; });
+  text("Verify recipient address before dispatch.", 144, 10, 5.8, false, "center", "0.40 0.42 0.48");
+
   const stream = commands.join("\n");
  
   const objects = [];
@@ -2966,13 +2881,15 @@ renderBoxLabelPdf(document = {}) {
                 }
               </td>
               <td class="qty">${this.escapeHtml(item.quantity)}</td>
+              <td>${item.unitPrice == null ? "-" : this.escapeHtml(this.money(item.unitPrice))}</td>
+              <td>${item.lineTotal == null && item.unitPrice == null ? "-" : this.escapeHtml(this.money(item.lineTotal ?? Number(item.unitPrice) * item.quantity))}</td>
             </tr>
           `,
         )
         .join("")
     : `
       <tr>
-        <td colspan="2" class="muted">Package items not provided</td>
+        <td colspan="4" class="muted">Package items not provided</td>
       </tr>
     `;
 
@@ -3328,33 +3245,10 @@ renderBoxLabelPdf(document = {}) {
           : ""
       }
 
-      <div class="pincode">
-        <span>DESTINATION</span>
-        <strong>${this.escapeHtml(label.destinationPincode)}</strong>
-      </div>
     </section>
 
 
-    <section class="tracking">
-      <div class="section-label">
-        TRACKING NUMBER / AWB
-      </div>
-
-      <div class="tracking-number">
-        ${this.escapeHtml(label.trackingNumber)}
-      </div>
-
-      <div class="carrier">
-        <span>
-          Carrier: ${this.escapeHtml(label.carrier)}
-        </span>
-
-        <span>
-          Shipment: ${this.escapeHtml(label.shipmentNumber)}
-        </span>
-      </div>
-    </section>
-
+    ${label.trackingNumber ? `<section class="tracking"><div class="section-label">TRACKING / AWB</div><div class="tracking-number">${this.escapeHtml(label.trackingNumber)}</div></section>` : ""}
 
     <div class="payment-banner">
       ${this.escapeHtml(paymentText)}
@@ -3398,7 +3292,7 @@ renderBoxLabelPdf(document = {}) {
         <thead>
           <tr>
             <th>Product</th>
-            <th class="qty">QTY</th>
+            <th class="qty">QTY</th><th>Unit price</th><th>Amount</th>
           </tr>
         </thead>
 
@@ -3424,6 +3318,8 @@ renderBoxLabelPdf(document = {}) {
       </strong>
 
       ${senderAddress}
+      ${label.senderEmail ? `<div>Email: ${this.escapeHtml(label.senderEmail)}</div>` : ""}
+      ${label.senderGstin ? `<div>GSTIN: ${this.escapeHtml(label.senderGstin)}</div>` : ""}
 
       ${
         label.senderPhone
