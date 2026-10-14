@@ -221,6 +221,7 @@ class NotificationService {
           status: "queued",
           idempotencyKey: `${event.eventName}:${event.id}:${adminId}:admin:in_app`,
         });
+        if (admin.role !== ROLES.SUPER_ADMIN) return;
         await this.queueEmailForUser(adminId, {
           subject,
           message,
@@ -298,6 +299,7 @@ class NotificationService {
           status: "queued",
           idempotencyKey: `${event.eventName}:${event.id}:${adminId}:admin:in_app`,
         });
+        if (admin.role !== ROLES.SUPER_ADMIN) return;
         await this.queueEmailForUser(adminId, {
           subject,
           message,
