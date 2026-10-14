@@ -836,6 +836,20 @@ class AuthService {
       throw new AppError("Invalid credentials", 401);
     }
 
+    // Customer authentication must not disclose that valid credentials belong
+    // to an admin, seller, or another portal. Reject the role before account
+    // status/password-provider checks so those details cannot leak either.
+    if (options.requireBuyer && user.role !== ROLES.BUYER) {
+      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
+        userId: user.id,
+        email: user.email,
+        provider: "password",
+        ...requestContext,
+        metadata: { reason: "customer_portal_role_mismatch", role: user.role },
+      });
+      throw new AppError("Invalid credentials", 401);
+    }
+
     await this.assertUserCanAuthenticate(user, { allowSellerOnboarding: true });
 
     if (!user.passwordHash) {
@@ -859,22 +873,6 @@ class AuthService {
         metadata: { reason: "invalid_password" },
       });
       throw new AppError("Invalid credentials", 401);
-    }
-
-    if (options.requireBuyer && user.role !== ROLES.BUYER) {
-      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
-        userId: user.id,
-        email: user.email,
-        provider: "password",
-        ...requestContext,
-        metadata: { reason: "non_buyer_customer_login", role: user.role },
-      });
-      throw new AppError(
-        "This account cannot sign in to the customer store. Please use the Admin or Seller portal.",
-        403,
-        { requiredRole: ROLES.BUYER },
-        "CUSTOMER_LOGIN_BUYER_ONLY",
-      );
     }
 
     await this.assertAdminPanelLoginAllowed(user, requestContext);
@@ -1109,12 +1107,14 @@ class AuthService {
         await this.referralService.rewardReferral(payload.referralCode, user);
       } else {
         if (payload.role === ROLES.BUYER && user.role !== ROLES.BUYER) {
-          throw new AppError(
-            "This account cannot sign in to the customer store. Please use the Admin or Seller portal.",
-            403,
-            { requiredRole: ROLES.BUYER },
-            "CUSTOMER_LOGIN_BUYER_ONLY",
-          );
+          await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
+            userId: user.id,
+            email: user.email,
+            provider: providerProfile.provider,
+            ...requestContext,
+            metadata: { reason: "customer_portal_role_mismatch", role: user.role },
+          });
+          throw new AppError("Invalid credentials", 401);
         }
         user = await this.authRepository.linkSocialProvider(user.id, providerProfile);
       }
@@ -1374,10 +1374,14 @@ class AuthService {
       existingUser &&
       existingUser.role !== ROLES.BUYER
     ) {
-      throw new AppError(
-        "This identifier cannot be used for buyer login",
-        403,
-      );
+      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
+        userId: existingUser.id,
+        email: existingUser.email,
+        provider: "otp",
+        ...requestContext,
+        metadata: { reason: "customer_portal_role_mismatch", role: existingUser.role },
+      });
+      throw new AppError("Invalid credentials", 401);
     }
 
     if (existingUser) {
@@ -1771,10 +1775,14 @@ class AuthService {
       user &&
       user.role !== ROLES.BUYER
     ) {
-      throw new AppError(
-        "This identifier cannot be used for buyer login",
-        403,
-      );
+      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
+        userId: user.id,
+        email: user.email,
+        provider: "otp",
+        ...requestContext,
+        metadata: { reason: "customer_portal_role_mismatch", role: user.role },
+      });
+      throw new AppError("Invalid credentials", 401);
     }
 
     /*
@@ -2378,12 +2386,14 @@ class AuthService {
     }
 
     if (options.requireBuyer && payload.role !== ROLES.BUYER) {
-      throw new AppError(
-        "This account cannot use the customer store. Please use the Admin or Seller portal.",
-        403,
-        { requiredRole: ROLES.BUYER },
-        "CUSTOMER_LOGIN_BUYER_ONLY",
-      );
+      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_REFRESH_FAILED, "failed", {
+        userId: payload.sub,
+        email: payload.email,
+        provider: "session",
+        ...requestContext,
+        metadata: { reason: "customer_portal_role_mismatch", role: payload.role },
+      });
+      throw new AppError("Invalid credentials", 401);
     }
 
     if (payload.role === ROLES.INFLUENCER || payload.authScope === "referral") {

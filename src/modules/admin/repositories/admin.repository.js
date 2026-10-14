@@ -338,7 +338,7 @@ class AdminRepository {
     };
   }
 
-  async listVendors({ liveOnly = false, q = "", status = null, onboardingStatus = null, limit = 50, page = 1, ownerAdminId = null, ownerSellerId = null, parentAdminId = null, parentSellerId = null } = {}) {
+  async listVendors({ liveOnly = false, q = "", status = null, onboardingStatus = null, kycStatus = null, bankVerificationStatus = null, goLiveStatus = null, limit = 50, page = 1, ownerAdminId = null, ownerSellerId = null, parentAdminId = null, parentSellerId = null } = {}) {
     const filter = { role: "seller" };
     if (status) {
       filter.accountStatus = status;
@@ -354,6 +354,15 @@ class AdminRepository {
     }
     if (onboardingStatus) {
       filter["sellerProfile.onboardingStatus"] = onboardingStatus;
+    }
+    if (kycStatus) {
+      filter["sellerProfile.kycStatus"] = kycStatus;
+    }
+    if (bankVerificationStatus) {
+      filter["sellerProfile.bankVerificationStatus"] = bankVerificationStatus;
+    }
+    if (goLiveStatus) {
+      filter["sellerProfile.goLiveStatus"] = goLiveStatus;
     }
     if (q) {
       filter.$or = [

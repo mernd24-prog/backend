@@ -35,7 +35,7 @@ const sellerOnboardingStatuses = [
 ];
 const sellerKycStatuses = ["not_submitted", "submitted", "under_review", "verified", "rejected"];
 const sellerBankStatuses = ["not_submitted", "submitted", "verified", "rejected"];
-const sellerGoLiveStatuses = ["pending", "ready", "live", "blocked"];
+const sellerGoLiveStatuses = ["pending", "ready", "live", "blocked", "rejected"];
 
 const adminOverviewSchema = Joi.object({
   body: Joi.object({}).required(),
@@ -71,6 +71,9 @@ const listVendorsSchema = Joi.object({
     searchFields: Joi.string().trim().allow("").max(300),
     status: Joi.string().valid(...accountStatuses),
     onboardingStatus: Joi.string().valid(...sellerOnboardingStatuses),
+    kycStatus: Joi.string().valid(...sellerKycStatuses),
+    bankVerificationStatus: Joi.string().valid(...sellerBankStatuses),
+    goLiveStatus: Joi.string().valid(...sellerGoLiveStatuses),
     page: Joi.number().integer().min(1),
     limit: Joi.number().integer().min(1).max(100),
   }).required(),
