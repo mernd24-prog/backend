@@ -221,6 +221,7 @@ class NotificationService {
           status: "queued",
           idempotencyKey: `${event.eventName}:${event.id}:${adminId}:admin:in_app`,
         });
+        if (admin.role !== ROLES.SUPER_ADMIN) return;
         await this.queueEmailForUser(adminId, {
           subject,
           message,
@@ -298,6 +299,7 @@ class NotificationService {
           status: "queued",
           idempotencyKey: `${event.eventName}:${event.id}:${adminId}:admin:in_app`,
         });
+        if (admin.role !== ROLES.SUPER_ADMIN) return;
         await this.queueEmailForUser(adminId, {
           subject,
           message,
@@ -656,9 +658,10 @@ class NotificationService {
   async queueEmailForUser(userId, { subject, message, eventName, eventId, recipientType, payload = {} }) {
     if (!shouldNotify(eventName, payload)) return;
     const isBuyerRecipient = ["buyer", "customer"].includes(String(recipientType || ""));
+    const isSellerRecipient = String(recipientType || "") === "seller";
     const directEmail = isBuyerRecipient
       ? payload.recipientEmail || payload.recipient_email || payload.customerEmail || payload.customer_email || payload.buyerEmail || payload.buyer_email || payload.email
-      : payload.recipientEmail || payload.recipient_email || this.extractSellerRecipientEmail(payload, userId);
+      : payload.recipientEmail || payload.recipient_email || (isSellerRecipient ? this.extractSellerRecipientEmail(payload, userId) : null);
     const to = directEmail || await this.findUserEmail(userId, recipientType);
     if (!to || !emailPattern.test(String(to).trim())) return;
     const referenceId = payload.emailDedupeKey || payload.orderId || payload.returnId || payload.payoutId || eventId;

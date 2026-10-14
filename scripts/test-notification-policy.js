@@ -19,6 +19,58 @@ const { DOMAIN_EVENTS: E } = require('../src/contracts/events/domain-events');
   assert.notEqual(notificationIdentity(E.REFUND_PROCESSED_V1, { refundId: 'r1' }), notificationIdentity(E.REFUND_PROCESSED_V1, { refundId: 'r2' }));
   assert.equal(notificationIdentity(E.REFUND_PROCESSED_V1, { orderId: 'o1' }), null);
   assert.equal(notificationIdentity(E.INVENTORY_LOW_STOCK_V1, { productId: 'p1' }, 100), notificationIdentity(E.INVENTORY_LOW_STOCK_V1, { productId: 'p1' }, 200));
+  const notificationSource = fs.readFileSync(path.join(__dirname, '../src/modules/notification/services/notification.service.js'), 'utf8');
+  const queueMethod = notificationSource.slice(notificationSource.indexOf('  async queueEmailForUser('), notificationSource.indexOf('  async findUserEmail('));
+  const jobs = [];
+  const recipientContext = {
+    shouldNotify, notificationIdentity,
+    emailPattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+    env: { smtp: { queue: { initialDelayMs: 0, retryBackoffMs: 1000 } } },
+    notificationQueue: { add: async (name, data) => jobs.push(data) },
+  };
+  const recipientService = vm.runInNewContext(`({${queueMethod}})`, recipientContext);
+  recipientService.findUserEmail = async () => 'admin@example.com';
+  recipientService.extractSellerRecipientEmail = payload => payload.sellerEmail;
+  recipientService.emailJobStatusKey = () => '';
+  const onboardingEmail = {
+    eventName: E.SELLER_KYC_SUBMITTED_V1, eventId: 'submission-1',
+    recipientType: 'admin', payload: { sellerEmail: 'seller@example.com' },
+  };
+  await recipientService.queueEmailForUser('admin-id', onboardingEmail);
+  assert.equal(jobs.at(-1).to, 'admin@example.com', 'admin onboarding email must not go to seller');
+  await recipientService.queueEmailForUser('seller-id', { ...onboardingEmail, recipientType: 'seller' });
+  assert.equal(jobs.at(-1).to, 'seller@example.com', 'seller email still goes to seller');
+  await recipientService.queueEmailForUser('admin-id', { ...onboardingEmail, payload: { sellerEmail: 'seller@example.com', recipientEmail: 'override@example.com' } });
+  assert.equal(jobs.at(-1).to, 'override@example.com', 'explicit recipient remains supported');
+  const subscribers = new Map();
+  const onboardingMethod = notificationSource.slice(notificationSource.indexOf('  registerOnboardingSubscribers() {'), notificationSource.indexOf('  sellerDisplayName('));
+  const onboardingService = vm.runInNewContext(`({${onboardingMethod}})`, {
+    DOMAIN_EVENTS: E,
+    ROLES: { SUPER_ADMIN: 'super-admin' },
+    eventBus: { subscribe: (name, handler) => subscribers.set(name, handler) },
+  });
+  onboardingService.findAdminRecipients = async () => [
+    { _id: 'admin', role: 'admin' },
+    { _id: 'sub-admin', role: 'sub-admin' },
+    { _id: 'super-admin', role: 'super-admin' },
+  ];
+  onboardingService.enrichSellerPayload = async payload => payload;
+  onboardingService.sellerDisplayName = () => 'Test Seller';
+  const onboardingEmails = [];
+  const inAppRecipients = [];
+  onboardingService.createNotification = async notification => inAppRecipients.push(notification.userId);
+  onboardingService.queueEmailForUser = async userId => onboardingEmails.push(userId);
+  onboardingService.registerOnboardingSubscribers();
+  for (const eventName of [E.SELLER_KYC_SUBMITTED_V1, E.SELLER_ORGANIZATION_CREATED_V1]) {
+    onboardingEmails.length = 0;
+    inAppRecipients.length = 0;
+    await subscribers.get(eventName)({ eventName, id: 'submission', payload: { sellerId: 'seller' } });
+    assert.deepEqual(onboardingEmails, ['super-admin'], 'seller submission email goes only to superadmin');
+    assert.deepEqual(inAppRecipients.sort(), ['admin', 'sub-admin', 'super-admin'], 'admin in-app notifications remain available');
+  }
+  onboardingEmails.length = 0;
+  await subscribers.get(E.KYC_STATUS_UPDATED_V1)({ eventName: E.KYC_STATUS_UPDATED_V1, id: 'approval', payload: { sellerId: 'seller', status: 'approved' } });
+  assert.deepEqual(onboardingEmails, ['seller'], 'approval outcome still goes to seller');
   let sent = 0;
   const env = { smtp: { live: true, mode: 'live' }, mail: { sendEmails: false, sendAuthOtpEmails: true } };
   const modules = {
