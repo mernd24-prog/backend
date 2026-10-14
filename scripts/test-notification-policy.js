@@ -79,8 +79,17 @@ const { DOMAIN_EVENTS: E } = require('../src/contracts/events/domain-events');
     assert.deepEqual(inAppRecipients.sort(), ['admin', 'sub-admin', 'super-admin'], 'admin in-app notifications remain available');
   }
   onboardingEmails.length = 0;
-  await subscribers.get(E.KYC_STATUS_UPDATED_V1)({ eventName: E.KYC_STATUS_UPDATED_V1, id: 'approval', payload: { sellerId: 'seller', status: 'approved' } });
+  assert.equal(subscribers.has(E.KYC_STATUS_UPDATED_V1), false, 'KYC verification must not duplicate organization approval');
+  const approvalSubscriber = subscribers.get(E.SELLER_ORGANIZATION_STATUS_UPDATED_V1);
+  await approvalSubscriber({ eventName: E.SELLER_ORGANIZATION_STATUS_UPDATED_V1, id: 'approval', payload: { sellerId: 'seller', status: 'approved', changedFields: ['approvalStatus', 'kycStatus'] } });
   assert.deepEqual(onboardingEmails, ['seller'], 'approval outcome still goes to seller');
+  for (const [status, changedFields] of [['approved', ['bankVerificationStatus']], ['live', ['goLiveStatus']], ['approved', ['kycStatus']]]) {
+    await approvalSubscriber({ eventName: E.SELLER_ORGANIZATION_STATUS_UPDATED_V1, id: 'later-update', payload: { sellerId: 'seller', status, changedFields } });
+  }
+  assert.deepEqual(onboardingEmails, ['seller'], 'later verification and go-live updates do not repeat approval');
+  await approvalSubscriber({ eventName: E.SELLER_ORGANIZATION_STATUS_UPDATED_V1, id: 'rejection', payload: { sellerId: 'seller', status: 'rejected', changedFields: ['approvalStatus'] } });
+  await approvalSubscriber({ eventName: E.SELLER_ORGANIZATION_STATUS_UPDATED_V1, id: 'reapproval', payload: { sellerId: 'seller', status: 'approved', changedFields: ['approvalStatus'] } });
+  assert.equal(onboardingEmails.length, 3, 'new rejection and reapproval decisions still notify seller');
   let sent = 0;
   const env = { smtp: { live: true, mode: 'live' }, mail: { sendEmails: false, sendAuthOtpEmails: true } };
   const modules = {

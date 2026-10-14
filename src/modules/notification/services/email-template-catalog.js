@@ -192,6 +192,28 @@ const sellerRows = (payload = {}) => compactRows([
   row("Reason", firstValue(payload.rejectionReason, payload.reason)),
 ]);
 
+const sellerOnboardingRows = (payload = {}) => {
+  const address = payload.businessAddress || {};
+  const submittedAt = payload.submittedAt ? new Date(payload.submittedAt) : null;
+  return compactRows([
+    row("Seller name", firstValue(payload.sellerName, payload.legalName)),
+    row("Legal business name", firstValue(payload.legalBusinessName, payload.storeDisplayName)),
+    row("Store name", payload.storeDisplayName !== payload.legalBusinessName ? payload.storeDisplayName : ""),
+    row("Business type", humanize(payload.businessType)),
+    row("Email", firstValue(payload.sellerEmail, payload.email)),
+    row("Mobile", firstValue(payload.sellerPhone, payload.phone)),
+    row("GSTIN", payload.gstin),
+    row("PAN", payload.pan),
+    row("Business address", [address.line1, address.line2, address.city, address.state, address.postalCode, address.country].filter(Boolean).join(", ")),
+    row("Review status", "Pending approval"),
+    row("KYC status", humanize(firstValue(payload.kycStatus, payload.verificationStatus))),
+    row("Bank verification status", humanize(payload.bankVerificationStatus)),
+    row("Submitted at (IST)", submittedAt && !Number.isNaN(submittedAt.getTime())
+      ? new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" }).format(submittedAt)
+      : ""),
+  ]);
+};
+
 const payoutRows = (payload = {}) => compactRows([
   row("Payout", publicPayoutReference(payload)),
   row("Status", humanize(payload.status)),
@@ -279,11 +301,11 @@ const EMAIL_TEMPLATE_DEFINITIONS = {
     ctaText: "Review seller",
   },
   seller_onboarding_submitted_admin: {
-    subject: "New Seller Account Created",
-    title: "New Seller Account Created",
+    subject: "Seller Onboarding Awaiting Approval",
+    title: "Seller Onboarding Awaiting Approval",
     intro: ({ legalBusinessName, storeDisplayName, legalName, sellerName }) =>
       `${legalBusinessName || storeDisplayName || legalName || sellerName || "A seller"} completed seller onboarding and is ready for admin review.`,
-    rows: sellerRows,
+    rows: sellerOnboardingRows,
     ctaText: "Review onboarding",
   },
   seller_onboarding_approved: {

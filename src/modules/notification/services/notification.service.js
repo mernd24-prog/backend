@@ -197,13 +197,14 @@ class NotificationService {
           enrichedPayload.storeDisplayName ||
           enrichedPayload.legalName ||
           sellerName;
-        const subject = "New Seller Account Created";
+        const subject = "Seller Onboarding Awaiting Approval";
         const message = `${businessName || "A seller"} completed seller onboarding and is ready for admin review.`;
         const payload = {
           ...enrichedPayload,
           eventName: event.eventName,
           eventId: event.id,
           emailDedupeEventName: "seller.onboarding_submitted.admin",
+          submittedAt: event.payload.submittedAt || event.occurredAt,
           emailDedupeKey: `seller-onboarding:${enrichedPayload.sellerId || event.id}`,
           recipientType: "admin",
           adminName: admin.profile?.firstName || admin.email || "",
@@ -275,13 +276,14 @@ class NotificationService {
         const enrichedPayload = await this.enrichSellerPayload(event.payload);
         const sellerName = this.sellerDisplayName(enrichedPayload);
         const businessName = enrichedPayload.legalBusinessName || enrichedPayload.storeDisplayName || sellerName;
-        const subject = "New Seller Account Created";
+        const subject = "Seller Onboarding Awaiting Approval";
         const message = `${businessName || "A seller"} submitted seller onboarding details and is ready for admin review.`;
         const payload = {
           ...enrichedPayload,
           eventName: event.eventName,
           eventId: event.id,
           emailDedupeEventName: "seller.onboarding_submitted.admin",
+          submittedAt: event.payload.submittedAt || event.occurredAt,
           emailDedupeKey: `seller-onboarding:${enrichedPayload.sellerId || event.id}`,
           recipientType: "admin",
           adminName: admin.profile?.firstName || admin.email || "",
@@ -312,7 +314,6 @@ class NotificationService {
     });
 
     const sellerStatusEvents = [
-      DOMAIN_EVENTS.KYC_STATUS_UPDATED_V1,
       DOMAIN_EVENTS.SELLER_ORGANIZATION_STATUS_UPDATED_V1,
     ];
     sellerStatusEvents.forEach((eventName) => {
@@ -320,6 +321,10 @@ class NotificationService {
         const sellerId = event.payload.sellerId;
         const status = event.payload.status || event.payload.verificationStatus || event.payload.approvalStatus;
         if (!sellerId || !["verified", "approved", "active", "live", "rejected"].includes(String(status || ""))) return;
+        // Approval emails represent the organization's review decision, not later
+        // KYC, bank, or go-live updates on an already approved organization.
+        if (Array.isArray(event.payload.changedFields) &&
+          !event.payload.changedFields.includes("approvalStatus")) return;
         const isRejected = String(status) === "rejected";
         const subject = isRejected ? "Seller Onboarding Rejected" : "Seller Onboarding Approved";
         const message = isRejected
@@ -357,7 +362,7 @@ class NotificationService {
   sellerDisplayName(payload = {}) {
     const profile = payload.profile || {};
     const sellerProfile = payload.sellerProfile || {};
-    return sellerProfile.legalBusinessName ||
+    return payload.sellerName || sellerProfile.legalBusinessName ||
       sellerProfile.displayName ||
       [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim() ||
       payload.email ||
@@ -376,13 +381,8 @@ class NotificationService {
 
     const profile = seller.profile || {};
     const sellerProfile = seller.sellerProfile || {};
-    const sellerName = this.sellerDisplayName({
-      ...payload,
-      email: seller.email,
-      phone: seller.phone,
-      profile,
-      sellerProfile,
-    });
+    const sellerName = [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim() ||
+      sellerProfile.primaryContactName || payload.sellerName || payload.legalName || "Seller";
 
     return {
       ...payload,
@@ -393,6 +393,14 @@ class NotificationService {
       sellerPhone: payload.sellerPhone || seller.phone,
       legalBusinessName: payload.legalBusinessName || sellerProfile.legalBusinessName || sellerProfile.businessName,
       storeDisplayName: payload.storeDisplayName || sellerProfile.displayName || sellerProfile.storeDisplayName,
+      businessType: payload.businessType || sellerProfile.businessType,
+      gstin: payload.gstin || sellerProfile.gstNumber,
+      pan: payload.pan || sellerProfile.panNumber,
+      businessAddress: payload.businessAddress || sellerProfile.billingAddress || sellerProfile.businessAddress,
+      kycStatus: payload.kycStatus || sellerProfile.kycStatus,
+      bankVerificationStatus: payload.bankVerificationStatus || sellerProfile.bankVerificationStatus,
+      onboardingStatus: payload.onboardingStatus || sellerProfile.onboardingStatus,
+      goLiveStatus: payload.goLiveStatus || sellerProfile.goLiveStatus,
     };
   }
 
