@@ -716,6 +716,7 @@ class AdvancedSearchService {
     if (pending) return pending;
 
     const lookup = (async () => {
+      let indexedProducts = [];
       if (isElasticsearchEnabled()) {
         try {
           const response = await elasticsearchClient.search({
@@ -735,24 +736,9 @@ class AdvancedSearchService {
               },
             },
           });
-          const resolvedHits = await this.resolveSuggestionLabels(
-            response.hits.hits.map((hit) => hit._source || {}),
-          );
-          const suggestions = resolvedHits.map((source) => ({
-            title: source.title || "",
-            brandName: source.brandName || "",
-            categoryName: source.categoryName || "",
-            image:
-              source.image ||
-              source.imageUrl ||
-              source.images?.[0] ||
-              source.commonImages?.[0] ||
-              "",
-          })).filter((item) => item.title);
-          if (suggestions.length) {
-            setAutocompleteCache(cacheKey, suggestions);
-            return suggestions;
-          }
+          // An index may lag behind catalog updates. Do not let partial ES
+          // results hide current MongoDB prefix matches.
+          indexedProducts = response.hits.hits.map((hit) => hit._source || {});
         } catch (error) {
           logger.warn({ err: error, term }, "Elasticsearch autocomplete failed; using Mongo fallback");
         }
@@ -773,7 +759,7 @@ class AdvancedSearchService {
         ? prefixProducts
         : await this.getAutocompleteCorpus();
 
-      const scored = [...prefixProducts, ...corpus]
+      const scored = [...prefixProducts, ...indexedProducts, ...corpus]
         .map((product) => ({
           product,
           score: scoreAutocompleteSuggestion(term, product),
