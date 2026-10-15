@@ -5,8 +5,7 @@ const {
 const {
   ContentPageModel,
 } = require("../../src/modules/platform/models/content-page.model");
- 
- 
+const { customerCmsFallbackPages } = require("./cms-customer-fallback-pages");
 
 async function seedPolicyPages() {
   try {
@@ -15,7 +14,7 @@ async function seedPolicyPages() {
     console.log("✅ MongoDB Connected");
 
     const pages = [
-         {
+      {
         slug: "about-banner",
         title: "About Banner",
         pageType: "about",
@@ -730,7 +729,8 @@ async function seedPolicyPages() {
             buttonPath: "/products",
           },
         },
-      },     {
+      },
+      {
         slug: "faq-details",
         title: "Frequently Asked Questions",
         pageType: "faq",
@@ -981,7 +981,8 @@ async function seedPolicyPages() {
               target: "_self",
             },
             sortOrder: 99,
-          }, ],
+          },
+        ],
 
         metadata: {},
       },
@@ -1553,6 +1554,29 @@ async function seedPolicyPages() {
       console.log(`✅ ${page.title} uploaded`);
     }
 
+    let insertedCustomerPages = 0;
+    let skippedCustomerPages = 0;
+
+    for (const customerPage of customerCmsFallbackPages) {
+      const result = await ContentPageModel.updateOne(
+        { slug: customerPage.slug },
+        { $setOnInsert: customerPage },
+        { upsert: true },
+      );
+
+      if (result.upsertedCount) {
+        insertedCustomerPages += 1;
+        console.log(`✅ ${customerPage.slug} inserted`);
+      } else {
+        skippedCustomerPages += 1;
+        console.log(`⏭️  ${customerPage.slug} already exists; preserved`);
+      }
+    }
+
+    console.log(
+      `\nCustomer fallback CMS: ${insertedCustomerPages} inserted, ${skippedCustomerPages} preserved`,
+    );
+
     console.log("\n🎉 All Policy Pages Seeded Successfully");
 
     process.exit(0);
@@ -1565,5 +1589,3 @@ async function seedPolicyPages() {
 }
 
 seedPolicyPages();
- 
- 
