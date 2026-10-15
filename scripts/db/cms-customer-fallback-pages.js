@@ -403,6 +403,106 @@ const customerCmsFallbackPages = [
     description:
       "Products promoted by admin with special deal price, original price, deal badge, and limited-time availability.",
   }),
+  page("privacy-policy", "Privacy Policy", {
+    pageType: "policy",
+    category: "legal",
+    sections: [
+      {
+        type: "content",
+        title: "Your Privacy Matters",
+        description:
+          "At Sam Global, we are committed to protecting your personal information and ensuring transparency in how your data is collected, used, and safeguarded.",
+        points: [
+          point(
+            "1. Information We Collect",
+            "Personal Information: Name, phone number, email address; shipping and billing address\nAccount Information: Login details, preferences, and order history\nTransaction Data: Payment details processed securely via third-party gateways\nTechnical Data: IP address, browser type, device information, website usage and interaction data",
+          ),
+          point(
+            "2. How We Use Your Information",
+            "Process and deliver your orders\nProvide customer support\nImprove our platform and user experience\nSend order updates, service notifications, and relevant offers\nPrevent fraud and ensure platform security",
+          ),
+          point(
+            "3. Sharing of Information",
+            "We do not sell your personal data.\nWe may share information with logistics partners, payment gateways, technology and analytics providers, and sellers where applicable.\nAll partners are expected to maintain data confidentiality and security.",
+          ),
+          point(
+            "4. Data Security",
+            "We implement appropriate technical and organizational measures to protect your data.\nHowever, no system is completely secure, and we cannot guarantee absolute security.",
+          ),
+          point(
+            "5. Cookies & Tracking",
+            "We use cookies and similar technologies to enhance browsing, remember preferences, and analyse platform usage.\nRefer to our Cookie Policy for more details.",
+          ),
+          point(
+            "6. Your Rights",
+            "Access or update your personal information\nRequest deletion of your data, subject to legal requirements\nOpt out of marketing communications",
+          ),
+          point(
+            "7. Data Retention",
+            "We retain data only as long as necessary for order fulfilment, legal and regulatory compliance, and business operations.",
+          ),
+          point(
+            "8. Third-Party Links",
+            "Our platform may contain links to external websites. We are not responsible for the privacy practices of such third parties.",
+          ),
+          point(
+            "9. Policy Updates",
+            "We may update this Privacy Policy from time to time. Continued use of the platform implies acceptance of the updated policy.",
+          ),
+          point(
+            "10. Contact Us",
+            "For any privacy-related concerns, please contact us through our Contact page.\nYour trust is important to us, and we are committed to protecting it.",
+          ),
+        ],
+      },
+    ],
+  }),
+  page("cookie-policy", "Cookie Policy", {
+    pageType: "policy",
+    category: "legal",
+    sections: [
+      {
+        type: "content",
+        title: "Understanding How We Use Cookies",
+        description:
+          "This Cookie Policy explains how Sam Global uses cookies and similar technologies to enhance your experience on our platform.",
+        points: [
+          point(
+            "1. What Are Cookies?",
+            "Cookies are small text files stored on your device when you visit a website. They help improve functionality, performance, and user experience.",
+          ),
+          point(
+            "2. Types of Cookies We Use",
+            "Essential Cookies: Required for basic website functionality such as login and checkout.\nPerformance Cookies: Help us understand how users interact with our platform to improve performance.\nFunctional Cookies: Remember your preferences and settings for a personalized experience.\nAdvertising Cookies: Used to deliver relevant ads and measure campaign effectiveness.",
+          ),
+          point(
+            "3. How We Use Cookies",
+            "Enable smooth navigation and functionality\nRemember your preferences and login details\nAnalyse website traffic and usage patterns\nImprove performance and user experience\nSupport marketing and advertising efforts",
+          ),
+          point(
+            "4. Third-Party Cookies",
+            "We may allow trusted third-party services, such as analytics or advertising platforms, to place cookies on your device. These cookies are governed by the respective third parties’ policies.",
+          ),
+          point(
+            "5. Managing Cookies",
+            "You can control or disable cookies through your browser settings. Please note that disabling cookies may affect certain features and functionality of the platform.",
+          ),
+          point(
+            "6. Consent",
+            "By continuing to use our platform, you consent to our use of cookies as described in this policy.",
+          ),
+          point(
+            "7. Updates to This Policy",
+            "We may update this Cookie Policy from time to time.",
+          ),
+          point(
+            "Closing Line",
+            "Designed to enhance your experience while respecting your privacy.",
+          ),
+        ],
+      },
+    ],
+  }),
   page("footerdata", "footerData", {
     pageType: "footer",
     image: image("/image/webp/logoWithName.webp", "Sam Global"),
@@ -438,6 +538,8 @@ const customerCmsFallbackPages = [
         ["Shipping & Delivery Policy", "/shipping-policy"],
         ["Return & Refund Policy", "/refund-policy"],
         ["Terms of Use", "/terms-of-use"],
+        ["Privacy Policy", "/privacy-policy"],
+        ["Cookie Policy", "/cookie-policy"],
         ["FAQ", "/faq"],
       ]),
       {

@@ -1,8 +1,13 @@
 const { projectDealVariant } = require("../../deal/services/deal-variant");
-const { productMedia, deleteUnreferencedMedia } = require("../../../shared/storage/media-cleanup");
+const {
+  productMedia,
+  deleteUnreferencedMedia,
+} = require("../../../shared/storage/media-cleanup");
 const slugify = require("slugify");
 const { getPage } = require("../../../shared/tools/page");
-const { decodeProductRouteToken } = require("../../../shared/tools/route-token");
+const {
+  decodeProductRouteToken,
+} = require("../../../shared/tools/route-token");
 const { ProductRepository } = require("../repositories/product.repository");
 const { ProductModel } = require("../models/product.model");
 const {
@@ -15,7 +20,9 @@ const {
 const { remember, forget } = require("../../../shared/tools/cache");
 const { AppError } = require("../../../shared/errors/app-error");
 const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
-const { InventoryService } = require("../../inventory/services/inventory.service");
+const {
+  InventoryService,
+} = require("../../inventory/services/inventory.service");
 const {
   PRODUCT_STATUS,
   PRODUCT_APPROVAL_STATUS,
@@ -34,26 +41,56 @@ const {
   hydrateLatestSearchProducts,
 } = require("../../../shared/search/product-search-document");
 const { logger } = require("../../../shared/logger/logger");
-const { PlatformRepository } = require("../../platform/repositories/platform.repository");
+const {
+  PlatformRepository,
+} = require("../../platform/repositories/platform.repository");
 const { PlatformService } = require("../../platform/services/platform.service");
-const { OrderRepository } = require("../../order/repositories/order.repository");
+const {
+  OrderRepository,
+} = require("../../order/repositories/order.repository");
 const { DealRepository } = require("../../deal/repositories/deal.repository");
 const { WarehouseModel } = require("../../inventory/models/warehouse.model");
 const { UserModel } = require("../../user/models/user.model");
-const { sellerOrganizationService } = require("../../seller/services/seller-organization.service");
+const {
+  sellerOrganizationService,
+} = require("../../seller/services/seller-organization.service");
 const {
   AdminCountryModel,
   AdminStateModel,
   AdminCityModel,
 } = require("../../admin/models/common-management.model");
-const { ShippingProfilesService } = require("../../delivery/services/shipping-profiles.service");
+const {
+  ShippingProfilesService,
+} = require("../../delivery/services/shipping-profiles.service");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
-const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
+const {
+  eventPublisher,
+} = require("../../../infrastructure/events/event-publisher");
 
 // Temporarily disabled: sellers should update approved products directly.
 // Set to true when the product-revision approval workflow is reintroduced.
 const PRODUCT_REVISIONS_ENABLED = false;
+
+// A seller is a user account; the organization is the seller's business/store.
+// Keep these identities separate anywhere product responses expose sellerName.
+const sellerAccountDisplayName = (seller) => {
+  if (!seller) return null;
+
+  const profileName = [seller.profile?.firstName, seller.profile?.lastName]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    profileName ||
+    seller.email ||
+    seller.sellerProfile?.displayName ||
+    seller.sellerProfile?.legalBusinessName ||
+    seller.sellerProfile?.businessName ||
+    null
+  );
+};
 
 const SELLER_BLOCKED_COMPLIANCE_FIELDS = [
   "gstRate",
@@ -94,7 +131,9 @@ const buildRevisionPendingConditions = ({
 };
 
 const normalizeRevisionWorkflowStatus = (value = "") => {
-  const normalized = String(value ?? "").trim().toLowerCase();
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
   if (!normalized || normalized === "all") return "";
   const withoutPrefix = normalized.startsWith("workflow:")
     ? normalized.replace(/^workflow:/, "")
@@ -245,14 +284,12 @@ const buildProductListProjection = (query = {}) => ({
   variants: 1,
   hasVariants: 1,
   variantAxes: 1,
-  ...(
-    query.includeVariants === true ||
-    query.includeVariants === "true" ||
-    query.hasVariants === true ||
-    query.hasVariants === "true"
-      ? { variants: 1, hasVariants: 1, variantAxes: 1 }
-      : {}
-  ),
+  ...(query.includeVariants === true ||
+  query.includeVariants === "true" ||
+  query.hasVariants === true ||
+  query.hasVariants === "true"
+    ? { variants: 1, hasVariants: 1, variantAxes: 1 }
+    : {}),
 });
 
 class ProductService {
@@ -266,18 +303,24 @@ class ProductService {
   } = {}) {
     this.productRepository = productRepository;
     this.platformRepository = platformRepository;
-    this.platformService = platformService || new PlatformService({ platformRepository });
-    this.inventoryService = inventoryService || new InventoryService({ productRepository });
-    this.shippingProfilesService = shippingProfilesService || new ShippingProfilesService();
+    this.platformService =
+      platformService || new PlatformService({ platformRepository });
+    this.inventoryService =
+      inventoryService || new InventoryService({ productRepository });
+    this.shippingProfilesService =
+      shippingProfilesService || new ShippingProfilesService();
     this.dealRepository = dealRepository || new DealRepository();
   }
 
   normalizeReturnPolicy(policy = {}, fallback = {}) {
     const source = { ...(fallback || {}), ...(policy || {}) };
     const type = String(source.type || "").toLowerCase();
-    const returnable = type === "non_returnable" || source.returnable === false || source.eligible === false
-      ? false
-      : source.returnable ?? source.eligible ?? true;
+    const returnable =
+      type === "non_returnable" ||
+      source.returnable === false ||
+      source.eligible === false
+        ? false
+        : (source.returnable ?? source.eligible ?? true);
     const returnWindowDays = returnable
       ? Math.max(Number(source.returnWindowDays ?? source.days ?? 0), 0)
       : 0;
@@ -295,7 +338,10 @@ class ProductService {
   // ─── Category & attribute helpers ─────────────────────────────────────────
 
   normalizeCategoryAttributes(category = {}) {
-    if (Array.isArray(category.attributeSchema) && category.attributeSchema.length) {
+    if (
+      Array.isArray(category.attributeSchema) &&
+      category.attributeSchema.length
+    ) {
       return category.attributeSchema;
     }
     const legacy = category.attributesSchema || {};
@@ -312,7 +358,10 @@ class ProductService {
       attributes instanceof Map ? Object.fromEntries(attributes) : attributes;
     for (const field of attributeSchema) {
       const value = normalizedAttributes?.[field.key];
-      if (field.required && (value === undefined || value === null || value === "")) {
+      if (
+        field.required &&
+        (value === undefined || value === null || value === "")
+      ) {
         throw new AppError(`Attribute '${field.key}' is required`, 400);
       }
       if (value === undefined || value === null) continue;
@@ -331,10 +380,17 @@ class ProductService {
         throw new AppError(`Attribute '${field.key}' has invalid option`, 400);
       }
       if (field.type === "multi_select") {
-        if (!Array.isArray(value)) throw new AppError(`Attribute '${field.key}' must be an array`, 400);
+        if (!Array.isArray(value))
+          throw new AppError(`Attribute '${field.key}' must be an array`, 400);
         if (Array.isArray(field.options) && field.options.length) {
-          const bad = value.find((item) => !field.options.includes(String(item)));
-          if (bad !== undefined) throw new AppError(`Attribute '${field.key}' has invalid option`, 400);
+          const bad = value.find(
+            (item) => !field.options.includes(String(item)),
+          );
+          if (bad !== undefined)
+            throw new AppError(
+              `Attribute '${field.key}' has invalid option`,
+              400,
+            );
         }
       }
     }
@@ -378,7 +434,8 @@ class ProductService {
   }
 
   normalizeVariantAttributes(attributes = {}) {
-    const source = attributes instanceof Map ? Object.fromEntries(attributes) : attributes;
+    const source =
+      attributes instanceof Map ? Object.fromEntries(attributes) : attributes;
     return Object.entries(source || {}).reduce((acc, [key, value]) => {
       const axis = this.normalizeVariantAxis({ name: key });
       if (axis) acc[axis] = value;
@@ -397,20 +454,29 @@ class ProductService {
 
     for (const variant of variants) {
       if (!variant?.sku) continue;
-      if (skus.has(variant.sku)) throw new AppError("Variant SKU must be unique", 400);
+      if (skus.has(variant.sku))
+        throw new AppError("Variant SKU must be unique", 400);
       skus.add(variant.sku);
       if (variant.stock !== undefined && Number(variant.stock) < 0) {
         throw new AppError("Variant stock must be non-negative", 400);
       }
 
-	      const attributes = this.normalizeVariantAttributes(variant.attributes || {});
-	      if (!optionMap.size) continue;
-	      for (const [axis, value] of Object.entries(attributes)) {
+      const attributes = this.normalizeVariantAttributes(
+        variant.attributes || {},
+      );
+      if (!optionMap.size) continue;
+      for (const [axis, value] of Object.entries(attributes)) {
         if (!optionMap.has(axis)) {
-          throw new AppError(`Variant attribute '${axis}' is not configured as a product option`, 400);
+          throw new AppError(
+            `Variant attribute '${axis}' is not configured as a product option`,
+            400,
+          );
         }
         if (!optionMap.get(axis).has(String(value))) {
-          throw new AppError(`Variant attribute '${axis}' has invalid value '${value}'`, 400);
+          throw new AppError(
+            `Variant attribute '${axis}' has invalid value '${value}'`,
+            400,
+          );
         }
       }
     }
@@ -418,28 +484,47 @@ class ProductService {
 
   validatePricing(payload = {}, existingProduct = null, context = {}) {
     const source = existingProduct ? this.toPlainObject(existingProduct) : {};
-    const price = payload.price !== undefined ? Number(payload.price) : Number(source.price || 0);
-    const mrp = payload.mrp !== undefined ? Number(payload.mrp) : Number(source.mrp || 0);
-    const salePriceValue = payload.salePrice !== undefined ? payload.salePrice : source.salePrice;
-    const salePrice = salePriceValue === undefined || salePriceValue === null || salePriceValue === ""
-      ? null
-      : Number(salePriceValue);
+    const price =
+      payload.price !== undefined
+        ? Number(payload.price)
+        : Number(source.price || 0);
+    const mrp =
+      payload.mrp !== undefined ? Number(payload.mrp) : Number(source.mrp || 0);
+    const salePriceValue =
+      payload.salePrice !== undefined ? payload.salePrice : source.salePrice;
+    const salePrice =
+      salePriceValue === undefined ||
+      salePriceValue === null ||
+      salePriceValue === ""
+        ? null
+        : Number(salePriceValue);
 
     if (Number.isFinite(price) && Number.isFinite(mrp) && price > mrp) {
-      const contextStr = context.productTitle ? ` for "${context.productTitle}"` : "";
+      const contextStr = context.productTitle
+        ? ` for "${context.productTitle}"`
+        : "";
       throw new AppError(
         `Selling price (₹${price}) must be less than or equal to MRP (₹${mrp})${contextStr}. ` +
-        "Pricing hierarchy: MRP ≥ Selling Price ≥ Special Price",
-        400
+          "Pricing hierarchy: MRP ≥ Selling Price ≥ Special Price",
+        400,
       );
     }
-    if (salePrice !== null && Number.isFinite(salePrice) && Number.isFinite(price) && salePrice > price) {
-      const contextStr = context.productTitle ? ` for "${context.productTitle}"` : "";
-      const variantStr = context.variantTitle ? ` [${context.variantTitle}]` : "";
+    if (
+      salePrice !== null &&
+      Number.isFinite(salePrice) &&
+      Number.isFinite(price) &&
+      salePrice > price
+    ) {
+      const contextStr = context.productTitle
+        ? ` for "${context.productTitle}"`
+        : "";
+      const variantStr = context.variantTitle
+        ? ` [${context.variantTitle}]`
+        : "";
       throw new AppError(
         `Special price (₹${salePrice}) must be less than or equal to selling price (₹${price})${variantStr}${contextStr}. ` +
-        "Pricing hierarchy: MRP ≥ Selling Price ≥ Special Price",
-        400
+          "Pricing hierarchy: MRP ≥ Selling Price ≥ Special Price",
+        400,
       );
     }
   }
@@ -447,7 +532,9 @@ class ProductService {
   generateVariantCombinations(options = []) {
     if (!options.length) return [];
     const [first, ...rest] = options;
-    const restCombinations = rest.length ? this.generateVariantCombinations(rest) : [{}];
+    const restCombinations = rest.length
+      ? this.generateVariantCombinations(rest)
+      : [{}];
     const axis = this.normalizeVariantAxis(first);
     return first.values.flatMap((value) =>
       restCombinations.map((combo) => ({
@@ -473,10 +560,12 @@ class ProductService {
   }
 
   hasPayloadValue(payload = {}, field) {
-    return Object.prototype.hasOwnProperty.call(payload, field) &&
+    return (
+      Object.prototype.hasOwnProperty.call(payload, field) &&
       payload[field] !== undefined &&
       payload[field] !== null &&
-      payload[field] !== "";
+      payload[field] !== ""
+    );
   }
 
   toVariantNumber(value, fallback = 0) {
@@ -486,9 +575,10 @@ class ProductService {
   }
 
   toPlainVariant(variant = {}) {
-    const plain = typeof variant?.toObject === "function"
-      ? variant.toObject({ depopulate: true })
-      : { ...variant };
+    const plain =
+      typeof variant?.toObject === "function"
+        ? variant.toObject({ depopulate: true })
+        : { ...variant };
     if (plain.attributes instanceof Map) {
       plain.attributes = Object.fromEntries(plain.attributes);
     }
@@ -505,33 +595,57 @@ class ProductService {
     const submittedVariants = Array.isArray(payload.variants)
       ? payload.variants.map((variant) => this.toPlainVariant(variant))
       : [];
-    const hasVariantPayload = Object.prototype.hasOwnProperty.call(payload, "variants");
-    const rootHasInventoryOrPricing = ["sku", "price", "mrp", "salePrice", "stock", "color"].some((field) =>
-      this.hasPayloadValue(payload, field),
+    const hasVariantPayload = Object.prototype.hasOwnProperty.call(
+      payload,
+      "variants",
     );
+    const rootHasInventoryOrPricing = [
+      "sku",
+      "price",
+      "mrp",
+      "salePrice",
+      "stock",
+      "color",
+    ].some((field) => this.hasPayloadValue(payload, field));
 
     let variants = hasVariantPayload ? submittedVariants : existingVariants;
 
     if (!variants.length && rootHasInventoryOrPricing) {
-      variants = [{
-        sku: payload.sku || `${payload.title || payload.name || "SKU"}-1`,
-        title: payload.color && payload.color !== "default" ? String(payload.color) : "Default",
-        price: this.toVariantNumber(payload.price, 0),
-        mrp: this.toVariantNumber(payload.mrp, this.toVariantNumber(payload.price, 0)),
-        salePrice: this.hasPayloadValue(payload, "salePrice") ? this.toVariantNumber(payload.salePrice, 0) : undefined,
-        stock: this.toVariantNumber(payload.stock, 0),
-        reservedStock: 0,
-        attributes: payload.color && payload.color !== "default" ? { color: payload.color } : {},
-        images: [],
-        status: "active",
-        isDefault: true,
-        sortOrder: 0,
-      }];
+      variants = [
+        {
+          sku: payload.sku || `${payload.title || payload.name || "SKU"}-1`,
+          title:
+            payload.color && payload.color !== "default"
+              ? String(payload.color)
+              : "Default",
+          price: this.toVariantNumber(payload.price, 0),
+          mrp: this.toVariantNumber(
+            payload.mrp,
+            this.toVariantNumber(payload.price, 0),
+          ),
+          salePrice: this.hasPayloadValue(payload, "salePrice")
+            ? this.toVariantNumber(payload.salePrice, 0)
+            : undefined,
+          stock: this.toVariantNumber(payload.stock, 0),
+          reservedStock: 0,
+          attributes:
+            payload.color && payload.color !== "default"
+              ? { color: payload.color }
+              : {},
+          images: [],
+          status: "active",
+          isDefault: true,
+          sortOrder: 0,
+        },
+      ];
     }
 
     if (!variants.length) return payload;
 
-    const defaultIndex = Math.max(0, variants.findIndex((variant) => variant.isDefault === true));
+    const defaultIndex = Math.max(
+      0,
+      variants.findIndex((variant) => variant.isDefault === true),
+    );
     variants = variants.map((variant, index) => {
       const next = {
         ...variant,
@@ -542,24 +656,41 @@ class ProductService {
 
       if (!hasVariantPayload && index === defaultIndex) {
         if (this.hasPayloadValue(payload, "sku")) next.sku = payload.sku;
-        if (this.hasPayloadValue(payload, "price")) next.price = this.toVariantNumber(payload.price, next.price);
-        if (this.hasPayloadValue(payload, "mrp")) next.mrp = this.toVariantNumber(payload.mrp, next.mrp);
-        if (this.hasPayloadValue(payload, "salePrice")) next.salePrice = this.toVariantNumber(payload.salePrice, next.salePrice);
-        if (this.hasPayloadValue(payload, "stock")) next.stock = this.toVariantNumber(payload.stock, next.stock);
-        if (this.hasPayloadValue(payload, "color") && payload.color !== "default") {
-          next.attributes = { ...(next.attributes || {}), color: payload.color };
-          if (!next.title || next.title === "Default") next.title = String(payload.color);
+        if (this.hasPayloadValue(payload, "price"))
+          next.price = this.toVariantNumber(payload.price, next.price);
+        if (this.hasPayloadValue(payload, "mrp"))
+          next.mrp = this.toVariantNumber(payload.mrp, next.mrp);
+        if (this.hasPayloadValue(payload, "salePrice"))
+          next.salePrice = this.toVariantNumber(
+            payload.salePrice,
+            next.salePrice,
+          );
+        if (this.hasPayloadValue(payload, "stock"))
+          next.stock = this.toVariantNumber(payload.stock, next.stock);
+        if (
+          this.hasPayloadValue(payload, "color") &&
+          payload.color !== "default"
+        ) {
+          next.attributes = {
+            ...(next.attributes || {}),
+            color: payload.color,
+          };
+          if (!next.title || next.title === "Default")
+            next.title = String(payload.color);
         }
       }
 
-      if (!next.sku) next.sku = `${payload.sku || payload.title || "SKU"}-${index + 1}`;
+      if (!next.sku)
+        next.sku = `${payload.sku || payload.title || "SKU"}-${index + 1}`;
       next.price = this.toVariantNumber(
         next.price,
         hasVariantPayload ? 0 : this.toVariantNumber(payload.price, 0),
       );
       next.mrp = this.toVariantNumber(
         next.mrp,
-        hasVariantPayload ? next.price : this.toVariantNumber(payload.mrp, next.price),
+        hasVariantPayload
+          ? next.price
+          : this.toVariantNumber(payload.mrp, next.price),
       );
       next.stock = this.toVariantNumber(next.stock, 0);
       next.reservedStock = this.toVariantNumber(next.reservedStock, 0);
@@ -569,19 +700,38 @@ class ProductService {
 
     const defaultVariant = variants[defaultIndex] || variants[0];
     const defaultVariantPrice = this.toVariantNumber(defaultVariant.price, 0);
-    const defaultVariantMrp = this.toVariantNumber(defaultVariant.mrp, this.toVariantNumber(defaultVariant.price, defaultVariantPrice));
-    const defaultVariantSalePrice = this.hasPayloadValue(defaultVariant, "salePrice")
+    const defaultVariantMrp = this.toVariantNumber(
+      defaultVariant.mrp,
+      this.toVariantNumber(defaultVariant.price, defaultVariantPrice),
+    );
+    const defaultVariantSalePrice = this.hasPayloadValue(
+      defaultVariant,
+      "salePrice",
+    )
       ? this.toVariantNumber(defaultVariant.salePrice, 0)
       : null;
-    const stock = variants.reduce((total, variant) => total + this.toVariantNumber(variant.stock, 0), 0);
-    const reservedStock = variants.reduce((total, variant) => total + this.toVariantNumber(variant.reservedStock, 0), 0);
+    const stock = variants.reduce(
+      (total, variant) => total + this.toVariantNumber(variant.stock, 0),
+      0,
+    );
+    const reservedStock = variants.reduce(
+      (total, variant) =>
+        total + this.toVariantNumber(variant.reservedStock, 0),
+      0,
+    );
 
     return {
       ...payload,
       sku: payload.sku || defaultVariant.sku,
-      price: hasVariantPayload ? defaultVariantPrice : this.toVariantNumber(payload.price, defaultVariantPrice),
-      mrp: hasVariantPayload ? defaultVariantMrp : this.toVariantNumber(payload.mrp, defaultVariantMrp),
-      salePrice: hasVariantPayload ? defaultVariantSalePrice : payload.salePrice,
+      price: hasVariantPayload
+        ? defaultVariantPrice
+        : this.toVariantNumber(payload.price, defaultVariantPrice),
+      mrp: hasVariantPayload
+        ? defaultVariantMrp
+        : this.toVariantNumber(payload.mrp, defaultVariantMrp),
+      salePrice: hasVariantPayload
+        ? defaultVariantSalePrice
+        : payload.salePrice,
       stock,
       reservedStock,
       variants,
@@ -594,42 +744,65 @@ class ProductService {
   }
 
   normalizeProductVariants(payload = {}) {
-    const hasOptionPayload = Object.prototype.hasOwnProperty.call(payload, "options");
-    const hasVariantPayload = Object.prototype.hasOwnProperty.call(payload, "variants");
-    const hasVariantAxisPayload = Object.prototype.hasOwnProperty.call(payload, "variantAxes");
+    const hasOptionPayload = Object.prototype.hasOwnProperty.call(
+      payload,
+      "options",
+    );
+    const hasVariantPayload = Object.prototype.hasOwnProperty.call(
+      payload,
+      "variants",
+    );
+    const hasVariantAxisPayload = Object.prototype.hasOwnProperty.call(
+      payload,
+      "variantAxes",
+    );
 
     if (!hasOptionPayload && !hasVariantPayload && !hasVariantAxisPayload) {
       return payload;
     }
 
     const options = this.normalizeProductOptions(payload.options || []);
-    const explicitVariants = Array.isArray(payload.variants) ? payload.variants : [];
+    const explicitVariants = Array.isArray(payload.variants)
+      ? payload.variants
+      : [];
     const variants = explicitVariants.length
       ? explicitVariants.map((variant, index) => {
           const plainVariant = this.toPlainVariant(variant);
-          const attributes = this.normalizeVariantAttributes(plainVariant.attributes || {});
+          const attributes = this.normalizeVariantAttributes(
+            plainVariant.attributes || {},
+          );
           return {
             ...plainVariant,
             attributes,
             title: variant.title || Object.values(attributes).join(" / "),
-            isDefault: variant.isDefault === true || (!explicitVariants.some((v) => v.isDefault) && index === 0),
+            isDefault:
+              variant.isDefault === true ||
+              (!explicitVariants.some((v) => v.isDefault) && index === 0),
             sortOrder: variant.sortOrder ?? index,
           };
         })
       : options.length
-        ? this.buildVariantsFromOptions(options, payload.price || 0, payload.mrp || 0)
+        ? this.buildVariantsFromOptions(
+            options,
+            payload.price || 0,
+            payload.mrp || 0,
+          )
         : [];
 
     const variantAxes = options.length
       ? options.map((option) => this.normalizeVariantAxis(option))
       : Array.isArray(payload.variantAxes)
-        ? payload.variantAxes.map((axis) => this.normalizeVariantAxis({ name: axis })).filter(Boolean)
+        ? payload.variantAxes
+            .map((axis) => this.normalizeVariantAxis({ name: axis }))
+            .filter(Boolean)
         : [];
 
     return this.syncRootAndDefaultVariant({
       ...payload,
       ...(hasOptionPayload ? { options } : {}),
-      ...(hasVariantPayload || (hasOptionPayload && variants.length) ? { variants } : {}),
+      ...(hasVariantPayload || (hasOptionPayload && variants.length)
+        ? { variants }
+        : {}),
       variantAxes,
       hasVariants: payload.hasVariants === true || variants.length > 0,
       defaultVariantId: payload.defaultVariantId,
@@ -644,24 +817,20 @@ class ProductService {
     if (typeof image !== "object") return "";
     return String(
       image.url ||
-      image.imageURL ||
-      image.imageUrl ||
-      image.secure_url ||
-      image.src ||
-      image.thumbnail ||
-      image.thumbnailUrl ||
-      "",
+        image.imageURL ||
+        image.imageUrl ||
+        image.secure_url ||
+        image.src ||
+        image.thumbnail ||
+        image.thumbnailUrl ||
+        "",
     ).trim();
   }
 
   normalizeImages(images = []) {
     if (!Array.isArray(images)) return [];
     return Array.from(
-      new Set(
-        images
-          .map((img) => this.normalizeImageUrl(img))
-          .filter(Boolean),
-      ),
+      new Set(images.map((img) => this.normalizeImageUrl(img)).filter(Boolean)),
     );
   }
 
@@ -669,9 +838,7 @@ class ProductService {
     const list = Array.isArray(videos) ? videos : [videos];
     return Array.from(
       new Set(
-        list
-          .map((video) => this.normalizeImageUrl(video))
-          .filter(Boolean),
+        list.map((video) => this.normalizeImageUrl(video)).filter(Boolean),
       ),
     ).slice(0, 1);
   }
@@ -679,10 +846,17 @@ class ProductService {
   withPrimaryImageAlias(product = {}) {
     const { variants, ...productWithoutVariants } = product || {};
     const variantImage = (Array.isArray(variants) ? variants : [])
-      .map((variant) => this.normalizeImageUrl(variant?.image) || this.normalizeImageUrl(variant?.images?.[0]))
+      .map(
+        (variant) =>
+          this.normalizeImageUrl(variant?.image) ||
+          this.normalizeImageUrl(variant?.images?.[0]),
+      )
       .find(Boolean);
     const commonImages = this.normalizeImages(product.commonImages || []);
-    const primaryImage = this.normalizeImageUrl(product.image) || this.normalizeImageUrl(product.images?.[0]) || variantImage;
+    const primaryImage =
+      this.normalizeImageUrl(product.image) ||
+      this.normalizeImageUrl(product.images?.[0]) ||
+      variantImage;
     return {
       ...productWithoutVariants,
       commonImages,
@@ -696,13 +870,17 @@ class ProductService {
   normalizeProductMedia(payload = {}) {
     const normalized = { ...payload };
     if (Object.prototype.hasOwnProperty.call(payload, "commonImages")) {
-      normalized.commonImages = this.normalizeImages(payload.commonImages || []);
+      normalized.commonImages = this.normalizeImages(
+        payload.commonImages || [],
+      );
     }
     if (
       Object.prototype.hasOwnProperty.call(payload, "videos") ||
       Object.prototype.hasOwnProperty.call(payload, "video")
     ) {
-      normalized.videos = this.normalizeVideos(payload.videos || payload.video || []);
+      normalized.videos = this.normalizeVideos(
+        payload.videos || payload.video || [],
+      );
       delete normalized.video;
     }
     delete normalized.images;
@@ -745,9 +923,15 @@ class ProductService {
     return normalized;
   }
 
-  async normalizeProductCompliance(payload = {}, actor = {}, existingProduct = null) {
+  async normalizeProductCompliance(
+    payload = {},
+    actor = {},
+    existingProduct = null,
+  ) {
     const isSeller = isSellerRole(actor);
-    let normalized = isSeller ? this.stripSellerComplianceFields(payload) : { ...payload };
+    let normalized = isSeller
+      ? this.stripSellerComplianceFields(payload)
+      : { ...payload };
 
     if (!Object.prototype.hasOwnProperty.call(normalized, "hsnCode")) {
       return normalized;
@@ -771,7 +955,10 @@ class ProductService {
 
     const hsnRule = await this.platformRepository.getHsnCode(hsnCode);
     if (!hsnRule || hsnRule.active === false) {
-      throw new AppError("HSN code must be an active approved master record", 400);
+      throw new AppError(
+        "HSN code must be an active approved master record",
+        400,
+      );
     }
 
     normalized.hsnCode = hsnRule.code;
@@ -784,7 +971,11 @@ class ProductService {
       exempt: Boolean(hsnRule.exempt),
       source: "hsn_master",
       validatedAt: new Date(),
-      validatedBy: actor.userId || existingProduct?.lastUpdatedBy || existingProduct?.createdBy || "system",
+      validatedBy:
+        actor.userId ||
+        existingProduct?.lastUpdatedBy ||
+        existingProduct?.createdBy ||
+        "system",
     };
 
     return normalized;
@@ -822,7 +1013,10 @@ class ProductService {
     if (!isElasticsearchEnabled()) return;
 
     try {
-      await elasticsearchClient.delete({ index: "samglobal_products", id: String(productId) });
+      await elasticsearchClient.delete({
+        index: "samglobal_products",
+        id: String(productId),
+      });
     } catch (err) {
       if (err?.meta?.statusCode !== 404) {
         logger.error({ err, productId }, "Elasticsearch delete failed");
@@ -836,20 +1030,22 @@ class ProductService {
     }
   }
 
-  async listRawMasterCollection(collectionName, filter = {}, { sort = {}, limit = 500 } = {}) {
+  async listRawMasterCollection(
+    collectionName,
+    filter = {},
+    { sort = {}, limit = 500 } = {},
+  ) {
     const collection = mongoose.connection.collection(collectionName);
-    return collection
-      .find(filter)
-      .sort(sort)
-      .limit(limit)
-      .toArray();
+    return collection.find(filter).sort(sort).limit(limit).toArray();
   }
 
   async decorateProductMasterReferences(products = []) {
     if (!Array.isArray(products) || !products.length) return [];
 
     const [brands, categories] = await Promise.all([
-      this.platformRepository.resolveBrandReferences(products.map((product) => product.brand)),
+      this.platformRepository.resolveBrandReferences(
+        products.map((product) => product.brand),
+      ),
       this.platformRepository.resolveCategoryReferences(
         products.flatMap((product) => [product.categoryId, product.category]),
       ),
@@ -875,7 +1071,8 @@ class ProductService {
         categoryId: categoryRef?.id || product.categoryId || null,
         categoryKey: categoryRef?.key || rawCategory,
         categoryName:
-          categoryRef?.name || (/^[a-f\d]{24}$/i.test(rawCategory) ? "" : rawCategory),
+          categoryRef?.name ||
+          (/^[a-f\d]{24}$/i.test(rawCategory) ? "" : rawCategory),
         categoryRef,
         categoryReferenceResolved: Boolean(categoryRef),
       };
@@ -892,9 +1089,14 @@ class ProductService {
       ...facets,
       brands: brandFacets
         .map((brand) => {
-          const record = references.get(String(brand.value || "").trim().toLowerCase());
+          const record = references.get(
+            String(brand.value || "")
+              .trim()
+              .toLowerCase(),
+          );
           const rawLabel = String(brand.label || brand.value || "").trim();
-          const label = record?.name || (/^[a-f\d]{24}$/i.test(rawLabel) ? "" : rawLabel);
+          const label =
+            record?.name || (/^[a-f\d]{24}$/i.test(rawLabel) ? "" : rawLabel);
           return { ...brand, label };
         })
         .filter((brand) => brand.label),
@@ -902,9 +1104,14 @@ class ProductService {
   }
 
   async getProductPrefillData(query = {}, actor = {}) {
-    const includeInactive = query.includeInactive === true || query.includeInactive === "true";
-    const includeProducts = query.includeProducts !== false && query.includeProducts !== "false";
-    const productLimit = Math.min(200, Math.max(1, Number(query.productLimit || query.limit || 100)));
+    const includeInactive =
+      query.includeInactive === true || query.includeInactive === "true";
+    const includeProducts =
+      query.includeProducts !== false && query.includeProducts !== "false";
+    const productLimit = Math.min(
+      200,
+      Math.max(1, Number(query.productLimit || query.limit || 100)),
+    );
     const sellerId = isSellerRole(actor)
       ? actor.ownerSellerId || actor.userId
       : query.sellerId || null;
@@ -922,7 +1129,13 @@ class ProductService {
       const activeFilter = includeInactive ? {} : { active: true };
       const rawActiveFilter = includeInactive
         ? {}
-        : { $or: [{ active: true }, { isActive: true }, { active: { $exists: false }, isActive: { $exists: false } }] };
+        : {
+            $or: [
+              { active: true },
+              { isActive: true },
+              { active: { $exists: false }, isActive: { $exists: false } },
+            ],
+          };
 
       const [
         catalog,
@@ -936,12 +1149,24 @@ class ProductService {
         cities,
       ] = await Promise.all([
         this.platformService.getCatalogPrefillData({ includeInactive }, actor),
-        this.listRawMasterCollection("collections", rawActiveFilter, { sort: { sortOrder: 1, name: 1 } }),
-        this.listRawMasterCollection("tags", activeFilter, { sort: { group: 1, name: 1 }, limit: 1000 }),
-        WarehouseModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(500).lean(),
+        this.listRawMasterCollection("collections", rawActiveFilter, {
+          sort: { sortOrder: 1, name: 1 },
+        }),
+        this.listRawMasterCollection("tags", activeFilter, {
+          sort: { group: 1, name: 1 },
+          limit: 1000,
+        }),
+        WarehouseModel.find(includeInactive ? {} : { active: true })
+          .sort({ name: 1 })
+          .limit(500)
+          .lean(),
         sellerId
-          ? sellerOrganizationService.organizationRepository.listBySeller(sellerId)
-          : sellerOrganizationService.organizationRepository.list({ limit: 500 }),
+          ? sellerOrganizationService.organizationRepository.listBySeller(
+              sellerId,
+            )
+          : sellerOrganizationService.organizationRepository.list({
+              limit: 500,
+            }),
         UserModel.find({
           role: { $in: ["seller"] },
           ...(includeInactive ? {} : { accountStatus: "active" }),
@@ -950,63 +1175,96 @@ class ProductService {
           .sort({ "sellerProfile.displayName": 1, email: 1 })
           .limit(500)
           .lean(),
-        AdminCountryModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(500).lean(),
-        AdminStateModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(2000).lean(),
-        AdminCityModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(5000).lean(),
+        AdminCountryModel.find(includeInactive ? {} : { active: true })
+          .sort({ name: 1 })
+          .limit(500)
+          .lean(),
+        AdminStateModel.find(includeInactive ? {} : { active: true })
+          .sort({ name: 1 })
+          .limit(2000)
+          .lean(),
+        AdminCityModel.find(includeInactive ? {} : { active: true })
+          .sort({ name: 1 })
+          .limit(5000)
+          .lean(),
       ]);
 
       const relatedProductFilter = {
         ...(sellerId ? { sellerId } : {}),
-        ...(query.organizationId ? { organizationId: query.organizationId } : {}),
+        ...(query.organizationId
+          ? { organizationId: query.organizationId }
+          : {}),
         ...(includeInactive
           ? {}
-          : { status: { $in: [PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.INACTIVE, PRODUCT_STATUS.DRAFT, PRODUCT_STATUS.PENDING_APPROVAL] } }),
+          : {
+              status: {
+                $in: [
+                  PRODUCT_STATUS.ACTIVE,
+                  PRODUCT_STATUS.INACTIVE,
+                  PRODUCT_STATUS.DRAFT,
+                  PRODUCT_STATUS.PENDING_APPROVAL,
+                ],
+              },
+            }),
       };
       const relatedProducts = includeProducts
-        ? await this.decorateProductMasterReferences((await this.productRepository.paginate(relatedProductFilter, {
-            page: 1,
-            limit: productLimit,
-            skip: 0,
-            sortBy: "newest",
-          }, {
-            projection: {
-              title: 1,
-              sku: 1,
-              sellerId: 1,
-              organizationId: 1,
-              status: 1,
-              brand: 1,
-              category: 1,
-              categoryId: 1,
-              images: 1,
-            },
-            lean: true,
-          })).items.map((product) => ({
-            _id: String(product._id || product.id),
-            id: String(product._id || product.id),
-            title: product.title,
-            sku: product.sku || "",
-            sellerId: product.sellerId || "",
-            organizationId: product.organizationId || "",
-            status: product.status,
-            brand: product.brand || "",
-            category: product.category || "",
-            categoryId: product.categoryId || "",
-            image: product.images?.[0] || null,
-          })))
+        ? await this.decorateProductMasterReferences(
+            (
+              await this.productRepository.paginate(
+                relatedProductFilter,
+                {
+                  page: 1,
+                  limit: productLimit,
+                  skip: 0,
+                  sortBy: "newest",
+                },
+                {
+                  projection: {
+                    title: 1,
+                    sku: 1,
+                    sellerId: 1,
+                    organizationId: 1,
+                    status: 1,
+                    brand: 1,
+                    category: 1,
+                    categoryId: 1,
+                    images: 1,
+                  },
+                  lean: true,
+                },
+              )
+            ).items.map((product) => ({
+              _id: String(product._id || product.id),
+              id: String(product._id || product.id),
+              title: product.title,
+              sku: product.sku || "",
+              sellerId: product.sellerId || "",
+              organizationId: product.organizationId || "",
+              status: product.status,
+              brand: product.brand || "",
+              category: product.category || "",
+              categoryId: product.categoryId || "",
+              image: product.images?.[0] || null,
+            })),
+          )
         : [];
 
-      const optionValuesByOptionId = (catalog.optionValues || []).reduce((acc, item) => {
-        const optionId = String(item.optionId || item.option_id || "");
-        if (!optionId) return acc;
-        if (!acc[optionId]) acc[optionId] = [];
-        acc[optionId].push(item);
-        return acc;
-      }, {});
+      const optionValuesByOptionId = (catalog.optionValues || []).reduce(
+        (acc, item) => {
+          const optionId = String(item.optionId || item.option_id || "");
+          if (!optionId) return acc;
+          if (!acc[optionId]) acc[optionId] = [];
+          acc[optionId].push(item);
+          return acc;
+        },
+        {},
+      );
 
       const categoryTree = this.platformService.buildCategoryTree(
         (catalog.categories || []).map((category) =>
-          category?.toObject ? category.toObject({ depopulate: true, flattenMaps: true }) : category,
+          category?.toObject
+            ? category.toObject({ depopulate: true, flattenMaps: true })
+            : category,
         ),
       );
 
@@ -1026,8 +1284,12 @@ class ProductService {
 
       return {
         categories: catalog.categories || [],
-        subCategories: (catalog.categories || []).filter((category) => Number(category.level || 0) === 1),
-        childCategories: (catalog.categories || []).filter((category) => Number(category.level || 0) >= 2),
+        subCategories: (catalog.categories || []).filter(
+          (category) => Number(category.level || 0) === 1,
+        ),
+        childCategories: (catalog.categories || []).filter(
+          (category) => Number(category.level || 0) >= 2,
+        ),
         categoryTree,
         categoryAttributes: catalog.categoryAttributes || [],
         attributes: catalog.categoryAttributes || [],
@@ -1061,7 +1323,9 @@ class ProductService {
           name:
             seller.sellerProfile?.displayName ||
             seller.sellerProfile?.legalBusinessName ||
-            [seller.profile?.firstName, seller.profile?.lastName].filter(Boolean).join(" ") ||
+            [seller.profile?.firstName, seller.profile?.lastName]
+              .filter(Boolean)
+              .join(" ") ||
             seller.email,
         })),
         shippingClasses,
@@ -1087,35 +1351,51 @@ class ProductService {
   }
 
   async getProductPrefillBasic(query = {}, actor = {}) {
-    const includeInactive = query.includeInactive === true || query.includeInactive === "true";
-    const includeOptionValues = query.includeOptionValues !== false && query.includeOptionValues !== "false";
+    const includeInactive =
+      query.includeInactive === true || query.includeInactive === "true";
+    const includeOptionValues =
+      query.includeOptionValues !== false &&
+      query.includeOptionValues !== "false";
     const includeCategoryAttributes =
-      query.includeCategoryAttributes !== false && query.includeCategoryAttributes !== "false";
+      query.includeCategoryAttributes !== false &&
+      query.includeCategoryAttributes !== "false";
     const cacheKey = `products:prefill:basic:v2:${JSON.stringify({ includeInactive, includeOptionValues, includeCategoryAttributes, actorRole: actor.role || "public", sellerId: actor.ownerSellerId || actor.userId || null })}`;
     return remember(cacheKey, 300, async () => {
-      const catalog = await this.platformService.getCatalogPrefillData({
-        includeInactive,
-        includeOptionValues,
-        includeCategoryAttributes,
-      }, actor);
-      const optionValuesByOptionId = (catalog.optionValues || []).reduce((acc, item) => {
-        const optionId = String(item.optionId || item.option_id || "");
-        if (!optionId) return acc;
-        if (!acc[optionId]) acc[optionId] = [];
-        acc[optionId].push(item);
-        return acc;
-      }, {});
+      const catalog = await this.platformService.getCatalogPrefillData(
+        {
+          includeInactive,
+          includeOptionValues,
+          includeCategoryAttributes,
+        },
+        actor,
+      );
+      const optionValuesByOptionId = (catalog.optionValues || []).reduce(
+        (acc, item) => {
+          const optionId = String(item.optionId || item.option_id || "");
+          if (!optionId) return acc;
+          if (!acc[optionId]) acc[optionId] = [];
+          acc[optionId].push(item);
+          return acc;
+        },
+        {},
+      );
 
       const categoryTree = this.platformService.buildCategoryTree(
         (catalog.categories || []).map((category) =>
-          category?.toObject ? category.toObject({ depopulate: true, flattenMaps: true }) : category,
+          category?.toObject
+            ? category.toObject({ depopulate: true, flattenMaps: true })
+            : category,
         ),
       );
 
       return {
         categories: catalog.categories || [],
-        subCategories: (catalog.categories || []).filter((category) => Number(category.level || 0) === 1),
-        childCategories: (catalog.categories || []).filter((category) => Number(category.level || 0) >= 2),
+        subCategories: (catalog.categories || []).filter(
+          (category) => Number(category.level || 0) === 1,
+        ),
+        childCategories: (catalog.categories || []).filter(
+          (category) => Number(category.level || 0) >= 2,
+        ),
         categoryTree,
         categoryAttributes: catalog.categoryAttributes || [],
         attributes: catalog.categoryAttributes || [],
@@ -1136,42 +1416,67 @@ class ProductService {
           taxRules: catalog.taxRules || [],
         },
         taxClasses: catalog.taxes || [],
-        meta: { cached: true, generatedAt: new Date().toISOString(), includeInactive },
+        meta: {
+          cached: true,
+          generatedAt: new Date().toISOString(),
+          includeInactive,
+        },
       };
     });
   }
 
   async getProductPrefillLookups(query = {}, actor = {}) {
-    const includeInactive = query.includeInactive === true || query.includeInactive === "true";
-    const sellerId = isSellerRole(actor) ? actor.ownerSellerId || actor.userId : query.sellerId || null;
+    const includeInactive =
+      query.includeInactive === true || query.includeInactive === "true";
+    const sellerId = isSellerRole(actor)
+      ? actor.ownerSellerId || actor.userId
+      : query.sellerId || null;
     const cacheKey = `products:prefill:lookups:${JSON.stringify({ includeInactive, sellerId })}`;
     return remember(cacheKey, 300, async () => {
       const activeFilter = includeInactive ? {} : { active: true };
       const rawActiveFilter = includeInactive
         ? {}
-        : { $or: [{ active: true }, { isActive: true }, { active: { $exists: false }, isActive: { $exists: false } }] };
+        : {
+            $or: [
+              { active: true },
+              { isActive: true },
+              { active: { $exists: false }, isActive: { $exists: false } },
+            ],
+          };
 
-      const [collections, tags, organizationsResult, sellers] = await Promise.all([
-        this.listRawMasterCollection("collections", rawActiveFilter, { sort: { sortOrder: 1, name: 1 } }),
-        this.listRawMasterCollection("tags", activeFilter, { sort: { group: 1, name: 1 }, limit: 1000 }),
-        sellerId
-          ? sellerOrganizationService.organizationRepository.listBySeller(sellerId)
-          : sellerOrganizationService.organizationRepository.list({ limit: 500 }),
-        UserModel.find({
-          role: { $in: ["seller"] },
-          ...(sellerId ? { _id: sellerId } : {}),
-          ...(includeInactive ? {} : { accountStatus: "active" }),
-        })
-          .select("email phone profile sellerProfile accountStatus role")
-          .sort({ "sellerProfile.displayName": 1, email: 1 })
-          .limit(500)
-          .lean(),
-      ]);
+      const [collections, tags, organizationsResult, sellers] =
+        await Promise.all([
+          this.listRawMasterCollection("collections", rawActiveFilter, {
+            sort: { sortOrder: 1, name: 1 },
+          }),
+          this.listRawMasterCollection("tags", activeFilter, {
+            sort: { group: 1, name: 1 },
+            limit: 1000,
+          }),
+          sellerId
+            ? sellerOrganizationService.organizationRepository.listBySeller(
+                sellerId,
+              )
+            : sellerOrganizationService.organizationRepository.list({
+                limit: 500,
+              }),
+          UserModel.find({
+            role: { $in: ["seller"] },
+            ...(sellerId ? { _id: sellerId } : {}),
+            ...(includeInactive ? {} : { accountStatus: "active" }),
+          })
+            .select("email phone profile sellerProfile accountStatus role")
+            .sort({ "sellerProfile.displayName": 1, email: 1 })
+            .limit(500)
+            .lean(),
+        ]);
 
       return {
         collections,
         tags,
-        organizations: Array.isArray(organizationsResult) ? organizationsResult : organizationsResult.items || [],
+        organizations: Array.isArray(organizationsResult)
+          ? organizationsResult
+          : organizationsResult.items || [],
         sellers: sellers.map((seller) => ({
           ...seller,
           _id: String(seller._id || seller.id),
@@ -1179,7 +1484,9 @@ class ProductService {
           name:
             seller.sellerProfile?.displayName ||
             seller.sellerProfile?.legalBusinessName ||
-            [seller.profile?.firstName, seller.profile?.lastName].filter(Boolean).join(" ") ||
+            [seller.profile?.firstName, seller.profile?.lastName]
+              .filter(Boolean)
+              .join(" ") ||
             seller.email,
         })),
         shippingClasses: [
@@ -1195,25 +1502,44 @@ class ProductService {
           { value: "replacement_only", label: "Replacement only", days: 7 },
           { value: "non_returnable", label: "Non-returnable", days: 0 },
         ],
-        meta: { cached: true, generatedAt: new Date().toISOString(), includeInactive },
+        meta: {
+          cached: true,
+          generatedAt: new Date().toISOString(),
+          includeInactive,
+        },
       };
     });
   }
 
   async getProductPrefillLocations(query = {}, actor = {}) {
-    const includeInactive = query.includeInactive === true || query.includeInactive === "true";
-    const includeStates = query.includeStates !== false && query.includeStates !== "false";
-    const includeCities = query.includeCities !== false && query.includeCities !== "false";
+    const includeInactive =
+      query.includeInactive === true || query.includeInactive === "true";
+    const includeStates =
+      query.includeStates !== false && query.includeStates !== "false";
+    const includeCities =
+      query.includeCities !== false && query.includeCities !== "false";
     const cacheKey = `products:prefill:locations:${JSON.stringify({ includeInactive, includeStates, includeCities })}`;
     return remember(cacheKey, 300, async () => {
       const [warehouses, countries, states, cities] = await Promise.all([
-        WarehouseModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(500).lean(),
-        AdminCountryModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(500).lean(),
+        WarehouseModel.find(includeInactive ? {} : { active: true })
+          .sort({ name: 1 })
+          .limit(500)
+          .lean(),
+        AdminCountryModel.find(includeInactive ? {} : { active: true })
+          .sort({ name: 1 })
+          .limit(500)
+          .lean(),
         includeStates
-          ? AdminStateModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(2000).lean()
+          ? AdminStateModel.find(includeInactive ? {} : { active: true })
+              .sort({ name: 1 })
+              .limit(2000)
+              .lean()
           : Promise.resolve([]),
         includeCities
-          ? AdminCityModel.find(includeInactive ? {} : { active: true }).sort({ name: 1 }).limit(5000).lean()
+          ? AdminCityModel.find(includeInactive ? {} : { active: true })
+              .sort({ name: 1 })
+              .limit(5000)
+              .lean()
           : Promise.resolve([]),
       ]);
 
@@ -1222,14 +1548,22 @@ class ProductService {
         countries,
         states,
         cities,
-        meta: { cached: true, generatedAt: new Date().toISOString(), includeInactive },
+        meta: {
+          cached: true,
+          generatedAt: new Date().toISOString(),
+          includeInactive,
+        },
       };
     });
   }
 
   async getProductPrefillProducts(query = {}, actor = {}) {
-    const includeInactive = query.includeInactive === true || query.includeInactive === "true";
-    const productLimit = Math.min(200, Math.max(1, Number(query.productLimit || query.limit || 100)));
+    const includeInactive =
+      query.includeInactive === true || query.includeInactive === "true";
+    const productLimit = Math.min(
+      200,
+      Math.max(1, Number(query.productLimit || query.limit || 100)),
+    );
     const sellerId = isSellerRole(actor)
       ? actor.ownerSellerId || actor.userId
       : query.sellerId || null;
@@ -1238,56 +1572,86 @@ class ProductService {
     return remember(cacheKey, 300, async () => {
       const relatedProductFilter = {
         ...(sellerId ? { sellerId } : {}),
-        ...(query.organizationId ? { organizationId: query.organizationId } : {}),
+        ...(query.organizationId
+          ? { organizationId: query.organizationId }
+          : {}),
         ...(includeInactive
           ? {}
-          : { status: { $in: [PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.INACTIVE, PRODUCT_STATUS.DRAFT, PRODUCT_STATUS.PENDING_APPROVAL] } }),
+          : {
+              status: {
+                $in: [
+                  PRODUCT_STATUS.ACTIVE,
+                  PRODUCT_STATUS.INACTIVE,
+                  PRODUCT_STATUS.DRAFT,
+                  PRODUCT_STATUS.PENDING_APPROVAL,
+                ],
+              },
+            }),
       };
 
-      const relatedProducts = await this.decorateProductMasterReferences((await this.productRepository.paginate(relatedProductFilter, {
-        page: 1,
-        limit: productLimit,
-        skip: 0,
-        sortBy: "newest",
-      }, {
-        projection: {
-          title: 1,
-          sku: 1,
-          sellerId: 1,
-          organizationId: 1,
-          status: 1,
-          brand: 1,
-          category: 1,
-          categoryId: 1,
-          images: 1,
-        },
-        lean: true,
-      })).items.map((product) => ({
-        _id: String(product._id || product.id),
-        id: String(product._id || product.id),
-        title: product.title,
-        sku: product.sku || "",
-        sellerId: product.sellerId || "",
-        organizationId: product.organizationId || "",
-        status: product.status,
-        brand: product.brand || "",
-        category: product.category || "",
-        categoryId: product.categoryId || "",
-        image: product.images?.[0] || null,
-      })));
+      const relatedProducts = await this.decorateProductMasterReferences(
+        (
+          await this.productRepository.paginate(
+            relatedProductFilter,
+            {
+              page: 1,
+              limit: productLimit,
+              skip: 0,
+              sortBy: "newest",
+            },
+            {
+              projection: {
+                title: 1,
+                sku: 1,
+                sellerId: 1,
+                organizationId: 1,
+                status: 1,
+                brand: 1,
+                category: 1,
+                categoryId: 1,
+                images: 1,
+              },
+              lean: true,
+            },
+          )
+        ).items.map((product) => ({
+          _id: String(product._id || product.id),
+          id: String(product._id || product.id),
+          title: product.title,
+          sku: product.sku || "",
+          sellerId: product.sellerId || "",
+          organizationId: product.organizationId || "",
+          status: product.status,
+          brand: product.brand || "",
+          category: product.category || "",
+          categoryId: product.categoryId || "",
+          image: product.images?.[0] || null,
+        })),
+      );
 
       return {
         relatedProducts,
-        meta: { cached: true, generatedAt: new Date().toISOString(), includeInactive, includeProducts: true },
+        meta: {
+          cached: true,
+          generatedAt: new Date().toISOString(),
+          includeInactive,
+          includeProducts: true,
+        },
       };
     });
   }
 
-  async validateProductReferences(payload = {}, actor = {}, existingProduct = null) {
+  async validateProductReferences(
+    payload = {},
+    actor = {},
+    existingProduct = null,
+  ) {
     const brand = payload.brand;
     if (brand) {
       const brandRecord = await this.platformRepository.getBrandByValue(brand);
-      const sellerId = String(actor.ownerSellerId || actor.userId || actor.sub || "");
+      const sellerId = String(
+        actor.ownerSellerId || actor.userId || actor.sub || "",
+      );
       const isOwnPendingBrand =
         isSellerRole(actor) &&
         brandRecord?.approvalStatus === "pending" &&
@@ -1299,14 +1663,22 @@ class ProductService {
         (!isOwnPendingBrand && brandRecord.active === false) ||
         (!isOwnPendingBrand && brandRecord.approvalStatus === "pending")
       ) {
-        throw new AppError("Brand must be an active approved master record", 400);
+        throw new AppError(
+          "Brand must be an active approved master record",
+          400,
+        );
       }
     }
 
     if (payload.productFamilyCode) {
-      const family = await this.platformRepository.getProductFamily(payload.productFamilyCode);
+      const family = await this.platformRepository.getProductFamily(
+        payload.productFamilyCode,
+      );
       if (!family || family.status === "inactive" || family.active === false) {
-        throw new AppError("Product family must be an active master record", 400);
+        throw new AppError(
+          "Product family must be an active master record",
+          400,
+        );
       }
     }
 
@@ -1317,26 +1689,41 @@ class ProductService {
   }
 
   async validateShippingProfileReference(payload = {}, existingProduct = null) {
-    const hasShippingPayload = Object.prototype.hasOwnProperty.call(payload, "shipping");
-    const hasProfileField = hasShippingPayload && Object.prototype.hasOwnProperty.call(
-      payload.shipping || {},
-      "shippingProfileId",
+    const hasShippingPayload = Object.prototype.hasOwnProperty.call(
+      payload,
+      "shipping",
     );
+    const hasProfileField =
+      hasShippingPayload &&
+      Object.prototype.hasOwnProperty.call(
+        payload.shipping || {},
+        "shippingProfileId",
+      );
     const profileId = hasProfileField
       ? payload.shipping?.shippingProfileId
       : existingProduct?.shipping?.shippingProfileId;
     if (!profileId) {
       if (hasShippingPayload) {
-        const shipping = { ...(existingProduct?.shipping || {}), ...(payload.shipping || {}) };
-        const pincodes = Array.from(new Set(
-          (shipping.allowPincodes || shipping.serviceablePincodes || [])
-            .map((value) => String(value || "").trim())
-            .filter(Boolean),
-        ));
+        const shipping = {
+          ...(existingProduct?.shipping || {}),
+          ...(payload.shipping || {}),
+        };
+        const pincodes = Array.from(
+          new Set(
+            (shipping.allowPincodes || shipping.serviceablePincodes || [])
+              .map((value) => String(value || "").trim())
+              .filter(Boolean),
+          ),
+        );
         if (pincodes.some((pincode) => !/^\d{6}$/.test(pincode))) {
-          throw new AppError("Every allowed delivery pincode must be a valid 6-digit pincode", 400);
+          throw new AppError(
+            "Every allowed delivery pincode must be a valid 6-digit pincode",
+            400,
+          );
         }
-        payload.shipping.serviceabilityMode = pincodes.length ? "allowlist" : "all_pincodes";
+        payload.shipping.serviceabilityMode = pincodes.length
+          ? "allowlist"
+          : "all_pincodes";
         payload.shipping.allowPincodes = pincodes;
         payload.shipping.serviceablePincodes = pincodes;
         payload.shipping.regions = [];
@@ -1347,15 +1734,20 @@ class ProductService {
     }
 
     const sellerId = payload.sellerId || existingProduct?.sellerId;
-    const organizationId = payload.organizationId || existingProduct?.organizationId || null;
+    const organizationId =
+      payload.organizationId || existingProduct?.organizationId || null;
     const profile = await this.shippingProfilesService.getById(profileId);
-    if (!profile) throw new AppError("Selected shipping profile was not found", 400);
+    if (!profile)
+      throw new AppError("Selected shipping profile was not found", 400);
     this.shippingProfilesService.assertProfileBelongsToSeller(profile, {
       sellerId,
       organizationId,
     });
     if (profile.active === false) {
-      throw new AppError("Inactive shipping profiles cannot be assigned to products", 400);
+      throw new AppError(
+        "Inactive shipping profiles cannot be assigned to products",
+        400,
+      );
     }
 
     // A selected profile is the only delivery-rule source. Keep product-level
@@ -1371,10 +1763,14 @@ class ProductService {
   }
 
   async validateProductOptionReferences(options = [], actor = {}) {
-    const sellerId = String(actor.ownerSellerId || actor.userId || actor.sub || "");
+    const sellerId = String(
+      actor.ownerSellerId || actor.userId || actor.sub || "",
+    );
     for (const option of options || []) {
       if (!option?.platformOptionId) continue;
-      const masterOption = await this.platformRepository.getProductOption(option.platformOptionId);
+      const masterOption = await this.platformRepository.getProductOption(
+        option.platformOptionId,
+      );
       const isOwnPendingOption =
         isSellerRole(actor) &&
         masterOption?.approvalStatus === "pending" &&
@@ -1385,24 +1781,38 @@ class ProductService {
         (!isOwnPendingOption && masterOption.active === false) ||
         (!isOwnPendingOption && masterOption.approvalStatus === "pending")
       ) {
-        throw new AppError(`Product option '${option.name || option.platformOptionId}' is not active`, 400);
+        throw new AppError(
+          `Product option '${option.name || option.platformOptionId}' is not active`,
+          400,
+        );
       }
 
-      const allowedValues = await this.platformRepository.listAllProductOptionValues({
-        optionId: String(masterOption._id),
-        ...(isOwnPendingOption
-          ? { approvalStatus: "pending", submittedBySellerId: sellerId }
-          : { active: true, approvalStatus: { $in: ["approved", null, ""] } }),
-      });
+      const allowedValues =
+        await this.platformRepository.listAllProductOptionValues({
+          optionId: String(masterOption._id),
+          ...(isOwnPendingOption
+            ? { approvalStatus: "pending", submittedBySellerId: sellerId }
+            : {
+                active: true,
+                approvalStatus: { $in: ["approved", null, ""] },
+              }),
+        });
       const allowedNames = new Set(
-        allowedValues.flatMap((item) => [
-          String(item.name || ""),
-          String(item.valueCode || ""),
-        ]).filter(Boolean),
+        allowedValues
+          .flatMap((item) => [
+            String(item.name || ""),
+            String(item.valueCode || ""),
+          ])
+          .filter(Boolean),
       );
-      const badValue = (option.values || []).find((value) => allowedNames.size && !allowedNames.has(String(value)));
+      const badValue = (option.values || []).find(
+        (value) => allowedNames.size && !allowedNames.has(String(value)),
+      );
       if (badValue !== undefined) {
-        throw new AppError(`Product option '${masterOption.name}' has invalid value '${badValue}'`, 400);
+        throw new AppError(
+          `Product option '${masterOption.name}' has invalid value '${badValue}'`,
+          400,
+        );
       }
     }
   }
@@ -1418,10 +1828,20 @@ class ProductService {
       "trendingProducts",
       "bestSellerProducts",
     ];
-    const ids = Array.from(new Set([
-      ...relationFields.flatMap((field) => Array.isArray(payload[field]) ? payload[field] : []),
-      ...(Array.isArray(payload.bundleItems) ? payload.bundleItems.map((item) => item.productId) : []),
-    ].map((id) => String(id || "").trim()).filter(Boolean)));
+    const ids = Array.from(
+      new Set(
+        [
+          ...relationFields.flatMap((field) =>
+            Array.isArray(payload[field]) ? payload[field] : [],
+          ),
+          ...(Array.isArray(payload.bundleItems)
+            ? payload.bundleItems.map((item) => item.productId)
+            : []),
+        ]
+          .map((id) => String(id || "").trim())
+          .filter(Boolean),
+      ),
+    );
 
     if (!ids.length) return;
     if (productId && ids.includes(productId)) {
@@ -1429,7 +1849,9 @@ class ProductService {
     }
 
     const found = await this.productRepository.findByIds(ids);
-    const foundIds = new Set(found.map((product) => String(product._id || product.id)));
+    const foundIds = new Set(
+      found.map((product) => String(product._id || product.id)),
+    );
     const missing = ids.find((id) => !foundIds.has(id));
     if (missing) {
       throw new AppError(`Referenced product not found: ${missing}`, 400);
@@ -1437,27 +1859,40 @@ class ProductService {
   }
 
   async validateCollectionReferences(collectionIds = []) {
-    const ids = Array.from(new Set(
-      (Array.isArray(collectionIds) ? collectionIds : [])
-        .map((id) => String(id || "").trim())
-        .filter(Boolean),
-    ));
+    const ids = Array.from(
+      new Set(
+        (Array.isArray(collectionIds) ? collectionIds : [])
+          .map((id) => String(id || "").trim())
+          .filter(Boolean),
+      ),
+    );
     if (!ids.length) return;
 
     const collection = mongoose.connection.collection("collections");
-    const found = await collection.find({
-      $or: [
-        { _id: { $in: ids.filter((id) => mongoose.Types.ObjectId.isValid(id)).map((id) => new mongoose.Types.ObjectId(id)) } },
-        { slug: { $in: ids } },
-        { name: { $in: ids } },
-      ],
-    }).project({ _id: 1, slug: 1, name: 1 }).toArray();
+    const found = await collection
+      .find({
+        $or: [
+          {
+            _id: {
+              $in: ids
+                .filter((id) => mongoose.Types.ObjectId.isValid(id))
+                .map((id) => new mongoose.Types.ObjectId(id)),
+            },
+          },
+          { slug: { $in: ids } },
+          { name: { $in: ids } },
+        ],
+      })
+      .project({ _id: 1, slug: 1, name: 1 })
+      .toArray();
     const foundIds = new Set(
-      found.flatMap((item) => [
-        String(item._id || ""),
-        String(item.slug || ""),
-        String(item.name || ""),
-      ]).filter(Boolean),
+      found
+        .flatMap((item) => [
+          String(item._id || ""),
+          String(item.slug || ""),
+          String(item.name || ""),
+        ])
+        .filter(Boolean),
     );
     const missing = ids.find((id) => !foundIds.has(id));
     if (missing) {
@@ -1469,8 +1904,14 @@ class ProductService {
 
   _validateProductType(productType, payload) {
     if (productType === PRODUCT_TYPE.BUNDLE) {
-      if (!Array.isArray(payload.bundleItems) || payload.bundleItems.length === 0) {
-        throw new AppError("Bundle products require at least one bundle item", 400);
+      if (
+        !Array.isArray(payload.bundleItems) ||
+        payload.bundleItems.length === 0
+      ) {
+        throw new AppError(
+          "Bundle products require at least one bundle item",
+          400,
+        );
       }
     }
     if (productType === PRODUCT_TYPE.DIGITAL) {
@@ -1479,13 +1920,24 @@ class ProductService {
       }
     }
     if (productType === PRODUCT_TYPE.SUBSCRIPTION) {
-      if (!payload.subscription?.recurringPrice && payload.subscription?.recurringPrice !== 0) {
-        throw new AppError("Subscription products require a recurring price", 400);
+      if (
+        !payload.subscription?.recurringPrice &&
+        payload.subscription?.recurringPrice !== 0
+      ) {
+        throw new AppError(
+          "Subscription products require a recurring price",
+          400,
+        );
       }
     }
   }
 
-  async resolveProductOrganization(payload = {}, actor = {}, sellerId, existingProduct = null) {
+  async resolveProductOrganization(
+    payload = {},
+    actor = {},
+    sellerId,
+    existingProduct = null,
+  ) {
     const requestedOrganizationId =
       payload.organizationId ||
       payload.organization_id ||
@@ -1499,28 +1951,38 @@ class ProductService {
     }
 
     const requireApproved = isSellerRole(actor);
-    const organization = await sellerOrganizationService.assertOrganizationForSeller(
-      sellerId,
-      requestedOrganizationId,
-      { requireApproved },
-    );
+    const organization =
+      await sellerOrganizationService.assertOrganizationForSeller(
+        sellerId,
+        requestedOrganizationId,
+        { requireApproved },
+      );
 
     return {
       organizationId: organization.id,
-      organizationSnapshot: sellerOrganizationService.buildSnapshot(organization),
+      organizationSnapshot:
+        sellerOrganizationService.buildSnapshot(organization),
     };
   }
 
   assertOrganizationChangeAllowed(existingProduct, payload = {}, actor = {}) {
-    if (!Object.prototype.hasOwnProperty.call(payload, "organizationId")) return;
+    if (!Object.prototype.hasOwnProperty.call(payload, "organizationId"))
+      return;
     const current = String(existingProduct.organizationId || "");
     const next = String(payload.organizationId || "");
     if (current && next && current !== next) {
-      throw new AppError("Product organization cannot be changed after creation", 409);
+      throw new AppError(
+        "Product organization cannot be changed after creation",
+        409,
+      );
     }
   }
 
-  resolveSellerForOrganizationAssignment(existingProduct, payload = {}, actor = {}) {
+  resolveSellerForOrganizationAssignment(
+    existingProduct,
+    payload = {},
+    actor = {},
+  ) {
     const currentSellerId = String(existingProduct.sellerId || "");
     const requestedSellerId = String(payload.sellerId || "");
 
@@ -1540,16 +2002,27 @@ class ProductService {
 
     const currentSellerId = String(existingProduct.sellerId || "");
     const requestedSellerId = String(payload.sellerId || "");
-    if (!requestedSellerId || !currentSellerId || requestedSellerId === currentSellerId) return;
+    if (
+      !requestedSellerId ||
+      !currentSellerId ||
+      requestedSellerId === currentSellerId
+    )
+      return;
 
     if (isSellerRole(actor)) {
       throw new AppError("Product seller cannot be changed", 403);
     }
     if (existingProduct.organizationId) {
-      throw new AppError("Product seller cannot be changed after organization assignment", 409);
+      throw new AppError(
+        "Product seller cannot be changed after organization assignment",
+        409,
+      );
     }
     if (!payload.organizationId) {
-      throw new AppError("organizationId is required when assigning a product to another seller", 400);
+      throw new AppError(
+        "organizationId is required when assigning a product to another seller",
+        400,
+      );
     }
   }
 
@@ -1560,7 +2033,11 @@ class ProductService {
     const sellerId = isSeller
       ? actor.ownerSellerId || actor.userId
       : payload.sellerId || actor.userId;
-    const organizationContext = await this.resolveProductOrganization(payload, actor, sellerId);
+    const organizationContext = await this.resolveProductOrganization(
+      payload,
+      actor,
+      sellerId,
+    );
 
     payload = this.normalizeProductMedia(payload);
     payload = this.normalizeProductVariants(payload);
@@ -1583,9 +2060,10 @@ class ProductService {
       returnPolicy: this.normalizeReturnPolicy(payload.warranty?.returnPolicy),
     };
     payload = await this.normalizeProductCompliance(payload, actor);
-    const productType = (payload.hasVariants === true || (payload.variants || []).length > 0)
-      ? PRODUCT_TYPE.VARIABLE
-      : payload.productType || PRODUCT_TYPE.SIMPLE;
+    const productType =
+      payload.hasVariants === true || (payload.variants || []).length > 0
+        ? PRODUCT_TYPE.VARIABLE
+        : payload.productType || PRODUCT_TYPE.SIMPLE;
 
     const categoryKey = payload.categoryId || payload.category;
     const category = await this.platformRepository.getCategory(categoryKey);
@@ -1600,11 +2078,13 @@ class ProductService {
     await this.validateProductReferences(payload, actor);
     this._validateProductType(productType, payload);
 
-    const status = payload.status === PRODUCT_STATUS.ACTIVE
-      ? PRODUCT_STATUS.ACTIVE
-      : PRODUCT_STATUS.DRAFT;
+    const status =
+      payload.status === PRODUCT_STATUS.ACTIVE
+        ? PRODUCT_STATUS.ACTIVE
+        : PRODUCT_STATUS.DRAFT;
 
-    const hasVariants = payload.hasVariants === true || (payload.variants || []).length > 0;
+    const hasVariants =
+      payload.hasVariants === true || (payload.variants || []).length > 0;
 
     const product = await this.productRepository.create({
       ...payload,
@@ -1618,12 +2098,16 @@ class ProductService {
       storeId: payload.storeId || null,
       warehouseId: payload.warehouseId || null,
       hasVariants,
-      slug: slugify(`${payload.title}-${Date.now()}`, { lower: true, strict: true }),
+      slug: slugify(`${payload.title}-${Date.now()}`, {
+        lower: true,
+        strict: true,
+      }),
       moderation: {
         submittedAt: status === PRODUCT_STATUS.ACTIVE ? new Date() : null,
-        notes: status === PRODUCT_STATUS.DRAFT
-          ? "Product details are saved as draft."
-          : "Product submitted for approval.",
+        notes:
+          status === PRODUCT_STATUS.DRAFT
+            ? "Product details are saved as draft."
+            : "Product submitted for approval.",
         checklist: {
           titleVerified: false,
           categoryVerified: false,
@@ -1675,21 +2159,37 @@ class ProductService {
     ) {
       throw new AppError("Permission denied", 403);
     }
-    if (isScopedSellerRole(actor) && String(existingProduct.createdBy || "") !== String(actor.userId || "")) {
+    if (
+      isScopedSellerRole(actor) &&
+      String(existingProduct.createdBy || "") !== String(actor.userId || "")
+    ) {
       throw new AppError("Permission denied", 403);
     }
     if (
       isSellerRole(actor) &&
       actor.organizationId &&
-      String(existingProduct.organizationId || "") !== String(actor.organizationId)
+      String(existingProduct.organizationId || "") !==
+        String(actor.organizationId)
     ) {
-      throw new AppError("Product does not belong to the selected organization", 403);
+      throw new AppError(
+        "Product does not belong to the selected organization",
+        403,
+      );
     }
     this.assertOrganizationChangeAllowed(existingProduct, payload, actor);
     this.assertSellerChangeAllowed(existingProduct, payload, actor);
     if (!existingProduct.organizationId && payload.organizationId) {
-      const sellerId = this.resolveSellerForOrganizationAssignment(existingProduct, payload, actor);
-      const organizationContext = await this.resolveProductOrganization(payload, actor, sellerId, existingProduct);
+      const sellerId = this.resolveSellerForOrganizationAssignment(
+        existingProduct,
+        payload,
+        actor,
+      );
+      const organizationContext = await this.resolveProductOrganization(
+        payload,
+        actor,
+        sellerId,
+        existingProduct,
+      );
       payload.sellerId = sellerId;
       payload.organizationId = organizationContext.organizationId;
       payload.organizationSnapshot = organizationContext.organizationSnapshot;
@@ -1706,7 +2206,9 @@ class ProductService {
       payload.warranty = {
         ...(payload.warranty || existingProduct.warranty || {}),
         returnPolicy: {
-          ...(payload.warranty?.returnPolicy || existingProduct.warranty?.returnPolicy || {}),
+          ...(payload.warranty?.returnPolicy ||
+            existingProduct.warranty?.returnPolicy ||
+            {}),
           shippingPaidBy: "seller",
         },
       };
@@ -1718,29 +2220,54 @@ class ProductService {
         existingProduct.warranty?.returnPolicy,
       ),
     };
-    payload = await this.normalizeProductCompliance(payload, actor, existingProduct);
+    payload = await this.normalizeProductCompliance(
+      payload,
+      actor,
+      existingProduct,
+    );
     await this.validateProductReferences(payload, actor, existingProduct);
 
     const categoryKey =
-      payload.categoryId || payload.category || existingProduct.categoryId || existingProduct.category;
+      payload.categoryId ||
+      payload.category ||
+      existingProduct.categoryId ||
+      existingProduct.category;
     const category = await this.platformRepository.getCategory(categoryKey);
     if (!category) throw new AppError("Category not found", 400);
 
-    const nextAttributes = payload.attributes || existingProduct.attributes || {};
-    this.validateDynamicAttributes(this.normalizeCategoryAttributes(category), nextAttributes);
+    const nextAttributes =
+      payload.attributes || existingProduct.attributes || {};
+    this.validateDynamicAttributes(
+      this.normalizeCategoryAttributes(category),
+      nextAttributes,
+    );
     const nextOptions = payload.options || existingProduct.options || [];
-    this.validateVariants(payload.variants || existingProduct.variants || [], nextOptions);
+    this.validateVariants(
+      payload.variants || existingProduct.variants || [],
+      nextOptions,
+    );
     this.validatePricing(payload, existingProduct);
     await this.validateProductReferences(
-      { ...this.toPlainObject(existingProduct), ...payload, options: nextOptions },
+      {
+        ...this.toPlainObject(existingProduct),
+        ...payload,
+        options: nextOptions,
+      },
       actor,
       existingProduct,
     );
 
-    const productType = (payload.hasVariants === true || (payload.variants || existingProduct.variants || []).length > 0)
-      ? PRODUCT_TYPE.VARIABLE
-      : payload.productType || existingProduct.productType || PRODUCT_TYPE.SIMPLE;
-    this._validateProductType(productType, { ...existingProduct.toObject(), ...payload });
+    const productType =
+      payload.hasVariants === true ||
+      (payload.variants || existingProduct.variants || []).length > 0
+        ? PRODUCT_TYPE.VARIABLE
+        : payload.productType ||
+          existingProduct.productType ||
+          PRODUCT_TYPE.SIMPLE;
+    this._validateProductType(productType, {
+      ...existingProduct.toObject(),
+      ...payload,
+    });
 
     const hasVariants =
       payload.hasVariants !== undefined
@@ -1778,8 +2305,10 @@ class ProductService {
       updatePayload.approvalStatus &&
       updatePayload.approvalStatus !== existingProduct.approvalStatus
     ) {
-      const isApproval = updatePayload.approvalStatus === PRODUCT_APPROVAL_STATUS.APPROVED;
-      const isRejection = updatePayload.approvalStatus === PRODUCT_APPROVAL_STATUS.REJECTED;
+      const isApproval =
+        updatePayload.approvalStatus === PRODUCT_APPROVAL_STATUS.APPROVED;
+      const isRejection =
+        updatePayload.approvalStatus === PRODUCT_APPROVAL_STATUS.REJECTED;
       this.assertCanReviewProductStatus(
         actor,
         isApproval
@@ -1802,7 +2331,9 @@ class ProductService {
       }
 
       updatePayload.moderation = {
-        ...(existingProduct.moderation?.toObject?.() || existingProduct.moderation || {}),
+        ...(existingProduct.moderation?.toObject?.() ||
+          existingProduct.moderation ||
+          {}),
         reviewedAt: new Date(),
         reviewedBy: actor.userId,
         rejectionReason: isRejection ? payload.rejectionReason || null : null,
@@ -1824,7 +2355,8 @@ class ProductService {
       updatePayload.rejectionReason = null;
       updatePayload["moderation.submittedAt"] = new Date();
       updatePayload["moderation.rejectionReason"] = null;
-      updatePayload["moderation.notes"] = "Product resubmitted for admin approval.";
+      updatePayload["moderation.notes"] =
+        "Product resubmitted for admin approval.";
     }
 
     // if (
@@ -1858,16 +2390,23 @@ class ProductService {
     //   }
     // }
 
-    if (updatePayload.status && updatePayload.status !== existingProduct.status) {
+    if (
+      updatePayload.status &&
+      updatePayload.status !== existingProduct.status
+    ) {
       updatePayload.statusHistory = this.appendStatusHistory(existingProduct, {
         fromStatus: existingProduct.status,
         toStatus: updatePayload.status,
         actor,
-        reason: payload.rejectionReason || payload.reason || "product_status_updated",
+        reason:
+          payload.rejectionReason || payload.reason || "product_status_updated",
       });
     }
 
-    const updatedProduct = await this.productRepository.update(productId, updatePayload);
+    const updatedProduct = await this.productRepository.update(
+      productId,
+      updatePayload,
+    );
 
     if (
       updatedProduct.status === PRODUCT_STATUS.ACTIVE &&
@@ -1909,7 +2448,10 @@ class ProductService {
     const existing = this.toPlainObject(existingProduct);
     return Object.keys(changes).filter((key) => {
       if (changes[key] === undefined) return false;
-      return JSON.stringify(existing[key] ?? null) !== JSON.stringify(changes[key] ?? null);
+      return (
+        JSON.stringify(existing[key] ?? null) !==
+        JSON.stringify(changes[key] ?? null)
+      );
     });
   }
 
@@ -1923,12 +2465,17 @@ class ProductService {
       return { ...product, pendingRevision: null };
     }
 
-    const pendingRevision = await this.productRepository.findPendingRevision(productId);
+    const pendingRevision =
+      await this.productRepository.findPendingRevision(productId);
     const revisionPayload = {
       productId,
       sellerId: existingProduct.sellerId,
-      organizationId: existingProduct.organizationId || draftChanges.organizationId || null,
-      organizationSnapshot: existingProduct.organizationSnapshot || draftChanges.organizationSnapshot || {},
+      organizationId:
+        existingProduct.organizationId || draftChanges.organizationId || null,
+      organizationSnapshot:
+        existingProduct.organizationSnapshot ||
+        draftChanges.organizationSnapshot ||
+        {},
       baseVersion: existingProduct.version || 1,
       draftChanges,
       changedFields,
@@ -1939,7 +2486,10 @@ class ProductService {
     };
 
     const revision = pendingRevision
-      ? await this.productRepository.updateRevision(pendingRevision._id, revisionPayload)
+      ? await this.productRepository.updateRevision(
+          pendingRevision._id,
+          revisionPayload,
+        )
       : await this.productRepository.createRevision(revisionPayload);
 
     const product = await this.productRepository.update(productId, {
@@ -1950,14 +2500,16 @@ class ProductService {
         fromStatus: existingProduct.status,
         toStatus: existingProduct.status,
         fromRevisionStatus:
-          existingProduct.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+          existingProduct.revisionStatus ||
+          PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
         toRevisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING,
         actor,
         reason: "seller_active_product_revision_submitted",
         changedFields,
         revisionId: revision._id,
       }),
-      "moderation.revisionCount": (existingProduct.moderation?.revisionCount || 0) + 1,
+      "moderation.revisionCount":
+        (existingProduct.moderation?.revisionCount || 0) + 1,
       "moderation.submittedAt": new Date(),
     });
 
@@ -2000,15 +2552,18 @@ class ProductService {
     }
 
     if (isRejection) {
-      const updatedRevision = await this.productRepository.updateRevision(revisionId, {
-        status: PRODUCT_REVISION_STATUS.REJECTED,
-        reviewedBy: actor.userId,
-        reviewedByRole: actor.role,
-        reviewedAt: new Date(),
-        rejectionReason: payload.rejectionReason,
-        notes: payload.notes || null,
-        checklist: payload.checklist || {},
-      });
+      const updatedRevision = await this.productRepository.updateRevision(
+        revisionId,
+        {
+          status: PRODUCT_REVISION_STATUS.REJECTED,
+          reviewedBy: actor.userId,
+          reviewedByRole: actor.role,
+          reviewedAt: new Date(),
+          rejectionReason: payload.rejectionReason,
+          notes: payload.notes || null,
+          checklist: payload.checklist || {},
+        },
+      );
       const updatedProduct = await this.productRepository.update(productId, {
         pendingRevisionId: null,
         revisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
@@ -2018,7 +2573,8 @@ class ProductService {
           fromStatus: product.status,
           toStatus: product.status,
           fromRevisionStatus:
-            product.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING,
+            product.revisionStatus ||
+            PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING,
           toRevisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
           actor,
           reason: payload.rejectionReason,
@@ -2053,7 +2609,8 @@ class ProductService {
         fromStatus: product.status,
         toStatus: PRODUCT_STATUS.ACTIVE,
         fromRevisionStatus:
-          product.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING,
+          product.revisionStatus ||
+          PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING,
         toRevisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
         actor,
         reason: "product_revision_approved",
@@ -2070,17 +2627,23 @@ class ProductService {
       },
     };
 
-    const updatedProduct = await this.productRepository.update(productId, updatePayload);
-    const updatedRevision = await this.productRepository.updateRevision(revisionId, {
-      status: PRODUCT_REVISION_STATUS.APPROVED,
-      reviewedBy: actor.userId,
-      reviewedByRole: actor.role,
-      reviewedAt: new Date(),
-      notes: payload.notes || null,
-      checklist: payload.checklist || {},
-      targetVersion: nextVersion,
-      publishedVersion: nextVersion,
-    });
+    const updatedProduct = await this.productRepository.update(
+      productId,
+      updatePayload,
+    );
+    const updatedRevision = await this.productRepository.updateRevision(
+      revisionId,
+      {
+        status: PRODUCT_REVISION_STATUS.APPROVED,
+        reviewedBy: actor.userId,
+        reviewedByRole: actor.role,
+        reviewedAt: new Date(),
+        notes: payload.notes || null,
+        checklist: payload.checklist || {},
+        targetVersion: nextVersion,
+        publishedVersion: nextVersion,
+      },
+    );
 
     this._indexProduct(updatedProduct);
     this._invalidateProductCache();
@@ -2103,35 +2666,61 @@ class ProductService {
       ...projected,
       // Product detail retains the product title; cards identify the selected variant.
       title: plain.title,
-      metadata: { ...(plain.metadata || {}), isDealProduct: true, dealBadge: badge },
+      metadata: {
+        ...(plain.metadata || {}),
+        isDealProduct: true,
+        dealBadge: badge,
+      },
       deal: {
-        dealId: deal.id || deal.dealId, title: deal.title, badge,
+        dealId: deal.id || deal.dealId,
+        title: deal.title,
+        badge,
         dealNumber: deal.dealNumber,
         source: deal.metadata?.dealSource || null,
         dealType: deal.dealType,
         allocatedQuantity: Number(deal.allocatedQuantity || 0),
         soldQuantity: Number(deal.soldQuantity || 0),
         reservedQuantity: Number(deal.reservedQuantity || 0),
-        remainingQuantity: Math.max(0, Number(deal.allocatedQuantity || 0) - Number(deal.soldQuantity || 0) - Number(deal.reservedQuantity || 0)),
+        remainingQuantity: Math.max(
+          0,
+          Number(deal.allocatedQuantity || 0) -
+            Number(deal.soldQuantity || 0) -
+            Number(deal.reservedQuantity || 0),
+        ),
         maxQuantityPerOrder: deal.maxQuantityPerOrder,
-        variantId: deal.variantId, variantSku: deal.variantSku,
-        sellingPrice: projected.salePrice, catalogPrice: projected.mrp,
-        startAt: deal.startAt, endAt: deal.endAt,
+        variantId: deal.variantId,
+        variantSku: deal.variantSku,
+        sellingPrice: projected.salePrice,
+        catalogPrice: projected.mrp,
+        startAt: deal.startAt,
+        endAt: deal.endAt,
       },
     };
   }
 
   async enrichProductsWithActiveDeals(items = []) {
     const plainItems = items.map((item) => this.toPlainObject(item));
-    const productIds = plainItems.map((item) => String(item._id || item.id || "")).filter(Boolean);
+    const productIds = plainItems
+      .map((item) => String(item._id || item.id || ""))
+      .filter(Boolean);
     if (!productIds.length) return plainItems;
 
-    const deals = await this.dealRepository.findActiveDealsForProducts(productIds).catch(() => []);
+    const deals = await this.dealRepository
+      .findActiveDealsForProducts(productIds)
+      .catch(() => []);
     if (!deals.length) return plainItems;
 
-    const dealByProductId = new Map(deals.map((deal) => [String(deal.productId || deal.product_id || ""), deal]));
+    const dealByProductId = new Map(
+      deals.map((deal) => [
+        String(deal.productId || deal.product_id || ""),
+        deal,
+      ]),
+    );
     return plainItems.map((item) =>
-      this.buildProductWithActiveDeal(item, dealByProductId.get(String(item._id || item.id || ""))),
+      this.buildProductWithActiveDeal(
+        item,
+        dealByProductId.get(String(item._id || item.id || "")),
+      ),
     );
   }
 
@@ -2148,7 +2737,10 @@ class ProductService {
       if (!normalized) return;
       matches.add(normalized);
       matches.add(normalized.toLowerCase());
-      const slug = normalized.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+      const slug = normalized
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
       if (slug) matches.add(slug);
     };
 
@@ -2157,7 +2749,9 @@ class ProductService {
     }
 
     const primaryValue = rawValues[0] || value;
-    const brandRecord = await this.platformRepository.getBrandByValue(primaryValue).catch(() => null);
+    const brandRecord = await this.platformRepository
+      .getBrandByValue(primaryValue)
+      .catch(() => null);
     if (brandRecord) {
       for (const candidate of [
         brandRecord?._id,
@@ -2174,7 +2768,9 @@ class ProductService {
   }
 
   normalizeProductFilterText(value) {
-    return String(value || "").trim().toLowerCase();
+    return String(value || "")
+      .trim()
+      .toLowerCase();
   }
 
   parseProductRatingFilter(value) {
@@ -2189,18 +2785,27 @@ class ProductService {
   getProductAvailableStockValue(product = {}) {
     const variants = Array.isArray(product.variants) ? product.variants : [];
     const variantStock = variants
-      .filter((variant) => variant?.status !== "inactive" && variant?.status !== "out_of_stock")
+      .filter(
+        (variant) =>
+          variant?.status !== "inactive" && variant?.status !== "out_of_stock",
+      )
       .map((variant) => {
         const available = variant.availableStock ?? variant.available_stock;
-        if (available !== undefined && available !== null && available !== "") return Number(available);
+        if (available !== undefined && available !== null && available !== "")
+          return Number(available);
         return Number(variant.stock || 0) - Number(variant.reservedStock || 0);
       })
       .filter((value) => Number.isFinite(value));
 
-    if (variantStock.length) return variantStock.reduce((total, value) => total + Math.max(0, value), 0);
+    if (variantStock.length)
+      return variantStock.reduce(
+        (total, value) => total + Math.max(0, value),
+        0,
+      );
 
     const available = product.availableStock ?? product.available_stock;
-    if (available !== undefined && available !== null && available !== "") return Number(available);
+    if (available !== undefined && available !== null && available !== "")
+      return Number(available);
     return Number(product.stock || 0) - Number(product.reservedStock || 0);
   }
 
@@ -2208,26 +2813,46 @@ class ProductService {
     const shipping = product.shipping || {};
     if (type === "free") {
       const charge = shipping.shippingCharge ?? shipping.additionalCost;
-      return shipping.freeShipping === true || (charge !== undefined && charge !== null && Number(charge) === 0);
+      return (
+        shipping.freeShipping === true ||
+        (charge !== undefined && charge !== null && Number(charge) === 0)
+      );
     }
     if (type === "express") {
       return (
         shipping.expressDelivery === true ||
         shipping.express_delivery === true ||
         shipping.isExpress === true ||
-        String(shipping.shippingMethod || shipping.shippingClass || "").toLowerCase().includes("express") ||
-        Number(shipping.estimatedDaysMax ?? shipping.estimatedDaysMin ?? shipping.processingDays ?? Infinity) <= 2
+        String(shipping.shippingMethod || shipping.shippingClass || "")
+          .toLowerCase()
+          .includes("express") ||
+        Number(
+          shipping.estimatedDaysMax ??
+            shipping.estimatedDaysMin ??
+            shipping.processingDays ??
+            Infinity,
+        ) <= 2
       );
     }
     return true;
   }
 
   productMatchesPostFilters(product = {}, query = {}) {
-    const outOfStock = query.out_of_stock === "true" || query.outOfStock === "true";
-    if (outOfStock && this.getProductAvailableStockValue(product) > 0) return false;
+    const outOfStock =
+      query.out_of_stock === "true" || query.outOfStock === "true";
+    if (outOfStock && this.getProductAvailableStockValue(product) > 0)
+      return false;
 
-    if ((query.free_delivery === "true" || query.freeDelivery === "true") && !this.matchesProductDeliveryFilter(product, "free")) return false;
-    if ((query.express_delivery === "true" || query.expressDelivery === "true") && !this.matchesProductDeliveryFilter(product, "express")) return false;
+    if (
+      (query.free_delivery === "true" || query.freeDelivery === "true") &&
+      !this.matchesProductDeliveryFilter(product, "free")
+    )
+      return false;
+    if (
+      (query.express_delivery === "true" || query.expressDelivery === "true") &&
+      !this.matchesProductDeliveryFilter(product, "express")
+    )
+      return false;
 
     return true;
   }
@@ -2243,46 +2868,79 @@ class ProductService {
     );
   }
 
-  async buildProductFacets(filter = {}, projection = PRODUCT_LIST_PROJECTION, query = {}) {
-    const facetResult = await this.productRepository.paginate(filter, {
-      page: 1,
-      limit: 500,
-      skip: 0,
-      sortBy: "newest",
-      sortDir: "desc",
-    }, {
-      projection: {
-        ...projection,
-        variants: 1,
-        hasVariants: 1,
+  async buildProductFacets(
+    filter = {},
+    projection = PRODUCT_LIST_PROJECTION,
+    query = {},
+  ) {
+    const facetResult = await this.productRepository.paginate(
+      filter,
+      {
+        page: 1,
+        limit: 500,
+        skip: 0,
+        sortBy: "newest",
+        sortDir: "desc",
       },
-      lean: true,
-    });
+      {
+        projection: {
+          ...projection,
+          variants: 1,
+          hasVariants: 1,
+        },
+        lean: true,
+      },
+    );
 
-    const items = (facetResult.items || []).filter((product) => this.productMatchesPostFilters(product, query));
+    const items = (facetResult.items || []).filter((product) =>
+      this.productMatchesPostFilters(product, query),
+    );
     const categoryCounts = new Map();
     const brandCounts = new Map();
-    const ratingCounts = new Map([["5", 0], ["4", 0], ["3", 0], ["2", 0], ["1", 0]]);
+    const ratingCounts = new Map([
+      ["5", 0],
+      ["4", 0],
+      ["3", 0],
+      ["2", 0],
+      ["1", 0],
+    ]);
     const availability = { inStock: 0, outOfStock: 0 };
     let minPrice = null;
     let maxPrice = null;
 
     items.forEach((product) => {
-      const categoryKey = String(product.categoryId || product.category_id || product.category || "").trim();
-      if (categoryKey) categoryCounts.set(categoryKey, (categoryCounts.get(categoryKey) || 0) + 1);
+      const categoryKey = String(
+        product.categoryId || product.category_id || product.category || "",
+      ).trim();
+      if (categoryKey)
+        categoryCounts.set(
+          categoryKey,
+          (categoryCounts.get(categoryKey) || 0) + 1,
+        );
 
-      const brand = String(product.brandName || product.brand || product.brand_id || "").trim();
+      const brand = String(
+        product.brandName || product.brand || product.brand_id || "",
+      ).trim();
       if (brand) brandCounts.set(brand, (brandCounts.get(brand) || 0) + 1);
 
-      const rating = Number(product.rating ?? product.averageRating ?? product.avgRating ?? 0);
+      const rating = Number(
+        product.rating ?? product.averageRating ?? product.avgRating ?? 0,
+      );
       [5, 4, 3, 2, 1].forEach((stars) => {
-        if (rating >= stars) ratingCounts.set(String(stars), (ratingCounts.get(String(stars)) || 0) + 1);
+        if (rating >= stars)
+          ratingCounts.set(
+            String(stars),
+            (ratingCounts.get(String(stars)) || 0) + 1,
+          );
       });
 
-      if (this.getProductAvailableStockValue(product) > 0) availability.inStock += 1;
+      if (this.getProductAvailableStockValue(product) > 0)
+        availability.inStock += 1;
       else availability.outOfStock += 1;
 
-      const price = Number(product.salePrice ?? product.price ?? product.sellingPrice ?? 0);
+      const price = Number(
+        product.salePrice ?? product.price ?? product.sellingPrice ?? 0,
+      );
       if (Number.isFinite(price) && price > 0) {
         minPrice = minPrice === null ? price : Math.min(minPrice, price);
         maxPrice = maxPrice === null ? price : Math.max(maxPrice, price);
@@ -2292,14 +2950,17 @@ class ProductService {
     const categoryLabelByKey = new Map();
     await Promise.all(
       [...categoryCounts.keys()].map(async (categoryKey) => {
-        const category = await this.platformRepository.getCategory(categoryKey).catch(() => null);
+        const category = await this.platformRepository
+          .getCategory(categoryKey)
+          .catch(() => null);
         categoryLabelByKey.set(categoryKey, category?.title || categoryKey);
       }),
     );
 
-    const brandReferences = await this.platformRepository.resolveBrandReferences(
-      [...brandCounts.keys()],
-    );
+    const brandReferences =
+      await this.platformRepository.resolveBrandReferences([
+        ...brandCounts.keys(),
+      ]);
 
     return {
       total: items.length,
@@ -2332,11 +2993,19 @@ class ProductService {
   }
 
   async listProducts(query, { publicOnly = true, actor = null } = {}) {
-    const pagination = { ...getPage(query), sortBy: query.sortBy || query.sort, sortDir: query.sortDir };
+    const pagination = {
+      ...getPage(query),
+      sortBy: query.sortBy || query.sort,
+      sortDir: query.sortDir,
+    };
     const filter = {};
     let revisionFilterPendingIds = [];
 
-    const category = query.category_id || query.categoryId || query.categorySlug || query.category;
+    const category =
+      query.category_id ||
+      query.categoryId ||
+      query.categorySlug ||
+      query.category;
     if (category) {
       const selectedCategories = this.parseProductFilterValues(category);
       const categoryMatches = [];
@@ -2353,7 +3022,10 @@ class ProductService {
             const exactMatches = await this.platformRepository
               .getCategoryDescendantKeys(categoryReference)
               .catch(() => []);
-            if (exactMatches.length || categoryReference === normalizedCategory) {
+            if (
+              exactMatches.length ||
+              categoryReference === normalizedCategory
+            ) {
               return exactMatches;
             }
             return this.platformRepository
@@ -2388,12 +3060,15 @@ class ProductService {
     if (query.hsnCode) filter.hsnCode = query.hsnCode;
     if (query.color) filter.color = query.color;
     if (query.productFamilyCode || query.family || query.familyCode) {
-      filter.productFamilyCode = query.productFamilyCode || query.family || query.familyCode;
+      filter.productFamilyCode =
+        query.productFamilyCode || query.family || query.familyCode;
     }
     if (query.sku) filter.sku = query.sku;
     if (query.brand) {
       const brands = await this.resolveBrandFilterValues(query.brand);
-      const regexes = brands.map((brand) => new RegExp(`^${escapeRegExp(brand)}$`, "i"));
+      const regexes = brands.map(
+        (brand) => new RegExp(`^${escapeRegExp(brand)}$`, "i"),
+      );
       filter.brand = regexes.length > 1 ? { $in: regexes } : regexes[0];
     }
     if (query.sellerId) filter.sellerId = query.sellerId;
@@ -2403,13 +3078,17 @@ class ProductService {
     if (query.warehouseId) filter.warehouseId = query.warehouseId;
     if (query.productType) filter.productType = query.productType;
     if (query.hasVariants !== undefined) {
-      filter.hasVariants = query.hasVariants === true || query.hasVariants === "true";
+      filter.hasVariants =
+        query.hasVariants === true || query.hasVariants === "true";
     }
     if (!publicOnly && query.visibility) filter.visibility = query.visibility;
-    if (query.tags) filter.tags = { $in: this.parseProductFilterValues(query.tags) };
+    if (query.tags)
+      filter.tags = { $in: this.parseProductFilterValues(query.tags) };
     if (query.collectionIds || query.collection) {
       filter.collectionIds = {
-        $in: this.parseProductFilterValues(query.collectionIds || query.collection),
+        $in: this.parseProductFilterValues(
+          query.collectionIds || query.collection,
+        ),
       };
     }
     const merchandisingFilters = [];
@@ -2418,7 +3097,10 @@ class ProductService {
     }
     if (query.bestSeller === true || query.bestSeller === "true") {
       merchandisingFilters.push({
-        $or: [{ "metadata.bestSeller": true }, { "metadata.isBestSeller": true }],
+        $or: [
+          { "metadata.bestSeller": true },
+          { "metadata.isBestSeller": true },
+        ],
       });
     }
     if (query.newArrival === true || query.newArrival === "true") {
@@ -2434,14 +3116,18 @@ class ProductService {
           : { $or: merchandisingFilters },
       ];
     }
-    const ratings = this.parseProductRatingFilter(query.min_rating ?? query.minRating ?? query.rating);
+    const ratings = this.parseProductRatingFilter(
+      query.min_rating ?? query.minRating ?? query.rating,
+    );
     if (ratings.length) filter.rating = { $gte: Math.min(...ratings) };
 
     if (query.approvalStatus) {
       filter.approvalStatus = query.approvalStatus;
     }
     if (query.revisionStatus) {
-      const normalizedRevisionStatus = normalizeRevisionWorkflowStatus(query.revisionStatus);
+      const normalizedRevisionStatus = normalizeRevisionWorkflowStatus(
+        query.revisionStatus,
+      );
       if (!normalizedRevisionStatus) {
         delete filter.$and;
       } else {
@@ -2453,7 +3139,10 @@ class ProductService {
           );
         revisionFilterPendingIds = [
           ...new Set(
-            [...pendingRevisionProductIds, ...latestPendingRevisionProductIds].map(String),
+            [
+              ...pendingRevisionProductIds,
+              ...latestPendingRevisionProductIds,
+            ].map(String),
           ),
         ];
         const revisionFilter = buildRevisionStatusFilter({
@@ -2463,10 +3152,7 @@ class ProductService {
         });
 
         if (Object.keys(revisionFilter).length) {
-          filter.$and = [
-            ...(filter.$and || []),
-            revisionFilter,
-          ];
+          filter.$and = [...(filter.$and || []), revisionFilter];
         }
       }
     }
@@ -2485,9 +3171,18 @@ class ProductService {
     if (minPrice !== undefined || maxPrice !== undefined) {
       if (publicOnly) {
         const conditions = [];
-        if (minPrice !== undefined) conditions.push({ $gte: [this.getPublicEffectivePriceExpression(), Number(minPrice)] });
-        if (maxPrice !== undefined) conditions.push({ $lte: [this.getPublicEffectivePriceExpression(), Number(maxPrice)] });
-        this.appendExpressionFilter(filter, conditions.length === 1 ? conditions[0] : { $and: conditions });
+        if (minPrice !== undefined)
+          conditions.push({
+            $gte: [this.getPublicEffectivePriceExpression(), Number(minPrice)],
+          });
+        if (maxPrice !== undefined)
+          conditions.push({
+            $lte: [this.getPublicEffectivePriceExpression(), Number(maxPrice)],
+          });
+        this.appendExpressionFilter(
+          filter,
+          conditions.length === 1 ? conditions[0] : { $and: conditions },
+        );
       } else {
         filter.price = {};
         if (minPrice !== undefined) filter.price.$gte = Number(minPrice);
@@ -2506,7 +3201,10 @@ class ProductService {
     if (query.city) filter["origin.city"] = query.city;
 
     if (!publicOnly) {
-      if (query.includeAllStatuses === true || query.includeAllStatuses === "true") {
+      if (
+        query.includeAllStatuses === true ||
+        query.includeAllStatuses === "true"
+      ) {
         if (query.status) filter.status = query.status;
         if (
           !query.status &&
@@ -2518,7 +3216,11 @@ class ProductService {
       } else {
         filter.status = query.status || PRODUCT_STATUS.ACTIVE;
 
-        if (!query.status && query.includeArchived !== true && query.includeArchived !== "true") {
+        if (
+          !query.status &&
+          query.includeArchived !== true &&
+          query.includeArchived !== "true"
+        ) {
           filter.status = { $in: Object.values(PRODUCT_STATUS) };
         }
       }
@@ -2531,23 +3233,37 @@ class ProductService {
           lean: true,
         }),
       );
-      const normalizedRevisionStatus = normalizeRevisionWorkflowStatus(query.revisionStatus);
-      if (normalizedRevisionStatus === PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING) {
+      const normalizedRevisionStatus = normalizeRevisionWorkflowStatus(
+        query.revisionStatus,
+      );
+      if (
+        normalizedRevisionStatus ===
+        PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING
+      ) {
         const pendingIds = new Set(revisionFilterPendingIds);
         result.items = (result.items || []).map((product) =>
           pendingIds.has(String(product?._id || product?.id))
-            ? { ...product, revisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING }
+            ? {
+                ...product,
+                revisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING,
+              }
             : product,
         );
       }
-      const latestRevisions = await this.productRepository.findLatestRevisionsByProductIds(
-        (result.items || []).map((product) => product?._id || product?.id),
-      );
+      const latestRevisions =
+        await this.productRepository.findLatestRevisionsByProductIds(
+          (result.items || []).map((product) => product?._id || product?.id),
+        );
       const latestByProduct = new Map(
-        latestRevisions.map((revision) => [String(revision.productId), revision]),
+        latestRevisions.map((revision) => [
+          String(revision.productId),
+          revision,
+        ]),
       );
       result.items = (result.items || []).map((product) => {
-        const latestRevision = latestByProduct.get(String(product?._id || product?.id));
+        const latestRevision = latestByProduct.get(
+          String(product?._id || product?.id),
+        );
         return latestRevision
           ? {
               ...product,
@@ -2582,27 +3298,42 @@ class ProductService {
     // Do not serialize publicFilter here: it contains the current time in the
     // publish/schedule predicates and would make every Redis key unique.
     const cacheKey = `products:${discoveryView}:${JSON.stringify({ query, pagination })}`;
-    const result = await remember(cacheKey, discoveryView === "facets" ? 300 : 120, () =>
-      this.productRepository.aggregatePublicCatalog(publicFilter, pagination, projection),
+    const result = await remember(
+      cacheKey,
+      discoveryView === "facets" ? 300 : 120,
+      () =>
+        this.productRepository.aggregatePublicCatalog(
+          publicFilter,
+          pagination,
+          projection,
+        ),
     );
     return {
       ...result,
-      items: discoveryView === "facets"
-        ? []
-        : await this.enrichProductsWithActiveDeals(
-            await this.decorateProductMasterReferences(result.items || []),
-          ),
+      items:
+        discoveryView === "facets"
+          ? []
+          : await this.enrichProductsWithActiveDeals(
+              await this.decorateProductMasterReferences(result.items || []),
+            ),
       facets: await this.decorateBrandFacets(result.facets || {}),
     };
   }
 
   async listSellerProducts(query, actor) {
-    const pagination = { ...getPage(query), sortBy: query.sortBy || query.sort, sortDir: query.sortDir };
+    const pagination = {
+      ...getPage(query),
+      sortBy: query.sortBy || query.sort,
+      sortDir: query.sortDir,
+    };
     const sellerId = actor?.ownerSellerId || actor?.userId || null;
     const filter = {};
     let revisionFilterPendingIds = [];
     if (isScopedSellerRole(actor)) filter.createdBy = actor.userId;
-    if (query.includeAllStatuses === true || query.includeAllStatuses === "true") {
+    if (
+      query.includeAllStatuses === true ||
+      query.includeAllStatuses === "true"
+    ) {
       if (query.status) filter.status = query.status;
       if (
         !query.status &&
@@ -2618,7 +3349,9 @@ class ProductService {
     }
     if (query.approvalStatus) filter.approvalStatus = query.approvalStatus;
     if (query.revisionStatus) {
-      const normalizedRevisionStatus = normalizeRevisionWorkflowStatus(query.revisionStatus);
+      const normalizedRevisionStatus = normalizeRevisionWorkflowStatus(
+        query.revisionStatus,
+      );
       if (!normalizedRevisionStatus) {
         delete filter.$and;
       } else {
@@ -2630,7 +3363,10 @@ class ProductService {
           );
         revisionFilterPendingIds = [
           ...new Set(
-            [...pendingRevisionProductIds, ...latestPendingRevisionProductIds].map(String),
+            [
+              ...pendingRevisionProductIds,
+              ...latestPendingRevisionProductIds,
+            ].map(String),
           ),
         ];
         const revisionFilter = buildRevisionStatusFilter({
@@ -2640,10 +3376,7 @@ class ProductService {
         });
 
         if (Object.keys(revisionFilter).length) {
-          filter.$and = [
-            ...(filter.$and || []),
-            revisionFilter,
-          ];
+          filter.$and = [...(filter.$and || []), revisionFilter];
         }
       }
     }
@@ -2655,50 +3388,73 @@ class ProductService {
       filter._id = { $in: productIds };
     }
     if (query.category) {
-      const categoryKeys = await this.platformRepository.getCategoryDescendantKeys(query.category);
-      filter.category = categoryKeys.length ? { $in: categoryKeys } : query.category;
+      const categoryKeys =
+        await this.platformRepository.getCategoryDescendantKeys(query.category);
+      filter.category = categoryKeys.length
+        ? { $in: categoryKeys }
+        : query.category;
     }
     if (query.sku) filter.sku = query.sku;
     if (query.brand) {
       const brands = await this.resolveBrandFilterValues(query.brand);
-      const regexes = brands.map((brand) => new RegExp(`^${escapeRegExp(brand)}$`, "i"));
+      const regexes = brands.map(
+        (brand) => new RegExp(`^${escapeRegExp(brand)}$`, "i"),
+      );
       filter.brand = regexes.length > 1 ? { $in: regexes } : regexes[0];
     }
     if (query.organizationId) filter.organizationId = query.organizationId;
     if (query.storeId) filter.storeId = query.storeId;
     if (query.warehouseId) filter.warehouseId = query.warehouseId;
     if (query.productFamilyCode || query.family || query.familyCode) {
-      filter.productFamilyCode = query.productFamilyCode || query.family || query.familyCode;
+      filter.productFamilyCode =
+        query.productFamilyCode || query.family || query.familyCode;
     }
     if (query.productType) filter.productType = query.productType;
     if (query.hasVariants !== undefined) {
-      filter.hasVariants = query.hasVariants === true || query.hasVariants === "true";
+      filter.hasVariants =
+        query.hasVariants === true || query.hasVariants === "true";
     }
     this.applyDateFilters(filter, query);
     this.applyStockFilters(filter, query);
     this.applyAttributeFilters(filter, query);
     this.applySearchFilter(filter, query);
-    const result = await this.productRepository.paginateBySeller(sellerId, filter, pagination, {
-      projection: buildProductListProjection(query),
-      lean: true,
-    });
-    const normalizedRevisionStatus = normalizeRevisionWorkflowStatus(query.revisionStatus);
-    if (normalizedRevisionStatus === PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING) {
+    const result = await this.productRepository.paginateBySeller(
+      sellerId,
+      filter,
+      pagination,
+      {
+        projection: buildProductListProjection(query),
+        lean: true,
+      },
+    );
+    const normalizedRevisionStatus = normalizeRevisionWorkflowStatus(
+      query.revisionStatus,
+    );
+    if (
+      normalizedRevisionStatus ===
+      PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING
+    ) {
       const pendingIds = new Set(revisionFilterPendingIds);
       result.items = (result.items || []).map((product) =>
         pendingIds.has(String(product?._id || product?.id))
-          ? { ...product, revisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING }
+          ? {
+              ...product,
+              revisionStatus: PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING,
+            }
           : product,
       );
     }
-    const latestRevisions = await this.productRepository.findLatestRevisionsByProductIds(
-      (result.items || []).map((product) => product?._id || product?.id),
-    );
+    const latestRevisions =
+      await this.productRepository.findLatestRevisionsByProductIds(
+        (result.items || []).map((product) => product?._id || product?.id),
+      );
     const latestByProduct = new Map(
       latestRevisions.map((revision) => [String(revision.productId), revision]),
     );
     result.items = (result.items || []).map((product) => {
-      const latestRevision = latestByProduct.get(String(product?._id || product?.id));
+      const latestRevision = latestByProduct.get(
+        String(product?._id || product?.id),
+      );
       return latestRevision
         ? {
             ...product,
@@ -2712,7 +3468,9 @@ class ProductService {
   }
 
   applySearchFilter(filter, query = {}) {
-    const searchTerm = String(query.q || query.keyWord || query.search || "").trim();
+    const searchTerm = String(
+      query.q || query.keyWord || query.search || "",
+    ).trim();
     if (!searchTerm) return;
 
     const regex = new RegExp(escapeRegExp(searchTerm), "i");
@@ -2743,7 +3501,9 @@ class ProductService {
         { $ifNull: ["$reservedStock", 0] },
       ],
     };
-    const requestedThreshold = Number(query.lowStockThreshold || query.threshold || 0);
+    const requestedThreshold = Number(
+      query.lowStockThreshold || query.threshold || 0,
+    );
     const lowStockThreshold =
       Number.isFinite(requestedThreshold) && requestedThreshold > 0
         ? Math.floor(requestedThreshold)
@@ -2761,7 +3521,9 @@ class ProductService {
           ],
         });
       } else if (stockStatus === "in_stock") {
-        this.appendExpressionFilter(filter, { $gt: [availableStock, lowStockThreshold] });
+        this.appendExpressionFilter(filter, {
+          $gt: [availableStock, lowStockThreshold],
+        });
       }
       return;
     }
@@ -2781,19 +3543,41 @@ class ProductService {
               $filter: {
                 input: { $ifNull: ["$variants", []] },
                 as: "variant",
-                cond: { $eq: [{ $ifNull: ["$$variant.status", "active"] }, "active"] },
+                cond: {
+                  $eq: [{ $ifNull: ["$$variant.status", "active"] }, "active"],
+                },
               },
             },
             initialValue: 0,
             in: {
               $add: [
                 "$$value",
-                { $max: [0, { $subtract: [{ $ifNull: ["$$this.stock", 0] }, { $ifNull: ["$$this.reservedStock", 0] }] }] },
+                {
+                  $max: [
+                    0,
+                    {
+                      $subtract: [
+                        { $ifNull: ["$$this.stock", 0] },
+                        { $ifNull: ["$$this.reservedStock", 0] },
+                      ],
+                    },
+                  ],
+                },
               ],
             },
           },
         },
-        { $max: [0, { $subtract: [{ $ifNull: ["$stock", 0] }, { $ifNull: ["$reservedStock", 0] }] }] },
+        {
+          $max: [
+            0,
+            {
+              $subtract: [
+                { $ifNull: ["$stock", 0] },
+                { $ifNull: ["$reservedStock", 0] },
+              ],
+            },
+          ],
+        },
       ],
     };
   }
@@ -2809,7 +3593,12 @@ class ProductService {
                 $filter: {
                   input: { $ifNull: ["$variants", []] },
                   as: "variant",
-                  cond: { $ne: [{ $ifNull: ["$$variant.status", "active"] }, "inactive"] },
+                  cond: {
+                    $ne: [
+                      { $ifNull: ["$$variant.status", "active"] },
+                      "inactive",
+                    ],
+                  },
                 },
               },
               as: "variant",
@@ -2835,7 +3624,11 @@ class ProductService {
     if (wantsOutOfStock && !wantsInStock) {
       this.appendExpressionFilter(filter, { $lte: [availableStock, 0] });
     }
-    if (query.freeDelivery === true || query.freeDelivery === "true" || query.free_delivery === "true") {
+    if (
+      query.freeDelivery === true ||
+      query.freeDelivery === "true" ||
+      query.free_delivery === "true"
+    ) {
       filter.$and = [
         ...(filter.$and || []),
         {
@@ -2847,7 +3640,11 @@ class ProductService {
         },
       ];
     }
-    if (query.expressDelivery === true || query.expressDelivery === "true" || query.express_delivery === "true") {
+    if (
+      query.expressDelivery === true ||
+      query.expressDelivery === "true" ||
+      query.express_delivery === "true"
+    ) {
       filter.$and = [
         ...(filter.$and || []),
         {
@@ -2985,7 +3782,10 @@ class ProductService {
           {
             $or: [
               { [`attributes.${attributeKey}`]: parseFilterValue(value) },
-              { [`variants.attributes.${attributeKey}`]: parseFilterValue(value) },
+              {
+                [`variants.attributes.${attributeKey}`]:
+                  parseFilterValue(value),
+              },
             ],
           },
         ];
@@ -3010,10 +3810,7 @@ class ProductService {
     const filter = applyPublicProductFilter();
     const term = String(query.q || "").trim();
     const addFilter = (condition) => {
-      filter.$and = [
-        ...(filter.$and || []),
-        condition,
-      ];
+      filter.$and = [...(filter.$and || []), condition];
     };
 
     if (term) {
@@ -3049,16 +3846,25 @@ class ProductService {
     }
 
     if (query.brand) {
-      const brands = this.parseProductFilterValues(query.brand).flatMap((brand) => {
-        const value = String(brand || "").trim();
-        if (!value) return [];
-        return [...new Set([
-          value,
-          value.toLowerCase(),
-          value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
-        ])];
-      });
-      const regexes = brands.map((brand) => new RegExp(`^${escapeRegExp(brand)}$`, "i"));
+      const brands = this.parseProductFilterValues(query.brand).flatMap(
+        (brand) => {
+          const value = String(brand || "").trim();
+          if (!value) return [];
+          return [
+            ...new Set([
+              value,
+              value.toLowerCase(),
+              value
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, "-")
+                .replace(/^-+|-+$/g, ""),
+            ]),
+          ];
+        },
+      );
+      const regexes = brands.map(
+        (brand) => new RegExp(`^${escapeRegExp(brand)}$`, "i"),
+      );
       if (regexes.length) {
         filter.brand = regexes.length > 1 ? { $in: regexes } : regexes[0];
       }
@@ -3080,7 +3886,11 @@ class ProductService {
     }
 
     if (query.tags) {
-      filter.tags = { $in: splitFilterValues(query.tags).map((tag) => new RegExp(`^${escapeRegExp(tag)}$`, "i")) };
+      filter.tags = {
+        $in: splitFilterValues(query.tags).map(
+          (tag) => new RegExp(`^${escapeRegExp(tag)}$`, "i"),
+        ),
+      };
     }
 
     [
@@ -3097,7 +3907,9 @@ class ProductService {
       "concern",
     ].forEach((key) => {
       if (!query[key]) return;
-      const regexes = splitFilterValues(query[key]).map((value) => new RegExp(`^${escapeRegExp(value)}$`, "i"));
+      const regexes = splitFilterValues(query[key]).map(
+        (value) => new RegExp(`^${escapeRegExp(value)}$`, "i"),
+      );
       addFilter({
         $or: [
           { [key]: { $in: regexes } },
@@ -3108,8 +3920,10 @@ class ProductService {
 
     if (query.minPrice !== undefined || query.maxPrice !== undefined) {
       filter.price = {};
-      if (query.minPrice !== undefined) filter.price.$gte = Number(query.minPrice);
-      if (query.maxPrice !== undefined) filter.price.$lte = Number(query.maxPrice);
+      if (query.minPrice !== undefined)
+        filter.price.$gte = Number(query.minPrice);
+      if (query.maxPrice !== undefined)
+        filter.price.$lte = Number(query.maxPrice);
     }
 
     const rating = query.minRating ?? query.rating;
@@ -3122,123 +3936,111 @@ class ProductService {
     return filter;
   }
 
-// ─── Get single ───────────────────────────────────────────────────────────
+  // ─── Get single ───────────────────────────────────────────────────────────
 
-resolveProductRouteIdentifier(productId, { allowRawObjectId = false } = {}) {
-  const rawIdentifier = String(productId || "").trim();
-  const tokenPayload = decodeProductRouteToken(rawIdentifier);
-  const productIdentifier = String(tokenPayload?.p || rawIdentifier).trim();
+  resolveProductRouteIdentifier(productId, { allowRawObjectId = false } = {}) {
+    const rawIdentifier = String(productId || "").trim();
+    const tokenPayload = decodeProductRouteToken(rawIdentifier);
+    const productIdentifier = String(tokenPayload?.p || rawIdentifier).trim();
 
-  if (
-    productIdentifier &&
-    productIdentifier === rawIdentifier &&
-    mongoose.Types.ObjectId.isValid(productIdentifier) &&
-    !allowRawObjectId
-  ) {
-    throw new AppError("Product not found", 404);
+    if (
+      productIdentifier &&
+      productIdentifier === rawIdentifier &&
+      mongoose.Types.ObjectId.isValid(productIdentifier) &&
+      !allowRawObjectId
+    ) {
+      throw new AppError("Product not found", 404);
+    }
+
+    return productIdentifier;
   }
 
-  return productIdentifier;
-}
+  async getProduct(productId) {
+    const productIdentifier = this.resolveProductRouteIdentifier(productId, {
+      allowRawObjectId: true,
+    });
 
-async getProduct(productId) {
-  const productIdentifier = this.resolveProductRouteIdentifier(productId, {
-    allowRawObjectId: true,
-  });
+    const productLookup = mongoose.Types.ObjectId.isValid(productIdentifier)
+      ? { _id: productIdentifier }
+      : {
+          slug: productIdentifier,
+        };
 
-  const productLookup = mongoose.Types.ObjectId.isValid(productIdentifier)
-    ? { _id: productIdentifier }
-    : {
-        slug: productIdentifier,
-      };
+    const product = await this.productRepository.findOne(
+      applyPublicProductFilter(productLookup),
+    );
 
-  const product = await this.productRepository.findOne(
-    applyPublicProductFilter(productLookup),
-  );
+    if (!product) {
+      throw new AppError("Product not found", 404);
+    }
 
-  if (!product) {
-    throw new AppError("Product not found", 404);
-  }
+    const sellerId = String(product.sellerId || "");
 
-  const sellerId = String(product.sellerId || "");
+    const [enrichedProducts, seller] = await Promise.all([
+      this.enrichProductsWithActiveDeals([product]),
 
-  const [enrichedProducts, seller] = await Promise.all([
-    this.enrichProductsWithActiveDeals([product]),
+      mongoose.Types.ObjectId.isValid(sellerId)
+        ? UserModel.findById(sellerId)
+            .select({
+              email: 1,
+              "profile.firstName": 1,
+              "profile.lastName": 1,
+              "profile.avatarUrl": 1,
 
-    mongoose.Types.ObjectId.isValid(sellerId)
-      ? UserModel.findById(sellerId)
-          .select({
-            "profile.firstName": 1,
-            "profile.lastName": 1,
-            "profile.avatarUrl": 1,
+              "sellerProfile.businessName": 1,
+              "sellerProfile.displayName": 1,
+              "sellerProfile.legalBusinessName": 1,
+              "sellerProfile.description": 1,
+              "sellerProfile.supportEmail": 1,
+              "sellerProfile.supportPhone": 1,
+              // "sellerProfile.businessWebsite": 1,
+              // "sellerProfile.businessAddress": 1,
 
-            "sellerProfile.businessName": 1,
-            "sellerProfile.displayName": 1,
-            "sellerProfile.legalBusinessName": 1,
-            "sellerProfile.description": 1,
-            "sellerProfile.supportEmail": 1,
-            "sellerProfile.supportPhone": 1,
-            // "sellerProfile.businessWebsite": 1,
-            // "sellerProfile.businessAddress": 1,
+              // Seller account creation time
+              createdAt: 1,
+            })
+            .lean()
+        : null,
+    ]);
+
+    const enrichedProduct = enrichedProducts[0] || product;
+
+    const sellerName = sellerAccountDisplayName(seller);
+
+    return {
+      ...this.toPlainObject(enrichedProduct),
+
+      sellerName,
+
+      seller: seller
+        ? {
+            id: String(seller._id),
+            name: sellerName,
 
             // Seller account creation time
-            createdAt: 1,
-          })
-          .lean()
-      : null,
-  ]);
+            joinAt: seller.createdAt || null,
 
-  const enrichedProduct = enrichedProducts[0] || product;
+            description: seller.sellerProfile?.description || null,
+            avatarUrl: seller.profile?.avatarUrl || null,
+            supportEmail: seller.sellerProfile?.supportEmail || null,
+            supportPhone: seller.sellerProfile?.supportPhone || null,
+            website: seller.sellerProfile?.businessWebsite || null,
 
-  const sellerName = seller
-    ? seller.sellerProfile?.displayName ||
-      seller.sellerProfile?.legalBusinessName ||
-      seller.sellerProfile?.businessName ||
-      [seller.profile?.firstName, seller.profile?.lastName]
-        .filter(Boolean)
-        .join(" ") ||
-      null
-    : null;
-
-  return {
-    ...this.toPlainObject(enrichedProduct),
-
-    sellerName,
-
-    seller: seller
-      ? {
-          id: String(seller._id),
-          name: sellerName,
-
-          // Seller account creation time
-          joinAt: seller.createdAt || null,
-
-          description: seller.sellerProfile?.description || null,
-          avatarUrl: seller.profile?.avatarUrl || null,
-          supportEmail: seller.sellerProfile?.supportEmail || null,
-          supportPhone: seller.sellerProfile?.supportPhone || null,
-          website: seller.sellerProfile?.businessWebsite || null,
-
-          address: seller.sellerProfile?.businessAddress
-            ? {
-                line1:
-                  seller.sellerProfile.businessAddress.line1 || null,
-                line2:
-                  seller.sellerProfile.businessAddress.line2 || null,
-                city:
-                  seller.sellerProfile.businessAddress.city || null,
-                state:
-                  seller.sellerProfile.businessAddress.state || null,
-                country:
-                  seller.sellerProfile.businessAddress.country || null,
-                postalCode:
-                  seller.sellerProfile.businessAddress.postalCode || null,
-              }
-            : null,
-        }
-      : null,
-  };
-}
+            address: seller.sellerProfile?.businessAddress
+              ? {
+                  line1: seller.sellerProfile.businessAddress.line1 || null,
+                  line2: seller.sellerProfile.businessAddress.line2 || null,
+                  city: seller.sellerProfile.businessAddress.city || null,
+                  state: seller.sellerProfile.businessAddress.state || null,
+                  country: seller.sellerProfile.businessAddress.country || null,
+                  postalCode:
+                    seller.sellerProfile.businessAddress.postalCode || null,
+                }
+              : null,
+          }
+        : null,
+    };
+  }
 
   async getProductForManagement(productId, actor = {}) {
     const product = await this.productRepository.findById(productId);
@@ -3253,20 +4055,15 @@ async getProduct(productId) {
             .lean()
         : null,
     ]);
-    const sellerName = seller
-      ? seller.sellerProfile?.displayName ||
-        seller.sellerProfile?.legalBusinessName ||
-        seller.sellerProfile?.businessName ||
-        [seller.profile?.firstName, seller.profile?.lastName].filter(Boolean).join(" ") ||
-        seller.email ||
-        null
-      : null;
+    const sellerName = sellerAccountDisplayName(seller);
 
     return {
       ...this.toPlainObject(product),
       sellerName,
       sellerEmail: seller?.email || null,
-      pendingRevision: pendingRevision ? this.toPlainObject(pendingRevision) : null,
+      pendingRevision: pendingRevision
+        ? this.toPlainObject(pendingRevision)
+        : null,
     };
   }
 
@@ -3302,18 +4099,27 @@ async getProduct(productId) {
     try {
       const esQuery = {
         bool: {
-          must: [{
-            multi_match: {
-              query: query.q,
-              fields: [
-                "title^4", "shortDescription^2", "brand^2", "category^2",
-                "description", "sku^2", "tags^3", "color", "hsnCode",
-                "productFamilyCode",
-              ],
-              fuzziness: "AUTO",
-              prefix_length: 2,
+          must: [
+            {
+              multi_match: {
+                query: query.q,
+                fields: [
+                  "title^4",
+                  "shortDescription^2",
+                  "brand^2",
+                  "category^2",
+                  "description",
+                  "sku^2",
+                  "tags^3",
+                  "color",
+                  "hsnCode",
+                  "productFamilyCode",
+                ],
+                fuzziness: "AUTO",
+                prefix_length: 2,
+              },
             },
-          }],
+          ],
           filter: buildPublicSearchFilters(),
         },
       };
@@ -3330,8 +4136,10 @@ async getProduct(productId) {
           },
         });
       }
-      if (query.brand) esQuery.bool.filter.push({ term: { brand: query.brand } });
-      if (query.productType) esQuery.bool.filter.push({ term: { productType: query.productType } });
+      if (query.brand)
+        esQuery.bool.filter.push({ term: { brand: query.brand } });
+      if (query.productType)
+        esQuery.bool.filter.push({ term: { productType: query.productType } });
       if (query.productFamilyCode || query.family || query.familyCode) {
         const familyFilter = buildProductSearchExactFilter(
           ["productFamilyCode.keyword", "productFamilyCode"],
@@ -3340,17 +4148,40 @@ async getProduct(productId) {
         if (familyFilter) esQuery.bool.filter.push(familyFilter);
       }
       if (query.hsnCode) {
-        const hsnFilter = buildProductSearchExactFilter(["hsnCode.keyword", "hsnCode"], query.hsnCode);
+        const hsnFilter = buildProductSearchExactFilter(
+          ["hsnCode.keyword", "hsnCode"],
+          query.hsnCode,
+        );
         if (hsnFilter) esQuery.bool.filter.push(hsnFilter);
       }
       if (query.tags) {
-        const tagsFilter = buildProductSearchExactFilter(["tags.keyword", "tags"], query.tags);
+        const tagsFilter = buildProductSearchExactFilter(
+          ["tags.keyword", "tags"],
+          query.tags,
+        );
         if (tagsFilter) esQuery.bool.filter.push(tagsFilter);
       }
-      ["color", "size", "material", "fit", "storage", "skinType", "shade", "finish", "room", "sport", "concern"].forEach((key) => {
+      [
+        "color",
+        "size",
+        "material",
+        "fit",
+        "storage",
+        "skinType",
+        "shade",
+        "finish",
+        "room",
+        "sport",
+        "concern",
+      ].forEach((key) => {
         if (!query[key]) return;
         const attributeFilter = buildProductSearchExactFilter(
-          [`${key}.keyword`, key, `attributes.${key}.keyword`, `attributes.${key}`],
+          [
+            `${key}.keyword`,
+            key,
+            `attributes.${key}.keyword`,
+            `attributes.${key}`,
+          ],
           query[key],
         );
         if (attributeFilter) esQuery.bool.filter.push(attributeFilter);
@@ -3363,7 +4194,9 @@ async getProduct(productId) {
       }
       const rating = query.minRating ?? query.rating;
       if (rating !== undefined && rating !== null && rating !== "") {
-        esQuery.bool.filter.push({ range: { rating: { gte: Number(rating) } } });
+        esQuery.bool.filter.push({
+          range: { rating: { gte: Number(rating) } },
+        });
       }
       if (query.inStock === true || query.inStock === "true") {
         esQuery.bool.filter.push({ range: { availableStock: { gt: 0 } } });
@@ -3384,11 +4217,35 @@ async getProduct(productId) {
         query: esQuery,
         sort: sortOptions[query.sort] || sortOptions._score,
         _source: [
-          "title", "slug", "shortDescription", "category", "categoryId", "brand",
-          "sku", "price", "salePrice", "gstRate", "stock", "reservedStock",
-          "availableStock", "rating", "reviewCount", "images", "commonImages",
-          "image", "imageUrl", "thumbnail", "variants", "sellerId", "organizationId",
-          "shipping", "metadata", "status", "approvalStatus", "visibility", "createdAt",
+          "title",
+          "slug",
+          "shortDescription",
+          "category",
+          "categoryId",
+          "brand",
+          "sku",
+          "price",
+          "salePrice",
+          "gstRate",
+          "stock",
+          "reservedStock",
+          "availableStock",
+          "rating",
+          "reviewCount",
+          "images",
+          "commonImages",
+          "image",
+          "imageUrl",
+          "thumbnail",
+          "variants",
+          "sellerId",
+          "organizationId",
+          "shipping",
+          "metadata",
+          "status",
+          "approvalStatus",
+          "visibility",
+          "createdAt",
         ],
       });
       logger.info("[Elasticsearch] Product search served by Elasticsearch");
@@ -3404,13 +4261,17 @@ async getProduct(productId) {
       );
       return {
         items: hydratedItems,
-        total: hydratedItems.length < items.length
-          ? hydratedItems.length
-          : response.hits.total?.value ?? response.hits.hits.length,
+        total:
+          hydratedItems.length < items.length
+            ? hydratedItems.length
+            : (response.hits.total?.value ?? response.hits.hits.length),
         source: "elasticsearch",
       };
     } catch (error) {
-      logger.warn({ err: error, q: query.q }, "Elasticsearch search failed, falling back to Mongo");
+      logger.warn(
+        { err: error, q: query.q },
+        "Elasticsearch search failed, falling back to Mongo",
+      );
       logger.info("[Elasticsearch] Search failed - using fallback search");
       return searchMongo();
     }
@@ -3423,13 +4284,19 @@ async getProduct(productId) {
     if (!existingProduct) throw new AppError("Product not found", 404);
     this.assertCanReviewProductStatus(actor, payload.status);
 
-    const pendingRevision = await this.productRepository.findPendingRevision(productId);
+    const pendingRevision =
+      await this.productRepository.findPendingRevision(productId);
     if (
       pendingRevision &&
       existingProduct.status === PRODUCT_STATUS.ACTIVE &&
       [PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.REJECTED].includes(payload.status)
     ) {
-      return this.reviewProductRevision(productId, pendingRevision._id, payload, actor);
+      return this.reviewProductRevision(
+        productId,
+        pendingRevision._id,
+        payload,
+        actor,
+      );
     }
 
     const isApproval = payload.status === PRODUCT_STATUS.ACTIVE;
@@ -3447,32 +4314,41 @@ async getProduct(productId) {
       throw new AppError("Rejection reason is required", 400);
     }
 
-    const updatedProduct = await this.productRepository.reviewProduct(productId, {
-      status: nextStatus,
-      approvalStatus: nextApprovalStatus,
-      ...(isApproval ? { visibility: PRODUCT_VISIBILITY.PUBLIC } : {}),
-      approvedBy: isApproval ? actor.userId : null,
-      approvedAt: isApproval ? new Date() : null,
-      publishedAt: isApproval ? new Date() : existingProduct.publishedAt,
-      rejectionReason: isRejection ? payload.rejectionReason || null : null,
-      moderation: {
-        ...(existingProduct.moderation?.toObject?.() || existingProduct.moderation || {}),
-        reviewedAt: new Date(),
-        reviewedBy: actor.userId,
-        rejectionReason: payload.rejectionReason || null,
-        notes: payload.notes || null,
-        checklist: payload.checklist || existingProduct.moderation?.checklist || {},
+    const updatedProduct = await this.productRepository.reviewProduct(
+      productId,
+      {
+        status: nextStatus,
+        approvalStatus: nextApprovalStatus,
+        ...(isApproval ? { visibility: PRODUCT_VISIBILITY.PUBLIC } : {}),
+        approvedBy: isApproval ? actor.userId : null,
+        approvedAt: isApproval ? new Date() : null,
+        publishedAt: isApproval ? new Date() : existingProduct.publishedAt,
+        rejectionReason: isRejection ? payload.rejectionReason || null : null,
+        moderation: {
+          ...(existingProduct.moderation?.toObject?.() ||
+            existingProduct.moderation ||
+            {}),
+          reviewedAt: new Date(),
+          reviewedBy: actor.userId,
+          rejectionReason: payload.rejectionReason || null,
+          notes: payload.notes || null,
+          checklist:
+            payload.checklist || existingProduct.moderation?.checklist || {},
+        },
+        statusHistory: this.appendStatusHistory(existingProduct, {
+          fromStatus: existingProduct.status,
+          toStatus: nextStatus,
+          fromRevisionStatus:
+            existingProduct.revisionStatus ||
+            PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+          toRevisionStatus:
+            existingProduct.revisionStatus ||
+            PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+          actor,
+          reason: payload.rejectionReason || payload.notes || "product_review",
+        }),
       },
-      statusHistory: this.appendStatusHistory(existingProduct, {
-        fromStatus: existingProduct.status,
-        toStatus: nextStatus,
-        fromRevisionStatus:
-          existingProduct.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
-        toRevisionStatus: existingProduct.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
-        actor,
-        reason: payload.rejectionReason || payload.notes || "product_review",
-      }),
-    });
+    );
 
     if (
       nextStatus === PRODUCT_STATUS.ACTIVE &&
@@ -3485,26 +4361,41 @@ async getProduct(productId) {
     this._invalidateProductCache();
 
     if (isApproval || isRejection) {
-      await eventPublisher.publish(
-        makeEvent(
-          isApproval ? DOMAIN_EVENTS.PRODUCT_APPROVED_V1 : DOMAIN_EVENTS.PRODUCT_REJECTED_V1,
-          {
-            productId: String(updatedProduct._id || updatedProduct.id || productId),
-            productName: updatedProduct.title || existingProduct.title,
-            productTitle: updatedProduct.title || existingProduct.title,
-            sku: updatedProduct.sku || existingProduct.sku || null,
-            sellerId: updatedProduct.sellerId || existingProduct.sellerId || null,
-            status: nextStatus,
-            approvalStatus: nextApprovalStatus,
-            reason: payload.rejectionReason || payload.notes || null,
-            updatedBy: actor.userId || null,
-            viewUrl: `/app/products/${encodeURIComponent(String(updatedProduct._id || updatedProduct.id || productId))}`,
-          },
-          { source: "product-module", aggregateId: String(updatedProduct._id || updatedProduct.id || productId) },
-        ),
-      ).catch((error) => {
-        logger.error({ err: error, productId }, "Product review notification event failed");
-      });
+      await eventPublisher
+        .publish(
+          makeEvent(
+            isApproval
+              ? DOMAIN_EVENTS.PRODUCT_APPROVED_V1
+              : DOMAIN_EVENTS.PRODUCT_REJECTED_V1,
+            {
+              productId: String(
+                updatedProduct._id || updatedProduct.id || productId,
+              ),
+              productName: updatedProduct.title || existingProduct.title,
+              productTitle: updatedProduct.title || existingProduct.title,
+              sku: updatedProduct.sku || existingProduct.sku || null,
+              sellerId:
+                updatedProduct.sellerId || existingProduct.sellerId || null,
+              status: nextStatus,
+              approvalStatus: nextApprovalStatus,
+              reason: payload.rejectionReason || payload.notes || null,
+              updatedBy: actor.userId || null,
+              viewUrl: `/app/products/${encodeURIComponent(String(updatedProduct._id || updatedProduct.id || productId))}`,
+            },
+            {
+              source: "product-module",
+              aggregateId: String(
+                updatedProduct._id || updatedProduct.id || productId,
+              ),
+            },
+          ),
+        )
+        .catch((error) => {
+          logger.error(
+            { err: error, productId },
+            "Product review notification event failed",
+          );
+        });
     }
 
     return updatedProduct;
@@ -3516,7 +4407,10 @@ async getProduct(productId) {
     const products = await this.productRepository.findByIds(productIds);
     const requestedCount = new Set(productIds.map((id) => String(id))).size;
     if (!products.length || products.length !== requestedCount) {
-      throw new AppError("One or more products were not found for bulk update", 404);
+      throw new AppError(
+        "One or more products were not found for bulk update",
+        404,
+      );
     }
 
     products.forEach((product) => {
@@ -3528,7 +4422,10 @@ async getProduct(productId) {
 
     if (
       status === PRODUCT_STATUS.ACTIVE &&
-      products.some((product) => product.approvalStatus !== PRODUCT_APPROVAL_STATUS.APPROVED)
+      products.some(
+        (product) =>
+          product.approvalStatus !== PRODUCT_APPROVAL_STATUS.APPROVED,
+      )
     ) {
       throw new AppError(
         "Only approved products can be activated. Approve pending products from the moderation queue first.",
@@ -3542,33 +4439,40 @@ async getProduct(productId) {
 
     if (!isSellerRole(actor) && isBulkReactivation) {
       this.assertCanReviewProductStatus(actor, PRODUCT_STATUS.INACTIVE);
-    } else if (!isSellerRole(actor) && [
-      PRODUCT_STATUS.ACTIVE,
-      PRODUCT_STATUS.REJECTED,
-    ].includes(status)) {
+    } else if (
+      !isSellerRole(actor) &&
+      [PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.REJECTED].includes(status)
+    ) {
       this.assertCanReviewProductStatus(actor, status);
     } else if (!isSellerRole(actor) && status === PRODUCT_STATUS.INACTIVE) {
       this.assertCanReviewProductStatus(actor, PRODUCT_STATUS.INACTIVE);
     }
 
-    await Promise.all(products.map((product) =>
-      this.productRepository.update(product._id, {
-        status,
-        lastUpdatedBy: actor.userId,
-        ...(status === PRODUCT_STATUS.ACTIVE ? { publishedAt: product.publishedAt || new Date() } : {}),
-        statusHistory: this.appendStatusHistory(product, {
-          fromStatus: product.status,
-          toStatus: status,
-          fromRevisionStatus: product.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
-          toRevisionStatus: product.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
-          actor,
-          reason: "bulk_status_update",
+    await Promise.all(
+      products.map((product) =>
+        this.productRepository.update(product._id, {
+          status,
+          lastUpdatedBy: actor.userId,
+          ...(status === PRODUCT_STATUS.ACTIVE
+            ? { publishedAt: product.publishedAt || new Date() }
+            : {}),
+          statusHistory: this.appendStatusHistory(product, {
+            fromStatus: product.status,
+            toStatus: status,
+            fromRevisionStatus:
+              product.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+            toRevisionStatus:
+              product.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+            actor,
+            reason: "bulk_status_update",
+          }),
         }),
-      }),
-    ));
+      ),
+    );
 
     if (status === PRODUCT_STATUS.ACTIVE) {
-      const updatedProducts = await this.productRepository.findByIds(productIds);
+      const updatedProducts =
+        await this.productRepository.findByIds(productIds);
       Promise.allSettled(updatedProducts.map((p) => this._indexProduct(p)));
     } else {
       Promise.allSettled(productIds.map((id) => this._deleteFromIndex(id)));
@@ -3582,13 +4486,20 @@ async getProduct(productId) {
     const products = await this.productRepository.findByIds(productIds);
     const requestedCount = new Set(productIds.map((id) => String(id))).size;
     if (!products.length || products.length !== requestedCount) {
-      throw new AppError("One or more products were not found for bulk visibility update", 404);
+      throw new AppError(
+        "One or more products were not found for bulk visibility update",
+        404,
+      );
     }
 
-    products.forEach((product) => this.assertCanAccessManagementProduct(product, actor));
+    products.forEach((product) =>
+      this.assertCanAccessManagementProduct(product, actor),
+    );
     await this.productRepository.bulkUpdateVisibility(productIds, visibility);
     const updatedProducts = await this.productRepository.findByIds(productIds);
-    Promise.allSettled(updatedProducts.map((product) => this._indexProduct(product)));
+    Promise.allSettled(
+      updatedProducts.map((product) => this._indexProduct(product)),
+    );
     this._invalidateProductCache();
     return { updated: productIds.length, visibility };
   }
@@ -3605,12 +4516,18 @@ async getProduct(productId) {
         productId,
         variants: [],
       };
-      const hasTopLevelVariantIdentity = Boolean(entry?.variantId || entry?.variantSku);
-      const hasGroupedVariantUpdates = Array.isArray(entry?.variants) && entry.variants.length > 0;
+      const hasTopLevelVariantIdentity = Boolean(
+        entry?.variantId || entry?.variantSku,
+      );
+      const hasGroupedVariantUpdates =
+        Array.isArray(entry?.variants) && entry.variants.length > 0;
 
       if (hasTopLevelVariantIdentity) {
         if (Object.prototype.hasOwnProperty.call(existing, "salePrice")) {
-          throw new AppError(`Cannot mix product-level and variant-level special price updates for product ${productId}`, 400);
+          throw new AppError(
+            `Cannot mix product-level and variant-level special price updates for product ${productId}`,
+            400,
+          );
         }
         existing.variants.push({
           variantId: entry.variantId,
@@ -3621,17 +4538,30 @@ async getProduct(productId) {
 
       if (hasGroupedVariantUpdates) {
         if (Object.prototype.hasOwnProperty.call(existing, "salePrice")) {
-          throw new AppError(`Cannot mix product-level and variant-level special price updates for product ${productId}`, 400);
+          throw new AppError(
+            `Cannot mix product-level and variant-level special price updates for product ${productId}`,
+            400,
+          );
         }
         existing.variants.push(...entry.variants);
       }
 
-      if (!hasTopLevelVariantIdentity && !hasGroupedVariantUpdates && Object.prototype.hasOwnProperty.call(entry, "salePrice")) {
+      if (
+        !hasTopLevelVariantIdentity &&
+        !hasGroupedVariantUpdates &&
+        Object.prototype.hasOwnProperty.call(entry, "salePrice")
+      ) {
         if (existing.variants.length) {
-          throw new AppError(`Cannot mix product-level and variant-level special price updates for product ${productId}`, 400);
+          throw new AppError(
+            `Cannot mix product-level and variant-level special price updates for product ${productId}`,
+            400,
+          );
         }
         if (Object.prototype.hasOwnProperty.call(existing, "salePrice")) {
-          throw new AppError(`Duplicate product-level special price update for product ${productId}`, 400);
+          throw new AppError(
+            `Duplicate product-level special price update for product ${productId}`,
+            400,
+          );
         }
         existing.salePrice = entry.salePrice;
       }
@@ -3639,11 +4569,13 @@ async getProduct(productId) {
       groupedUpdates.set(productId, existing);
     });
 
-    const normalizedUpdates = Array.from(groupedUpdates.values()).map((entry) => {
-      if (entry.variants.length) return entry;
-      const { variants, ...productLevelEntry } = entry;
-      return productLevelEntry;
-    });
+    const normalizedUpdates = Array.from(groupedUpdates.values()).map(
+      (entry) => {
+        if (entry.variants.length) return entry;
+        const { variants, ...productLevelEntry } = entry;
+        return productLevelEntry;
+      },
+    );
 
     if (!normalizedUpdates.length) {
       throw new AppError("No special price updates were provided", 400);
@@ -3655,15 +4587,23 @@ async getProduct(productId) {
       .map((id) => String(id));
     const requestedCount = new Set(productIds).size;
     if (!requestedCount) {
-      throw new AppError("No valid product ids were provided for special price updates", 400);
+      throw new AppError(
+        "No valid product ids were provided for special price updates",
+        400,
+      );
     }
 
     const products = await this.productRepository.findByIds(productIds);
     if (!products.length || products.length !== requestedCount) {
-      throw new AppError("One or more products were not found for special price update", 404);
+      throw new AppError(
+        "One or more products were not found for special price update",
+        404,
+      );
     }
 
-    const productMap = new Map(products.map((product) => [String(product._id || product.id), product]));
+    const productMap = new Map(
+      products.map((product) => [String(product._id || product.id), product]),
+    );
     const updatePlans = [];
     const updatedProductIds = [];
 
@@ -3678,13 +4618,19 @@ async getProduct(productId) {
       }
       this.assertCanAccessManagementProduct(product, actor);
 
-      const hasVariantUpdates = Array.isArray(entry?.variants) && entry.variants.length > 0;
+      const hasVariantUpdates =
+        Array.isArray(entry?.variants) && entry.variants.length > 0;
       const payload = {};
 
       if (hasVariantUpdates) {
-        const variants = Array.isArray(product.variants) ? product.variants : [];
+        const variants = Array.isArray(product.variants)
+          ? product.variants
+          : [];
         if (!variants.length) {
-          throw new AppError("Product does not have variants for special price update", 400);
+          throw new AppError(
+            "Product does not have variants for special price update",
+            400,
+          );
         }
         const seenVariants = new Set();
         const updatesByVariantId = new Map();
@@ -3694,7 +4640,9 @@ async getProduct(productId) {
           const variantSku = String(item?.variantSku || "");
           const matchingVariants = variants.filter((variant) => {
             const plainVariant = this.toPlainVariant(variant);
-            const currentVariantId = String(plainVariant._id || plainVariant.id || "");
+            const currentVariantId = String(
+              plainVariant._id || plainVariant.id || "",
+            );
             const currentVariantSku = String(plainVariant.sku || "");
             return (
               (!variantId || currentVariantId === variantId) &&
@@ -3710,31 +4658,50 @@ async getProduct(productId) {
           }
 
           const plainVariant = this.toPlainVariant(matchingVariants[0]);
-          const currentVariantId = String(plainVariant._id || plainVariant.id || "");
+          const currentVariantId = String(
+            plainVariant._id || plainVariant.id || "",
+          );
           if (seenVariants.has(currentVariantId)) {
-            throw new AppError(`Duplicate variant update for "${plainVariant.title || plainVariant.sku}"`, 400);
+            throw new AppError(
+              `Duplicate variant update for "${plainVariant.title || plainVariant.sku}"`,
+              400,
+            );
           }
           seenVariants.add(currentVariantId);
 
-          const nextValue = item.salePrice === undefined || item.salePrice === null || item.salePrice === ""
-            ? null
-            : Number(item.salePrice);
-          if (nextValue !== null && (!Number.isFinite(nextValue) || nextValue < 0)) {
-            throw new AppError("Special price must be a non-negative number or null", 400);
+          const nextValue =
+            item.salePrice === undefined ||
+            item.salePrice === null ||
+            item.salePrice === ""
+              ? null
+              : Number(item.salePrice);
+          if (
+            nextValue !== null &&
+            (!Number.isFinite(nextValue) || nextValue < 0)
+          ) {
+            throw new AppError(
+              "Special price must be a non-negative number or null",
+              400,
+            );
           }
           const sellingPrice = Number(plainVariant.price);
           const minimumSpecialPrice = Math.ceil(sellingPrice * 0.5 * 100) / 100;
           if (nextValue !== null && nextValue < minimumSpecialPrice) {
             throw new AppError(
               `Invalid special price for variant "${plainVariant.title}" in "${product.title}". ` +
-              `Special price (₹${nextValue}) must be at least 50% of selling price (₹${minimumSpecialPrice}).`,
+                `Special price (₹${nextValue}) must be at least 50% of selling price (₹${minimumSpecialPrice}).`,
               400,
             );
           }
-          if (nextValue !== null && (!Number.isFinite(sellingPrice) || sellingPrice <= 0 || nextValue >= sellingPrice)) {
+          if (
+            nextValue !== null &&
+            (!Number.isFinite(sellingPrice) ||
+              sellingPrice <= 0 ||
+              nextValue >= sellingPrice)
+          ) {
             throw new AppError(
               `Invalid special price for variant "${plainVariant.title}" in "${product.title}". ` +
-              `Special price (₹${nextValue}) must be less than selling price (₹${sellingPrice || 0}).`,
+                `Special price (₹${nextValue}) must be less than selling price (₹${sellingPrice || 0}).`,
               400,
             );
           }
@@ -3743,56 +4710,82 @@ async getProduct(productId) {
 
         payload.variants = variants.map((variant) => {
           const plainVariant = this.toPlainVariant(variant);
-          const currentVariantId = String(plainVariant._id || plainVariant.id || "");
+          const currentVariantId = String(
+            plainVariant._id || plainVariant.id || "",
+          );
           return updatesByVariantId.has(currentVariantId)
-            ? { ...plainVariant, salePrice: updatesByVariantId.get(currentVariantId) }
+            ? {
+                ...plainVariant,
+                salePrice: updatesByVariantId.get(currentVariantId),
+              }
             : plainVariant;
         });
       } else if (Object.prototype.hasOwnProperty.call(entry, "salePrice")) {
-        const nextValue = entry.salePrice === undefined || entry.salePrice === null || entry.salePrice === ""
-          ? null
-          : Number(entry.salePrice);
-        
+        const nextValue =
+          entry.salePrice === undefined ||
+          entry.salePrice === null ||
+          entry.salePrice === ""
+            ? null
+            : Number(entry.salePrice);
+
         // Pre-validate pricing before updating
         const sellingPrice = Number(product.price);
-        if (nextValue !== null && (!Number.isFinite(nextValue) || nextValue < 0)) {
-          throw new AppError("Special price must be a non-negative number or null", 400);
+        if (
+          nextValue !== null &&
+          (!Number.isFinite(nextValue) || nextValue < 0)
+        ) {
+          throw new AppError(
+            "Special price must be a non-negative number or null",
+            400,
+          );
         }
         const minimumSpecialPrice = Math.ceil(sellingPrice * 0.5 * 100) / 100;
         if (nextValue !== null && nextValue < minimumSpecialPrice) {
           throw new AppError(
             `Invalid special price for "${product.title}". ` +
-            `Special price (₹${nextValue}) must be at least 50% of selling price (₹${minimumSpecialPrice}).`,
+              `Special price (₹${nextValue}) must be at least 50% of selling price (₹${minimumSpecialPrice}).`,
             400,
           );
         }
-        if (nextValue !== null && (!Number.isFinite(sellingPrice) || sellingPrice <= 0 || nextValue >= sellingPrice)) {
+        if (
+          nextValue !== null &&
+          (!Number.isFinite(sellingPrice) ||
+            sellingPrice <= 0 ||
+            nextValue >= sellingPrice)
+        ) {
           throw new AppError(
             `Invalid special price for "${product.title}". ` +
-            `Special price (₹${nextValue}) must be less than selling price (₹${sellingPrice || 0}).`,
+              `Special price (₹${nextValue}) must be less than selling price (₹${sellingPrice || 0}).`,
             400,
           );
         }
-        
+
         payload.salePrice = nextValue;
       }
 
       if (!Object.keys(payload).length) {
-        throw new AppError(`No special price was provided for product ${productId}`, 400);
+        throw new AppError(
+          `No special price was provided for product ${productId}`,
+          400,
+        );
       }
       updatePlans.push({ productId, product, payload });
     }
 
     for (const { productId, product, payload } of updatePlans) {
       try {
-        const updatedProduct = await this.updateProduct(productId, payload, actor);
+        const updatedProduct = await this.updateProduct(
+          productId,
+          payload,
+          actor,
+        );
         updatedProductIds.push(String(updatedProduct._id || updatedProduct.id));
       } catch (err) {
         // Enhance error with product context if validation error
         if (err.message && err.statusCode === 400) {
           throw new AppError(
             `Failed to update "${product.title}" (SKU: ${product.sku}): ${err.message}`,
-            400
+            400,
           );
         }
         throw err;
@@ -3800,26 +4793,38 @@ async getProduct(productId) {
     }
 
     this._invalidateProductCache();
-    return { updated: updatedProductIds.length, updates: normalizedUpdates.length };
+    return {
+      updated: updatedProductIds.length,
+      updates: normalizedUpdates.length,
+    };
   }
 
   // ─── Inventory management ─────────────────────────────────────────────────
 
   async adjustInventory(productId, payload, actor) {
-    const updatedProduct = await this.inventoryService.adjustProductInventory(productId, payload, actor);
+    const updatedProduct = await this.inventoryService.adjustProductInventory(
+      productId,
+      payload,
+      actor,
+    );
     this._invalidateProductCache();
     return updatedProduct;
   }
 
   async getInventoryStats(sellerId = null, createdBy = null) {
-    const [stats] = await this.productRepository.getInventoryStats(sellerId, createdBy);
-    return stats || {
-      totalProducts: 0,
-      totalStock: 0,
-      totalReserved: 0,
-      lowStockCount: 0,
-      outOfStockCount: 0,
-    };
+    const [stats] = await this.productRepository.getInventoryStats(
+      sellerId,
+      createdBy,
+    );
+    return (
+      stats || {
+        totalProducts: 0,
+        totalStock: 0,
+        totalReserved: 0,
+        lowStockCount: 0,
+        outOfStockCount: 0,
+      }
+    );
   }
 
   async getLowStockProducts(limit = 10, actor = {}, query = {}) {
@@ -3868,9 +4873,14 @@ async getProduct(productId) {
     if (isSellerRole(actor)) {
       throw new AppError("Only Admin can permanently delete products", 403);
     }
-    products.forEach((product) => this.assertCanAccessManagementProduct(product, actor));
+    products.forEach((product) =>
+      this.assertCanAccessManagementProduct(product, actor),
+    );
 
-    const referencedIds = await this.productRepository.findProductIdsWithOrderReferences(normalizedIds);
+    const referencedIds =
+      await this.productRepository.findProductIdsWithOrderReferences(
+        normalizedIds,
+      );
     if (referencedIds.length) {
       throw new AppError(
         `${referencedIds.length} selected product(s) have order history and cannot be permanently deleted`,
@@ -3882,10 +4892,11 @@ async getProduct(productId) {
     const result = await this.productRepository.deleteMany(normalizedIds);
     Promise.allSettled(normalizedIds.map((id) => this._deleteFromIndex(id)));
     this._invalidateProductCache();
-    await deleteUnreferencedMedia([
-      ...products.flatMap(productMedia),
-    ]);
-    return { deleted: Number(result?.deletedCount || 0), productIds: normalizedIds };
+    await deleteUnreferencedMedia([...products.flatMap(productMedia)]);
+    return {
+      deleted: Number(result?.deletedCount || 0),
+      productIds: normalizedIds,
+    };
   }
 
   async duplicateProduct(productId, payload = {}, actor = {}) {
@@ -3907,7 +4918,9 @@ async getProduct(productId) {
       ...source,
       title,
       slug: slugify(`${title}-${Date.now()}`, { lower: true, strict: true }),
-      sku: payload.sku || (source.sku ? `${source.sku}-COPY-${Date.now()}` : source.sku),
+      sku:
+        payload.sku ||
+        (source.sku ? `${source.sku}-COPY-${Date.now()}` : source.sku),
       status: PRODUCT_STATUS.DRAFT,
       approvalStatus: PRODUCT_APPROVAL_STATUS.PENDING,
       visibility: PRODUCT_VISIBILITY.PRIVATE,
@@ -3969,7 +4982,10 @@ async getProduct(productId) {
       existingProduct.approvalStatus !== PRODUCT_APPROVAL_STATUS.APPROVED &&
       isSellerRole(actor)
     ) {
-      throw new AppError("Product must be approved before it can be activated", 409);
+      throw new AppError(
+        "Product must be approved before it can be activated",
+        409,
+      );
     }
 
     const isAdminReactivation =
@@ -3981,7 +4997,9 @@ async getProduct(productId) {
       this.assertSellerCanSetStatus(existingProduct, nextStatus);
     } else if (isAdminReactivation || nextStatus === PRODUCT_STATUS.INACTIVE) {
       this.assertCanReviewProductStatus(actor, PRODUCT_STATUS.INACTIVE);
-    } else if ([PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.REJECTED].includes(nextStatus)) {
+    } else if (
+      [PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.REJECTED].includes(nextStatus)
+    ) {
       return this.reviewProduct(productId, payload, actor);
     }
 
@@ -3989,7 +5007,8 @@ async getProduct(productId) {
       status: nextStatus,
       ...(nextStatus === PRODUCT_STATUS.SCHEDULED
         ? {
-            scheduledAt: payload.scheduledAt || existingProduct.scheduledAt || null,
+            scheduledAt:
+              payload.scheduledAt || existingProduct.scheduledAt || null,
             visibility: PRODUCT_VISIBILITY.SCHEDULED,
           }
         : {}),
@@ -3999,19 +5018,24 @@ async getProduct(productId) {
             rejectionReason: null,
           }
         : {}),
-      ...(nextStatus === PRODUCT_STATUS.ACTIVE ? { publishedAt: existingProduct.publishedAt || new Date() } : {}),
+      ...(nextStatus === PRODUCT_STATUS.ACTIVE
+        ? { publishedAt: existingProduct.publishedAt || new Date() }
+        : {}),
       lastUpdatedBy: actor.userId,
       statusHistory: this.appendStatusHistory(existingProduct, {
         fromStatus: existingProduct.status,
         toStatus: nextStatus,
         fromRevisionStatus:
-          existingProduct.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+          existingProduct.revisionStatus ||
+          PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
         toRevisionStatus:
           nextStatus === PRODUCT_STATUS.CHANGE_PENDING
             ? PRODUCT_REVISION_WORKFLOW_STATUS.CHANGE_PENDING
-            : existingProduct.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+            : existingProduct.revisionStatus ||
+              PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
         actor,
-        reason: payload.reason || payload.rejectionReason || "product_status_changed",
+        reason:
+          payload.reason || payload.rejectionReason || "product_status_changed",
       }),
     });
 
@@ -4029,7 +5053,12 @@ async getProduct(productId) {
 
   // ─── Analytics ───────────────────────────────────────────────────────────
 
-  async getTopProducts(limit = 10, metric = "purchases", actor = {}, query = {}) {
+  async getTopProducts(
+    limit = 10,
+    metric = "purchases",
+    actor = {},
+    query = {},
+  ) {
     return this.productRepository.getTopProducts(
       limit,
       metric,
@@ -4056,8 +5085,15 @@ async getProduct(productId) {
     return filter;
   }
 
-  async publishScheduledProducts({ now = new Date(), limit = 100, actor = null } = {}) {
-    const products = await this.productRepository.findScheduledForPublish(now, limit);
+  async publishScheduledProducts({
+    now = new Date(),
+    limit = 100,
+    actor = null,
+  } = {}) {
+    const products = await this.productRepository.findScheduledForPublish(
+      now,
+      limit,
+    );
     const results = [];
 
     for (const product of products) {
@@ -4070,8 +5106,10 @@ async getProduct(productId) {
         statusHistory: this.appendStatusHistory(product, {
           fromStatus: product.status,
           toStatus: PRODUCT_STATUS.ACTIVE,
-          fromRevisionStatus: product.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
-          toRevisionStatus: product.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+          fromRevisionStatus:
+            product.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
+          toRevisionStatus:
+            product.revisionStatus || PRODUCT_REVISION_WORKFLOW_STATUS.NONE,
           actor: actor || { userId: "system", role: "system" },
           reason: "scheduled_publish_job",
         }),
@@ -4086,41 +5124,48 @@ async getProduct(productId) {
 
   toPlainObject(value = {}) {
     if (!value) return {};
-    const plain = typeof value.toObject === "function"
-      ? value.toObject({ depopulate: true, flattenMaps: true })
-      : { ...value };
+    const plain =
+      typeof value.toObject === "function"
+        ? value.toObject({ depopulate: true, flattenMaps: true })
+        : { ...value };
     return this.applyVariantDisplayFields(plain);
   }
 
   getDisplayVariant(product = {}) {
     const variants = Array.isArray(product?.variants) ? product.variants : [];
     if (!variants.length) return null;
-    const activeVariants = variants.filter((variant) =>
-      variant?.status !== "inactive" && variant?.status !== "out_of_stock",
+    const activeVariants = variants.filter(
+      (variant) =>
+        variant?.status !== "inactive" && variant?.status !== "out_of_stock",
     );
     const inStockVariants = activeVariants.filter((variant) => {
       const available = variant.availableStock ?? variant.available_stock;
-      const availableStock = available !== undefined && available !== null && available !== ""
-        ? this.toVariantNumber(available, 0)
-        : this.toVariantNumber(variant.stock, 0) - this.toVariantNumber(variant.reservedStock, 0);
+      const availableStock =
+        available !== undefined && available !== null && available !== ""
+          ? this.toVariantNumber(available, 0)
+          : this.toVariantNumber(variant.stock, 0) -
+            this.toVariantNumber(variant.reservedStock, 0);
       return availableStock > 0;
     });
-    const lowestPricedVariant = (items = []) => [...items].sort((left, right) => {
-      const leftPrice = this.hasPayloadValue(left, "salePrice")
-        ? this.toVariantNumber(left.salePrice, Infinity)
-        : this.toVariantNumber(left.price, Infinity);
-      const rightPrice = this.hasPayloadValue(right, "salePrice")
-        ? this.toVariantNumber(right.salePrice, Infinity)
-        : this.toVariantNumber(right.price, Infinity);
-      return leftPrice - rightPrice;
-    })[0];
+    const lowestPricedVariant = (items = []) =>
+      [...items].sort((left, right) => {
+        const leftPrice = this.hasPayloadValue(left, "salePrice")
+          ? this.toVariantNumber(left.salePrice, Infinity)
+          : this.toVariantNumber(left.price, Infinity);
+        const rightPrice = this.hasPayloadValue(right, "salePrice")
+          ? this.toVariantNumber(right.salePrice, Infinity)
+          : this.toVariantNumber(right.price, Infinity);
+        return leftPrice - rightPrice;
+      })[0];
 
-    return inStockVariants.find((variant) => variant?.isDefault === true) ||
+    return (
+      inStockVariants.find((variant) => variant?.isDefault === true) ||
       lowestPricedVariant(inStockVariants) ||
       activeVariants.find((variant) => variant?.isDefault === true) ||
       activeVariants[0] ||
       variants[0] ||
-      null;
+      null
+    );
   }
 
   applyVariantDisplayFields(product = {}) {
@@ -4171,7 +5216,8 @@ async getProduct(productId) {
       variants,
       images: variantImages,
       image: variantImages[0] || "",
-      color: variant.attributes?.color || variant.attributes?.Color || product.color,
+      color:
+        variant.attributes?.color || variant.attributes?.Color || product.color,
     };
   }
 
@@ -4208,12 +5254,17 @@ async getProduct(productId) {
   }
 
   assertCanAccessManagementProduct(product, actor = {}) {
-    if (!actor.userId || actor.isSuperAdmin || ["admin", "super-admin"].includes(actor.role)) {
+    if (
+      !actor.userId ||
+      actor.isSuperAdmin ||
+      ["admin", "super-admin"].includes(actor.role)
+    ) {
       return;
     }
     if (
       isSellerRole(actor) &&
-      String(product.sellerId || "") === String(actor.ownerSellerId || actor.userId)
+      String(product.sellerId || "") ===
+        String(actor.ownerSellerId || actor.userId)
     ) {
       if (
         isScopedSellerRole(actor) &&
@@ -4225,7 +5276,10 @@ async getProduct(productId) {
         actor.organizationId &&
         String(product.organizationId || "") !== String(actor.organizationId)
       ) {
-        throw new AppError("Product does not belong to the selected organization", 403);
+        throw new AppError(
+          "Product does not belong to the selected organization",
+          403,
+        );
       }
       return;
     }
@@ -4250,7 +5304,10 @@ async getProduct(productId) {
       return;
     }
 
-    throw new AppError(`Permission denied: products:${requiredAction} is required`, 403);
+    throw new AppError(
+      `Permission denied: products:${requiredAction} is required`,
+      403,
+    );
   }
 
   assertSellerCanSetStatus(product, nextStatus) {
@@ -4263,7 +5320,10 @@ async getProduct(productId) {
     ]);
 
     if (!allowedSellerStatuses.has(nextStatus)) {
-      throw new AppError("Seller cannot directly approve or reject products", 403);
+      throw new AppError(
+        "Seller cannot directly approve or reject products",
+        403,
+      );
     }
 
     // if (
@@ -4276,15 +5336,24 @@ async getProduct(productId) {
     //   );
     // }
 
-    if (currentStatus === PRODUCT_STATUS.ACTIVE && nextStatus !== PRODUCT_STATUS.INACTIVE) {
-      throw new AppError("Active product changes must be submitted as a pending revision", 403);
+    if (
+      currentStatus === PRODUCT_STATUS.ACTIVE &&
+      nextStatus !== PRODUCT_STATUS.INACTIVE
+    ) {
+      throw new AppError(
+        "Active product changes must be submitted as a pending revision",
+        403,
+      );
     }
 
-    if (nextStatus === PRODUCT_STATUS.INACTIVE && ![
-      PRODUCT_STATUS.ACTIVE,
-      PRODUCT_STATUS.INACTIVE,
-    ].includes(currentStatus)) {
-      throw new AppError("Only active products can be deactivated by seller", 400);
+    if (
+      nextStatus === PRODUCT_STATUS.INACTIVE &&
+      ![PRODUCT_STATUS.ACTIVE, PRODUCT_STATUS.INACTIVE].includes(currentStatus)
+    ) {
+      throw new AppError(
+        "Only active products can be deactivated by seller",
+        400,
+      );
     }
   }
 
@@ -4292,7 +5361,9 @@ async getProduct(productId) {
 
   async submitReview(productId, payload, actor) {
     const buyerId = actor.userId || actor.sub || actor.id;
-    const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId, {
+      allowRawObjectId: true,
+    });
     const orderRepo = new OrderRepository();
     const reviewableItem = await orderRepo.findReviewableOrderItem({
       buyerId,
@@ -4301,14 +5372,22 @@ async getProduct(productId) {
       orderItemId: payload.orderItemId,
     });
     if (!reviewableItem) {
-      throw AppError.validation("You can review this product only after this item is delivered.");
+      throw AppError.validation(
+        "You can review this product only after this item is delivered.",
+      );
     }
     const platformService = new PlatformService();
-    return platformService.createProductReview(resolvedProductId, payload, actor);
+    return platformService.createProductReview(
+      resolvedProductId,
+      payload,
+      actor,
+    );
   }
 
   async listReviews(productId, query = {}) {
-    const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId, {
+      allowRawObjectId: true,
+    });
     const platformService = new PlatformService();
     return platformService.listPublicProductReviews(resolvedProductId, query);
   }
@@ -4327,7 +5406,9 @@ async getProduct(productId) {
 
   async getMyReviewForProduct(productId, actor, query = {}) {
     const buyerId = actor.userId || actor.sub || actor.id;
-    const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId, {
+      allowRawObjectId: true,
+    });
     const platformRepo = new PlatformRepository();
     const filter = {
       productId: resolvedProductId,
@@ -4335,114 +5416,352 @@ async getProduct(productId) {
       ...(query.orderId ? { orderId: query.orderId } : {}),
       ...(query.orderItemId ? { orderItemId: query.orderItemId } : {}),
     };
-    const reviews = await platformRepo.listProductReviews(filter, { skip: 0, limit: 1 });
+    const reviews = await platformRepo.listProductReviews(filter, {
+      skip: 0,
+      limit: 1,
+    });
     if (!reviews.items[0]) return null;
     const platformService = new PlatformService();
-    const [review] = await platformService.enrichProductReviewItems(reviews.items);
+    const [review] = await platformService.enrichProductReviewItems(
+      reviews.items,
+    );
     return review || null;
   }
 
-async getRelatedProducts(productId, { limit = 8 } = {}) {
-  const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
-  const normalizedLimit = Math.min(Math.max(Number(limit) || 8, 1), 20);
-  return remember(`products:related:${resolvedProductId}:${normalizedLimit}`, 300, async () => {
-  try {
-    const product =
-      await ProductModel.findById(resolvedProductId)
-        .select("categoryId category brand tags")
-        .lean();
+  async getRelatedProducts(productId, { limit = 8 } = {}) {
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId, {
+      allowRawObjectId: true,
+    });
+    const normalizedLimit = Math.min(Math.max(Number(limit) || 8, 1), 20);
+    return remember(
+      `products:related:${resolvedProductId}:${normalizedLimit}`,
+      300,
+      async () => {
+        try {
+          const product = await ProductModel.findById(resolvedProductId)
+            .select("categoryId category brand tags")
+            .lean();
 
-    if (!product) {
-      return [];
-    }
+          if (!product) {
+            return [];
+          }
 
-    const currentCategoryKey =
-      product.categoryId ||
-      product.category ||
-      null;
+          const currentCategoryKey =
+            product.categoryId || product.category || null;
 
-    if (!currentCategoryKey) {
-      return [];
-    }
+          if (!currentCategoryKey) {
+            return [];
+          }
 
-    // ---------------------------------------------------------
-    // 1. FIND CURRENT CATEGORY
-    // ---------------------------------------------------------
+          // ---------------------------------------------------------
+          // 1. FIND CURRENT CATEGORY
+          // ---------------------------------------------------------
 
-    const currentCategory =
-      await CategoryTreeModel.findOne({
-        categoryKey: currentCategoryKey,
-        active: true,
-      }).lean();
+          const currentCategory = await CategoryTreeModel.findOne({
+            categoryKey: currentCategoryKey,
+            active: true,
+          }).lean();
 
-    if (!currentCategory) {
-      return [];
-    }
+          if (!currentCategory) {
+            return [];
+          }
 
-    // ---------------------------------------------------------
-    // 2. FIND SAME CATEGORY / SUBCATEGORY MATCHES
-    // ---------------------------------------------------------
+          // ---------------------------------------------------------
+          // 2. FIND SAME CATEGORY / SUBCATEGORY MATCHES
+          // ---------------------------------------------------------
 
-    const descendantKeys = await this.platformRepository
-      .getCategoryDescendantKeys(currentCategoryKey)
-      .catch(() => []);
-    const matchingCategoryKeys = [
-      ...new Set([currentCategoryKey, ...descendantKeys].filter(Boolean)),
-    ];
+          const descendantKeys = await this.platformRepository
+            .getCategoryDescendantKeys(currentCategoryKey)
+            .catch(() => []);
+          const matchingCategoryKeys = [
+            ...new Set([currentCategoryKey, ...descendantKeys].filter(Boolean)),
+          ];
 
-    // ---------------------------------------------------------
-    // 3. BUILD RELATED PRODUCT CONDITIONS
-    // ---------------------------------------------------------
+          // ---------------------------------------------------------
+          // 3. BUILD RELATED PRODUCT CONDITIONS
+          // ---------------------------------------------------------
 
-    const relatedConditions = [];
+          const relatedConditions = [];
 
-    // Same category / subcategory
-    if (matchingCategoryKeys.length > 0) {
-      relatedConditions.push({
-        categoryId: {
-          $in: matchingCategoryKeys,
-        },
-      });
+          // Same category / subcategory
+          if (matchingCategoryKeys.length > 0) {
+            relatedConditions.push({
+              categoryId: {
+                $in: matchingCategoryKeys,
+              },
+            });
 
-      relatedConditions.push({
-        category: {
-          $in: matchingCategoryKeys,
-        },
-      });
-    }
+            relatedConditions.push({
+              category: {
+                $in: matchingCategoryKeys,
+              },
+            });
+          }
 
-    if (relatedConditions.length === 0) {
-      return [];
-    }
+          if (relatedConditions.length === 0) {
+            return [];
+          }
 
-    // ---------------------------------------------------------
-    // 5. PUBLIC FILTER
-    // ---------------------------------------------------------
+          // ---------------------------------------------------------
+          // 5. PUBLIC FILTER
+          // ---------------------------------------------------------
 
-    const relatedFilter =
-      applyPublicProductFilter({
-        _id: {
-          $ne: product._id,
-        },
+          const relatedFilter = applyPublicProductFilter({
+            _id: {
+              $ne: product._id,
+            },
 
-        $or: relatedConditions,
-      });
+            $or: relatedConditions,
+          });
 
-    // ---------------------------------------------------------
-    // 6. PRODUCT PROJECTION
-    // ---------------------------------------------------------
+          // ---------------------------------------------------------
+          // 6. PRODUCT PROJECTION
+          // ---------------------------------------------------------
 
-    const results =
-      await this.productRepository.list(
-        relatedFilter,
-        {
-          page: 1,
-          limit: Math.max(normalizedLimit * 5, 30),
-          skip: 0,
-          sortBy: "rating",
-        },
-        {
-          projection: {
+          const results = await this.productRepository.list(
+            relatedFilter,
+            {
+              page: 1,
+              limit: Math.max(normalizedLimit * 5, 30),
+              skip: 0,
+              sortBy: "rating",
+            },
+            {
+              projection: {
+                sellerId: 1,
+                organizationId: 1,
+                storeId: 1,
+                warehouseId: 1,
+                organizationSnapshot: 1,
+
+                title: 1,
+                slug: 1,
+                productType: 1,
+
+                visibility: 1,
+
+                categoryId: 1,
+                category: 1,
+                brand: 1,
+
+                productFamilyCode: 1,
+                tags: 1,
+
+                price: 1,
+                mrp: 1,
+                salePrice: 1,
+                currency: 1,
+
+                gstRate: 1,
+                hsnCode: 1,
+                sku: 1,
+
+                attributes: 1,
+                variantAxes: 1,
+                hasVariants: 1,
+                variants: 1,
+
+                images: 1,
+                commonImages: 1,
+
+                stock: 1,
+                reservedStock: 1,
+                availableStock: 1,
+
+                inventorySettings: 1,
+                shipping: 1,
+
+                collectionIds: 1,
+
+                rating: 1,
+                reviewCount: 1,
+
+                metadata: 1,
+
+                status: 1,
+                approvalStatus: 1,
+                revisionStatus: 1,
+
+                analytics: 1,
+
+                createdAt: 1,
+                updatedAt: 1,
+                approvedAt: 1,
+
+                origin: 1,
+              },
+
+              lean: true,
+            },
+          );
+
+          const items = Array.isArray(results) ? results : results?.items || [];
+
+          // ---------------------------------------------------------
+          // 7. REMOVE DUPLICATES
+          // ---------------------------------------------------------
+
+          const uniqueProducts = [];
+          const seenIds = new Set();
+
+          for (const item of items) {
+            const id = String(item._id);
+
+            if (id === String(product._id)) {
+              continue;
+            }
+
+            if (seenIds.has(id)) {
+              continue;
+            }
+
+            seenIds.add(id);
+            uniqueProducts.push(item);
+          }
+
+          // ---------------------------------------------------------
+          // 8. FINAL RESPONSE
+          // ---------------------------------------------------------
+
+          return uniqueProducts
+            .slice(0, normalizedLimit)
+            .map((item) => this.withPrimaryImageAlias(item));
+        } catch (error) {
+          return [];
+        }
+      },
+    );
+  }
+
+  async getCrossSellProducts(productId, { limit = 6 } = {}) {
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId, {
+      allowRawObjectId: true,
+    });
+    const normalizedLimit = Math.min(Math.max(Number(limit) || 6, 1), 12);
+    return remember(
+      `products:cross-sell:${resolvedProductId}:${normalizedLimit}`,
+      300,
+      async () => {
+        try {
+          const product = await ProductModel.findById(resolvedProductId)
+            .select("categoryId category brand")
+            .lean();
+
+          if (!product) {
+            return [];
+          }
+
+          const currentCategoryKey =
+            product.categoryId || product.category || null;
+
+          if (!currentCategoryKey) {
+            return [];
+          }
+
+          // 1. Find current category
+          const currentCategory = await CategoryTreeModel.findOne({
+            categoryKey: currentCategoryKey,
+            active: true,
+          }).lean();
+
+          if (!currentCategory) {
+            return [];
+          }
+
+          // 2. Find root category
+          let rootCategory = currentCategory;
+          let parentKey = currentCategory.parentKey;
+
+          const visited = new Set();
+
+          while (parentKey && !visited.has(parentKey)) {
+            visited.add(parentKey);
+
+            const parentCategory = await CategoryTreeModel.findOne({
+              categoryKey: parentKey,
+              active: true,
+            }).lean();
+
+            if (!parentCategory) {
+              break;
+            }
+
+            rootCategory = parentCategory;
+            parentKey = parentCategory.parentKey;
+          }
+
+          const rootCategoryKey = rootCategory.categoryKey;
+
+          // 3. Find all categories under same root
+          const allRootCategories = await CategoryTreeModel.find({
+            active: true,
+          })
+            .select("categoryKey parentKey")
+            .lean();
+          const categoryByKey = new Map(
+            allRootCategories.map((category) => [
+              String(category.categoryKey),
+              category,
+            ]),
+          );
+
+          const matchingCategoryKeys = [];
+
+          for (const category of allRootCategories) {
+            let categoryRoot = category;
+            let categoryParentKey = category.parentKey;
+
+            const categoryVisited = new Set();
+
+            while (
+              categoryParentKey &&
+              !categoryVisited.has(categoryParentKey)
+            ) {
+              categoryVisited.add(categoryParentKey);
+
+              const parentCategory = categoryByKey.get(
+                String(categoryParentKey),
+              );
+
+              if (!parentCategory) {
+                break;
+              }
+
+              categoryRoot = parentCategory;
+              categoryParentKey = parentCategory.parentKey;
+            }
+
+            if (categoryRoot.categoryKey === rootCategoryKey) {
+              matchingCategoryKeys.push(category.categoryKey);
+            }
+          }
+
+          // Make sure current category is included
+          if (!matchingCategoryKeys.includes(currentCategoryKey)) {
+            matchingCategoryKeys.push(currentCategoryKey);
+          }
+
+          // 4. Same root category products
+          const rootCategoryFilter = applyPublicProductFilter({
+            _id: {
+              $ne: product._id,
+            },
+
+            $or: [
+              {
+                categoryId: {
+                  $in: matchingCategoryKeys,
+                },
+              },
+              {
+                category: {
+                  $in: matchingCategoryKeys,
+                },
+              },
+            ],
+          });
+
+          const productProjection = {
             sellerId: 1,
             organizationId: 1,
             storeId: 1,
@@ -4504,339 +5823,95 @@ async getRelatedProducts(productId, { limit = 8 } = {}) {
             approvedAt: 1,
 
             origin: 1,
-          },
+          };
 
-          lean: true,
-        }
-      );
-
-    const items = Array.isArray(results) ? results : results?.items || [];
-
-    // ---------------------------------------------------------
-    // 7. REMOVE DUPLICATES
-    // ---------------------------------------------------------
-
-    const uniqueProducts = [];
-    const seenIds = new Set();
-
-    for (const item of items) {
-      const id = String(item._id);
-
-      if (id === String(product._id)) {
-        continue;
-      }
-
-      if (seenIds.has(id)) {
-        continue;
-      }
-
-      seenIds.add(id);
-      uniqueProducts.push(item);
-    }
-
-    // ---------------------------------------------------------
-    // 8. FINAL RESPONSE
-    // ---------------------------------------------------------
-
-    return uniqueProducts
-      .slice(0, normalizedLimit)
-      .map((item) =>
-        this.withPrimaryImageAlias(item)
-      );
-  } catch (error) {
-    return [];
-  }
-  });
-}
-
-async getCrossSellProducts(productId, { limit = 6 } = {}) {
-  const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
-  const normalizedLimit = Math.min(Math.max(Number(limit) || 6, 1), 12);
-  return remember(`products:cross-sell:${resolvedProductId}:${normalizedLimit}`, 300, async () => {
-  try {
-    const product = await ProductModel.findById(resolvedProductId)
-      .select("categoryId category brand")
-      .lean();
-
-    if (!product) {
-      return [];
-    }
-
-    const currentCategoryKey =
-      product.categoryId || product.category || null;
-
-    if (!currentCategoryKey) {
-      return [];
-    }
-
-    // 1. Find current category
-    const currentCategory = await CategoryTreeModel.findOne({
-      categoryKey: currentCategoryKey,
-      active: true,
-    }).lean();
-
-    if (!currentCategory) {
-      return [];
-    }
-
-    // 2. Find root category
-    let rootCategory = currentCategory;
-    let parentKey = currentCategory.parentKey;
-
-    const visited = new Set();
-
-    while (
-      parentKey &&
-      !visited.has(parentKey)
-    ) {
-      visited.add(parentKey);
-
-      const parentCategory =
-        await CategoryTreeModel.findOne({
-          categoryKey: parentKey,
-          active: true,
-        }).lean();
-
-      if (!parentCategory) {
-        break;
-      }
-
-      rootCategory = parentCategory;
-      parentKey = parentCategory.parentKey;
-    }
-
-    const rootCategoryKey = rootCategory.categoryKey;
-
-    // 3. Find all categories under same root
-    const allRootCategories =
-      await CategoryTreeModel.find({
-        active: true,
-      }).select("categoryKey parentKey").lean();
-    const categoryByKey = new Map(
-      allRootCategories.map((category) => [String(category.categoryKey), category]),
-    );
-
-    const matchingCategoryKeys = [];
-
-    for (const category of allRootCategories) {
-      let categoryRoot = category;
-      let categoryParentKey = category.parentKey;
-
-      const categoryVisited = new Set();
-
-      while (
-        categoryParentKey &&
-        !categoryVisited.has(categoryParentKey)
-      ) {
-        categoryVisited.add(categoryParentKey);
-
-        const parentCategory = categoryByKey.get(String(categoryParentKey));
-
-        if (!parentCategory) {
-          break;
-        }
-
-        categoryRoot = parentCategory;
-        categoryParentKey = parentCategory.parentKey;
-      }
-
-      if (
-        categoryRoot.categoryKey === rootCategoryKey
-      ) {
-        matchingCategoryKeys.push(
-          category.categoryKey
-        );
-      }
-    }
-
-    // Make sure current category is included
-    if (
-      !matchingCategoryKeys.includes(
-        currentCategoryKey
-      )
-    ) {
-      matchingCategoryKeys.push(
-        currentCategoryKey
-      );
-    }
-
-    // 4. Same root category products
-    const rootCategoryFilter =
-      applyPublicProductFilter({
-        _id: {
-          $ne: product._id,
-        },
-
-        $or: [
-          {
-            categoryId: {
-              $in: matchingCategoryKeys,
+          const rootCategoryResults = await this.productRepository.list(
+            rootCategoryFilter,
+            {
+              page: 1,
+              limit: Math.max(normalizedLimit * 5, 30),
+              skip: 0,
+              sortBy: "newest",
             },
-          },
-          {
-            category: {
-              $in: matchingCategoryKeys,
+            {
+              projection: productProjection,
+              lean: true,
             },
-          },
-        ],
-      });
+          );
 
-    const productProjection = {
-      sellerId: 1,
-      organizationId: 1,
-      storeId: 1,
-      warehouseId: 1,
-      organizationSnapshot: 1,
+          let matchedProducts = Array.isArray(rootCategoryResults)
+            ? rootCategoryResults
+            : rootCategoryResults?.items || [];
 
-      title: 1,
-      slug: 1,
-      productType: 1,
+          // 5. Fallback: same brand
+          if (matchedProducts.length === 0 && product.brand) {
+            const brandFilter = applyPublicProductFilter({
+              _id: {
+                $ne: product._id,
+              },
 
-      visibility: 1,
+              brand: product.brand,
+            });
 
-      categoryId: 1,
-      category: 1,
-      brand: 1,
+            const brandResults = await this.productRepository.list(
+              brandFilter,
+              {
+                page: 1,
+                limit: Math.max(normalizedLimit * 5, 30),
+                skip: 0,
+                sortBy: "newest",
+              },
+              {
+                projection: productProjection,
+                lean: true,
+              },
+            );
 
-      productFamilyCode: 1,
-      tags: 1,
-
-      price: 1,
-      mrp: 1,
-      salePrice: 1,
-      currency: 1,
-
-      gstRate: 1,
-      hsnCode: 1,
-      sku: 1,
-
-      attributes: 1,
-      variantAxes: 1,
-      hasVariants: 1,
-      variants: 1,
-
-      images: 1,
-      commonImages: 1,
-
-      stock: 1,
-      reservedStock: 1,
-      availableStock: 1,
-
-      inventorySettings: 1,
-      shipping: 1,
-
-      collectionIds: 1,
-
-      rating: 1,
-      reviewCount: 1,
-
-      metadata: 1,
-
-      status: 1,
-      approvalStatus: 1,
-      revisionStatus: 1,
-
-      analytics: 1,
-
-      createdAt: 1,
-      updatedAt: 1,
-      approvedAt: 1,
-
-      origin: 1,
-    };
-
-    const rootCategoryResults =
-      await this.productRepository.list(
-        rootCategoryFilter,
-        {
-          page: 1,
-          limit: Math.max(normalizedLimit * 5, 30),
-          skip: 0,
-          sortBy: "newest",
-        },
-        {
-          projection: productProjection,
-          lean: true,
-        }
-      );
-
-    let matchedProducts = Array.isArray(rootCategoryResults)
-      ? rootCategoryResults
-      : rootCategoryResults?.items || [];
-
-    // 5. Fallback: same brand
-    if (
-      matchedProducts.length === 0 &&
-      product.brand
-    ) {
-      const brandFilter =
-        applyPublicProductFilter({
-          _id: {
-            $ne: product._id,
-          },
-
-          brand: product.brand,
-        });
-
-      const brandResults =
-        await this.productRepository.list(
-          brandFilter,
-          {
-            page: 1,
-            limit: Math.max(normalizedLimit * 5, 30),
-            skip: 0,
-            sortBy: "newest",
-          },
-          {
-            projection: productProjection,
-            lean: true,
+            matchedProducts = Array.isArray(brandResults)
+              ? brandResults
+              : brandResults?.items || [];
           }
-        );
 
-      matchedProducts = Array.isArray(brandResults)
-        ? brandResults
-        : brandResults?.items || [];
-    }
+          // 6. Remove duplicates and current product
+          const uniqueProducts = [];
+          const seenIds = new Set();
 
-    // 6. Remove duplicates and current product
-    const uniqueProducts = [];
-    const seenIds = new Set();
+          for (const item of matchedProducts) {
+            const id = String(item._id);
 
-    for (const item of matchedProducts) {
-      const id = String(item._id);
+            if (id === String(product._id)) {
+              continue;
+            }
 
-      if (id === String(product._id)) {
-        continue;
-      }
+            if (seenIds.has(id)) {
+              continue;
+            }
 
-      if (seenIds.has(id)) {
-        continue;
-      }
+            seenIds.add(id);
+            uniqueProducts.push(item);
+          }
 
-      seenIds.add(id);
-      uniqueProducts.push(item);
-    }
-
-    // 7. Return final products
-    return uniqueProducts
-      .slice(0, normalizedLimit)
-      .map((item) =>
-        this.withPrimaryImageAlias(item)
-      );
-  } catch (error) {
-    return [];
+          // 7. Return final products
+          return uniqueProducts
+            .slice(0, normalizedLimit)
+            .map((item) => this.withPrimaryImageAlias(item));
+        } catch (error) {
+          return [];
+        }
+      },
+    );
   }
-  });
-}
 
   async getUpSellProducts(productId, { limit = 4 } = {}) {
-    const resolvedProductId = this.resolveProductRouteIdentifier(productId, { allowRawObjectId: true });
+    const resolvedProductId = this.resolveProductRouteIdentifier(productId, {
+      allowRawObjectId: true,
+    });
     const product = await this.productRepository.findById(resolvedProductId);
     if (!product) return [];
 
     const basePrice = Number(product.salePrice || product.price || 0);
     const minPrice = basePrice * 1.1; // 10% more expensive
-    const maxPrice = basePrice * 3;   // Cap at 3x the current price
+    const maxPrice = basePrice * 3; // Cap at 3x the current price
 
     const filter = applyPublicProductFilter({
       _id: { $ne: product._id },
@@ -4847,36 +5922,88 @@ async getCrossSellProducts(productId, { limit = 6 } = {}) {
       ],
     });
 
-    const results = await this.productRepository.paginate(filter, { page: 1, limit, skip: 0, sortBy: "rating" }, {
-      projection: { title: 1, slug: 1, images: 1, commonImages: 1, "variants.images": 1, "variants.image": 1, price: 1, salePrice: 1, rating: 1, reviewCount: 1, brand: 1, category: 1, availableStock: 1 },
-      lean: true,
-    });
+    const results = await this.productRepository.paginate(
+      filter,
+      { page: 1, limit, skip: 0, sortBy: "rating" },
+      {
+        projection: {
+          title: 1,
+          slug: 1,
+          images: 1,
+          commonImages: 1,
+          "variants.images": 1,
+          "variants.image": 1,
+          price: 1,
+          salePrice: 1,
+          rating: 1,
+          reviewCount: 1,
+          brand: 1,
+          category: 1,
+          availableStock: 1,
+        },
+        lean: true,
+      },
+    );
 
-    return (results.items || []).map((item) => this.withPrimaryImageAlias(item));
+    return (results.items || []).map((item) =>
+      this.withPrimaryImageAlias(item),
+    );
   }
 
   computeCompletenessScore(product) {
     const checks = [
-      { field: "title", weight: 10, pass: () => !!(product.title || "").trim() },
-      { field: "description", weight: 10, pass: () => !!(product.description || "").trim() },
+      {
+        field: "title",
+        weight: 10,
+        pass: () => !!(product.title || "").trim(),
+      },
+      {
+        field: "description",
+        weight: 10,
+        pass: () => !!(product.description || "").trim(),
+      },
       { field: "category", weight: 10, pass: () => !!product.category },
       { field: "brand", weight: 5, pass: () => !!product.brand },
-      { field: "price", weight: 10, pass: () => Number(product.price || product.salePrice || 0) > 0 },
-      { field: "images", weight: 15, pass: () => (product.images || []).length >= 2 },
+      {
+        field: "price",
+        weight: 10,
+        pass: () => Number(product.price || product.salePrice || 0) > 0,
+      },
+      {
+        field: "images",
+        weight: 15,
+        pass: () => (product.images || []).length >= 2,
+      },
       { field: "sku", weight: 5, pass: () => !!(product.sku || "").trim() },
-      { field: "stock", weight: 10, pass: () => Number(product.stock ?? product.availableStock ?? 0) >= 0 },
+      {
+        field: "stock",
+        weight: 10,
+        pass: () => Number(product.stock ?? product.availableStock ?? 0) >= 0,
+      },
       { field: "hsnCode", weight: 5, pass: () => !!product.hsnCode },
-      { field: "gstRate", weight: 5, pass: () => product.gstRate !== undefined && product.gstRate !== null },
+      {
+        field: "gstRate",
+        weight: 5,
+        pass: () => product.gstRate !== undefined && product.gstRate !== null,
+      },
       { field: "productType", weight: 5, pass: () => !!product.productType },
       { field: "tags", weight: 5, pass: () => (product.tags || []).length > 0 },
-      { field: "metaTitle", weight: 5, pass: () => !!(product.metaTitle || product.seoTitle || "").trim() },
+      {
+        field: "metaTitle",
+        weight: 5,
+        pass: () => !!(product.metaTitle || product.seoTitle || "").trim(),
+      },
     ];
 
     const total = checks.reduce((sum, check) => sum + check.weight, 0);
-    const earned = checks.filter((check) => check.pass()).reduce((sum, check) => sum + check.weight, 0);
+    const earned = checks
+      .filter((check) => check.pass())
+      .reduce((sum, check) => sum + check.weight, 0);
     const score = Math.round((earned / total) * 100);
 
-    const missing = checks.filter((check) => !check.pass()).map((check) => check.field);
+    const missing = checks
+      .filter((check) => !check.pass())
+      .map((check) => check.field);
 
     return { score, missing, total, earned };
   }
@@ -4910,10 +6037,13 @@ function hasProductPermission(actor = {}, action) {
     status_change: ["status_change", "status", "action", "manage"],
   };
   const actions = actionAliases[action] || [action];
-  const permissions = new Set(Array.isArray(actor.permissions) ? actor.permissions : []);
+  const permissions = new Set(
+    Array.isArray(actor.permissions) ? actor.permissions : [],
+  );
 
-  return actions.some((candidate) =>
-    permissions.has(candidate) || permissions.has(`products:${candidate}`),
+  return actions.some(
+    (candidate) =>
+      permissions.has(candidate) || permissions.has(`products:${candidate}`),
   );
 }
 
@@ -4933,9 +6063,7 @@ function normalizeCategoryKey(value) {
 
 function splitFilterValues(value) {
   const values = Array.isArray(value) ? value : String(value).split(",");
-  return values
-    .map((item) => String(item || "").trim())
-    .filter(Boolean);
+  return values.map((item) => String(item || "").trim()).filter(Boolean);
 }
 
 function buildProductSearchExactFilter(fields = [], value) {
@@ -4944,11 +6072,11 @@ function buildProductSearchExactFilter(fields = [], value) {
 
   return {
     bool: {
-      should: fields.flatMap((field) => (
+      should: fields.flatMap((field) =>
         values.length > 1
           ? [{ terms: { [field]: values } }]
-          : [{ term: { [field]: values[0] } }]
-      )),
+          : [{ term: { [field]: values[0] } }],
+      ),
       minimum_should_match: 1,
     },
   };

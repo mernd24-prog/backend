@@ -1048,9 +1048,9 @@ async function seedPolicyPages() {
 
             points: [
               {
-                title: "Eligibility",
+                title: "Definitions",
                 description:
-                  "You must be legally capable of entering into binding agreements to use this platform \n By using Sam Global, you confirm that all information provided is accurate and complete",
+                  "“Platform” refers to the Sam Global website, mobile application, and related services.\n“User” / “Customer” refers to any individual accessing or using the Platform.\n“Seller” refers to third-party vendors offering products through the Platform (where applicable).\n“Services” refers to all functionalities provided through the Platform.",
                 image: {},
                 cta: {},
                 sortOrder: 1,
@@ -1285,10 +1285,10 @@ async function seedPolicyPages() {
               {
                 title: "Return Eligibility",
                 description:
-                  "Returns will be accepted only if the product is eligible under the applicable policy.\n" +
-                  "The return request is initiated within the specified return window.\n" +
+                  "Returns will be accepted only if the return request is initiated within the specified return window.\n" +
                   "The product is unused, undamaged, and in its original condition.\n" +
-                  "Original tags, packaging, and accessories are intact.",
+                  "All original tags, packaging, and accessories are intact.\n" +
+                  "Sam Global reserves the right to reject returns that do not meet the above conditions.",
                 image: {},
                 cta: {},
                 sortOrder: 1,
@@ -1297,9 +1297,10 @@ async function seedPolicyPages() {
               {
                 title: "Return Process",
                 description:
-                  "Return requests must be raised through the appropriate platform or support channel.\n" +
-                  "Once submitted, return requests will be reviewed and approved where applicable.\n" +
-                  "Products must be handed over to the return courier as instructed.",
+                  "Return requests must be initiated through the designated platform or support channels.\n" +
+                  "Pickup or return instructions will be communicated upon request approval.\n" +
+                  "Products must be handed over in the same condition as received.\n" +
+                  "Failure to comply may result in rejection of the return request.",
                 image: {},
                 cta: {},
                 sortOrder: 2,
@@ -1351,7 +1352,7 @@ async function seedPolicyPages() {
                 title: "Damaged / Incorrect Products",
                 description:
                   "Any claims regarding damaged, defective, or incorrect products must be reported within 48 hours of delivery.\n" +
-                  "Photographic or video evidence may be required for claim review.",
+                  "Failure to report within this timeframe may result in rejection of the claim.",
                 image: {},
                 cta: {},
                 sortOrder: 7,
@@ -1531,7 +1532,7 @@ async function seedPolicyPages() {
               {
                 title: "Need Assistance?",
                 description:
-                  "For any shipping-related queries, please contact our support team.Reliable delivery, aligned with clarity and trust.",
+                  "For any shipping-related queries, please contact our support team.\nReliable delivery, aligned with clarity and trust.",
                 image: {},
                 cta: {},
                 sortOrder: 8,
