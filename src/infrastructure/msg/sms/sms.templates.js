@@ -12,7 +12,7 @@ const define = (templateId, variables, buildMessage, options = {}) => Object.fre
 
 const brand = env.sms.brandName;
 const SMS_TEMPLATES = Object.freeze({
-  [SMS_TEMPLATE_KEYS.LOGIN_OTP]: define(env.sms.templateIds.loginOtp, ["otp", "validityMinutes"], ({ otp, validityMinutes }) => `${otp} is your OTP to log in to ${brand}. Valid for ${validityMinutes} minutes. Do not share it with anyone.`, { otp: true }),
+  [SMS_TEMPLATE_KEYS.LOGIN_OTP]: define(env.sms.templateIds.loginOtp, ["otp", "validityMinutes"], ({ otp, validityMinutes }) => `${otp} is your OTP to log in to ${brand}. Valid for 10 minutes. Do not share it with anyone.`, { otp: true }),
   [SMS_TEMPLATE_KEYS.REGISTER_OTP]: define(env.sms.templateIds.registerOtp, ["otp", "validityMinutes"], ({ otp, validityMinutes }) => `${otp} is your OTP to register with ${brand}. Valid for ${validityMinutes} minutes. Do not share it with anyone.`, { otp: true }),
   [SMS_TEMPLATE_KEYS.FORGOT_PASSWORD_OTP]: define(env.sms.templateIds.forgotPasswordOtp, ["otp", "validityMinutes"], ({ otp, validityMinutes }) => `${otp} is your OTP to reset your ${brand} password. Valid for ${validityMinutes} minutes. Do not share it with anyone.`, { otp: true }),
   [SMS_TEMPLATE_KEYS.RESET_PASSWORD_OTP]: define(env.sms.templateIds.resetPasswordOtp, ["otp", "validityMinutes"], ({ otp, validityMinutes }) => `${otp} is your OTP to confirm your ${brand} password reset. Valid for ${validityMinutes} minutes. Do not share it with anyone.`, { otp: true }),

@@ -68,7 +68,7 @@ const {
 } = require("../../../shared/auth/session-state");
 const BUYER_OTP_PURPOSE = "buyer_auth";
 
-const BUYER_OTP_TTL_SECONDS = 300;
+const BUYER_OTP_TTL_SECONDS = 600;
 const BUYER_OTP_CONTEXT_TTL_SECONDS = 600;
 const BUYER_OTP_RESEND_SECONDS = 60;
 const BUYER_OTP_MAX_ATTEMPTS = 5;
