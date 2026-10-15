@@ -23,12 +23,10 @@ class ApitxtSmsProvider {
         otp: message.variables.otp,
         channel: "sms",
         templateId: providerTemplate?.referenceId || template.templateId,
-        templateName: providerTemplate?.name || undefined,
         validityMinutes: message.variables.validityMinutes,
-        validityParameter: this.config.otpValidityParameter,
+        // Login DLT text has a fixed 10-minute validity, with OTP as its only variable.
+        validityParameter: templateKey === "LOGIN_OTP" ? undefined : this.config.otpValidityParameter,
         country: this.config.country,
-        sender: header,
-        peId: this.config.peId,
       });
     }
     if (!this.config.apiUrl) {

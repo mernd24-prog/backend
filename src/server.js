@@ -130,6 +130,8 @@ async function bootstrap() {
   });
 
   logStartupUrls(localIp);
+  // Optional search diagnostics must not delay HTTP startup or stop the API.
+  void require("./shared/search/elasticsearch-client").checkElasticsearchConnection();
 
   logger.info(
     {

@@ -229,10 +229,14 @@ class ApitxtService {
         channel,
         template_id: templateId,
         country,
-        template_name: templateName,
+        // SMS OTP uses the provider template reference; extra DLT fields are
+        // resolved by APITXT. Preserve template metadata for other channels.
+        ...(channel === "sms" ? {} : {
+          template_name: templateName,
+          sender,
+          DLT_PE_ID: peId,
+        }),
         project_ref_id: projectRefId,
-        sender,
-        DLT_PE_ID: peId,
         // Provider variable naming is configurable until its API contract is confirmed.
         ...(validityParameter && validityMinutes !== undefined
           ? { [validityParameter]: String(validityMinutes) }
