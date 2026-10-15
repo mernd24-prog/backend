@@ -64,4 +64,25 @@ console.log("Index         :", "samglobal_products");
 console.log("Timeout (ms)  :", 5000);
 console.log("========================================\n");
 
-module.exports = { elasticsearchClient, isElasticsearchEnabled };
+async function checkElasticsearchConnection() {
+  if (!isElasticsearchEnabled()) return { enabled: false };
+  try {
+    // Verify the same index/read permission used by product search, not just TCP.
+    const result = await elasticsearchClient.search({
+      index: "samglobal_products",
+      size: 0,
+      track_total_hits: true,
+      query: { match_all: {} },
+    });
+    const documents = result.hits?.total?.value ?? result.hits?.total ?? 0;
+    console.log(`[Elasticsearch] Connected; product index readable; documents=${documents}`);
+    return { enabled: true, connected: true, documents };
+  } catch (error) {
+    const status = error.meta?.statusCode || null;
+    const type = error.meta?.body?.error?.type || error.code || error.name;
+    console.warn(`[Elasticsearch] Product index check failed: status=${status || "network"}, type=${type}. Product search can fall back to MongoDB.`);
+    return { enabled: true, connected: false, status, type };
+  }
+}
+
+module.exports = { elasticsearchClient, isElasticsearchEnabled, checkElasticsearchConnection };
