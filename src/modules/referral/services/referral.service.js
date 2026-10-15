@@ -13,6 +13,23 @@ const { WalletService } = require("../../wallet/services/wallet.service");
 const { ReturnModel } = require("../../returns/models/return.model");
 const { knex } = require("../../../infrastructure/postgres/postgres-client");
 
+const comparableValue = (value) => {
+  if (Array.isArray(value)) return value.map(comparableValue);
+  if (value && typeof value === "object") {
+    return Object.keys(value)
+      .sort()
+      .reduce((result, key) => {
+        if (value[key] !== undefined) result[key] = comparableValue(value[key]);
+        return result;
+      }, {});
+  }
+  return value === undefined ? null : value;
+};
+
+const valuesEqual = (left, right) =>
+  JSON.stringify(comparableValue(left)) ===
+  JSON.stringify(comparableValue(right));
+
 class ReferralService {
   constructor({
     referralRepository = new ReferralRepository(),
@@ -800,6 +817,77 @@ class ReferralService {
     }
 
     return this.enrichInfluencer(profile);
+  }
+
+  async updateInfluencerProfileByAdmin(influencerId, payload = {}) {
+    const profile =
+      await this.referralRepository.getInfluencerProfileById(influencerId);
+    if (!profile) throw new AppError("Referral partner not found", 404);
+
+    const accountId = profile.accountId || profile.userId;
+    const account =
+      await this.referralRepository.getInfluencerAccountById(accountId);
+    if (!account) throw new AppError("Influencer account not found", 404);
+
+    const current = this.toPlainObject(account);
+    const nextEmail = String(payload.email || "")
+      .trim()
+      .toLowerCase();
+    if (
+      nextEmail !==
+      String(current.email || "")
+        .trim()
+        .toLowerCase()
+    ) {
+      const duplicate =
+        await this.referralRepository.findInfluencerAccountByEmail(nextEmail);
+      if (duplicate && String(duplicate._id) !== String(accountId)) {
+        throw new AppError(
+          "Email is already used by another referral partner",
+          409,
+        );
+      }
+    }
+
+    const nextProfile = {
+      ...(current.profile || {}),
+      firstName: payload.firstName,
+      lastName: payload.lastName || "",
+    };
+    const update = {
+      ...(valuesEqual(nextProfile, current.profile || {})
+        ? {}
+        : { profile: nextProfile }),
+      ...(nextEmail ===
+      String(current.email || "")
+        .trim()
+        .toLowerCase()
+        ? {}
+        : { email: nextEmail }),
+      ...(String(payload.phone || "") === String(current.phone || "")
+        ? {}
+        : { phone: payload.phone || null }),
+    };
+
+    let updatedAccount = current;
+    if (Object.keys(update).length) {
+      updatedAccount = this.toPlainObject(
+        await this.referralRepository.updateInfluencerAccount(accountId, {
+          $set: update,
+        }),
+      );
+    }
+
+    // Admin profile corrections never restart KYC/bank approval.
+    return {
+      ...this.toPlainObject(profile),
+      user: {
+        id: String(updatedAccount._id || accountId),
+        email: updatedAccount.email || null,
+        phone: updatedAccount.phone || null,
+        profile: updatedAccount.profile || {},
+      },
+    };
   }
 
   async updateInfluencerChildPermission(influencerId, payload = {}) {
@@ -3556,8 +3644,10 @@ class ReferralService {
       await this.referralRepository.getInfluencerAccountById(accountId);
     if (!account) throw new AppError("Influencer account not found", 404);
 
+    const currentAccount = this.toPlainObject(account);
+    const currentAccountProfile = currentAccount.profile || {};
     const accountProfile = {
-      ...(this.toPlainObject(account).profile || {}),
+      ...currentAccountProfile,
       ...(payload.firstName !== undefined
         ? { firstName: payload.firstName }
         : {}),
@@ -3566,12 +3656,13 @@ class ReferralService {
         ? { avatarUrl: payload.avatarUrl }
         : {}),
     };
-    await this.referralRepository.updateInfluencerAccount(accountId, {
-      $set: {
-        profile: accountProfile,
-        ...(payload.phone !== undefined ? { phone: payload.phone } : {}),
-      },
-    });
+    const accountProfileChanged = !valuesEqual(
+      accountProfile,
+      currentAccountProfile,
+    );
+    const phoneChanged =
+      payload.phone !== undefined &&
+      String(payload.phone || "") !== String(currentAccount.phone || "");
 
     const currentMetadata = this.toPlainObject(profile).metadata || {};
     const details = currentMetadata.details || {};
@@ -3593,6 +3684,26 @@ class ReferralService {
     };
     const documents = nextDetails.documents || {};
     const payout = nextDetails.payout || {};
+    const documentsChanged =
+      payload.documents !== undefined &&
+      !valuesEqual(documents, details.documents || {});
+    const payoutChanged =
+      payload.payout !== undefined &&
+      !valuesEqual(payout, details.payout || {});
+    const detailsChanged = !valuesEqual(nextDetails, details);
+
+    if (!accountProfileChanged && !phoneChanged && !detailsChanged) {
+      return this.getMyInfluencerProfile(actor);
+    }
+
+    if (accountProfileChanged || phoneChanged) {
+      await this.referralRepository.updateInfluencerAccount(accountId, {
+        $set: {
+          ...(accountProfileChanged ? { profile: accountProfile } : {}),
+          ...(phoneChanged ? { phone: payload.phone } : {}),
+        },
+      });
+    }
     const kycComplete = [
       documents.panCardUrl,
       documents.aadhaarCardUrl,
@@ -3607,12 +3718,12 @@ class ReferralService {
             payout.accountNumber &&
             payout.ifscCode,
           );
-    const nextKycStatus = payload.documents
+    const nextKycStatus = documentsChanged
       ? kycComplete
         ? "submitted"
         : "not_submitted"
       : profile.kycStatus;
-    const nextBankStatus = payload.payout
+    const nextBankStatus = payoutChanged
       ? bankComplete
         ? "submitted"
         : "not_submitted"
@@ -3620,7 +3731,7 @@ class ReferralService {
     const hasSubmission =
       ["submitted", "verified"].includes(nextKycStatus) &&
       ["submitted", "verified"].includes(nextBankStatus);
-    const verificationChanged = Boolean(payload.documents || payload.payout);
+    const verificationChanged = documentsChanged || payoutChanged;
     await this.referralRepository.updateInfluencerProfile(
       this.getRecordId(profile),
       {
@@ -3634,8 +3745,8 @@ class ReferralService {
               canCreateChildren: false,
             }
           : {}),
-        ...(payload.payout ? { payoutProfileStatus: nextBankStatus } : {}),
-        ...(payload.documents ? { kycStatus: nextKycStatus } : {}),
+        ...(payoutChanged ? { payoutProfileStatus: nextBankStatus } : {}),
+        ...(documentsChanged ? { kycStatus: nextKycStatus } : {}),
       },
     );
     if (verificationChanged) {

@@ -46,9 +46,19 @@ const payoutStatuses = [
   "cancelled",
 ];
 const bonusPeriods = ["monthly", "quarterly", "yearly", "custom"];
-const bonusTargetTypes = ["order_value", "order_count", "customer_count", "active_children"];
+const bonusTargetTypes = [
+  "order_value",
+  "order_count",
+  "customer_count",
+  "active_children",
+];
 const bonusTypes = ["fixed_coins", "percentage_extra_coins"];
-const bonusApplyTo = ["code_owner", "parent", "child", "all_eligible_influencers"];
+const bonusApplyTo = [
+  "code_owner",
+  "parent",
+  "child",
+  "all_eligible_influencers",
+];
 const bonusResetCycles = ["monthly", "quarterly", "yearly"];
 const bonusReleaseRules = [
   "instantly_available",
@@ -87,17 +97,13 @@ const newInfluencerBody = {
 };
 
 const createParentInfluencerSchema = Joi.object({
-  body: Joi.object(newInfluencerBody)
-    .or("userId", "email")
-    .required(),
+  body: Joi.object(newInfluencerBody).or("userId", "email").required(),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),
 });
 
 const createChildInfluencerSchema = Joi.object({
-  body: Joi.object(newInfluencerBody)
-    .or("userId", "email")
-    .required(),
+  body: Joi.object(newInfluencerBody).or("userId", "email").required(),
   query: Joi.object({}).required(),
   params: Joi.object({
     parentId: Joi.string().required(),
@@ -129,7 +135,11 @@ const listBrandAssociatesByParentSchema = Joi.object({
 
 const listProductAmountsSchema = Joi.object({
   body: Joi.object({}).required(),
-  query: Joi.object({ ...pagingQuery, productId: Joi.string(), active: Joi.boolean() }).required(),
+  query: Joi.object({
+    ...pagingQuery,
+    productId: Joi.string(),
+    active: Joi.boolean(),
+  }).required(),
   params: Joi.object({}).required(),
 });
 
@@ -147,19 +157,36 @@ const upsertProductAmountSchema = Joi.object({
 });
 
 const productAmountIdSchema = Joi.object({
-  body: Joi.object({}).required(), query: Joi.object({}).required(),
+  body: Joi.object({}).required(),
+  query: Joi.object({}).required(),
   params: Joi.object({ configId: Joi.string().required() }).required(),
 });
 
 const updateInfluencerStatusSchema = Joi.object({
   body: Joi.object({
-    status: Joi.string().valid(...influencerStatuses).required(),
+    status: Joi.string()
+      .valid(...influencerStatuses)
+      .required(),
     reason: Joi.string().allow("", null),
   }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({
     influencerId: Joi.string().required(),
   }).required(),
+});
+
+const updateInfluencerProfileSchema = Joi.object({
+  body: Joi.object({
+    firstName: Joi.string().trim().min(2).max(80).required(),
+    lastName: Joi.string().trim().max(80).allow("", null),
+    email: Joi.string().trim().lowercase().email().required(),
+    phone: Joi.string()
+      .trim()
+      .pattern(/^\+?[0-9]{7,15}$/)
+      .allow("", null),
+  }).required(),
+  query: Joi.object({}).required(),
+  params: Joi.object({ influencerId: Joi.string().required() }).required(),
 });
 
 const updateInfluencerChildPermissionSchema = Joi.object({
@@ -322,10 +349,21 @@ const upsertRulesSchema = Joi.object({
     monthlyWithdrawalLimitCoins: Joi.number().min(0),
     withdrawalKycRequired: Joi.boolean(),
     withdrawalApprovalMode: Joi.string().valid(...withdrawalApprovalModes),
-    withdrawalMethods: Joi.array().items(Joi.string().valid(...withdrawalMethods)).min(1),
-    referralCodePrefix: Joi.string().trim().uppercase().pattern(/^[A-Z0-9]*$/).max(8).allow(""),
+    withdrawalMethods: Joi.array()
+      .items(Joi.string().valid(...withdrawalMethods))
+      .min(1),
+    referralCodePrefix: Joi.string()
+      .trim()
+      .uppercase()
+      .pattern(/^[A-Z0-9]*$/)
+      .max(8)
+      .allow(""),
     referralCodeRandomLength: Joi.number().integer().min(4).max(16),
-    referralCodeCharacterSet: Joi.string().valid("alphanumeric", "numeric", "alphabetic"),
+    referralCodeCharacterSet: Joi.string().valid(
+      "alphanumeric",
+      "numeric",
+      "alphabetic",
+    ),
     minOrderAmount: Joi.number().min(0),
     active: Joi.boolean(),
     effectiveFrom: Joi.date().iso().allow(null),
@@ -447,6 +485,7 @@ module.exports = {
   createParentInfluencerSchema,
   createChildInfluencerSchema,
   updateInfluencerStatusSchema,
+  updateInfluencerProfileSchema,
   updateInfluencerChildPermissionSchema,
   reviewInfluencerVerificationSchema,
   promoteInfluencerSchema,

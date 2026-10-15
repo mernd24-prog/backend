@@ -13,6 +13,7 @@ const {
   createParentInfluencerSchema,
   createChildInfluencerSchema,
   updateInfluencerStatusSchema,
+  updateInfluencerProfileSchema,
   updateInfluencerChildPermissionSchema,
   reviewInfluencerVerificationSchema,
   promoteInfluencerSchema,
@@ -38,9 +39,21 @@ const {
 const referralAdminRoutes = express.Router();
 const referralAdminController = new ReferralAdminController();
 
-referralAdminRoutes.get("/product-amounts", checkInput(listProductAmountsSchema), catchErrors(referralAdminController.listProductAmounts));
-referralAdminRoutes.put("/product-amounts", checkInput(upsertProductAmountSchema), catchErrors(referralAdminController.upsertProductAmount));
-referralAdminRoutes.delete("/product-amounts/:configId", checkInput(productAmountIdSchema), catchErrors(referralAdminController.deleteProductAmount));
+referralAdminRoutes.get(
+  "/product-amounts",
+  checkInput(listProductAmountsSchema),
+  catchErrors(referralAdminController.listProductAmounts),
+);
+referralAdminRoutes.put(
+  "/product-amounts",
+  checkInput(upsertProductAmountSchema),
+  catchErrors(referralAdminController.upsertProductAmount),
+);
+referralAdminRoutes.delete(
+  "/product-amounts/:configId",
+  checkInput(productAmountIdSchema),
+  catchErrors(referralAdminController.deleteProductAmount),
+);
 
 referralAdminRoutes.get(
   "/influencers",
@@ -61,6 +74,11 @@ referralAdminRoutes.post(
   "/influencers/:parentId/children",
   checkInput(createChildInfluencerSchema),
   catchErrors(referralAdminController.createChildInfluencer),
+);
+referralAdminRoutes.patch(
+  "/influencers/:influencerId/profile",
+  checkInput(updateInfluencerProfileSchema),
+  catchErrors(referralAdminController.updateInfluencerProfile),
 );
 referralAdminRoutes.patch(
   "/influencers/:influencerId/status",

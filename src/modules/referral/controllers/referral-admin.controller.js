@@ -20,16 +20,29 @@ class ReferralAdminController {
 
   listProductAmounts = async (req, res) => {
     const result = await this.referralService.listProductAmounts(req.query);
-    res.json(okResponse(result.items, { total: result.total, page: result.page, limit: result.limit }));
+    res.json(
+      okResponse(result.items, {
+        total: result.total,
+        page: result.page,
+        limit: result.limit,
+      }),
+    );
   };
 
   upsertProductAmount = async (req, res) => {
-    const result = await this.referralService.upsertProductAmount(req.body, getCurrentUser(req));
+    const result = await this.referralService.upsertProductAmount(
+      req.body,
+      getCurrentUser(req),
+    );
     res.json(okResponse(result));
   };
 
   deleteProductAmount = async (req, res) => {
-    res.json(okResponse(await this.referralService.deleteProductAmount(req.params.configId)));
+    res.json(
+      okResponse(
+        await this.referralService.deleteProductAmount(req.params.configId),
+      ),
+    );
   };
 
   createParentInfluencer = async (req, res) => {
@@ -74,11 +87,21 @@ class ReferralAdminController {
     res.json(okResponse(influencer));
   };
 
+  updateInfluencerProfile = async (req, res) => {
+    const influencer =
+      await this.referralService.updateInfluencerProfileByAdmin(
+        req.params.influencerId,
+        req.body,
+      );
+    res.json(okResponse(influencer));
+  };
+
   updateInfluencerChildPermission = async (req, res) => {
-    const influencer = await this.referralService.updateInfluencerChildPermission(
-      req.params.influencerId,
-      req.body,
-    );
+    const influencer =
+      await this.referralService.updateInfluencerChildPermission(
+        req.params.influencerId,
+        req.body,
+      );
     res.json(okResponse(influencer));
   };
 
@@ -136,7 +159,9 @@ class ReferralAdminController {
   };
 
   listCommissions = async (req, res) => {
-    const result = await this.referralService.listReferralCommissions(req.query);
+    const result = await this.referralService.listReferralCommissions(
+      req.query,
+    );
     res.json(
       okResponse(result.items, {
         total: result.total,
