@@ -179,6 +179,7 @@ class PlatformRepository {
   async listCategories(filter = {}, pagination = {}, options = {}) {
     const sort = { sortOrder: 1, title: 1 };
     const allItems = await CategoryTreeModel.find(filter).sort(sort).lean();
+    if (!allItems.length) return { items: [], total: 0 };
 
     const withCounts = options.includeProductCounts || options.hasProducts
       ? allItems.map((item) => ({
@@ -219,6 +220,7 @@ class PlatformRepository {
       .lean();
     if (projection) query = query.select(projection);
     const allItems = await query;
+    if (!allItems.length) return { items: [], total: 0 };
 
     let items = allItems;
     if (options.includeProductCounts || options.hasProducts) {
