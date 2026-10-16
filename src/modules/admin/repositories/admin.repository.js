@@ -633,6 +633,9 @@ class AdminRepository {
     search = null,
     fromDate = null,
     toDate = null,
+    sortBy = "created_at",
+    sortDir = "desc",
+    sortOrder = null,
     limit = 50,
     offset = 0,
   } = {}) {
@@ -684,6 +687,23 @@ class AdminRepository {
     }
 
     const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const sortColumns = {
+      createdAt: "orders.created_at",
+      created_at: "orders.created_at",
+      order_number: "orders.order_number",
+      orderNumber: "orders.order_number",
+      total_amount: "orders.total_amount",
+      totalAmount: "orders.total_amount",
+      status: "orders.status",
+      payment_status: "orders.payment_status",
+      paymentStatus: "orders.payment_status",
+      delivery_status: "orders.delivery_status",
+      deliveryStatus: "orders.delivery_status",
+    };
+    const sortColumn = sortColumns[sortBy] || sortColumns.created_at;
+    const direction = String(sortDir || sortOrder).toLowerCase() === "asc"
+      ? "ASC"
+      : "DESC";
     const pagingValues = [...values, limit, offset];
 
     const [listResult, countResult] = await Promise.all([
@@ -691,7 +711,7 @@ class AdminRepository {
       `SELECT *
        FROM orders
        ${whereSql}
-       ORDER BY created_at DESC
+       ORDER BY ${sortColumn} ${direction} NULLS LAST, orders.created_at DESC, orders.id ASC
        LIMIT $${idx++}
        OFFSET $${idx}`,
         pagingValues,

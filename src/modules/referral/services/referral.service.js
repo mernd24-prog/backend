@@ -1213,9 +1213,15 @@ class ReferralService {
     const code = await this.referralRepository.getReferralCodeByCode(
       this.normalizeCode(codeValue),
     );
-    if (!code) return null;
+    if (!code) throw new AppError("Invalid influencer code", 400);
 
     const now = new Date();
+    if (code.status === "expired") {
+      throw new AppError("Influencer code has expired", 400);
+    }
+    if (code.status === "suspended") {
+      throw new AppError("Influencer code has been suspended", 400);
+    }
     if (code.status !== "active") {
       throw new AppError("Influencer code is not active", 400);
     }
@@ -1260,20 +1266,37 @@ class ReferralService {
       );
     }
 
-    const shares = {
+    const configuredShares = {
       customer: rule.customerSharePercent,
       codeOwner: rule.childSharePercent,
       parent: rule.parentSharePercent,
     };
-    this.validateDistributionShares(shares);
+    this.validateDistributionShares(configuredShares);
+    const codeOwnerPartnerType =
+      influencer.influencerType === "parent" ? "growth_partner" : "brand_associate";
+    const codeOwnerSharePercent = Number(
+      codeOwnerPartnerType === "growth_partner"
+        ? rule.parentSharePercent
+        : rule.childSharePercent,
+    );
+    const directParentSharePercent =
+      codeOwnerPartnerType === "brand_associate"
+        ? Number(rule.parentSharePercent || 0)
+        : 0;
     const referralPoolAmount =
       await this.calculateReferralPoolWithProductAmounts(
         items,
         rule,
         eligibleAmount,
       );
+    if (referralPoolAmount <= 0) {
+      throw new AppError(
+        "This influencer code is not applicable to the products in your order",
+        400,
+      );
+    }
     const customerDiscountAmount = Number(
-      ((referralPoolAmount * Number(shares.customer || 0)) / 100).toFixed(2),
+      ((referralPoolAmount * Number(configuredShares.customer || 0)) / 100).toFixed(2),
     );
     return {
       codeId: this.getRecordId(code),
@@ -1285,14 +1308,17 @@ class ReferralService {
       influencerUserId: influencer.userId ? String(influencer.userId) : null,
       parentInfluencerId: influencer.parentInfluencerId || null,
       overrideInfluencerId: influencer.originalParentInfluencerId || null,
+      codeOwnerPartnerType,
+      codeOwnerSharePercent,
+      directParentSharePercent,
       eligibleAmount: Number(Number(eligibleAmount || 0).toFixed(2)),
       referralPoolAmount,
       customerDiscountAmount,
       codeOwnerAmount: Number(
-        ((referralPoolAmount * Number(shares.codeOwner || 0)) / 100).toFixed(2),
+        ((referralPoolAmount * codeOwnerSharePercent) / 100).toFixed(2),
       ),
       parentAmount: Number(
-        ((referralPoolAmount * Number(shares.parent || 0)) / 100).toFixed(2),
+        ((referralPoolAmount * directParentSharePercent) / 100).toFixed(2),
       ),
       rule: this.toPlainObject(rule),
     };
@@ -1306,7 +1332,15 @@ class ReferralService {
 
     const context = payload.referralContext;
     if (!context?.codeId) return null;
+    // Defense in depth: never persist empty referral orders when none of the
+    // purchased products has a positive referral amount configured.
+    if (Number(context.referralPoolAmount || 0) <= 0) return null;
     const rule = context.rule || {};
+    const hasPositiveInfluencerAllocation = [
+      context.codeOwnerAmount,
+      context.parentAmount,
+    ].some((amount) => Number(amount || 0) > 0);
+    if (!hasPositiveInfluencerAllocation) return null;
     const referralOrder = await this.referralRepository.createReferralOrder({
       orderId: String(payload.orderId),
       customerId: String(payload.customerId),
@@ -1323,6 +1357,17 @@ class ReferralService {
       paymentStatus: payload.paymentStatus || "initiated",
       metadata: {
         referralPoolAmount: Number(context.referralPoolAmount || 0),
+        codeOwnerPartnerType: context.codeOwnerPartnerType || "brand_associate",
+        undistributedBrandAssociateAmount:
+          context.codeOwnerPartnerType === "growth_partner"
+            ? Number(
+                (
+                  (Number(context.referralPoolAmount || 0) *
+                    Number(rule.childSharePercent || 0)) /
+                  100
+                ).toFixed(2),
+              )
+            : 0,
         undistributedParentAmount: context.parentInfluencerId
           ? 0
           : Number(context.parentAmount || 0),
@@ -1340,14 +1385,19 @@ class ReferralService {
       {
         influencerId: context.influencerId,
         commissionType: "code_owner_base",
-        sharePercent: Number(rule.childSharePercent || 0),
+        sharePercent: Number(
+          context.codeOwnerSharePercent ?? rule.childSharePercent ?? 0,
+        ),
         shareAmount: context.codeOwnerAmount,
+        recipientPartnerType:
+          context.codeOwnerPartnerType || "brand_associate",
       },
       {
         influencerId: context.parentInfluencerId,
         commissionType: "direct_parent",
         sharePercent: Number(rule.parentSharePercent || 0),
         shareAmount: context.parentAmount,
+        recipientPartnerType: "growth_partner",
       },
     ].filter(
       (allocation) => allocation.influencerId && allocation.sharePercent > 0,
@@ -1379,6 +1429,7 @@ class ReferralService {
           referralPoolAmount: Number(context.referralPoolAmount || 0),
           shareAmount: Number(shareAmount.toFixed(2)),
           coinValue,
+          recipientPartnerType: allocation.recipientPartnerType,
         },
       });
       await this.referralRepository.updateWallet(allocation.influencerId, {

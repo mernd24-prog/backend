@@ -236,6 +236,23 @@ class OrderRepository {
       values.push(filters.organizationId);
     }
     this.applyOrderFilters(clauses, values, { ...filters, sellerId }, () => index++);
+    const sortMap = {
+      createdAt: "o.created_at",
+      created_at: "o.created_at",
+      order_number: "o.order_number",
+      orderNumber: "o.order_number",
+      total_amount: "o.total_amount",
+      totalAmount: "o.total_amount",
+      status: "o.status",
+      payment_status: "o.payment_status",
+      paymentStatus: "o.payment_status",
+      delivery_status: "o.delivery_status",
+      deliveryStatus: "o.delivery_status",
+    };
+    const sortColumn = sortMap[filters.sortBy] || sortMap.created_at;
+    const sortDirection = filters.sortDir === "asc" || filters.sortOrder === "asc"
+      ? "ASC"
+      : "DESC";
     values.push(Number(filters.limit || 50), Number(filters.offset || 0));
 
     const { rows } = await postgresPool.query(
@@ -243,7 +260,7 @@ class OrderRepository {
        FROM orders o
        INNER JOIN order_items oi ON oi.order_id = o.id
        WHERE ${clauses.join(" AND ")}
-       ORDER BY o.created_at DESC
+       ORDER BY ${sortColumn} ${sortDirection} NULLS LAST, o.created_at DESC, o.id ASC
        LIMIT $${index++}
        OFFSET $${index}`,
       values,
@@ -865,7 +882,7 @@ class OrderRepository {
         `SELECT o.*
          FROM orders o
          ${whereSql}
-         ORDER BY ${sortColumn} ${sortDirection}
+         ORDER BY ${sortColumn} ${sortDirection} NULLS LAST, o.created_at DESC, o.id ASC
          LIMIT $${index++}
          OFFSET $${index}`,
         [...values, limit, offset],
