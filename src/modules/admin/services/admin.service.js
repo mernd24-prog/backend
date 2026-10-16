@@ -635,17 +635,72 @@ class AdminService {
   }
 
   async listVendors(query, actor = {}) {
-    const result = await this.adminRepository.listVendors(
-      this.withActorHierarchyFilter({
-        ...query,
-        q: query.q || query.keyWord || "",
-        // Explicit dropdown scope; keep ordinary management lists unfiltered.
-        liveOnly: query.liveOnly === true || Boolean(query.searchFields),
-      }, actor),
-    );
+    const lifecycleFilters = {
+      onboardingStatus: query.onboardingStatus || null,
+      kycStatus: query.kycStatus || null,
+      bankVerificationStatus: query.bankVerificationStatus || null,
+      goLiveStatus: query.goLiveStatus || null,
+    };
+    const hasLifecycleFilters = Object.values(lifecycleFilters).some(Boolean);
+    const requestedPage = Math.max(Number(query.page || 1), 1);
+    const requestedLimit = Math.min(Math.max(Number(query.limit || 50), 1), 100);
+    const repositoryQuery = this.withActorHierarchyFilter({
+      ...query,
+      q: query.q || query.keyWord || "",
+      liveOnly: query.liveOnly === true || Boolean(query.searchFields),
+      ...(hasLifecycleFilters ? {
+        onboardingStatus: null,
+        kycStatus: null,
+        bankVerificationStatus: null,
+        goLiveStatus: null,
+        paginate: false,
+      } : {}),
+    }, actor);
+    const result = await this.adminRepository.listVendors(repositoryQuery);
+    const enrichedItems = await this.enrichSellersForAdmin(result.items);
+    const statusOf = (value, fallback) =>
+      String(value || fallback || "").trim().toLowerCase();
+    const filteredItems = hasLifecycleFilters
+      ? enrichedItems.filter((seller) => {
+          const statuses = {
+            onboardingStatus: statusOf(
+              seller?.onboarding?.status || seller?.sellerProfile?.onboardingStatus,
+              "initiated",
+            ),
+            kycStatus: statusOf(
+              seller?.onboarding?.kycStatus || seller?.sellerProfile?.kycStatus,
+              "not_submitted",
+            ),
+            bankVerificationStatus: statusOf(
+              seller?.onboarding?.bankVerificationStatus ||
+                seller?.sellerProfile?.bankVerificationStatus,
+              "not_submitted",
+            ),
+            goLiveStatus: statusOf(
+              seller?.organizationSummary?.goLiveStatus ||
+                seller?.organization?.goLiveStatus ||
+                seller?.onboarding?.goLiveStatus ||
+                seller?.sellerProfile?.goLiveStatus ||
+                (seller?.accountStatus === "active" ? "live" : "pending"),
+              "pending",
+            ),
+          };
+          return Object.entries(lifecycleFilters).every(
+            ([key, value]) => !value || statuses[key] === value,
+          );
+        })
+      : enrichedItems;
+    const total = hasLifecycleFilters ? filteredItems.length : result.total;
+    const items = hasLifecycleFilters
+      ? filteredItems.slice(
+          (requestedPage - 1) * requestedLimit,
+          requestedPage * requestedLimit,
+        )
+      : filteredItems;
     return {
       ...result,
-      items: await this.enrichSellersForAdmin(result.items),
+      items,
+      total,
     };
   }
 
@@ -2305,11 +2360,75 @@ class AdminService {
       throw new AppError("Forbidden", 403);
     }
     delete listQuery.role;
-    const result = await this.adminRepository.listUsers(listQuery);
+    const lifecycleFilters = {
+      onboardingStatus: query.onboardingStatus || null,
+      kycStatus: query.kycStatus || null,
+      bankVerificationStatus: query.bankVerificationStatus || null,
+      goLiveStatus: query.goLiveStatus || null,
+    };
+    const hasLifecycleFilters = Object.values(lifecycleFilters).some(Boolean);
+    const requestedPage = Math.max(Number(query.page || 1), 1);
+    const requestedLimit = Math.min(Math.max(Number(query.limit || 50), 1), 100);
+
+    // These statuses are derived from Mongo profile data, PostgreSQL KYC, and
+    // one or more seller organizations. Filter the enriched records so the
+    // predicate always matches the badges rendered by the admin table.
+    const result = await this.adminRepository.listUsers({
+      ...listQuery,
+      ...(hasLifecycleFilters ? { paginate: false } : {}),
+    });
+    const enrichedItems = await this.enrichSellersForAdmin(result.items);
+    const statusOf = (value, fallback) =>
+      String(value || fallback || "").trim().toLowerCase();
+    const filteredItems = hasLifecycleFilters
+      ? enrichedItems.filter((seller) => {
+          const onboardingStatus = statusOf(
+            seller?.onboarding?.status || seller?.sellerProfile?.onboardingStatus,
+            "initiated",
+          );
+          const kycStatus = statusOf(
+            seller?.onboarding?.kycStatus || seller?.sellerProfile?.kycStatus,
+            "not_submitted",
+          );
+          const bankStatus = statusOf(
+            seller?.onboarding?.bankVerificationStatus ||
+              seller?.sellerProfile?.bankVerificationStatus,
+            "not_submitted",
+          );
+          const goLiveStatus = statusOf(
+            seller?.organizationSummary?.goLiveStatus ||
+              seller?.organization?.goLiveStatus ||
+              seller?.onboarding?.goLiveStatus ||
+              seller?.sellerProfile?.goLiveStatus ||
+              (seller?.accountStatus === "active" ? "live" : "pending"),
+            "pending",
+          );
+
+          return (
+            (!lifecycleFilters.onboardingStatus ||
+              onboardingStatus === lifecycleFilters.onboardingStatus) &&
+            (!lifecycleFilters.kycStatus ||
+              kycStatus === lifecycleFilters.kycStatus) &&
+            (!lifecycleFilters.bankVerificationStatus ||
+              bankStatus === lifecycleFilters.bankVerificationStatus) &&
+            (!lifecycleFilters.goLiveStatus ||
+              goLiveStatus === lifecycleFilters.goLiveStatus)
+          );
+        })
+      : enrichedItems;
+    const total = hasLifecycleFilters ? filteredItems.length : result.total;
+    const pageItems = hasLifecycleFilters
+      ? filteredItems.slice(
+          (requestedPage - 1) * requestedLimit,
+          requestedPage * requestedLimit,
+        )
+      : filteredItems;
+
     return {
       ...result,
+      total,
       items: await this.enrichPermissionSummary(
-        await this.enrichSellersForAdmin(result.items),
+        pageItems,
       ),
     };
   }

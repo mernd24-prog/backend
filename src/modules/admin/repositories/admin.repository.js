@@ -338,7 +338,7 @@ class AdminRepository {
     };
   }
 
-  async listVendors({ liveOnly = false, q = "", status = null, onboardingStatus = null, kycStatus = null, bankVerificationStatus = null, goLiveStatus = null, limit = 50, page = 1, ownerAdminId = null, ownerSellerId = null, parentAdminId = null, parentSellerId = null } = {}) {
+  async listVendors({ liveOnly = false, q = "", status = null, onboardingStatus = null, kycStatus = null, bankVerificationStatus = null, goLiveStatus = null, limit = 50, page = 1, paginate = true, ownerAdminId = null, ownerSellerId = null, parentAdminId = null, parentSellerId = null } = {}) {
     const filter = { role: "seller" };
     if (status) {
       filter.accountStatus = status;
@@ -365,10 +365,30 @@ class AdminRepository {
       filter["sellerProfile.goLiveStatus"] = goLiveStatus;
     }
     if (q) {
+      const escapedQuery = String(q).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       filter.$or = [
-        { email: { $regex: q, $options: "i" } },
-        { "sellerProfile.displayName": { $regex: q, $options: "i" } },
-        { "sellerProfile.legalBusinessName": { $regex: q, $options: "i" } },
+        { email: { $regex: escapedQuery, $options: "i" } },
+        { phone: { $regex: escapedQuery, $options: "i" } },
+        { "profile.firstName": { $regex: escapedQuery, $options: "i" } },
+        { "profile.lastName": { $regex: escapedQuery, $options: "i" } },
+        { "sellerProfile.displayName": { $regex: escapedQuery, $options: "i" } },
+        { "sellerProfile.businessName": { $regex: escapedQuery, $options: "i" } },
+        { "sellerProfile.legalBusinessName": { $regex: escapedQuery, $options: "i" } },
+        {
+          $expr: {
+            $regexMatch: {
+              input: {
+                $concat: [
+                  { $ifNull: ["$profile.firstName", ""] },
+                  " ",
+                  { $ifNull: ["$profile.lastName", ""] },
+                ],
+              },
+              regex: escapedQuery,
+              options: "i",
+            },
+          },
+        },
       ];
     }
     if (ownerAdminId) filter.ownerAdminId = ownerAdminId;
@@ -377,19 +397,21 @@ class AdminRepository {
     if (parentSellerId) filter.parentSellerId = parentSellerId;
 
     const skip = (Number(page) - 1) * Number(limit);
+    let itemQuery = UserModel.find(filter)
+      .select("email phone role accountStatus profile sellerProfile allowedModules createdBy createdByRole parentAdminId parentSellerId hierarchyLevel ownerAdminId ownerSellerId createdAt updatedAt lastLoginAt")
+      .sort({ createdAt: -1 });
+    if (paginate !== false) {
+      itemQuery = itemQuery.skip(skip).limit(Number(limit));
+    }
     const [items, total] = await Promise.all([
-      UserModel.find(filter)
-        .select("email phone role accountStatus profile sellerProfile allowedModules createdBy createdByRole parentAdminId parentSellerId hierarchyLevel ownerAdminId ownerSellerId createdAt updatedAt lastLoginAt")
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(Number(limit)),
+      itemQuery,
       UserModel.countDocuments(filter),
     ]);
 
     return { items, total };
   }
 
-  async listUsers({ q = "", role = null, roles = null, accountStatus = null, status = null, emailVerified = null, includeInfluencers = false, page = 1, limit = 50, ownerAdminId = null, ownerSellerId = null, parentAdminId = null, parentSellerId = null, createdBy = null } = {}) {
+  async listUsers({ q = "", role = null, roles = null, accountStatus = null, status = null, emailVerified = null, includeInfluencers = false, page = 1, limit = 50, paginate = true, ownerAdminId = null, ownerSellerId = null, parentAdminId = null, parentSellerId = null, createdBy = null } = {}) {
     const filter = {};
     if (Array.isArray(roles) && roles.length) {
       filter.role = { $in: roles };
@@ -403,11 +425,30 @@ class AdminRepository {
       filter.emailVerified = emailVerified === true || emailVerified === "true";
     }
     if (q) {
+      const escapedQuery = String(q).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       filter.$or = [
-        { email: { $regex: q, $options: "i" } },
-        { phone: { $regex: q, $options: "i" } },
-        { "profile.firstName": { $regex: q, $options: "i" } },
-        { "profile.lastName": { $regex: q, $options: "i" } },
+        { email: { $regex: escapedQuery, $options: "i" } },
+        { phone: { $regex: escapedQuery, $options: "i" } },
+        { "profile.firstName": { $regex: escapedQuery, $options: "i" } },
+        { "profile.lastName": { $regex: escapedQuery, $options: "i" } },
+        { "sellerProfile.displayName": { $regex: escapedQuery, $options: "i" } },
+        { "sellerProfile.businessName": { $regex: escapedQuery, $options: "i" } },
+        { "sellerProfile.legalBusinessName": { $regex: escapedQuery, $options: "i" } },
+        {
+          $expr: {
+            $regexMatch: {
+              input: {
+                $concat: [
+                  { $ifNull: ["$profile.firstName", ""] },
+                  " ",
+                  { $ifNull: ["$profile.lastName", ""] },
+                ],
+              },
+              regex: escapedQuery,
+              options: "i",
+            },
+          },
+        },
       ];
     }
     if (ownerAdminId) filter.ownerAdminId = ownerAdminId;
@@ -431,12 +472,14 @@ class AdminRepository {
     }
 
     const skip = (Number(page) - 1) * Number(limit);
+    let itemQuery = UserModel.find(filter)
+      .select("email phone role accountStatus emailVerified profile sellerProfile allowedModules createdBy createdByRole parentAdminId parentSellerId hierarchyLevel ownerAdminId ownerSellerId createdAt updatedAt lastLoginAt")
+      .sort({ createdAt: -1 });
+    if (paginate !== false) {
+      itemQuery = itemQuery.skip(skip).limit(Number(limit));
+    }
     const [items, total] = await Promise.all([
-      UserModel.find(filter)
-        .select("email phone role accountStatus emailVerified profile sellerProfile allowedModules createdBy createdByRole parentAdminId parentSellerId hierarchyLevel ownerAdminId ownerSellerId createdAt updatedAt lastLoginAt")
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(Number(limit)),
+      itemQuery,
       UserModel.countDocuments(filter),
     ]);
 

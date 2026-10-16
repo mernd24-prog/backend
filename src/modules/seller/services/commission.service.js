@@ -3969,19 +3969,84 @@ gstTcsAmount,
     const { limit, offset } = this.normalizePagination(query);
     const requestedStatus = query.status === "pending_approval" ? "pending" : query.status;
     const shouldLoadStatus = (status) => !requestedStatus || requestedStatus === status;
+    const searchText = String(query.search || "").trim();
+    const searchTerm = searchText ? `%${searchText}%` : "";
+    const normalizedSearchTerm = searchText
+      ? `%${searchText.toLowerCase().replace(/[\s-]+/g, "_")}%`
+      : "";
+    const numericSearch = searchText.replace(/[₹,\s]/g, "");
+    const amountSearchTerm = /^-?\d+(?:\.\d+)?$/.test(numericSearch)
+      ? `%${numericSearch}%`
+      : "";
+    let matchingSellerIds = [];
+
+    // Seller identity is stored in MongoDB while payouts are stored in
+    // PostgreSQL. Resolve matching sellers first so the queue can search the
+    // same name, store, email, and phone values that the admin table displays.
+    if (searchText) {
+      const escapedSearch = searchText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const sellerSearch = new RegExp(escapedSearch, "i");
+      matchingSellerIds = await UserModel.find({
+        $or: [
+          { email: sellerSearch },
+          { phone: sellerSearch },
+          { "profile.firstName": sellerSearch },
+          { "profile.lastName": sellerSearch },
+          { "profile.name": sellerSearch },
+          { "sellerProfile.displayName": sellerSearch },
+          { "sellerProfile.businessName": sellerSearch },
+          {
+            $expr: {
+              $regexMatch: {
+                input: {
+                  $concat: [
+                    { $ifNull: ["$profile.firstName", ""] },
+                    " ",
+                    { $ifNull: ["$profile.lastName", ""] },
+                  ],
+                },
+                regex: escapedSearch,
+                options: "i",
+              },
+            },
+          },
+        ],
+      })
+        .select("_id")
+        .limit(500)
+        .lean()
+        .then((users) => users.map((user) => String(user._id)))
+        .catch(() => []);
+    }
+
     const buildPayoutQuery = (status) => {
       const builder = knex("seller_payouts").where("status", status);
       if (query.sellerId) builder.where("seller_id", query.sellerId);
       if (query.organizationId) builder.where("organization_id", query.organizationId);
       if (query.fromDate) builder.where("created_at", ">=", this.normalizeDateRangeStart(query.fromDate));
       if (query.toDate) builder.where("created_at", "<=", this.normalizeDateRangeEnd(query.toDate));
-      if (query.search) {
-        const term = `%${String(query.search).trim()}%`;
+      if (searchText) {
         builder.where((searchBuilder) => {
           searchBuilder
-            .whereRaw("seller_id::text ILIKE ?", [term])
-            .orWhereILike("payment_reference", term)
-            .orWhereRaw("id::text ILIKE ?", [term]);
+            .whereRaw("seller_id::text ILIKE ?", [searchTerm])
+            .orWhereRaw("organization_id::text ILIKE ?", [searchTerm])
+            .orWhereILike("payment_reference", searchTerm)
+            .orWhereRaw("id::text ILIKE ?", [searchTerm])
+            .orWhereRaw("COALESCE(payment_method, '') ILIKE ?", [normalizedSearchTerm])
+            .orWhereRaw("COALESCE(status, '') ILIKE ?", [normalizedSearchTerm])
+            .orWhereRaw("COALESCE(metadata, '{}'::jsonb)::text ILIKE ?", [searchTerm])
+            .orWhereRaw("COALESCE(organization_snapshot, '{}'::jsonb)::text ILIKE ?", [searchTerm]);
+
+          if (amountSearchTerm) {
+            searchBuilder.orWhereRaw("COALESCE(net_amount, 0)::text ILIKE ?", [amountSearchTerm]);
+          }
+
+          if (/razorpay\s*x?/i.test(searchText)) {
+            searchBuilder.orWhereRaw("LOWER(COALESCE(payment_method, '')) = 'razorpayx'");
+          }
+          if (matchingSellerIds.length) {
+            searchBuilder.orWhereIn("seller_id", matchingSellerIds);
+          }
         });
       }
       return builder;

@@ -36,7 +36,16 @@ const sellerOnboardingStatuses = [
 ];
 const sellerKycStatuses = ["not_submitted", "submitted", "under_review", "verified", "rejected"];
 const sellerBankStatuses = ["not_submitted", "submitted", "verified", "rejected"];
-const sellerGoLiveStatuses = ["pending", "ready", "live", "blocked", "rejected"];
+const sellerGoLiveStatuses = [
+  "not_created",
+  "pending",
+  "approval_pending",
+  "ready",
+  "partially_live",
+  "live",
+  "blocked",
+  "rejected",
+];
 
 const adminOverviewSchema = Joi.object({
   body: Joi.object({}).required(),
