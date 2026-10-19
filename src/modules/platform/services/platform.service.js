@@ -156,10 +156,12 @@ class PlatformService {
     this.platformRepository = platformRepository;
     this.orderRepository = orderRepository;
     this.categoryTreeCache = new Map();
+    this.brandListCache = new Map();
   }
 
   invalidateCatalogCaches() {
     this.categoryTreeCache.clear();
+    this.brandListCache.clear();
     if (typeof forget === "function") {
       forget(/^products:/);
     }
@@ -285,12 +287,20 @@ class PlatformService {
 
     if (isNavigationRequested) {
       const navigationFilter = { ...visibleFilter, level: 0, active: true };
-      return this.platformRepository.listCategoriesFast(
-        navigationFilter,
-        { page: 1, limit: 50, skip: 0 },
-        "categoryKey title parentKey level active sortOrder imageUrl bannerUrl iconUrl isDashboardVisible",
-        { hasProducts: query.hasProducts === true || query.hasProducts === "true", includeProductCounts: true },
-      );
+      const cacheKey = JSON.stringify({ type: "navigation", navigationFilter });
+      const cached = this.categoryTreeCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) return cached.value;
+      const value = await this.platformRepository.listCategoriesFast(
+          navigationFilter,
+          { page: 1, limit: 50, skip: 0 },
+          "categoryKey title parentKey level active sortOrder imageUrl bannerUrl iconUrl isDashboardVisible",
+          { hasProducts: query.hasProducts === true || query.hasProducts === "true", includeProductCounts: true },
+        );
+      this.categoryTreeCache.set(cacheKey, {
+        value,
+        expiresAt: Date.now() + 5 * 60 * 1000,
+      });
+      return value;
     }
 
     if (isTreeRequested) {
@@ -316,10 +326,18 @@ class PlatformService {
       return value;
     }
 
+    const includeProductCounts =
+      query.hasProducts === true ||
+      query.hasProducts === "true" ||
+      query.includeProductCounts === true ||
+      query.includeProductCounts === "true";
     const result = await this.platformRepository.listCategories(
       visibleFilter,
       pagination,
-      { hasProducts: query.hasProducts === true || query.hasProducts === "true", includeProductCounts: true },
+      {
+        hasProducts: query.hasProducts === true || query.hasProducts === "true",
+        includeProductCounts,
+      },
     );
 
     return result;
@@ -1673,14 +1691,34 @@ class PlatformService {
         filter.approvalStatus = query.approvalStatus;
       }
     }
-    return this.platformRepository.listBrands(
-      applyCatalogSubmissionVisibility(filter, actor),
-      pagination,
-      {
-        hasProducts: query.hasProducts === true || query.hasProducts === "true",
-        publicProductsOnly: !actorContext.isAdmin && !actorContext.isSeller,
-      },
-    );
+    const options = {
+      hasProducts: query.hasProducts === true || query.hasProducts === "true",
+      includeProductCounts:
+        query.hasProducts === true ||
+        query.hasProducts === "true" ||
+        query.includeProductCounts === true ||
+        query.includeProductCounts === "true",
+      publicProductsOnly: !actorContext.isAdmin && !actorContext.isSeller,
+    };
+    const visibleFilter = applyCatalogSubmissionVisibility(filter, actor);
+
+    if (!actorContext.isAdmin && !actorContext.isSeller) {
+      const cacheKey = JSON.stringify({ visibleFilter, pagination, options });
+      const cached = this.brandListCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) return cached.value;
+      const value = await this.platformRepository.listBrands(
+        visibleFilter,
+        pagination,
+        options,
+      );
+      this.brandListCache.set(cacheKey, {
+        value,
+        expiresAt: Date.now() + 5 * 60 * 1000,
+      });
+      return value;
+    }
+
+    return this.platformRepository.listBrands(visibleFilter, pagination, options);
   }
 
   async submitBrand(payload, actor = {}, req) {

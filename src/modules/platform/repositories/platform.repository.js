@@ -673,6 +673,19 @@ class PlatformRepository {
       { sortOrder: 1, name: 1 },
     );
 
+    if (!options.includeProductCounts && !options.hasProducts) {
+      const skip = Number(pagination.skip || 0);
+      const limit = Number(pagination.limit || 20);
+      const [items, total] = await Promise.all([
+        PlatformBrandModel.find(filter).sort(sort).skip(skip).limit(limit).lean(),
+        PlatformBrandModel.countDocuments(filter),
+      ]);
+      return {
+        items: items.map((item) => ({ ...item, productCount: 0 })),
+        total,
+      };
+    }
+
     const platformItems = await PlatformBrandModel.find(filter).sort(sort).lean();
     const productBrandCounts = await this.getProductCountsByBrands(platformItems);
     const productBrandNameLookup = new Map();

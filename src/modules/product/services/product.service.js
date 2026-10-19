@@ -3290,7 +3290,9 @@ class ProductService {
       );
       return {
         ...result,
-        items: await this.enrichProductsWithActiveDeals(result.items || []),
+        items: await this.enrichProductsWithActiveDeals(
+          await this.decorateProductMasterReferences(result.items || []),
+        ),
         facets: {},
       };
     }
