@@ -1,3 +1,6 @@
+const { buildProductTextQuery } = require("../../../shared/search/product-text-query");
+const { mongoSearchFacetPipeline, colorRuntime, colorFacets } = require("../../../shared/search/search-light-facets");
+const { resolveCategorySearchScope } = require("../../../shared/search/category-search-scope");
 const { projectDealVariant } = require("../../deal/services/deal-variant");
 const {
   productMedia,
@@ -4082,16 +4085,60 @@ class ProductService {
   async searchProducts(query) {
     const page = Math.max(1, Number(query.page || 1));
     const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
+    const categoriesPromise = remember("products:search-category-tree:v1", 60, () =>
+      CategoryTreeModel.find({ active: true, approvalStatus: "approved" })
+        .select("categoryKey parentKey title").lean(),
+    );
+    // A suggestion contains a complete product title. Resolve exact catalog
+    // titles before interpreting individual words as category intent.
+    const rawTerm = String(query.q || "").trim();
+    const exactTitle = rawTerm
+      ? new RegExp(`^${rawTerm.split(/\s+/).map(escapeRegExp).join("\\s+")}$`, "i")
+      : null;
+    const exactProductPromise = exactTitle ? ProductModel.findOne(
+      applyPublicProductFilter({ title: exactTitle }),
+    ).select("_id").lean() : null;
+    const [categories, exactProduct] = await Promise.all([categoriesPromise, exactProductPromise]);
+    const { term, scopes } = resolveCategorySearchScope(
+      exactProduct ? { ...query, q: "" } : query, categories,
+    );
+    const selectedColor = query.color || query.attr_color || query["attribute.color"];
+    const scopedQuery = { ...query, q: term, category: undefined, categoryId: undefined, categorySlug: undefined,
+      color: undefined, attr_color: undefined, "attribute.color": undefined };
+
+    const facetOptions = (buckets = []) => buckets.map(bucket => {
+      const value = String(bucket.key ?? bucket._id ?? "");
+      const category = categories.find(item => item.categoryKey === value || String(item._id) === value);
+      return { value: category?.categoryKey || value, label: category?.title || value, parentKey: category?.parentKey, count: bucket.doc_count ?? bucket.count ?? 0 };
+    }).filter(item => item.value && item.count > 0);
     const searchMongo = async () => {
-      const filter = this.buildSearchFallbackFilter(query);
-      const result = await this.productRepository.paginate(filter, {
-        page,
-        limit,
-        skip: (page - 1) * limit,
-        sortBy: query.sort || "popular",
-      });
-      return { items: result.items, total: result.total, source: "mongo" };
+      const filter = this.buildSearchFallbackFilter(scopedQuery);
+      if (exactProduct) filter.title = exactTitle;
+      for (const references of scopes) {
+        filter.$and = [...(filter.$and || []), { $or: [
+          { category: { $in: references } }, { categoryId: { $in: references } },
+        ] }];
+      }
+      // Keep options/counts independent of the color selection, like the
+      // product listing. Cards still apply OR within the selected color values.
+      const facetFilter = { ...filter, $and: [...(filter.$and || [])] };
+      if (selectedColor) {
+        const colors = splitFilterValues(selectedColor).map(value => new RegExp(`^${escapeRegExp(String(value).trim())}$`, "i"));
+        filter.$and = [...(filter.$and || []), { $or: [
+          { "attributes.color": { $in: colors } },
+          { "variants.attributes.color": { $in: colors } },
+        ] }];
+      }
+      const [result, [facets = {}]] = await Promise.all([
+        this.productRepository.paginate(filter, { page, limit, skip: (page - 1) * limit, sortBy: query.sort || "popular" }),
+        ProductModel.aggregate(mongoSearchFacetPipeline(facetFilter)),
+      ]);
+      return { items: result.items, total: result.total, source: "mongo", facets: {
+        categories: facetOptions(facets.categories || []), attributes: colorFacets(facets.colors || []),
+      } };
     };
+
+    if (exactProduct || !term) return searchMongo();
 
     if (!isElasticsearchEnabled()) {
       logger.info("[Elasticsearch] Disabled - using existing fallback search");
@@ -4101,42 +4148,17 @@ class ProductService {
     try {
       const esQuery = {
         bool: {
-          must: [
-            {
-              multi_match: {
-                query: query.q,
-                fields: [
-                  "title^4",
-                  "shortDescription^2",
-                  "brand^2",
-                  "category^2",
-                  "description",
-                  "sku^2",
-                  "tags^3",
-                  "color",
-                  "hsnCode",
-                  "productFamilyCode",
-                ],
-                fuzziness: "AUTO",
-                prefix_length: 2,
-              },
-            },
-          ],
+          must: [buildProductTextQuery(term)],
           filter: buildPublicSearchFilters(),
         },
       };
 
-      const category = query.category || query.categoryId || query.categorySlug;
-      if (category) {
-        esQuery.bool.filter.push({
-          bool: {
-            should: [
-              { term: { category } },
-              { term: { categoryId: category } },
-            ],
-            minimum_should_match: 1,
-          },
-        });
+      if (!term) esQuery.bool.must = [{ match_all: {} }];
+      for (const references of scopes) {
+        esQuery.bool.filter.push({ bool: { should: [
+          { terms: { "category.keyword": references } },
+          { terms: { "categoryId.keyword": references } },
+        ], minimum_should_match: 1 } });
       }
       if (query.brand)
         esQuery.bool.filter.push({ term: { brand: query.brand } });
@@ -4176,7 +4198,7 @@ class ProductService {
         "sport",
         "concern",
       ].forEach((key) => {
-        if (!query[key]) return;
+        if (key === "color" || !query[key]) return;
         const attributeFilter = buildProductSearchExactFilter(
           [
             `${key}.keyword`,
@@ -4217,6 +4239,15 @@ class ProductService {
         from: (page - 1) * limit,
         size: limit,
         query: esQuery,
+        track_total_hits: true,
+        runtime_mappings: { searchColor: colorRuntime },
+        ...(selectedColor ? { post_filter: { terms: {
+          searchColor: splitFilterValues(selectedColor).map(value => String(value).trim().toLowerCase()),
+        } } } : {}),
+        aggs: { searchCategories: { terms: {
+          script: { source: "if (doc.containsKey('categoryId.keyword') && doc['categoryId.keyword'].size() > 0 && doc['categoryId.keyword'].value != '') return doc['categoryId.keyword'].value; if (doc.containsKey('category.keyword') && doc['category.keyword'].size() > 0) return doc['category.keyword'].value; return '';" },
+          size: 1000,
+        } }, searchColors: { terms: { field: "searchColor", size: 100 } } },
         sort: sortOptions[query.sort] || sortOptions._score,
         _source: [
           "title",
@@ -4250,6 +4281,7 @@ class ProductService {
           "createdAt",
         ],
       });
+      if (!response.hits.hits.length) return searchMongo();
       logger.info("[Elasticsearch] Product search served by Elasticsearch");
       const items = response.hits.hits.map((hit) => ({
         id: hit._id,
@@ -4263,6 +4295,10 @@ class ProductService {
       );
       return {
         items: hydratedItems,
+        facets: {
+          categories: facetOptions(response.aggregations?.searchCategories?.buckets || []),
+          attributes: colorFacets(response.aggregations?.searchColors?.buckets || []),
+        },
         total:
           hydratedItems.length < items.length
             ? hydratedItems.length

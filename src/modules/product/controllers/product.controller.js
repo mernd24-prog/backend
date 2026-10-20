@@ -137,7 +137,7 @@ class ProductController {
 
   search = async (req, res) => {
     const result = await this.productService.searchProducts(req.query);
-    res.json(okResponse(result.items, { total: result.total, source: result.source }));
+    res.json(okResponse(result.items, { total: result.total, source: result.source, facets: result.facets }));
   };
 
   update = async (req, res) => {

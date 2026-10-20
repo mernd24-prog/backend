@@ -124,7 +124,8 @@ router.get("/autocomplete", async (req, res, next) => {
     const suggestions =
       await AdvancedSearchService.getAutocompleteSuggestions(
         value.q,
-        limit
+        limit,
+        value.categoryId
       );
 
     return res.status(200).json({

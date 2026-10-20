@@ -1,3 +1,6 @@
+const { remember } = require("../tools/cache");
+const { resolveAutocompleteMedia } = require("../search/autocomplete-media");
+const { resolveCategorySearchScope } = require("../search/category-search-scope");
 /**
  * Advanced Search Service (PRODUCTION READY)
  */
@@ -141,7 +144,7 @@ function tokenMatchScore(query, text = "", scores = {}) {
       const prefix = token.slice(0, query.length);
       const allowedDistance = query.length >= 5 ? 2 : 1;
       if (editDistance(query, prefix) <= allowedDistance) {
-        bestScore = Math.max(bestScore, scores.fuzzy || 60);
+        bestScore = Math.max(bestScore, scores.fuzzy ?? 60);
       }
     }
   });
@@ -157,16 +160,16 @@ function scoreAutocompleteSuggestion(term, product = {}) {
   if (!query || !title) return 0;
 
   const categoryScore = tokenMatchScore(query, category, {
-    exact: 130,
-    prefix: 120,
-    contains: 105,
-    fuzzy: 90,
+    exact: 55,
+    prefix: 50,
+    contains: 25,
+    fuzzy: 0,
   });
   const brandScore = tokenMatchScore(query, brand, {
-    exact: 125,
-    prefix: 115,
-    contains: 95,
-    fuzzy: 88,
+    exact: 65,
+    prefix: 60,
+    contains: 30,
+    fuzzy: 20,
   });
   const titleScore = tokenMatchScore(query, title, {
     exact: 100,
@@ -717,11 +720,11 @@ class AdvancedSearchService {
     return items;
   }
 
-  async getAutocompleteSuggestions(query, limit = 10) {
+  async getAutocompleteSuggestions(query, limit = 10, categoryId = "") {
     const term = String(query || "").trim();
     const maxLimit = Math.min(Math.max(Number(limit) || 6, 1), 8);
     if (term.length < 2) return [];
-    const cacheKey = `${term.toLowerCase()}:${maxLimit}:mongo-fuzzy`;
+    const cacheKey = `${term.toLowerCase()}:${maxLimit}:${categoryId}:rank-media-v3`;
     const cached = getAutocompleteCache(cacheKey);
     if (cached) return cached;
 
@@ -729,6 +732,19 @@ class AdvancedSearchService {
     if (pending) return pending;
 
     const lookup = (async () => {
+      const categoryResult = await remember("products:autocomplete-category-tree:v1", 60, () =>
+        this.platformRepository.listCategoriesFast(
+          { active: true, approvalStatus: "approved" }, { limit: 5000 }, "categoryKey parentKey title",
+        ),
+      );
+      const { scopes } = resolveCategorySearchScope({ q: term, categoryId }, categoryResult.items || []);
+      const scopedProduct = product => scopes.every(references =>
+        [product.categoryId, product.category].some(value => references.includes(String(value || ""))),
+      );
+      const mongoScope = scopes.map(references => ({ $or: [
+        { category: { $in: references } }, { categoryId: { $in: references } },
+      ] }));
+      const indexedPromise = (async () => {
       let indexedProducts = [];
       if (isElasticsearchEnabled()) {
         try {
@@ -738,7 +754,10 @@ class AdvancedSearchService {
             _source: ["title", "brand", "category", "categoryId", "image", "imageUrl", "images", "commonImages"],
             query: {
               bool: {
-                filter: buildPublicSearchFilters(),
+                filter: [...buildPublicSearchFilters(), ...scopes.map(references => ({ bool: {
+                  should: [{ terms: { "category.keyword": references } }, { terms: { "categoryId.keyword": references } }],
+                  minimum_should_match: 1,
+                } }))],
                 must: [{
                   multi_match: {
                     query: term,
@@ -751,15 +770,19 @@ class AdvancedSearchService {
           });
           // An index may lag behind catalog updates. Do not let partial ES
           // results hide current MongoDB prefix matches.
-          indexedProducts = response.hits.hits.map((hit) => hit._source || {});
+          indexedProducts = response.hits.hits.map((hit) => ({ ...hit._source, _id: hit._id || hit._source?._id || hit._source?.id }));
         } catch (error) {
           logger.warn({ err: error, term }, "Elasticsearch autocomplete failed; using Mongo fallback");
         }
       }
 
+      return indexedProducts;
+      })();
+      const corpusPromise = this.getAutocompleteCorpus();
+
       const regex = new RegExp(`^${escapeRegex(term)}`, "i");
-      const prefixProducts = await ProductModel.find(
-        applyPublicProductFilter({ title: regex }),
+      const prefixPromise = ProductModel.find(
+        applyPublicProductFilter({ title: regex, $and: mongoScope }),
       )
         .sort({ title: 1, "analytics.purchases": -1, createdAt: -1 })
         .limit(maxLimit)
@@ -768,11 +791,13 @@ class AdvancedSearchService {
         .maxTimeMS(800)
         .catch(() => []);
 
-      const corpus = prefixProducts.length >= maxLimit
-        ? prefixProducts
-        : await this.getAutocompleteCorpus();
+      // Independent reads run concurrently instead of adding their latencies.
+      const [indexedProducts, prefixProducts, corpus] = await Promise.all([
+        indexedPromise, prefixPromise, corpusPromise,
+      ]);
 
       const scored = [...prefixProducts, ...indexedProducts, ...corpus]
+        .filter(scopedProduct)
         .map((product) => ({
           product,
           score: scoreAutocompleteSuggestion(term, product),
@@ -791,12 +816,16 @@ class AdvancedSearchService {
         })
         .slice(0, maxLimit)
         .map(({ product }) => product);
-      const resolvedProducts = await this.resolveSuggestionLabels(suggestionProducts);
-      const suggestions = resolvedProducts.map((product) => ({
+      const [resolvedProducts, mediaProducts] = await Promise.all([
+        this.resolveSuggestionLabels(suggestionProducts),
+        resolveAutocompleteMedia(suggestionProducts, ProductModel, applyPublicProductFilter()),
+      ]);
+      const suggestions = resolvedProducts.map((product, index) => ({
           title: product.title,
           brandName: product.brandName || "",
           categoryName: product.categoryName || "",
-          image: product.images?.[0] || product.commonImages?.[0] || "",
+          image: mediaProducts[index]?.suggestionImages?.[0] || "",
+          images: mediaProducts[index]?.suggestionImages || [],
         }));
 
       setAutocompleteCache(cacheKey, suggestions);

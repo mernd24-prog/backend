@@ -267,6 +267,27 @@ class PlatformService {
     return roots;
   }
 
+  async loadCategoryCache(cacheKey, loader) {
+    const cached = this.categoryTreeCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+    // Share the pending load too, so concurrent navigation requests do not
+    // each run the same category/product queries on a cold cache.
+    const entry = { expiresAt: Infinity };
+    entry.value = Promise.resolve().then(loader).then((value) => {
+      entry.value = value;
+      entry.expiresAt = Date.now() + 5 * 60 * 1000;
+      return value;
+    }).catch((error) => {
+      if (this.categoryTreeCache.get(cacheKey) === entry) {
+        this.categoryTreeCache.delete(cacheKey);
+      }
+      throw error;
+    });
+    this.categoryTreeCache.set(cacheKey, entry);
+    return entry.value;
+  }
+
   async listCategories(query, actor = {}) {
     const isNavigationRequested = query.navigation === true || query.navigation === "true";
     const isTreeRequested = query.tree === true || query.tree === "true";
@@ -287,43 +308,30 @@ class PlatformService {
 
     if (isNavigationRequested) {
       const navigationFilter = { ...visibleFilter, level: 0, active: true };
-      const cacheKey = JSON.stringify({ type: "navigation", navigationFilter });
-      const cached = this.categoryTreeCache.get(cacheKey);
-      if (cached && cached.expiresAt > Date.now()) return cached.value;
-      const value = await this.platformRepository.listCategoriesFast(
-          navigationFilter,
-          { page: 1, limit: 50, skip: 0 },
-          "categoryKey title parentKey level active sortOrder imageUrl bannerUrl iconUrl isDashboardVisible",
-          { hasProducts: query.hasProducts === true || query.hasProducts === "true", includeProductCounts: true },
-        );
-      this.categoryTreeCache.set(cacheKey, {
-        value,
-        expiresAt: Date.now() + 5 * 60 * 1000,
-      });
-      return value;
+      const hasProducts = query.hasProducts === true || query.hasProducts === "true";
+      const cacheKey = JSON.stringify({ type: "navigation", navigationFilter, hasProducts });
+      return this.loadCategoryCache(cacheKey, () => this.platformRepository.listCategoriesFast(
+        navigationFilter,
+        { page: 1, limit: 50, skip: 0 },
+        "categoryKey title parentKey level active sortOrder imageUrl bannerUrl iconUrl isDashboardVisible",
+        { hasProducts, includeProductCounts: true },
+      ));
     }
 
     if (isTreeRequested) {
       const maxDepth = query.maxDepth || 3;
-      const cacheKey = JSON.stringify({ filter, maxDepth, hasProducts: query.hasProducts === true || query.hasProducts === "true" });
-      const cached = this.categoryTreeCache.get(cacheKey);
-      if (cached && cached.expiresAt > Date.now()) {
-        return cached.value;
-      }
-
-      const result = await this.platformRepository.listCategoriesFast(
-        visibleFilter,
-        pagination,
-        "categoryKey title parentKey level active approvalStatus submittedBySellerId sortOrder bannerUrl iconUrl isDashboardVisible",
-        { hasProducts: query.hasProducts === true || query.hasProducts === "true", includeProductCounts: true },
-      );
-      const tree = this.buildCategoryTree(result.items || [], maxDepth);
-      const value = { items: tree, total: tree.length };
-      this.categoryTreeCache.set(cacheKey, {
-        value,
-        expiresAt: Date.now() + 5 * 60 * 1000,
+      const hasProducts = query.hasProducts === true || query.hasProducts === "true";
+      const cacheKey = JSON.stringify({ type: "tree", visibleFilter, maxDepth, hasProducts });
+      return this.loadCategoryCache(cacheKey, async () => {
+        const result = await this.platformRepository.listCategoriesFast(
+          visibleFilter,
+          pagination,
+          "categoryKey title parentKey level active approvalStatus submittedBySellerId sortOrder bannerUrl iconUrl isDashboardVisible",
+          { hasProducts, includeProductCounts: true },
+        );
+        const tree = this.buildCategoryTree(result.items || [], maxDepth);
+        return { items: tree, total: tree.length };
       });
-      return value;
     }
 
     const includeProductCounts =

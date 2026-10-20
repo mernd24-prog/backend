@@ -415,6 +415,7 @@ const searchValidation = {
     .pattern(/^attr_[A-Za-z0-9_-]+$/, Joi.string().trim().allow("", null))
     .pattern(/^attribute\.[A-Za-z0-9_-]+$/, Joi.string().trim().allow("", null)),
   autocomplete: Joi.object({
+    categoryId: Joi.string().trim().allow(""),
     q: Joi.string().trim().min(1).required(),
     limit: Joi.number().integer().min(1).max(20).default(10),
   }),

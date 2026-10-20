@@ -11,6 +11,7 @@ const { PlatformProductOptionValueModel } = require("../models/platform-product-
 const { ProductReviewModel } = require("../models/product-review.model");
 const { ProductModel } = require("../../product/models/product.model");
 const { applyPublicProductFilter } = require("../../../shared/catalog/public-product-filter");
+const { remember } = require("../../../shared/tools/cache");
 const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
 
 function makeCodeOrIdFilter(value, codeField = "code") {
@@ -112,10 +113,10 @@ class PlatformRepository {
 
     // Navigation queries often contain only level-0 rows. Load the complete
     // public tree so products assigned to a leaf can increment every ancestor.
-    const publicTree = await CategoryTreeModel.find({
-      active: true,
-      approvalStatus: "approved",
-    }).lean();
+    const publicTree = await remember("products:category-count-tree:v1", 60, () =>
+      CategoryTreeModel.find({ active: true, approvalStatus: "approved" })
+        .select("categoryKey parentKey").lean(),
+    );
     const itemByKey = new Map(
       [...publicTree, ...requestedItems].map((category) => [
         String(category.categoryKey),
@@ -137,24 +138,23 @@ class PlatformRepository {
         .forEach((reference) => keyByReference.set(reference, key));
     }
 
-    const references = [
-      ...new Set([
-        ...keyByReference.keys(),
-        ...items.flatMap((category) => [
-          String(category.categoryKey || "").trim(),
-          String(category._id || "").trim(),
-        ]),
-      ]),
-    ].filter(Boolean);
-    const products = await ProductModel.find({
-      ...applyPublicProductFilter({}),
-      $or: [
-        { category: { $in: references } },
-        { categoryId: { $in: references } },
-      ],
-    })
-      .select("category categoryId")
-      .lean();
+    // Return one row per category-reference pair instead of transferring every
+    // matching product to Node. Keep both references to preserve categoryId
+    // precedence and count each product only once.
+    const products = await remember("products:category-count-groups:v1", 60, () => ProductModel.aggregate([
+      {
+        $match: {
+          ...applyPublicProductFilter({}),
+        },
+      },
+      {
+        $group: {
+          _id: { category: "$category", categoryId: "$categoryId" },
+          count: { $sum: 1 },
+        },
+      },
+      { $project: { _id: 0, category: "$_id.category", categoryId: "$_id.categoryId", count: 1 } },
+    ]));
 
     for (const product of products) {
       const directKey = [product.categoryId, product.category]
@@ -168,7 +168,7 @@ class PlatformRepository {
       while (key && byKey.has(key) && !visited.has(key)) {
         visited.add(key);
         const normalizedKey = key.toLowerCase();
-        counts.set(normalizedKey, (counts.get(normalizedKey) || 0) + 1);
+        counts.set(normalizedKey, (counts.get(normalizedKey) || 0) + product.count);
         key = String(byKey.get(key)?.parentKey || "").trim();
       }
     }

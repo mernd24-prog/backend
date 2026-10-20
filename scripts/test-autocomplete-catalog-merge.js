@@ -6,10 +6,13 @@ const godrej = { title: 'Godrej 600 L Frost Free', images: [] };
 const golden = { title: 'Golden party wear Saree', images: [] };
 const query = { sort() { return this; }, limit() { return this; }, select() { return this; }, lean() { return this; }, maxTimeMS: async () => [godrej, golden] };
 const modules = {
+  "../tools/cache": { remember: async (key, ttl, loader) => loader() },
+  "../search/autocomplete-media": require("../src/shared/search/autocomplete-media"),
+  "../search/category-search-scope": require("../src/shared/search/category-search-scope"),
   '../search/elasticsearch-client': { isElasticsearchEnabled: () => true, elasticsearchClient: { search: async () => ({ hits: { hits: [{ _source: golden }] } }) } },
   '../logger/logger': { logger: { warn() {} } },
   '../../modules/product/models/product.model': { ProductModel: { find: () => query } },
-  '../../modules/platform/repositories/platform.repository': { PlatformRepository: class {} },
+  '../../modules/platform/repositories/platform.repository': { PlatformRepository: class { async listCategoriesFast() { return { items: [] }; } } },
   '../catalog/public-product-filter': { applyPublicProductFilter: value => value, buildPublicSearchFilters: () => [] },
   '../search/product-search-document': {},
 };
@@ -22,6 +25,20 @@ service.getAutocompleteCorpus = async () => [];
   const results = await service.getAutocompleteSuggestions('go', 8);
   assert.ok(results.some(row => row.title === godrej.title), 'catalog prefix product missing from index must appear');
   assert.equal(results.filter(row => row.title === golden.title).length, 1, 'merged duplicates removed');
+  const shirt = { title: "Men's Casual Shirt", category: 'mens-shirts', categoryId: 'mens-shirts' };
+  const top = { title: "Women's Wrap-style Top", category: 'womens-t-shirts', categoryId: 'womens-t-shirts' };
+  service.getAutocompleteCorpus = async () => [top, shirt];
+  modules['../search/elasticsearch-client'].elasticsearchClient.search = async () => ({ hits: { hits: [] } });
+  const typo = await service.getAutocompleteSuggestions('shur', 8);
+  assert.equal(typo[0].title, shirt.title, 'title typo match must outrank category-only matches');
+  assert.ok(!typo.some(row => row.title === top.title), 'weak category typo must not introduce unrelated tops');
+  service.platformRepository.listCategoriesFast = async () => ({ items: [
+    { categoryKey: 'mens-shirts', title: 'Mens Shirts' },
+    { categoryKey: 'womens-t-shirts', title: 'Womens T-Shirts' },
+  ] });
+  const scoped = await service.getAutocompleteSuggestions('shirt', 8, 'mens-shirts');
+  assert.ok(scoped.some(row => row.title === shirt.title));
+  assert.ok(!scoped.some(row => row.title === top.title), 'selected category must constrain suggestions');
   let capturedFilter;
   modules['../../modules/product/models/product.model'].ProductModel.findOne = filter => {
     capturedFilter = filter;

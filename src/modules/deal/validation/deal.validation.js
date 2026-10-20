@@ -144,7 +144,8 @@ const publicDealProductsSchema = {
     sortDir: Joi.string().valid("asc", "desc").default("asc"),
     page: Joi.number().integer().min(1).default(1),
     limit: Joi.number().integer().min(1).max(100).default(12),
-  }),
+  }).pattern(/^attr_[A-Za-z0-9_-]+$/, Joi.string().allow(""))
+    .pattern(/^attribute\.[A-Za-z0-9_-]+$/, Joi.string().allow("")),
 };
 const analyticsSchema = {
   query: Joi.object({

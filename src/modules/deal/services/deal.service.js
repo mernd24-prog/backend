@@ -1,3 +1,5 @@
+const { CategoryTreeModel } = require("../../platform/models/category-tree.model");
+const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
 const { resolveDealVariant, variantPrices, projectDealVariant } = require("./deal-variant");
 "use strict";
 
@@ -426,7 +428,7 @@ class DealService {
   }
 
   normalizeDealFilterText(value) {
-    return String(value || "").trim().toLowerCase();
+    return String(value ?? "").trim().toLowerCase();
   }
 
   async resolveDealCategoryFilterKeys(value) {
@@ -445,6 +447,7 @@ class DealService {
   }
 
   getDealProductAvailableStock(product = {}) {
+    if (product.selectedVariant) return Math.max(0, Number(product.availableStock ?? (Number(product.selectedVariant.stock || 0) - Number(product.selectedVariant.reservedStock || 0))));
     const variants = Array.isArray(product.variants) ? product.variants : [];
     const variantStock = variants
       .filter((variant) => variant?.status !== "inactive" && variant?.status !== "out_of_stock")
@@ -487,7 +490,7 @@ class DealService {
       const categoryKey = String(product.categoryId || product.category_id || product.category || "").trim();
       if (categoryKey) categoryCounts.set(categoryKey, (categoryCounts.get(categoryKey) || 0) + 1);
 
-      const brand = String(product.brandName || product.brand || product.brand_id || "").trim();
+      const brand = String(product.brand || product.brand_id || product.brandName || "").trim();
       if (brand) brandCounts.set(brand, (brandCounts.get(brand) || 0) + 1);
 
       const rating = this.getDealProductRating(product);
@@ -505,24 +508,50 @@ class DealService {
       }
     });
 
-    const categoryLabelByKey = new Map();
-    await Promise.all(
-      [...categoryCounts.keys()].map(async (categoryKey) => {
-        const category = await this.platformRepository.getCategory(categoryKey).catch(() => null);
-        categoryLabelByKey.set(categoryKey, category?.title || categoryKey);
-      }),
-    );
+    // Fetch only categories referenced by these deal cards. Loading/sorting the
+    // entire category tree here made the public listing wait on unrelated data.
+    const categoryReferences = [...categoryCounts.keys()];
+    const categoryIds = categoryReferences.filter(value => mongoose.Types.ObjectId.isValid(value))
+      .map(value => new mongoose.Types.ObjectId(value));
+    const [dealCategories, brands] = await Promise.all([
+      categoryReferences.length ? CategoryTreeModel.find({ $or: [
+        { categoryKey: { $in: categoryReferences } },
+        ...(categoryIds.length ? [{ _id: { $in: categoryIds } }] : []),
+      ] }).select("categoryKey title parentKey attributeSchema").lean().maxTimeMS(1500) : [],
+      this.platformRepository.resolveBrandReferences([...brandCounts.keys()]),
+    ]);
+    const categoryByReference = new Map();
+    for (const category of dealCategories) {
+      categoryByReference.set(String(category.categoryKey), category);
+      categoryByReference.set(String(category._id), category);
+    }
+    const attributes = new Map();
+    for (const product of items) {
+      const category = categoryByReference.get(String(product.categoryId || product.category || ""));
+      for (const definition of category?.attributeSchema || []) {
+        if (!definition.isFilterable || !definition.isVariantAttribute || !["select", "multi_select", "boolean"].includes(definition.type)) continue;
+        const values = this.getDealAttributeValues(product, definition.key);
+        if (!values.length) continue;
+        if (!attributes.has(definition.key)) attributes.set(definition.key, { key: definition.key, label: definition.label || definition.key, variant: true, values: new Map() });
+        const facet = attributes.get(definition.key);
+        for (const value of new Set(values.map(String))) facet.values.set(value, (facet.values.get(value) || 0) + 1);
+      }
+    }
 
     return {
       categories: [...categoryCounts.entries()].map(([value, count]) => ({
         value,
-        label: categoryLabelByKey.get(value) || value,
+        label: categoryByReference.get(value)?.title || value,
+        parentKey: categoryByReference.get(value)?.parentKey,
         count,
       })),
       brands: [...brandCounts.entries()].map(([value, count]) => ({
         value,
-        label: value,
+        label: brands.get(value.toLowerCase())?.name || value,
         count,
+      })),
+      attributes: [...attributes.values()].map(facet => ({ ...facet,
+        values: [...facet.values].map(([value, count]) => ({ value, label: value, count })),
       })),
       ratings: [...ratingCounts.entries()].map(([value, count]) => ({
         value,
@@ -555,7 +584,22 @@ class DealService {
     return true;
   }
 
+  getDealAttributeValues(product, key) {
+    const read = attributes => attributes instanceof Map ? attributes.get(key) : attributes?.[key];
+    const variants = product.selectedVariant ? [product.selectedVariant] : (product.variants || []).filter(variant => variant.status !== "inactive");
+    return [read(product.attributes), ...variants.map(variant => read(variant.attributes))]
+      .flatMap(value => Array.isArray(value) ? value : [value])
+      .filter(value => value !== undefined && value !== null && value !== "");
+  }
+
   productMatchesDealFilters(product = {}, query = {}) {
+    for (const [parameter, value] of Object.entries(query)) {
+      const key = parameter.startsWith("attr_") ? parameter.slice(5) : parameter.startsWith("attribute.") ? parameter.slice(10) : null;
+      if (!key || value === undefined || value === "") continue;
+      const selected = this.parseDealFilterValues(value).map(this.normalizeDealFilterText);
+      const actual = this.getDealAttributeValues(product, key).map(this.normalizeDealFilterText);
+      if (!selected.some(item => actual.includes(item))) return false;
+    }
     const search = String(query.q || query.search || "").trim().toLowerCase();
     if (search) {
       const haystack = [
@@ -675,12 +719,7 @@ class DealService {
         const baseProduct = productById.get(String(deal.productId));
         const product = baseProduct ? projectDealVariant(baseProduct, deal) : null;
         if (!product || product.status !== "active") return null;
-        if (!this.productMatchesDealFilters({
-          ...product,
-          price: Number(product.salePrice || 0),
-          salePrice: Number(product.salePrice || 0),
-          sellingPrice: Number(product.salePrice || 0),
-        }, normalizedQuery)) return null;
+
 
         const dealBadge = deal.metadata?.dealBadge || deal.metadata?.badge || "Deal";
         const remainingQuantity = Math.max(
@@ -729,10 +768,13 @@ class DealService {
       })
       .filter(Boolean);
 
-    const sortedItems = this.sortDealProducts(items, normalizedQuery.sort);
+    const facetItems = items.filter(product => this.productMatchesDealFilters(product, {
+      categoryKeys, q: normalizedQuery.q || normalizedQuery.search,
+    }));
+    const sortedItems = this.sortDealProducts(items.filter(product => this.productMatchesDealFilters(product, normalizedQuery)), normalizedQuery.sort);
     const total = sortedItems.length;
     const offset = (page - 1) * limit;
-    const facets = await this.buildDealProductFacets(sortedItems);
+    const facets = await this.buildDealProductFacets(facetItems);
     return {
       items: sortedItems.slice(offset, offset + limit),
       total,
