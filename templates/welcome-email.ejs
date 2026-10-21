@@ -19,6 +19,7 @@
       process.env.APP_PUBLIC_URL ||
       "https://staging.samglobal1.com",
   ).replace(/\/+$/, "");
+  const shoppingUrl = String(process.env.CUSTOMER_APP_BASE_URL || "").replace(/\/+$/, "");
   const heroSrc = typeof heroUrl !== "undefined" && heroUrl
     ? heroUrl
     : process.env.EMAIL_ACCOUNT_HERO_URL ||
@@ -41,9 +42,9 @@
     <style>
       @media only screen and (max-width: 520px) {
         .sg-wrapper { padding: 16px 8px !important; }
-        .sg-card { border-radius: 12px !important; }
-        .sg-header { padding: 24px 28px !important; }
-        .sg-body { padding: 26px 28px !important; }
+        .sg-card { border-radius: 8px !important; }
+        .sg-header { padding: 14px 16px !important; }
+        .sg-body { padding: 14px 16px 8px !important; }
         .sg-title { font-size: 21px !important; }
         .sg-brand-text { font-size: 11px !important; letter-spacing: 1.3px !important; white-space: nowrap !important; }
         .sg-hero-icon { width: 148px !important; }
@@ -51,23 +52,23 @@
       }
     </style>
   </head>
-  <body style="margin:0;background:#f3f6fb;font-family:Arial,Helvetica,sans-serif;color:#111827;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-wrapper" style="background:#f3f6fb;padding:30px 12px;">
+  <body style="margin:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-wrapper" style="background:#f3f4f6;padding:12px 8px;">
       <tr>
         <td align="center">
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-card" style="max-width:600px;background:#ffffff;border:1px solid #d9dee8;border-radius:18px;overflow:hidden;box-shadow:0 18px 40px rgba(17,24,39,0.11);">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-card" style="max-width:600px;background:#ffffff;border-radius:8px;">
             <tr>
-              <td class="sg-header" style="background:#061044;padding:26px 28px 24px;border-bottom:4px solid #d9a327;">
+              <td class="sg-header" style="background:#0a1450;padding:14px 20px;border-radius:8px 8px 0 0;">
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
                   <tr>
-                    <td width="190" valign="top">
+                    <td valign="top">
                       <table role="presentation" cellpadding="0" cellspacing="0">
                         <tr>
-                          <td width="36" valign="middle">
+                          <td width="48" valign="middle" style="padding-right:8px;">
                             <% if (logoSrc) { %>
-                              <img src="<%= escapeHtml(logoSrc) %>" width="28" height="28" alt="<%= escapeHtml(brandName) %>" style="display:block;width:28px;height:28px;border-radius:7px;object-fit:contain;background:#ffffff;border:0;outline:none;text-decoration:none;">
+                              <img src="<%= escapeHtml(logoSrc) %>" width="40" alt="<%= escapeHtml(brandName) %>" style="display:block;width:40px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;">
                             <% } else { %>
-                              <span style="display:inline-block;width:28px;height:28px;border-radius:50%;background:#d9a327;color:#061044;font-size:15px;line-height:28px;text-align:center;font-weight:800;">&#9737;</span>
+                              <span style="display:inline-block;width:28px;height:28px;border-radius:50%;background:#d9a327;color:#0a1450;font-size:12px;line-height:28px;text-align:center;font-weight:800;">&#9737;</span>
                             <% } %>
                           </td>
                           <td valign="middle">
@@ -75,8 +76,8 @@
                           </td>
                         </tr>
                       </table>
-                      <h1 class="sg-title" style="margin:20px 0 0;font-size:24px;line-height:1.25;color:#ffffff;font-weight:800;mso-line-height-rule:exactly;">Welcome to <%= escapeHtml(brandName) %></h1>
-                      <p style="margin:8px 0 0;font-size:13px;line-height:1.5;color:#dbe6ff;">Your account is ready</p>
+                      <h1 class="sg-title" style="margin:10px 0 2px;font-size:22px;line-height:1.25;color:#ffffff;font-weight:800;mso-line-height-rule:exactly;">Welcome to <%= escapeHtml(brandName) %></h1>
+                      <p style="margin:2px 0 0;font-size:11px;line-height:1.5;color:#dbe6ff;">Your account is ready</p>
                     </td>
                     <td class="sg-hero-icon" width="148" align="right" valign="middle">
                       <img class="sg-hero-art" src="<%= escapeHtml(heroSrc) %>" width="168" height="95" alt="" style="display:block;width:168px;max-width:168px;height:auto;border:0;outline:none;text-decoration:none;">
@@ -86,34 +87,22 @@
               </td>
             </tr>
             <tr>
-              <td class="sg-body" style="padding:28px 28px 26px;">
-                <p style="margin:0 0 10px;font-size:16px;line-height:1.5;color:#061044;font-weight:800;">Hello <%= displayName %>,</p>
-                <p style="margin:0 0 22px;font-size:15px;line-height:1.75;color:#061044;">Your account is active. Explore products, manage your cart, or start selling.</p>
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;border-top:1px solid #eef0f4;padding-top:18px;">
-                  <tr>
-                    <td style="padding:0;">
-                      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                        <tr>
-                          <td width="44" style="padding:14px 12px 14px 0;border-bottom:1px solid #e6e9f2;color:#0026d8;font-size:24px;line-height:1;vertical-align:top;">&#128737;</td>
-                          <td style="padding:14px 0;border-bottom:1px solid #e6e9f2;vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Secure &amp; Trusted</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">Your security is our top priority.</div></td>
-                        </tr>
-                        <tr>
-                          <td width="44" style="padding:14px 12px 14px 0;border-bottom:1px solid #e6e9f2;color:#0026d8;font-size:24px;line-height:1;vertical-align:top;">&#128100;</td>
-                          <td style="padding:14px 0;border-bottom:1px solid #e6e9f2;vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Account Protection</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">This helps us keep your account safe.</div></td>
-                        </tr>
-                        <tr>
-                          <td width="44" style="padding:14px 12px 14px 0;border-bottom:1px solid #e6e9f2;color:#0026d8;font-size:24px;line-height:1;vertical-align:top;">&#9993;</td>
-                          <td style="padding:14px 0;border-bottom:1px solid #e6e9f2;vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Didn't Request This?</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">You can safely ignore this email.</div></td>
-                        </tr>
-                      </table>
-                    </td>
-                  </tr>
-                </table>
+              <td class="sg-body" style="padding:14px 20px 8px;">
+                <p style="margin:0 0 10px;font-size:16px;line-height:1.5;color:#0a1450;font-weight:800;">Hello <%= displayName %>,</p>
+                <p style="margin:0 0 12px;font-size:12px;line-height:1.45;color:#0a1450;">Your account is active. Explore products, manage your cart, or start selling.</p>
+                <% if (shoppingUrl) { %>
+                <p style="margin:14px 0;"><a href="<%= escapeHtml(shoppingUrl) %>" style="display:inline-block;background:#d9a327;color:#0a1450;padding:12px 22px;border-radius:6px;font-size:13px;font-weight:bold;text-decoration:none;">Start shopping</a></p>
+                <% } %>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:20px;border-top:1px solid #e5e7eb;table-layout:fixed;"><tr>
+<% [["lock", "Secure & Trusted", "Updates from official systems."], ["shield", "Protection", "Review details in your account."], ["chat", "Need Help?", "Contact official support."]].forEach(function(item, index) { %>
+<td width="33%" valign="top" style="padding:14px 8px;<%= index ? 'border-left:1px solid #e5e7eb;' : '' %>"><table role="presentation" cellpadding="0" cellspacing="0"><tr><td valign="top" style="padding-right:8px;"><img src="<%= customerBaseUrl %>/email-assets/icons/<%= item[0] %>.png" width="36" height="36" alt="" style="display:block;width:36px;height:36px;border:0;"></td><td valign="top"><div style="font-size:12px;line-height:1.4;font-weight:bold;color:#0a1450;"><%= item[1] %></div><div style="font-size:10px;line-height:1.4;color:#6b7280;margin-top:2px;"><%= item[2] %></div></td></tr></table></td>
+<% }); %>
+</tr></table>
               </td>
             </tr>
             <tr>
-              <td align="center" style="background:#ffffff;border-top:1px solid #e6e9f2;padding:22px 36px 24px;">
-                <p style="margin:0;font-size:11px;line-height:1.7;color:#8a91a7;">This is an automated account email from <%= escapeHtml(brandName) %>. Please do not reply to this email.</p>
+              <td align="center" style="background:#ffffff;border-top:1px solid #e6e9f2;padding:8px 20px 12px;">
+                <p style="margin:0;font-size:11px;line-height:1.7;color:#8a91a7;">This is an automated account email from <%= escapeHtml(brandName) %>. Please do not reply to this email. For assistance, contact <a href="mailto:samglobalsupport@gmail.com" style="color:#1d4ed8;text-decoration:underline;">samglobalsupport@gmail.com</a>.</p>
                 <p style="margin:12px 0 0;font-size:11px;line-height:1.7;color:#8a91a7;">&#128274; &copy; <%= currentYear %> <%= escapeHtml(brandName) %>. All rights reserved.</p>
               </td>
             </tr>

@@ -6,7 +6,7 @@ const statusOf = payload => String(payload.status || payload.orderStatus || payl
 function shouldNotify(eventName, payload = {}) {
   if (!eventName) return true; // Explicit admin campaigns and direct messages.
   if (suppressed.has(eventName)) return false;
-  if (eventName === E.AUTH_USER_REGISTERED_V1) return false;
+  if (eventName === E.AUTH_USER_REGISTERED_V1) return payload.role === 'buyer';
   if (eventName === E.SELLER_PAYOUT_STATUS_UPDATED_V1) return ["completed", "paid", "failed", "rejected", "cancelled"].includes(statusOf(payload));
   const status = statusOf(payload);
   if (eventName === E.SHIPMENT_TRACKING_UPDATED_V1) return status === 'out_for_delivery';

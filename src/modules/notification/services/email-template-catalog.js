@@ -19,7 +19,7 @@ const logoUrl = process.env.EMAIL_LOGO_URL ||
   process.env.BRAND_LOGO_URL ||
   process.env.INVOICE_LOGO_URL ||
   (customerAppBaseUrl ? `${customerAppBaseUrl}/favicon.png` : "");
-const supportEmail = process.env.SUPPORT_EMAIL || process.env.REPLY_TO_EMAIL || "";
+const supportEmail = process.env.SUPPORT_EMAIL || "samglobalsupport@gmail.com";
 const currentYear = new Date().getFullYear();
 
 const EMAIL_ICONS = {
@@ -39,21 +39,7 @@ const EMAIL_ICONS = {
   success: "",
 };
 
-const renderTrustStrip = () => `
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;border-top:1px solid #eef0f4;border-bottom:1px solid #e6e9f2;">
-    <tr>
-      <td class="sg-trust-item" width="50%" style="padding:16px 16px 16px 0;border-right:1px solid #dfe5f0;vertical-align:top;">
-        <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-          <td style="vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Secure &amp; Trusted</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">Your security is our top priority.</div></td>
-        </tr></table>
-      </td>
-      <td class="sg-trust-item" width="50%" style="padding:16px 0 16px 16px;vertical-align:top;">
-        <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-          <td style="vertical-align:top;"><div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Account Protection</div><div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">This helps us keep your account safe.</div></td>
-        </tr></table>
-      </td>
-    </tr>
-  </table>`;
+const { renderTrustStrip } = require("./email-layout");
 
 const renderOtpCodeBlock = (otp) => {
   if (!otp) return "";
@@ -62,13 +48,13 @@ const renderOtpCodeBlock = (otp) => {
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:22px 0 16px;background:#f5f8ff;border:1px dashed #b8c8ff;border-radius:12px;">
       <tr>
         <td class="sg-code-cell" align="center" style="padding:24px 16px 26px;">
-          <span class="sg-code" style="font-size:42px;line-height:1.15;letter-spacing:12px;font-weight:800;color:#061044;font-family:Arial,Helvetica,sans-serif;white-space:nowrap;">${escapeHtml(code)}</span>
+          <span class="sg-code" style="font-size:42px;line-height:1.15;letter-spacing:12px;font-weight:800;color:#0a1450;font-family:Arial,Helvetica,sans-serif;white-space:nowrap;">${escapeHtml(code)}</span>
         </td>
       </tr>
     </table>
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 22px;background:#fff8eb;border:1px solid #ffe2a8;border-radius:10px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 12px;background:#fff8eb;border:1px solid #ffe2a8;border-radius:10px;">
       <tr>
-        <td style="padding:12px 14px;font-size:13px;line-height:1.5;color:#061044;"><strong>This code will expire in 15 minutes.</strong><br>Please do not share it with anyone.</td>
+        <td style="padding:12px 14px;font-size:11px;line-height:1.5;color:#0a1450;"><strong>This code will expire in 15 minutes.</strong><br>Please do not share it with anyone.</td>
       </tr>
     </table>`;
 };
@@ -290,7 +276,8 @@ const EMAIL_TEMPLATE_DEFINITIONS = {
     subject: "Welcome to Sam Global",
     title: "Welcome to Sam Global",
     intro: () => "Your account is ready. You can now continue shopping or managing your Sam Global account.",
-    rows: authRows,
+    rows: (payload) => compactRows([row("Account status", "Account Created"), row("Account", payload.email)]),
+    ctaText: "Start shopping",
     icon: EMAIL_ICONS.account,
   },
   seller_account_created_admin: {
@@ -607,7 +594,8 @@ function renderEmailTemplate({
   const alertText = definition.alertText || intro;
   const rows = typeof definition.rows === "function" ? definition.rows(payload) : [];
   const preheader = [heading, rows[0]?.value].filter(Boolean).join(" - ");
-  const safeCtaUrl = containsPrivateReference(ctaUrl) ? "" : ctaUrl;
+  const resolvedCtaUrl = ctaUrl || (resolvedKey === "account_welcome" ? customerAppBaseUrl : "");
+  const safeCtaUrl = containsPrivateReference(resolvedCtaUrl) ? "" : resolvedCtaUrl;
   const isOtpTemplate = resolvedKey === "auth_otp" && payload.otp;
   const bodyIntro = isOtpTemplate
     ? `Thank you for using ${brandName}. Please use the verification code below to confirm your email address and complete your account setup.`
@@ -616,22 +604,22 @@ function renderEmailTemplate({
     ? `Hello ${recipientNameOf(payload) || "User"},`
     : "";
   const button = safeCtaUrl && definition.ctaText
-    ? `<p style="margin:28px 0 0;"><a href="${escapeHtml(safeCtaUrl)}" style="display:inline-block;background:#d9a327;color:#061044;text-decoration:none;border-radius:999px;padding:13px 26px;font-weight:800;font-size:14px;">${escapeHtml(definition.ctaText)}</a></p>`
+    ? `<p style="margin:28px 0 0;"><a href="${escapeHtml(safeCtaUrl)}" style="display:inline-block;background:#d9a327;color:#0a1450;text-decoration:none;border-radius:999px;padding:13px 26px;font-weight:800;font-size:12px;">${escapeHtml(definition.ctaText)}</a></p>`
     : "";
   const detailRows = compactRows(rows)
     .map((item) => {
       const isStatus = /status/i.test(item.label);
       const isLowStockCount = /available stock/i.test(item.label) && Number(item.value) <= Number(payload.threshold || 0);
-      const isLongValue = String(item.value || "").length > 24 || String(item.value || "").includes("@");
+      const isLongValue = resolvedKey !== "account_welcome" && (String(item.value || "").length > 24 || String(item.value || "").includes("@"));
       const valueStyle = isStatus
         ? "display:inline-block;background:#fff1d6;color:#b06000;border-radius:999px;padding:4px 11px;font-size:12px;font-weight:700;"
         : isLowStockCount
-          ? "display:inline-block;background:#ffe5e5;color:#d12a2a;border-radius:999px;padding:4px 12px;font-size:13px;font-weight:800;"
-        : "color:#061044;font-size:14px;font-weight:700;text-align:right;word-break:break-word;";
+          ? "display:inline-block;background:#ffe5e5;color:#d12a2a;border-radius:999px;padding:4px 12px;font-size:11px;font-weight:800;"
+        : "color:#0a1450;font-size:12px;font-weight:700;text-align:right;word-break:break-word;";
       if (isLongValue) {
         return `
       <tr>
-        <td colspan="2" style="padding:13px 0 5px;color:#8a91a7;font-size:14px;border-bottom:0;vertical-align:top;">${escapeHtml(item.label)}</td>
+        <td colspan="2" style="padding:5px 0 5px;color:#8a91a7;font-size:12px;border-bottom:0;vertical-align:top;">${escapeHtml(item.label)}</td>
       </tr>
       <tr>
         <td colspan="2" style="padding:0 0 13px;border-bottom:1px solid #eef0f4;text-align:right;vertical-align:top;"><span style="${valueStyle}">${escapeHtml(item.value)}</span></td>
@@ -639,14 +627,14 @@ function renderEmailTemplate({
       }
       return `
       <tr>
-        <td style="padding:13px 0;color:#8a91a7;font-size:14px;border-bottom:1px solid #eef0f4;vertical-align:top;">${escapeHtml(item.label)}</td>
-        <td style="padding:13px 0;border-bottom:1px solid #eef0f4;text-align:right;vertical-align:top;"><span style="${valueStyle}">${escapeHtml(item.value)}</span></td>
+        <td style="padding:5px 0;color:#8a91a7;font-size:12px;border-bottom:1px solid #eef0f4;vertical-align:top;">${escapeHtml(item.label)}</td>
+        <td style="padding:5px 0;border-bottom:1px solid #eef0f4;text-align:right;vertical-align:top;"><span style="${valueStyle}">${escapeHtml(item.value)}</span></td>
       </tr>`;
     })
     .join("");
   const logoBlock = logoUrl
-    ? `<img src="${escapeHtml(logoUrl)}" width="28" height="28" alt="${escapeHtml(brandName)}" style="display:block;width:28px;height:28px;border-radius:7px;object-fit:contain;background:#ffffff;border:0;outline:none;text-decoration:none;">`
-    : `<span style="display:inline-block;width:28px;height:28px;border-radius:7px;background:#d9a327;color:#061044;font-size:12px;line-height:28px;text-align:center;font-weight:800;">SG</span>`;
+    ? `<img src="${escapeHtml(logoUrl)}" width="40" alt="${escapeHtml(brandName)}" style="display:block;width:40px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;">`
+    : `<span style="display:inline-block;width:28px;height:28px;border-radius:7px;background:#d9a327;color:#0a1450;font-size:12px;line-height:28px;text-align:center;font-weight:800;">SG</span>`;
 
   const html = `<!doctype html>
   <html>
@@ -657,10 +645,10 @@ function renderEmailTemplate({
       <style>
         @media only screen and (max-width: 520px) {
           .sg-wrapper { padding: 16px 8px !important; }
-          .sg-card { border-radius: 12px !important; }
-          .sg-header { padding: 24px 28px !important; }
-          .sg-body { padding: 26px 28px !important; }
-          .sg-footer { padding: 22px 20px !important; }
+          .sg-card { border-radius: 8px !important; }
+          .sg-header { padding: 14px 16px !important; }
+          .sg-body { padding: 14px 16px 8px !important; }
+          .sg-footer { padding: 8px 16px 12px !important; }
           .sg-title { font-size: 21px !important; }
           .sg-brand-text { font-size: 11px !important; letter-spacing: 1.3px !important; white-space: nowrap !important; }
           .sg-code { font-size: 38px !important; letter-spacing: 9px !important; padding-left: 8px !important; padding-right: 8px !important; }
@@ -669,37 +657,37 @@ function renderEmailTemplate({
         }
       </style>
     </head>
-    <body style="margin:0;background:#f3f6fb;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+    <body style="margin:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#111827;">
       <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;line-height:1px;font-size:1px;">${escapeHtml(preheader)}</div>
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-wrapper" style="background:#f3f6fb;padding:30px 12px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-wrapper" style="background:#f3f4f6;padding:12px 8px;">
         <tr>
           <td align="center">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-card" style="max-width:600px;background:#ffffff;border:1px solid #d9dee8;border-radius:18px;overflow:hidden;box-shadow:0 18px 40px rgba(17,24,39,0.11);">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-card" style="max-width:600px;background:#ffffff;border-radius:8px;">
               <tr>
-                <td class="sg-header" style="background:#061044;padding:26px 28px 24px;border-bottom:4px solid #d9a327;">
+                <td class="sg-header" style="background:#0a1450;padding:18px 24px 20px;border-radius:8px 8px 0 0;">
                   <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
                     <tr>
-                      <td width="190" valign="top">
+                      <td valign="top">
                         <table role="presentation" cellpadding="0" cellspacing="0">
                           <tr>
-                            <td width="36" valign="middle">${logoBlock}</td>
+                            <td width="48" valign="middle" style="padding-right:8px;">${logoBlock}</td>
                             <td valign="middle">
                               <div class="sg-brand-text" style="font-size:11px;line-height:1.3;color:#ffc34d;text-transform:uppercase;letter-spacing:1.4px;font-weight:800;white-space:nowrap;">${escapeHtml(headerBrandName)}</div>
                             </td>
                           </tr>
                         </table>
-                        <h1 class="sg-title" style="margin:20px 0 0;font-size:24px;line-height:1.25;color:#ffffff;font-weight:800;mso-line-height-rule:exactly;">${escapeHtml(heading)}</h1>
-                        <p style="margin:8px 0 0;font-size:13px;line-height:1.5;color:#dbe6ff;">${escapeHtml(isOtpTemplate ? "One last step to complete your registration" : "Important account update")}</p>
+                        <h1 class="sg-title" style="margin:12px 0 4px;font-size:24px;line-height:1.25;color:#ffffff;font-weight:800;mso-line-height-rule:exactly;">${escapeHtml(heading)}</h1>
+                        <p style="margin:2px 0 0;font-size:11px;line-height:1.5;color:#dbe6ff;">${escapeHtml(isOtpTemplate ? "One last step to complete your registration" : "Important account update")}</p>
                       </td>
                     </tr>
                   </table>
                 </td>
               </tr>
               <tr>
-                <td class="sg-body" style="padding:28px 28px 26px;">
-                  ${isAlert ? `<div style="margin:0 0 24px;border:1px solid #ffb7b7;background:#fff4f4;color:#c1121f;border-radius:9px;padding:14px 16px;font-size:14px;font-weight:800;line-height:1.5;">${escapeHtml(alertText)}</div>` : ""}
-                  ${greeting ? `<p style="margin:0 0 10px;font-size:16px;line-height:1.5;color:#061044;font-weight:800;">${escapeHtml(greeting)}</p>` : ""}
-                  ${isAlert ? "" : `<p style="margin:0 0 22px;font-size:15px;line-height:1.75;color:#061044;">${escapeHtml(bodyIntro)}</p>`}
+                <td class="sg-body" style="padding:22px 24px 8px;">
+                  ${isAlert ? `<div style="margin:0 0 24px;border:1px solid #ffb7b7;background:#fff4f4;color:#c1121f;border-radius:9px;padding:8px 12px;font-size:12px;font-weight:800;line-height:1.5;">${escapeHtml(alertText)}</div>` : ""}
+                  ${greeting ? `<p style="margin:0 0 8px;font-size:18px;line-height:1.5;color:#0a1450;font-weight:800;">${escapeHtml(greeting)}</p>` : ""}
+                  ${isAlert ? "" : `<p style="margin:0 0 12px;font-size:12px;line-height:1.45;color:#0a1450;">${escapeHtml(bodyIntro)}</p>`}
                   ${renderOtpCodeBlock(payload.otp)}
                   ${detailRows ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eef0f4;">${detailRows}</table>` : ""}
                   ${button}
@@ -707,10 +695,10 @@ function renderEmailTemplate({
                 </td>
               </tr>
               <tr>
-                <td class="sg-footer" align="center" style="background:#ffffff;border-top:1px solid #e6e9f2;padding:22px 36px 24px;">
+                <td class="sg-footer" align="center" style="background:#ffffff;border-top:1px solid #e6e9f2;padding:8px 20px 12px;">
                   <p style="margin:0;font-size:11px;line-height:1.7;color:#8a91a7;">
                     This is an automated email from ${escapeHtml(brandName)}. Please do not reply to this email.
-                    ${supportEmail ? ` For assistance, contact ${escapeHtml(supportEmail)}.` : ""}
+                    ${supportEmail ? ` For assistance, contact <a href="mailto:${escapeHtml(supportEmail)}" style="color:#1d4ed8;text-decoration:underline;">${escapeHtml(supportEmail)}</a>.` : ""}
                   </p>
                   <p style="margin:12px 0 0;font-size:11px;line-height:1.7;color:#8a91a7;">&copy; ${currentYear} ${escapeHtml(brandName)}. All rights reserved.</p>
                 </td>
@@ -732,6 +720,7 @@ function renderEmailTemplate({
       bodyIntro,
       isOtpTemplate ? `Verification code: ${payload.otp}` : "",
       textRows ? `\n${textRows}` : "",
+      safeCtaUrl && definition.ctaText ? `${definition.ctaText}: ${safeCtaUrl}` : "",
     ].filter(Boolean).join("\n"),
     html,
   };

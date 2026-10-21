@@ -2482,17 +2482,33 @@ class ReturnServiceClass {
       if (query.fromDate) filter.createdAt.$gte = new Date(query.fromDate);
       if (query.toDate) filter.createdAt.$lte = new Date(query.toDate);
     }
-    if (query.search) {
-      const search = new RegExp(String(query.search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    const searchText = String(query.search || "").trim();
+    if (searchText) {
+      const search = new RegExp(searchText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      // Resolve display values before pagination: returns store internal order/buyer IDs.
+      const [orders, buyers] = await Promise.all([
+        knex("orders").select("id").whereRaw("strpos(lower(order_number), lower(?)) > 0", [searchText]),
+        UserModel.find({ $or: [
+          { email: search }, { phone: search }, { fullName: search },
+          { "profile.firstName": search }, { "profile.lastName": search },
+          { $expr: { $regexMatch: {
+            input: { $concat: [{ $ifNull: ["$profile.firstName", ""] }, " ", { $ifNull: ["$profile.lastName", ""] }] },
+            regex: search.source, options: "i",
+          } } },
+        ] }).select("_id").lean(),
+      ]);
       filter.$or = [
-        { returnNumber: search },
-        { orderId: search },
-        { buyerId: search },
-        { reason: search },
-        { trackingNumber: search },
-        { "reverseShipment.trackingNumber": search },
-        { "refund.providerRefundId": search },
+        ...["returnNumber", "orderId", "buyerId", "reason", "trackingNumber",
+          "reverseShipment.trackingNumber", "reverseShipment.awbNumber",
+          "reverseShipment.shipment.awb_number", "reverseShipment.shipment.tracking_number",
+          "buyerSnapshot.fullName", "buyerSnapshot.firstName", "buyerSnapshot.lastName",
+          "buyerSnapshot.email", "buyerSnapshot.phone", "refund.providerRefundId"].map(field => ({ [field]: search })),
+        { orderId: { $in: orders.map(order => String(order.id)) } },
+        { buyerId: { $in: buyers.map(buyer => String(buyer._id)) } },
       ];
+    }
+    if (query.returnNumber) {
+      filter.returnNumber = new RegExp(String(query.returnNumber).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     }
     if (this.isAdmin(actor)) {
       if (query.sellerId) filter["items.sellerId"] = query.sellerId;

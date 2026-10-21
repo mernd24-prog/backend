@@ -49,7 +49,7 @@ function registerWorkers() {
           const template = renderEmailTemplate({
             templateKey: "account_welcome",
             recipientType: "customer",
-            payload: { email: job.data.email, action: "account_created" },
+            payload: { email: job.data.email, customerName: job.data.customerName, action: "account_created" },
           });
           await sendMail({
             to: job.data.email,
