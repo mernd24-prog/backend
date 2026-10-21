@@ -37,9 +37,12 @@ class NotificationService {
 
     eventBus.subscribe(DOMAIN_EVENTS.AUTH_USER_REGISTERED_V1, async (event) => {
       if (!shouldNotify(DOMAIN_EVENTS.AUTH_USER_REGISTERED_V1, event.payload)) return;
-      const { userId, email, role } = event.payload;
+      const { userId, email, profile = {} } = event.payload;
       if (!email || !emailPattern.test(String(email).trim())) return;
-      await notificationQueue.add("welcome-email", { userId, email }, {
+      await notificationQueue.add("welcome-email", {
+        userId, email: String(email).trim(),
+        customerName: [profile.firstName, profile.lastName].filter(Boolean).join(" "),
+      }, {
         jobId: ["welcome-email", userId || email].filter(Boolean).join("|"),
         delay: env.smtp.queue.initialDelayMs,
         attempts: 3,
@@ -49,7 +52,6 @@ class NotificationService {
         },
       });
 
-      if (role === ROLES.SELLER || role === "seller") return;
     });
 
     this.registerCommerceSubscribers();

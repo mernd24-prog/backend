@@ -12,6 +12,10 @@ const { DOMAIN_EVENTS: E } = require('../src/contracts/events/domain-events');
   assert.equal(shouldNotify(E.ORDER_STATUS_UPDATED_V1, { status: 'shipped' }), true);
   for (const event of [E.ORDER_CREATED_V1, E.ORDER_PAID_V1, E.ORDER_PAYMENT_FAILED_V1, E.ORDER_CANCELLED_V1, E.RETURN_APPROVED_V1, E.RETURN_REJECTED_V1, E.REFUND_PROCESSED_V1, E.REFUND_FAILED_V1, E.SHIPMENT_DELIVERED_V1, E.KYC_STATUS_UPDATED_V1, E.PRODUCT_REJECTED_V1, E.INVENTORY_LOW_STOCK_V1, E.OTP_SENT_V1]) assert.equal(shouldNotify(event), true);
   assert.equal(shouldNotify(E.AUTH_USER_REGISTERED_V1), false);
+  assert.equal(shouldNotify(E.AUTH_USER_REGISTERED_V1, { role: 'buyer' }), true);
+  for (const role of ['seller', 'admin', 'seller-admin']) {
+    assert.equal(shouldNotify(E.AUTH_USER_REGISTERED_V1, { role }), false);
+  }
   assert.equal(shouldNotify(E.SELLER_PAYOUT_STATUS_UPDATED_V1, { status: 'processing' }), false);
   assert.equal(shouldNotify(E.SELLER_PAYOUT_STATUS_UPDATED_V1, { status: 'completed' }), true);
   assert.equal(shouldNotify(E.ORDER_STATUS_UPDATED_V1, { status: 'confirmed' }), true);
@@ -22,6 +26,29 @@ const { DOMAIN_EVENTS: E } = require('../src/contracts/events/domain-events');
   assert.equal(notificationIdentity(E.REFUND_PROCESSED_V1, { orderId: 'o1' }), null);
   assert.equal(notificationIdentity(E.INVENTORY_LOW_STOCK_V1, { productId: 'p1' }, 100), notificationIdentity(E.INVENTORY_LOW_STOCK_V1, { productId: 'p1' }, 200));
   const notificationSource = fs.readFileSync(path.join(__dirname, '../src/modules/notification/services/notification.service.js'), 'utf8');
+  const welcomeSubscribers = new Map();
+  const welcomeJobs = [];
+  const registerMethod = notificationSource.slice(notificationSource.indexOf('  registerSubscribers() {'), notificationSource.indexOf('  registerCommerceSubscribers() {'));
+  const welcomeService = vm.runInNewContext(`({${registerMethod}})`, {
+    subscribersRegistered: false, shouldNotify, DOMAIN_EVENTS: E,
+    eventBus: { subscribe: (event, handler) => welcomeSubscribers.set(event, handler) },
+    emailPattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+    notificationQueue: { add: async (name, data, options) => welcomeJobs.push({ name, data, options }) },
+    env: { smtp: { queue: { initialDelayMs: 0, retryBackoffMs: 1000 } } },
+  });
+  welcomeService.registerCommerceSubscribers = () => {};
+  welcomeService.registerSubscribers();
+  const welcomeHandler = welcomeSubscribers.get(E.AUTH_USER_REGISTERED_V1);
+  await welcomeHandler({ payload: { userId: 'buyer-1', email: 'buyer@example.com', role: 'buyer', profile: { firstName: 'Test', lastName: 'Customer' } } });
+  assert.equal(welcomeJobs.length, 1);
+  assert.equal(welcomeJobs[0].name, 'welcome-email');
+  assert.equal(welcomeJobs[0].data.customerName, 'Test Customer');
+  assert.equal(welcomeJobs[0].options.attempts, 3);
+  await welcomeHandler({ payload: { userId: 'seller-1', email: 'seller@example.com', role: 'seller' } });
+  await welcomeHandler({ payload: { userId: 'buyer-2', email: 'invalid', role: 'buyer' } });
+  assert.equal(welcomeJobs.length, 1, 'seller and invalid email do not queue welcome mail');
+  const { renderEmailTemplate } = require('../src/modules/notification/services/email-template-catalog');
+  assert.match(renderEmailTemplate({ templateKey: 'account_welcome', payload: welcomeJobs[0].data }).html, /Hello Test Customer,/);
   const emailPolicyMethod = notificationSource.slice(notificationSource.indexOf('  shouldQueueEmail('), notificationSource.indexOf('  shouldQueueAdminEmail('));
   const emailPolicyService = vm.runInNewContext(`({${emailPolicyMethod}})`, {
     shouldNotify, DOMAIN_EVENTS: E, ORDER_STATUS: { CONFIRMED: 'confirmed' },

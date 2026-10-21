@@ -1105,6 +1105,7 @@ class AuthService {
         await this.walletService.ensureWallet(user.id);
         await this.assignDefaultRbacRole(user);
         await this.referralService.rewardReferral(payload.referralCode, user);
+        await this.publishUserRegisteredEvent(user, requestContext);
       } else {
         if (payload.role === ROLES.BUYER && user.role !== ROLES.BUYER) {
           await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {

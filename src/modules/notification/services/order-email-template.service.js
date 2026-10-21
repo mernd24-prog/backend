@@ -47,7 +47,7 @@ const logoUrl = process.env.EMAIL_LOGO_URL ||
   process.env.BRAND_LOGO_URL ||
   process.env.INVOICE_LOGO_URL ||
   (customerAppBaseUrl ? `${customerAppBaseUrl}/favicon.png` : "");
-const supportEmail = process.env.SUPPORT_EMAIL || process.env.REPLY_TO_EMAIL || "";
+const supportEmail = process.env.SUPPORT_EMAIL || "samglobalsupport@gmail.com";
 const currentYear = new Date().getFullYear();
 
 const isAlertOrderEvent = (eventName = "") =>
@@ -56,33 +56,7 @@ const isAlertOrderEvent = (eventName = "") =>
 const renderHeaderIcon = (icon, isAlert = false) => `
   ${renderHeroArt(icon, { type: isAlert ? "alert" : undefined })}`;
 
-const renderTrustStrip = () => `
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;">
-    <tr>
-      <td align="center" style="padding:0;">
-        <table role="presentation" width="420" cellpadding="0" cellspacing="0" class="sg-trust-list" style="width:420px;max-width:100%;border-top:1px solid #eef0f4;">
-          <tr>
-            <td style="padding:14px 0;border-bottom:1px solid #e6e9f2;vertical-align:top;">
-              <div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Secure &amp; Trusted</div>
-              <div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">Order updates are sent from official systems.</div>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:14px 0;border-bottom:1px solid #e6e9f2;vertical-align:top;">
-              <div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Order Protection</div>
-              <div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">Review details only in your account.</div>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:14px 0;vertical-align:top;">
-              <div style="font-size:13px;font-weight:800;color:#061044;line-height:1.35;">Need Help?</div>
-              <div style="margin-top:3px;font-size:12px;line-height:1.5;color:#26324a;">Contact support from your order page.</div>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>`;
+const { renderTrustStrip } = require("./email-layout");
 
 const hiddenPreheader = (text = "") => `
   <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;line-height:1px;font-size:1px;">
@@ -230,7 +204,7 @@ const orderRowsOf = (payload = {}) => compactRows([
   row("Payment status", humanize(firstValue(payload.paymentStatus, payload.payment_status))),
   row("Tracking number", firstValue(payload.trackingNumber, payload.tracking_number)),
   row("Carrier", firstValue(payload.carrierName, payload.carrier_name)),
-  row("Reason", firstValue(payload.reason, payload.cancellationReason)),
+  row("Reason", firstValue(payload.reason, payload.cancellationReason, payload.failureReason)),
 ]);
 
 const isOrderCompleteStatus = (payload = {}) =>
@@ -322,15 +296,15 @@ const resolveOrderEmailCopy = ({ eventName, subject, message, payload = {}, reci
 
 const renderSectionTitle = (title) => `
   <tr>
-    <td style="padding:22px 0 10px;font-size:15px;font-weight:700;color:#111827;">${escapeHtml(title)}</td>
+    <td style="padding:10px 0 6px;font-size:12px;font-weight:700;color:#111827;">${escapeHtml(title)}</td>
   </tr>`;
 
 const renderKeyValueRows = (rows = []) => {
   const html = compactRows(rows)
     .map((item) => `
       <tr>
-        <td style="padding:10px 10px 10px 0;color:#667085;font-size:13px;line-height:1.4;border-bottom:1px solid #eef0f4;vertical-align:top;">${escapeHtml(item.label)}</td>
-        <td style="padding:10px 0 10px 10px;color:#111827;font-size:13px;font-weight:700;line-height:1.4;text-align:right;border-bottom:1px solid #eef0f4;vertical-align:top;word-break:break-word;">${escapeHtml(item.value)}</td>
+        <td style="padding:5px 8px 5px 0;color:#667085;font-size:11px;line-height:1.4;border-bottom:1px solid #eef0f4;vertical-align:top;">${escapeHtml(item.label)}</td>
+        <td style="padding:5px 0 5px 8px;color:#111827;font-size:11px;font-weight:700;line-height:1.4;text-align:right;border-bottom:1px solid #eef0f4;vertical-align:top;word-break:break-word;">${escapeHtml(item.value)}</td>
       </tr>`)
     .join("");
   if (!html) return "";
@@ -341,16 +315,16 @@ const renderProductsTable = (items = []) => {
   if (!items.length) return "";
   const rows = items.map((item) => `
     <tr>
-      <td colspan="2" style="padding:14px 0 6px;border-top:1px solid #eef0f4;vertical-align:top;">
-        <div style="font-size:14px;font-weight:700;color:#111827;line-height:1.4;">${escapeHtml(item.name)}</div>
-        ${item.meta ? `<div style="margin-top:5px;font-size:12px;line-height:1.5;color:#6b7280;">${escapeHtml(item.meta)}</div>` : ""}
+      <td colspan="2" style="padding:6px 0 3px;border-top:1px solid #eef0f4;vertical-align:top;">
+        <div style="font-size:12px;font-weight:700;color:#111827;line-height:1.4;">${escapeHtml(item.name)}</div>
+        ${item.meta ? `<div style="margin-top:5px;font-size:9px;line-height:1.4;color:#6b7280;">${escapeHtml(item.meta)}</div>` : ""}
       </td>
     </tr>
     <tr>
-      <td style="padding:6px 12px 14px 0;font-size:13px;color:#667085;">
+      <td style="padding:3px 8px 8px 0;font-size:11px;color:#667085;">
         Qty <span style="display:inline-block;margin-left:8px;color:#111827;font-weight:700;">${escapeHtml(item.quantity)}</span>
       </td>
-      <td style="padding:6px 0 14px 12px;text-align:right;font-size:13px;color:#667085;">
+      <td style="padding:3px 0 8px 8px;text-align:right;font-size:11px;color:#667085;">
         Amount <span style="display:inline-block;margin-left:8px;color:#111827;font-weight:800;">${escapeHtml(item.price)}</span>
       </td>
     </tr>`).join("");
@@ -374,7 +348,7 @@ const renderAddress = (title, address = {}) => {
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
       ${renderSectionTitle(title)}
       <tr>
-        <td style="font-size:13px;line-height:1.7;color:#374151;background:#f9fafb;border:1px solid #eef0f4;border-radius:8px;padding:14px 16px;">${lines.map(escapeHtml).join("<br>")}</td>
+        <td style="font-size:11px;line-height:1.7;color:#374151;background:#f9fafb;border:1px solid #eef0f4;border-radius:8px;padding:8px 12px;">${lines.map(escapeHtml).join("<br>")}</td>
       </tr>
     </table>`;
 };
@@ -384,7 +358,7 @@ const renderBlock = (title, body) => {
   return `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
       ${renderSectionTitle(title)}
-      <tr><td style="font-size:13px;line-height:1.65;color:#374151;white-space:pre-line;">${escapeHtml(body)}</td></tr>
+      <tr><td style="font-size:11px;line-height:1.65;color:#374151;white-space:pre-line;">${escapeHtml(body)}</td></tr>
     </table>`;
 };
 
@@ -421,7 +395,9 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
   const greeting = recipientName ? `Hi ${recipientName},` : "";
   const items = orderItemsOf(payload);
   const summaryRows = orderSummaryRowsOf(payload);
-  const refundRows = refundRowsOf(payload);
+  const refundEvents = [DOMAIN_EVENTS.REFUND_PROCESSED_V1, DOMAIN_EVENTS.REFUND_FAILED_V1,
+    DOMAIN_EVENTS.RETURN_REFUNDED_V1, DOMAIN_EVENTS.PAYMENT_REFUNDED_V1];
+  const refundRows = refundEvents.includes(resolvedEventName) ? refundRowsOf(payload) : [];
   const orderRows = orderRowsOf(payload);
   const shippingAddress = payload.shippingAddress || payload.shipping_address || {};
   const billingAddress = payload.billingAddress || payload.billing_address || {};
@@ -445,8 +421,8 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
     moneyOf(payload, "payableAmount", "payable_amount", "totalAmount", "total_amount", "amount"),
   ].filter(Boolean).join(" - ");
   const logoBlock = logoUrl
-    ? `<img src="${escapeHtml(logoUrl)}" width="28" height="28" alt="${escapeHtml(brandName)}" style="display:block;width:28px;height:28px;border-radius:7px;object-fit:contain;background:#ffffff;border:0;outline:none;text-decoration:none;">`
-    : `<span style="display:inline-block;width:28px;height:28px;border-radius:7px;background:#d9a327;color:#061044;font-size:12px;line-height:28px;text-align:center;font-weight:800;">SG</span>`;
+    ? `<img src="${escapeHtml(logoUrl)}" width="40" alt="${escapeHtml(brandName)}" style="display:block;width:40px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;">`
+    : `<span style="display:inline-block;width:28px;height:28px;border-radius:7px;background:#d9a327;color:#0a1450;font-size:12px;line-height:28px;text-align:center;font-weight:800;">SG</span>`;
 
   const html = `<!doctype html>
   <html>
@@ -457,10 +433,10 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
       <style>
         @media only screen and (max-width: 560px) {
           .sg-wrapper { padding: 16px 8px !important; }
-          .sg-card { border-radius: 12px !important; }
-          .sg-header { padding: 24px 28px !important; }
-          .sg-body { padding: 26px 28px !important; }
-          .sg-footer { padding: 22px 20px !important; }
+          .sg-card { border-radius: 8px !important; }
+          .sg-header { padding: 14px 16px !important; }
+          .sg-body { padding: 14px 16px 8px !important; }
+          .sg-footer { padding: 8px 16px 12px !important; }
           .sg-title { font-size: 21px !important; }
           .sg-brand-text { font-size: 11px !important; letter-spacing: 1.3px !important; white-space: nowrap !important; }
           .sg-hero-icon { width: 148px !important; }
@@ -469,37 +445,37 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
         }
       </style>
     </head>
-    <body style="margin:0;background:#f3f6fb;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+    <body style="margin:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#111827;">
       ${hiddenPreheader(preheader)}
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-wrapper" style="background:#f3f6fb;padding:30px 12px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-wrapper" style="background:#f3f4f6;padding:12px 8px;">
         <tr>
           <td align="center">
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-card" style="max-width:600px;background:#ffffff;border:1px solid #d9dee8;border-radius:18px;overflow:hidden;box-shadow:0 18px 40px rgba(17,24,39,0.11);">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="sg-card" style="max-width:600px;background:#ffffff;border-radius:8px;">
               <tr>
-                <td class="sg-header" style="background:#061044;padding:26px 28px 24px;border-bottom:4px solid #d9a327;">
+                <td class="sg-header" style="background:#0a1450;padding:14px 20px;border-radius:8px 8px 0 0;">
                   <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
                     <tr>
-                      <td width="190" valign="top">
+                      <td valign="top">
                         <table role="presentation" cellpadding="0" cellspacing="0">
                           <tr>
-                            <td width="36" valign="middle">${logoBlock}</td>
+                            <td width="48" valign="middle" style="padding-right:8px;">${logoBlock}</td>
                             <td valign="middle">
                               <div class="sg-brand-text" style="font-size:11px;line-height:1.3;color:#ffc34d;text-transform:uppercase;letter-spacing:1.4px;font-weight:800;white-space:nowrap;">${escapeHtml(headerBrandName)}</div>
                             </td>
                           </tr>
                         </table>
-                        <h1 class="sg-title" style="margin:20px 0 0;font-size:24px;line-height:1.25;color:#ffffff;font-weight:800;mso-line-height-rule:exactly;">${escapeHtml(copy.title)}</h1>
-                        <p style="margin:8px 0 0;font-size:13px;line-height:1.5;color:#dbe6ff;">${escapeHtml(isAlert ? "Please review this update" : "Your order update is ready")}</p>
+                        <h1 class="sg-title" style="margin:10px 0 2px;font-size:22px;line-height:1.25;color:#ffffff;font-weight:800;mso-line-height-rule:exactly;">${escapeHtml(copy.title)}</h1>
+                        <p style="margin:2px 0 0;font-size:11px;line-height:1.5;color:#dbe6ff;">${escapeHtml(isAlert ? "Please review this update" : "Your order update is ready")}</p>
                       </td>
                     </tr>
                   </table>
                 </td>
               </tr>
               <tr>
-                <td class="sg-body" style="padding:28px 28px 26px;">
-                  ${orderRef ? `<p style="margin:0 0 20px;"><span style="display:inline-block;background:#f4f6fb;border:1px solid #d9dee8;border-radius:999px;padding:7px 12px;font-size:12px;font-weight:700;color:#1b1d60;">Order Reference: ${escapeHtml(orderRef)}</span></p>` : ""}
-                  ${greeting ? `<p style="margin:0 0 10px;font-size:15px;color:#344054;">${escapeHtml(greeting)}</p>` : ""}
-                  <p style="margin:0 0 20px;font-size:15px;line-height:1.7;color:#344054;">${escapeHtml(copy.intro)}</p>
+                <td class="sg-body" style="padding:14px 20px 8px;">
+                  ${orderRef ? `<p style="margin:0 0 12px;"><span style="display:inline-block;background:#f4f6fb;border:1px solid #d9dee8;border-radius:999px;padding:7px 12px;font-size:12px;font-weight:700;color:#1b1d60;">Order Reference: ${escapeHtml(orderRef)}</span></p>` : ""}
+                  ${greeting ? `<p style="margin:0 0 10px;font-size:12px;color:#344054;">${escapeHtml(greeting)}</p>` : ""}
+                  <p style="margin:0 0 12px;font-size:12px;line-height:1.4;color:#344054;">${escapeHtml(copy.intro)}</p>
                   ${items.length ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${renderSectionTitle("Items in this order")}<tr><td>${renderProductsTable(items)}</td></tr></table>` : ""}
                   ${summaryRows.length ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${renderSectionTitle(orderHeading || "Order summary")}<tr><td>${renderKeyValueRows(summaryRows)}</td></tr></table>` : ""}
                   ${refundRows.length ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${renderSectionTitle("Refund details")}<tr><td>${renderKeyValueRows(refundRows)}</td></tr></table>` : ""}
@@ -509,17 +485,17 @@ function buildOrderEmailTemplate({ subject, message, payload = {}, recipientType
                   ${renderAddress("Shipping address", shippingAddress)}
                   ${
                     ctaUrl
-                      ? `<p style="margin:28px 0 0;"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;background:#d9a327;color:#061044;text-decoration:none;border-radius:999px;padding:13px 26px;font-weight:800;font-size:14px;">${escapeHtml(ctaText)}</a></p>`
+                      ? `<p style="margin:28px 0 0;"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;background:#d9a327;color:#0a1450;text-decoration:none;border-radius:999px;padding:13px 26px;font-weight:800;font-size:12px;">${escapeHtml(ctaText)}</a></p>`
                       : ""
                   }
                   <div class="sg-trust">${renderTrustStrip()}</div>
                 </td>
               </tr>
               <tr>
-                <td class="sg-footer" align="center" style="background:#ffffff;border-top:1px solid #e6e9f2;padding:22px 36px 24px;">
+                <td class="sg-footer" align="center" style="background:#ffffff;border-top:1px solid #e6e9f2;padding:8px 20px 12px;">
                   <p style="margin:0;font-size:11px;line-height:1.7;color:#8a91a7;">
                     This is an automated transactional email from ${escapeHtml(brandName)}. Please do not reply to this email.
-                    ${supportEmail ? ` For assistance, contact ${escapeHtml(supportEmail)}.` : " Please contact customer support if you need assistance."}
+                    ${supportEmail ? ` For assistance, contact <a href="mailto:${escapeHtml(supportEmail)}" style="color:#1d4ed8;text-decoration:underline;">${escapeHtml(supportEmail)}</a>.` : " Please contact customer support if you need assistance."}
                   </p>
                   <p style="margin:12px 0 0;font-size:11px;line-height:1.7;color:#8a91a7;">&copy; ${currentYear} ${escapeHtml(brandName)}. All rights reserved.</p>
                 </td>
