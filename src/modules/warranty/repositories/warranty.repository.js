@@ -8,15 +8,22 @@ const warrantySchema = new mongoose.Schema({
   customerId: { type: String, required: true },
   sellerId: { type: String, required: true },
   warrantyDetails: {
+    enabled: { type: Boolean, default: true },
     period: { type: Number, required: true },
-    periodUnit: { type: String, enum: ["days", "months", "years"], required: true },
+    periodUnit: { type: String, enum: ["days", "weeks", "months", "years"], required: true },
     type: { type: String, required: true },
     provider: { type: String, required: true },
     terms: { type: String },
     returnPolicy: {
       eligible: { type: Boolean, default: true },
-      days: { type: Number, default: 30 },
-      type: { type: String, enum: ["refund", "exchange", "repair"], default: "refund" },
+      returnable: { type: Boolean, default: true },
+      days: { type: Number, default: 0 },
+      returnWindowDays: { type: Number, default: 0 },
+      type: { type: String, enum: ["standard", "replacement_only", "non_returnable"], default: "standard" },
+      resolution: { type: String, enum: ["refund", "replacement", "refund_or_replacement"], default: "refund_or_replacement" },
+      requiresImages: { type: Boolean, default: false },
+      inspectionRequired: { type: Boolean, default: true },
+      shippingPaidBy: { type: String, enum: ["platform", "seller", "customer"], default: "seller" },
       restockingFee: { type: Number, default: 0 },
     },
   },
@@ -52,6 +59,10 @@ class WarrantyRepository {
 
   async findByCustomerId(customerId) {
     return await Warranty.find({ customerId });
+  }
+
+  async findRegistration(orderId, productId, variantId = null) {
+    return await Warranty.findOne({ orderId, productId, variantId: variantId || null });
   }
 
   async update(warrantyId, updateData) {

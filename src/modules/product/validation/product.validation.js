@@ -116,9 +116,10 @@ const dimensionsSchema = Joi.object({
 });
 
 const warrantySchema = Joi.object({
-  period: optionalNonNegativeInteger(),
-  periodUnit: Joi.string().valid("days", "weeks", "months", "years").default("months"),
-  type: optionalString().default("manufacturer"),
+  enabled: Joi.boolean(),
+  period: Joi.number().integer().min(1).max(365).allow(null).empty(""),
+  periodUnit: Joi.string().valid("days", "weeks", "months", "years").allow("", null),
+  type: optionalString(),
   provider: optionalString(),
   terms: optionalString(),
   returnPolicy: Joi.object({
@@ -134,7 +135,22 @@ const warrantySchema = Joi.object({
     restockingFee: optionalNonNegativeNumber().default(0),
   }).default({}),
   serviceableCountries: Joi.array().items(Joi.string().trim()).default([]),
-});
+}).custom((value, helpers) => {
+  const hasDetails = [value.period, value.periodUnit, value.type, value.provider]
+    .some((item) => item !== undefined && item !== null && String(item).trim() !== "");
+  const enabled = value.enabled === true || (value.enabled === undefined && hasDetails);
+
+  if (!enabled) {
+    if (hasDetails) return helpers.message({ custom: "Warranty details must be cleared when warranty is disabled" });
+    return { ...value, enabled: false };
+  }
+
+  if (!value.period) return helpers.message({ custom: "Warranty period is required" });
+  if (!value.periodUnit) return helpers.message({ custom: "Warranty unit is required" });
+  if (!value.provider) return helpers.message({ custom: "Warranty provider is required" });
+  if (!value.type) return helpers.message({ custom: "Warranty type is required" });
+  return { ...value, enabled: true };
+}, "warranty coverage validation");
 
 const originSchema = Joi.object({
   country: optionalString(),
@@ -252,7 +268,7 @@ const productBodyBase = {
   weight: optionalNonNegativeNumber(),
   weightUnit: optionalString(),
   origin: originSchema.default({}),
-  warranty: warrantySchema.default({}),
+  warranty: warrantySchema,
 
   // Inventory
   stock: deprecatedRootVariantField(),

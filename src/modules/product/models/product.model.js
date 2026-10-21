@@ -333,6 +333,8 @@ const productSchema = new mongoose.Schema(
       city: { type: String, index: true },
     },
     warranty: {
+      // No default keeps legacy products with complete warranty details valid.
+      enabled: { type: Boolean },
       period: { type: Number, min: 0 },
       periodUnit: {
         type: String,

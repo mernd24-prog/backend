@@ -639,6 +639,18 @@ const MODULE_CATALOG = [
     apiPath: "/admin/analytics",
     apiAliases: ["/analytics/events"],
   },
+  {
+    tab: "Reports & Analytics",
+    slug: "ca-analytics",
+    name: "CA Finance & Reconciliation",
+    description: "Read-only finance registers, statutory summaries, and reconciliation exports",
+    icon: "calculator",
+    order: 24.3,
+    forPlatform: true,
+    forSeller: true,
+    apiPath: "/admin/ca-analytics",
+    apiAliases: ["/sellers/me/ca-analytics"],
+  },
 
   // ── Location Management ───────────────────────────────────────────────────
   {

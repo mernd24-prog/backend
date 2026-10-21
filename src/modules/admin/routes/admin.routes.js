@@ -37,6 +37,7 @@ const {
 const {
   adminReportRoutes,
 } = require("./operations-report.routes");
+const { createCaAnalyticsRoutes } = require("./ca-analytics.routes");
 const {
   commonManagementRoutes,
 } = require("./common-management.routes");
@@ -323,6 +324,7 @@ adminRoutes.use("/inventory", adminInventoryRoutes);
 adminRoutes.use("/shipping", adminShippingRoutes);
 adminRoutes.use("/carts", adminCartRoutes);
 adminRoutes.use("/reports", adminReportRoutes);
+adminRoutes.use("/ca-analytics", createCaAnalyticsRoutes());
 
 adminRoutes.get(
   "/access/modules",

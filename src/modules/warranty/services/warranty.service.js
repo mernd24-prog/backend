@@ -3,6 +3,7 @@ const { ProductRepository } = require("../../product/repositories/product.reposi
 const { OrderRepository } = require("../../order/repositories/order.repository");
 const { EventPublisher } = require("../../../infrastructure/events/event-publisher");
 const { v4: uuidv4 } = require("uuid");
+const { AppError } = require("../../../shared/errors/app-error");
 
 class WarrantyService {
   constructor({
@@ -19,12 +20,21 @@ class WarrantyService {
 
   async registerWarranty(orderId, productId, variantId = null) {
     const order = await this.orderRepository.findById(orderId);
-    if (!order) throw new Error("Order not found");
+    if (!order) throw new AppError("Order not found", 404);
 
     const product = await this.productRepository.findById(productId);
-    if (!product) throw new Error("Product not found");
+    if (!product) throw new AppError("Product not found", 404);
 
-    if (!product.warranty) throw new Error("Product has no warranty");
+    if (!this.isWarrantyAvailable(product.warranty)) {
+      throw new AppError("This product does not include warranty coverage", 400);
+    }
+
+    const existing = await this.warrantyRepository.findRegistration(
+      orderId,
+      productId,
+      variantId,
+    );
+    if (existing) return existing;
 
     const warrantyData = {
       warrantyId: uuidv4(),
@@ -111,6 +121,8 @@ class WarrantyService {
       startDate.setFullYear(startDate.getFullYear() + warranty.period);
     } else if (warranty.periodUnit === "months") {
       startDate.setMonth(startDate.getMonth() + warranty.period);
+    } else if (warranty.periodUnit === "weeks") {
+      startDate.setDate(startDate.getDate() + warranty.period * 7);
     } else if (warranty.periodUnit === "days") {
       startDate.setDate(startDate.getDate() + warranty.period);
     }
@@ -119,7 +131,20 @@ class WarrantyService {
 
   async getProductWarranty(productId) {
     const product = await this.productRepository.findById(productId);
-    return product?.warranty || null;
+    return this.isWarrantyAvailable(product?.warranty)
+      ? product.warranty
+      : null;
+  }
+
+  isWarrantyAvailable(warranty) {
+    if (!warranty || warranty.enabled === false) return false;
+    return (
+      Number.isInteger(Number(warranty.period)) &&
+      Number(warranty.period) >= 1 &&
+      ["days", "weeks", "months", "years"].includes(warranty.periodUnit) &&
+      Boolean(String(warranty.type || "").trim()) &&
+      Boolean(String(warranty.provider || "").trim())
+    );
   }
 }
 

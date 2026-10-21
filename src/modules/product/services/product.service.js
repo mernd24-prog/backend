@@ -338,6 +338,31 @@ class ProductService {
     };
   }
 
+  normalizeWarranty(warranty, fallback = {}, { forceSellerShipping = false } = {}) {
+    const supplied = warranty !== undefined && warranty !== null;
+    const source = supplied ? warranty : fallback || {};
+    const explicitlyDisabled = supplied && source.enabled === false;
+    const hasDetails =
+      Number(source.period) >= 1 || Boolean(String(source.provider || "").trim());
+    const enabled = !explicitlyDisabled && (source.enabled === true || hasDetails);
+    const returnPolicy = this.normalizeReturnPolicy(
+      source.returnPolicy,
+      supplied ? fallback?.returnPolicy : undefined,
+    );
+
+    if (forceSellerShipping) returnPolicy.shippingPaidBy = "seller";
+
+    if (!enabled) {
+      return { enabled: false, returnPolicy };
+    }
+
+    return {
+      ...source,
+      enabled: true,
+      returnPolicy,
+    };
+  }
+
   // ─── Category & attribute helpers ─────────────────────────────────────────
 
   normalizeCategoryAttributes(category = {}) {
@@ -2049,19 +2074,9 @@ class ProductService {
       ...payload,
       gstInclusive: true,
     };
-    if (isSeller) {
-      payload.warranty = {
-        ...(payload.warranty || {}),
-        returnPolicy: {
-          ...(payload.warranty?.returnPolicy || {}),
-          shippingPaidBy: "seller",
-        },
-      };
-    }
-    payload.warranty = {
-      ...(payload.warranty || {}),
-      returnPolicy: this.normalizeReturnPolicy(payload.warranty?.returnPolicy),
-    };
+    payload.warranty = this.normalizeWarranty(payload.warranty, {}, {
+      forceSellerShipping: isSeller,
+    });
     payload = await this.normalizeProductCompliance(payload, actor);
     const productType =
       payload.hasVariants === true || (payload.variants || []).length > 0
@@ -2205,24 +2220,11 @@ class ProductService {
     payload = this.normalizeProductMedia(payload);
     payload = this.normalizeProductVariants(payload);
     payload = this.syncRootAndDefaultVariant(payload, existingProduct);
-    if (isSellerRole(actor)) {
-      payload.warranty = {
-        ...(payload.warranty || existingProduct.warranty || {}),
-        returnPolicy: {
-          ...(payload.warranty?.returnPolicy ||
-            existingProduct.warranty?.returnPolicy ||
-            {}),
-          shippingPaidBy: "seller",
-        },
-      };
-    }
-    payload.warranty = {
-      ...(payload.warranty || existingProduct.warranty || {}),
-      returnPolicy: this.normalizeReturnPolicy(
-        payload.warranty?.returnPolicy,
-        existingProduct.warranty?.returnPolicy,
-      ),
-    };
+    payload.warranty = this.normalizeWarranty(
+      payload.warranty,
+      existingProduct.warranty,
+      { forceSellerShipping: isSellerRole(actor) },
+    );
     payload = await this.normalizeProductCompliance(
       payload,
       actor,

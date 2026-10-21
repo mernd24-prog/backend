@@ -38,6 +38,9 @@ const { adminSupportRoutes } = require("../modules/support/routes/admin-support.
 const { referralMobileRoutes } = require("../modules/referral/routes/referral-mobile.routes");
 const { whatsappSupportRoutes } = require("../modules/whatsapp-support/routes/whatsapp-support.routes");
 const { stockNotificationRoutes } = require("../modules/stock-notification/routes/stock-notification.routes");
+const { createCaAnalyticsRoutes } = require("../modules/admin/routes/ca-analytics.routes");
+const { authenticate } = require("../shared/middleware/authenticate");
+const { allowPermissions } = require("../shared/middleware/access");
 
 function registerRoutes(app) {
   app.use(`${env.apiPrefix}/auth`, authRoutes);
@@ -55,6 +58,7 @@ function registerRoutes(app) {
   app.use(`${env.apiPrefix}/whatsapp-support`, whatsappSupportRoutes);
   app.use(`${env.apiPrefix}/stock-notifications`, stockNotificationRoutes);
   app.use(`${env.apiPrefix}/influencer/referral`, referralMobileRoutes);
+  app.use(`${env.apiPrefix}/sellers/me/ca-analytics`, authenticate, allowPermissions("sellers/commissions:view"), createCaAnalyticsRoutes({ seller: true }));
   app.use(`${env.apiPrefix}/sellers`, sellerRoutes);
   app.use(`${env.apiPrefix}/notifications`, notificationRoutes);
   app.use(`${env.apiPrefix}/analytics`, analyticsRoutes);
