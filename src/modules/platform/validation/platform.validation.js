@@ -5,6 +5,60 @@ const { v } = require("../../../shared/validation/validation-helpers");
 // v.listQuery() already covers page, limit, search, sortBy, sortDir, status, startDate, endDate.
 const listQuery = v.listQuery();
 
+const brandName = () =>
+  Joi.string()
+    .trim()
+    .min(3)
+    .max(200)
+    .pattern(/[\p{L}\p{N}]/u)
+    .messages({
+      "string.empty": "Brand name is required.",
+      "string.min": "Brand name must contain at least 3 characters.",
+      "string.max": "Brand name cannot exceed 200 characters.",
+      "string.pattern.base": "Brand name must contain at least one letter or number.",
+      "any.required": "Brand name is required.",
+    });
+
+const categoryAttributeDefinitionSchema = Joi.object({
+  platformOptionId: Joi.string().trim().allow("", null),
+  allowCustomOptions: Joi.boolean().default(false),
+  key: Joi.string().trim().required(),
+  label: Joi.string().trim().required(),
+  type: Joi.string()
+    .valid("text", "number", "select", "multi_select", "boolean", "date")
+    .default("text"),
+  required: Joi.boolean().default(false),
+  min: Joi.alternatives().try(Joi.number(), Joi.string().trim()).allow(null, ""),
+  max: Joi.alternatives().try(Joi.number(), Joi.string().trim()).allow(null, ""),
+  minLength: Joi.number().integer().min(0).max(5000).allow(null),
+  maxLength: Joi.number().integer().min(0).max(5000).allow(null),
+  precision: Joi.number().integer().min(0).max(6).allow(null),
+  pattern: Joi.string().trim().max(200).allow("", null),
+  minSelections: Joi.number().integer().min(0).allow(null),
+  maxSelections: Joi.number().integer().min(0).allow(null),
+  options: Joi.array().items(Joi.string().trim()).default([]),
+  unit: Joi.string().allow("", null),
+  isVariantAttribute: Joi.boolean().default(false),
+  isFilterable: Joi.boolean().default(false),
+  isSearchable: Joi.boolean().default(false),
+}).custom((attribute, helpers) => {
+  if (
+    attribute.minSelections !== undefined &&
+    attribute.maxSelections !== undefined &&
+    attribute.minSelections > attribute.maxSelections
+  ) {
+    return helpers.message({ custom: "Minimum selections cannot exceed maximum selections" });
+  }
+  if (
+    attribute.minLength !== undefined &&
+    attribute.maxLength !== undefined &&
+    attribute.minLength > attribute.maxLength
+  ) {
+    return helpers.message({ custom: "Minimum length cannot exceed maximum length" });
+  }
+  return attribute;
+});
+
 const withCategoryAliases = (schema) =>
   schema
     .rename("name", "title", { ignoreUndefined: true, override: false })
@@ -19,23 +73,7 @@ const createCategorySchema = Joi.object({
     level: Joi.number().integer().min(0).default(0),
     attributesSchema: Joi.object().default({}),
     attributeSchema: Joi.array()
-      .items(
-        Joi.object({
-          platformOptionId: Joi.string().trim().allow("", null),
-          allowCustomOptions: Joi.boolean().default(false),
-          key: Joi.string().trim().required(),
-          label: Joi.string().trim().required(),
-          type: Joi.string()
-            .valid("text", "number", "select", "multi_select", "boolean", "date")
-            .default("text"),
-          required: Joi.boolean().default(false),
-          options: Joi.array().items(Joi.string().trim()).default([]),
-          unit: Joi.string().allow("", null),
-          isVariantAttribute: Joi.boolean().default(false),
-          isFilterable: Joi.boolean().default(false),
-          isSearchable: Joi.boolean().default(false),
-        }),
-      )
+      .items(categoryAttributeDefinitionSchema)
       .default([]),
     active: Joi.boolean().default(true),
     sortOrder: Joi.number().integer().default(0),
@@ -53,21 +91,7 @@ const updateCategorySchema = Joi.object({
     parentKey: Joi.string().allow(null, ""),
     level: Joi.number().integer().min(0),
     attributesSchema: Joi.object(),
-    attributeSchema: Joi.array().items(
-      Joi.object({
-        platformOptionId: Joi.string().trim().allow("", null),
-        allowCustomOptions: Joi.boolean(),
-        key: Joi.string().trim().required(),
-        label: Joi.string().trim().required(),
-        type: Joi.string().valid("text", "number", "select", "multi_select", "boolean", "date"),
-        required: Joi.boolean(),
-        options: Joi.array().items(Joi.string().trim()),
-        unit: Joi.string().allow("", null),
-        isVariantAttribute: Joi.boolean(),
-        isFilterable: Joi.boolean(),
-        isSearchable: Joi.boolean(),
-      }),
-    ),
+    attributeSchema: Joi.array().items(categoryAttributeDefinitionSchema),
     active: Joi.boolean(),
     sortOrder: Joi.number().integer(),
     bannerUrl: Joi.string().allow(""),
@@ -577,7 +601,7 @@ const productReviewIdSchema = Joi.object({
 
 const createBrandSchema = Joi.object({
   body: Joi.object({
-    name:        v.name({ label: "Brand name", max: 200 }),
+    name:        brandName().required(),
     slug:        v.slug().optional(),
     description: v.text({ max: 1000 }),
     logo:        v.url({ required: false }),
@@ -593,7 +617,7 @@ const createBrandSchema = Joi.object({
 
 const updateBrandSchema = Joi.object({
   body: Joi.object({
-    name: Joi.string().trim(),
+    name: brandName().optional(),
     slug: Joi.string().trim().allow(""),
     description: Joi.string().trim().allow(""),
     logo: Joi.string().allow(""),
@@ -622,7 +646,7 @@ const listBrandsSchema = Joi.object({
 
 const sellerBrandSubmissionSchema = Joi.object({
   body: Joi.object({
-    name: v.name({ label: "Brand name", max: 200 }),
+    name: brandName().required(),
     slug: v.slug().optional(),
     description: v.text({ max: 1000 }),
     logo: v.url({ required: false }),

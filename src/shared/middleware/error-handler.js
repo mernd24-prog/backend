@@ -8,7 +8,7 @@ const MONGOOSE_DUPLICATE_CODE = 11000;
 function buildFieldErrors(joiError) {
   if (!joiError || !Array.isArray(joiError.details)) return null;
   return joiError.details.map((d) => ({
-    field:   d.context?.key || d.path?.join(".") || "field",
+    field:   d.path?.join(".") || d.context?.key || "field",
     message: d.message.replace(/['"]/g, ""),
   }));
 }
@@ -19,7 +19,7 @@ function buildFieldErrorsFromDetails(details) {
   const fields = details
     .filter((d) => d && typeof d === "object" && d.message)
     .map((d) => ({
-      field:   d.context?.key || d.path?.join(".") || "field",
+      field:   d.path?.join(".") || d.context?.key || "field",
       message: String(d.message).replace(/['"]/g, ""),
     }));
 

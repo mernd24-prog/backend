@@ -17,57 +17,187 @@ const optionalPositiveNumber = () => Joi.number().positive().allow(null).empty("
 const optionalNonNegativeInteger = () => Joi.number().integer().min(0).allow(null).empty("");
 const optionalNonNegativeNumber = () => Joi.number().min(0).allow(null).empty("");
 const deprecatedRootVariantField = () => Joi.any().strip();
+const MAX_MONEY = 999999999.99;
+const MAX_INVENTORY = 1000000000;
+const MAX_MEASUREMENT = 1000000;
+const gstRateSchema = () =>
+  Joi.number()
+    .min(0)
+    .max(100)
+    .precision(2)
+    .messages({
+      "number.base": "Enter a valid GST rate.",
+      "number.min": "GST rate must be between 0 and 100.",
+      "number.max": "GST rate must be between 0 and 100.",
+      "number.precision": "GST rate can have no more than two decimal places.",
+    });
+const httpUrl = () => Joi.string().uri({ scheme: ["http", "https"] });
+const optionalHttpUrl = () => httpUrl().allow("", null);
+const money = () => Joi.number().positive().max(MAX_MONEY).precision(2);
+const skuSchema = Joi.string()
+  .trim()
+  .min(3)
+  .max(64)
+  .pattern(/^[A-Za-z0-9][A-Za-z0-9._/-]{1,62}[A-Za-z0-9]$/)
+  .required();
+const productTitleSchema = Joi.string()
+  .trim()
+  .min(3)
+  .max(200)
+  .custom((value, helpers) => {
+    if (!/\p{L}/u.test(value)) {
+      return helpers.message({ custom: "Product name must contain a letter" });
+    }
+    if (/[\u0000-\u001F\u007F-\u009F]/u.test(value)) {
+      return helpers.message({ custom: "Product name contains invalid characters" });
+    }
+    if (/\s{2,}/u.test(value)) {
+      return helpers.message({ custom: "Product name cannot contain repeated spaces" });
+    }
+    return value;
+  });
+const productDescriptionSchema = Joi.string().custom((value, helpers) => {
+  const visibleText = value
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&(?:amp|lt|gt|quot|#39);/gi, "x")
+    .trim();
+  if (visibleText.length < 10) {
+    return helpers.message({ custom: "Product description must contain at least 10 visible characters" });
+  }
+  if (visibleText.length > 5000) {
+    return helpers.message({ custom: "Product description must be 5000 visible characters or fewer" });
+  }
+  return value;
+});
+const uniqueTrimmedStrings = (items = []) => {
+  const seen = new Set();
+  for (const item of items) {
+    const normalized = String(item || "").trim().toLowerCase();
+    if (seen.has(normalized)) return false;
+    seen.add(normalized);
+  }
+  return true;
+};
+const uniqueHttpUrls = (items = []) => {
+  const seen = new Set();
+  for (const item of items) {
+    let normalized;
+    try {
+      normalized = new URL(String(item).trim()).href;
+    } catch {
+      normalized = String(item).trim();
+    }
+    if (seen.has(normalized)) return false;
+    seen.add(normalized);
+  }
+  return true;
+};
+const optionArray = Joi.array()
+  .items(
+    Joi.object({
+      platformOptionId: optionalString(),
+      name: Joi.string().trim().min(2).max(50).required(),
+      slug: optionalString(),
+      values: Joi.array()
+        .items(Joi.string().trim().min(1).max(80).required())
+        .min(1)
+        .required()
+        .custom((values, helpers) =>
+          uniqueTrimmedStrings(values)
+            ? values
+            : helpers.message({ custom: "Option values must be unique" }),
+        ),
+      valueCodes: Joi.object().pattern(Joi.string(), Joi.string().allow("", null)).default({}),
+      required: Joi.boolean().default(false),
+      displayType: Joi.string()
+        .valid("dropdown", "button", "color_swatch", "radio", "thumbnail")
+        .default("dropdown"),
+      sortOrder: Joi.number().integer().min(0).default(0),
+    }),
+  )
+  .custom((options, helpers) =>
+    uniqueTrimmedStrings(options.map((option) => option.name))
+      ? options
+      : helpers.message({ custom: "Option names must be unique" }),
+  );
 
 // ─── Reusable sub-schemas ────────────────────────────────────────────────────
 
 const variantSchema = Joi.object({
-  sku: Joi.string().trim().required(),
-  title: optionalString(),
-  description: Joi.string().min(10).allow("", null),
+  sku: skuSchema,
+  skuNormalized: Joi.string().strip(),
+  title: Joi.string().trim().max(100).allow("", null),
+  description: Joi.string().trim().min(10).max(5000).allow("", null),
   shortDescription: Joi.string().trim().max(500).allow("", null),
-  price: optionalNonNegativeNumber(),
-  mrp: optionalNonNegativeNumber(),
-  salePrice: optionalNonNegativeNumber(),
-  gstRate: Joi.number().min(0).max(100),
-  stock: optionalNonNegativeInteger().default(0),
-  barcode: optionalString(),
-  weight: optionalNonNegativeNumber(),
+  price: money().required(),
+  mrp: money().required(),
+  salePrice: money().required(),
+  gstRate: gstRateSchema(),
+  stock: optionalNonNegativeInteger().max(MAX_INVENTORY).default(0),
+  reservedStock: optionalNonNegativeInteger().max(MAX_INVENTORY).default(0),
+  barcode: Joi.string().trim().pattern(/^\d{8,14}$/).allow("", null),
+  weight: Joi.number().positive().max(MAX_MEASUREMENT).allow(null).empty(""),
   weightUnit: optionalString(),
   dimensions: Joi.object({
-    length: optionalPositiveNumber(),
-    width: optionalPositiveNumber(),
-    height: optionalPositiveNumber(),
+    length: Joi.number().positive().max(MAX_MEASUREMENT).allow(null).empty(""),
+    width: Joi.number().positive().max(MAX_MEASUREMENT).allow(null).empty(""),
+    height: Joi.number().positive().max(MAX_MEASUREMENT).allow(null).empty(""),
     unit: optionalString(),
   }),
-  attributes: Joi.object().default({}),
+  attributes: Joi.object()
+    .pattern(
+      Joi.string().trim().min(2).max(50),
+      Joi.string().trim().min(1).max(80),
+    )
+    .default({}),
   specifications: Joi.object().default({}),
-  images: Joi.array().items(Joi.string().uri()).default([]),
+  images: Joi.array().items(httpUrl()).min(1).max(5).required().custom((images, helpers) =>
+    uniqueHttpUrls(images)
+      ? images
+      : helpers.message({ custom: "Variant images must not contain duplicates" }),
+  ),
   status: Joi.string().valid("active", "inactive", "out_of_stock").default("active"),
   isDefault: Joi.boolean().default(false),
   sortOrder: Joi.number().integer().min(0).default(0),
-});
-
-const optionSchema = Joi.object({
-  platformOptionId: optionalString(),
-  name: Joi.string().trim().required(),
-  slug: optionalString(),
-  values: Joi.array().items(Joi.string().trim()).required(),
-  valueCodes: Joi.object().pattern(Joi.string(), Joi.string().allow("", null)).default({}),
-  required: Joi.boolean().default(false),
-  displayType: Joi.string()
-    .valid("dropdown", "button", "color_swatch", "radio", "thumbnail")
-    .default("dropdown"),
-  sortOrder: Joi.number().integer().min(0).default(0),
+}).custom((variant, helpers) => {
+  if (variant.reservedStock > variant.stock) {
+    return helpers.message({ custom: "Reserved stock cannot exceed stock" });
+  }
+  if (variant.weight !== undefined && !variant.weightUnit) {
+    return helpers.message({ custom: "Weight unit is required when weight is entered" });
+  }
+  const dimensions = variant.dimensions || {};
+  const hasDimension = [dimensions.length, dimensions.width, dimensions.height]
+    .some((value) => value !== undefined && value !== null && value !== "");
+  if (hasDimension && !dimensions.unit) {
+    return helpers.message({ custom: "Dimension unit is required when dimensions are entered" });
+  }
+  return variant;
 });
 
 const seoSchema = Joi.object({
   metaTitle: Joi.string().trim().max(70).allow("", null),
   metaDescription: Joi.string().trim().max(160).allow("", null),
-  keywords: Joi.array().items(Joi.string().trim()).default([]),
-  canonicalUrl: Joi.string().uri().allow("", null),
-  ogTitle: optionalString(),
-  ogDescription: optionalString(),
-  ogImage: Joi.string().uri().allow("", null),
+  keywords: Joi.array()
+    .items(Joi.string().trim().min(2).max(60).required())
+    .max(20)
+    .default([])
+    .custom((keywords, helpers) =>
+      uniqueTrimmedStrings(keywords)
+        ? keywords
+        : helpers.message({ custom: "SEO keywords must be unique" }),
+    ),
+  canonicalUrl: optionalHttpUrl(),
+  ogTitle: Joi.string().trim().max(70).allow("", null),
+  ogDescription: Joi.string().trim().max(160).allow("", null),
+  ogImage: Joi.string()
+    .trim()
+    .uri({ scheme: ["http", "https"] })
+    .allow("", null)
+    .messages({
+      "string.uri": "Pasted image URLs must be valid HTTP/HTTPS URLs.",
+    }),
   structuredData: Joi.object(),
 });
 
@@ -112,16 +242,23 @@ const dimensionsSchema = Joi.object({
   length: optionalPositiveNumber(),
   width: optionalPositiveNumber(),
   height: optionalPositiveNumber(),
+  weight: Joi.number().positive().max(MAX_MEASUREMENT).allow(null).empty(""),
+  weightUnit: optionalString(),
   unit: optionalString().default("cm"),
+}).custom((dimensions, helpers) => {
+  if (dimensions.weight !== undefined && !dimensions.weightUnit) {
+    return helpers.message({ custom: "Weight unit is required when weight is entered" });
+  }
+  return dimensions;
 });
 
 const warrantySchema = Joi.object({
   enabled: Joi.boolean(),
   period: Joi.number().integer().min(1).max(365).allow(null).empty(""),
   periodUnit: Joi.string().valid("days", "weeks", "months", "years").allow("", null),
-  type: optionalString(),
-  provider: optionalString(),
-  terms: optionalString(),
+  type: Joi.string().trim().max(100).allow("", null),
+  provider: Joi.string().trim().max(100).allow("", null),
+  terms: Joi.string().trim().max(1000).allow("", null),
   returnPolicy: Joi.object({
     eligible: Joi.boolean(),
     returnable: Joi.boolean(),
@@ -132,13 +269,29 @@ const warrantySchema = Joi.object({
     requiresImages: Joi.boolean().default(false),
     inspectionRequired: Joi.boolean().default(true),
     shippingPaidBy: Joi.string().valid("platform", "seller", "customer").default("seller"),
-    restockingFee: optionalNonNegativeNumber().default(0),
+    restockingFee: optionalNonNegativeNumber().max(MAX_MONEY).precision(2).default(0),
   }).default({}),
   serviceableCountries: Joi.array().items(Joi.string().trim()).default([]),
 }).custom((value, helpers) => {
   const hasDetails = [value.period, value.periodUnit, value.type, value.provider]
     .some((item) => item !== undefined && item !== null && String(item).trim() !== "");
   const enabled = value.enabled === true || (value.enabled === undefined && hasDetails);
+
+  const returnPolicy = value.returnPolicy || {};
+  const returnable =
+    returnPolicy.type !== "non_returnable" &&
+    returnPolicy.returnable !== false &&
+    returnPolicy.eligible !== false;
+  const returnWindowDays =
+    returnPolicy.returnWindowDays ?? returnPolicy.days;
+  if (
+    returnable &&
+    (!Number.isInteger(Number(returnWindowDays)) ||
+      Number(returnWindowDays) < 1 ||
+      Number(returnWindowDays) > 365)
+  ) {
+    return helpers.message({ custom: "Return window must be a whole number between 1 and 365 days" });
+  }
 
   if (!enabled) {
     if (hasDetails) return helpers.message({ custom: "Warranty details must be cleared when warranty is disabled" });
@@ -149,6 +302,12 @@ const warrantySchema = Joi.object({
   if (!value.periodUnit) return helpers.message({ custom: "Warranty unit is required" });
   if (!value.provider) return helpers.message({ custom: "Warranty provider is required" });
   if (!value.type) return helpers.message({ custom: "Warranty type is required" });
+  if (String(value.provider).trim().length > 100 || String(value.type).trim().length > 100) {
+    return helpers.message({ custom: "Warranty provider and type must be 100 characters or fewer" });
+  }
+  if (String(value.terms || "").length > 1000) {
+    return helpers.message({ custom: "Warranty terms must be 1000 characters or fewer" });
+  }
   return { ...value, enabled: true };
 }, "warranty coverage validation");
 
@@ -160,11 +319,11 @@ const originSchema = Joi.object({
 
 const shippingSchema = Joi.object({
   freeShipping: Joi.boolean().default(false),
-  freeShippingMinOrder: optionalNonNegativeNumber(),
+  freeShippingMinOrder: optionalNonNegativeNumber().max(MAX_MONEY).precision(2),
   shippingClass: optionalString(),
-  additionalCost: optionalNonNegativeNumber().default(0),
-  shippingCharge: optionalNonNegativeNumber(),
-  handlingCharge: optionalNonNegativeNumber().default(0),
+  additionalCost: optionalNonNegativeNumber().max(MAX_MONEY).precision(2).default(0),
+  shippingCharge: optionalNonNegativeNumber().max(MAX_MONEY).precision(2),
+  handlingCharge: optionalNonNegativeNumber().max(MAX_MONEY).precision(2).default(0),
   processingDays: optionalNonNegativeInteger().default(1),
   serviceabilityMode: Joi.string()
     .valid("inherit", "all_pincodes", "allowlist", "regions", "disabled")
@@ -182,6 +341,15 @@ const shippingSchema = Joi.object({
   dangerousGoods: Joi.boolean().default(false),
   requiresColdChain: Joi.boolean().default(false),
   shippingProfileId: Joi.string().uuid().allow("", null).optional(),
+}).custom((value, helpers) => {
+  if (
+    value.estimatedDaysMin !== undefined &&
+    value.estimatedDaysMax !== undefined &&
+    value.estimatedDaysMin > value.estimatedDaysMax
+  ) {
+    return helpers.message({ custom: "Minimum delivery ETA cannot exceed maximum ETA" });
+  }
+  return value;
 });
 
 const inventorySettingsSchema = Joi.object({
@@ -205,13 +373,13 @@ const moderationChecklistSchema = Joi.object({
 // ─── Product body (shared between create/update) ─────────────────────────────
 
 const productBodyBase = {
-  title: Joi.string().min(3).max(200).trim(),
+  title: productTitleSchema,
   shortDescription: Joi.string().max(500).trim().allow("", null),
   sellerId: optionalString(),
   organizationId: optionalString(),
   storeId: optionalString(),
   warehouseId: optionalString(),
-  description: Joi.string().min(10),
+  description: productDescriptionSchema,
   productType: Joi.string().valid(...Object.values(PRODUCT_TYPE)),
   visibility: Joi.string().valid(...Object.values(PRODUCT_VISIBILITY)),
   publishedAt: Joi.date().allow(null),
@@ -221,8 +389,8 @@ const productBodyBase = {
   price: deprecatedRootVariantField(),
   mrp: deprecatedRootVariantField(),
   salePrice: deprecatedRootVariantField(),
-  costPrice: optionalNonNegativeNumber(),
-  gstRate: Joi.number().min(0).max(100),
+  costPrice: optionalNonNegativeNumber().max(MAX_MONEY).precision(2),
+  gstRate: gstRateSchema(),
   gstInclusive: Joi.boolean(),
   hsnCode: optionalString(),
   currency: optionalString(),
@@ -232,7 +400,15 @@ const productBodyBase = {
   categoryId: optionalString(),
   brand: optionalString(),
   productFamilyCode: optionalString(),
-  tags: Joi.array().items(Joi.string().trim()).default([]),
+  tags: Joi.array()
+    .items(Joi.string().trim().min(2).max(40).pattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).required())
+    .max(20)
+    .default([])
+    .custom((tags, helpers) =>
+      uniqueTrimmedStrings(tags)
+        ? tags
+        : helpers.message({ custom: "Tags must be unique" }),
+    ),
 
   // Identifiers
   sku: deprecatedRootVariantField(),
@@ -245,7 +421,7 @@ const productBodyBase = {
   hasVariants: Joi.boolean(),
   defaultVariantId: optionalString(),
   variants: Joi.array().items(variantSchema).default([]),
-  options: Joi.array().items(optionSchema).default([]),
+  options: optionArray.default([]),
 
   // Type-specific
   digital: digitalSchema,
@@ -258,14 +434,25 @@ const productBodyBase = {
 
   // Media
   images: deprecatedRootVariantField(),
-  commonImages: Joi.array().items(Joi.string().uri()).max(8).default([]),
-  videos: Joi.array().items(Joi.string().uri()).max(1).default([]),
-  video: Joi.string().uri().allow("", null),
+  commonImages: Joi.array().items(httpUrl()).max(8).default([]).custom((images, helpers) =>
+    uniqueHttpUrls(images)
+      ? images
+      : helpers.message({ custom: "Product images must not contain duplicates" }),
+  ),
+  videos: Joi.array().items(httpUrl()).max(1).default([]),
+  video: optionalHttpUrl(),
   documents: deprecatedRootVariantField(),
 
   // Physical
-  dimensions: dimensionsSchema.default({}),
-  weight: optionalNonNegativeNumber(),
+  dimensions: dimensionsSchema.keys({
+    length: Joi.number().positive().max(MAX_MEASUREMENT).allow(null).empty(""),
+    width: Joi.number().positive().max(MAX_MEASUREMENT).allow(null).empty(""),
+    height: Joi.number().positive().max(MAX_MEASUREMENT).allow(null).empty(""),
+    weight: Joi.number().positive().max(MAX_MEASUREMENT).allow(null).empty(""),
+    weightUnit: optionalString(),
+    unit: optionalString().default("cm"),
+  }).default({}),
+  weight: Joi.number().positive().max(MAX_MEASUREMENT).allow(null).empty(""),
   weightUnit: optionalString(),
   origin: originSchema.default({}),
   warranty: warrantySchema,
@@ -296,26 +483,48 @@ const productBodyBase = {
   approvalStatus: Joi.string().valid(...Object.values(PRODUCT_APPROVAL_STATUS)),
 };
 
+const productBodyCrossCheck = (value, helpers) => {
+  if (value.weight !== undefined && value.weight !== null && !value.weightUnit) {
+    return helpers.message({ custom: "Weight unit is required when weight is entered" });
+  }
+  if (
+    value.dimensions?.weight !== undefined &&
+    value.dimensions?.weight !== null &&
+    !value.dimensions?.weightUnit
+  ) {
+    return helpers.message({ custom: "Weight unit is required when weight is entered" });
+  }
+  if (
+    value.status === PRODUCT_STATUS.ACTIVE &&
+    Array.isArray(value.variants) &&
+    value.variants.length &&
+    !value.variants.some((variant) => variant.status === "active")
+  ) {
+    return helpers.message({ custom: "At least one variant must be active before activating the product" });
+  }
+  return value;
+};
+
 // ─── Exported schemas ────────────────────────────────────────────────────────
 
 const createProductSchema = Joi.object({
   body: Joi.object({
     ...productBodyBase,
-    title: Joi.string().min(3).max(200).trim().required(),
-    description: Joi.string().min(10).required(),
+    title: productTitleSchema.required(),
+    description: productDescriptionSchema.required(),
     category: Joi.string().required(),
     variants: Joi.array().items(variantSchema).min(1).required(),
     organizationId: Joi.string().required(),
     gstInclusive: Joi.boolean().default(true),
     productType: Joi.string().valid(...Object.values(PRODUCT_TYPE)).default(PRODUCT_TYPE.SIMPLE),
     status: Joi.string().valid(...Object.values(PRODUCT_STATUS)).default(PRODUCT_STATUS.DRAFT),
-  }).required(),
+  }).custom(productBodyCrossCheck).required(),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),
 });
 
 const updateProductSchema = Joi.object({
-  body: Joi.object(productBodyBase).required(),
+  body: Joi.object(productBodyBase).custom(productBodyCrossCheck).required(),
   query: Joi.object({}).required(),
   params: Joi.object({
     productId: Joi.string().required(),

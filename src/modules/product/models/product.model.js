@@ -9,32 +9,109 @@ const {
   SUBSCRIPTION_BILLING_CYCLE,
 } = require("../../../shared/domain/commerce-constants");
 
+const countDecimalPlaces = (value) => {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/.test(text)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const [coefficient, exponentText = "0"] = text.split("e");
+  const fractionalDigits = coefficient.split(".")[1]?.length || 0;
+  return Math.max(0, fractionalDigits - Number(exponentText));
+};
+const hasAtMostTwoDecimals = (value) =>
+  value === undefined || value === null || countDecimalPlaces(value) <= 2;
+const isHttpUrl = (value) => {
+  try {
+    return ["http:", "https:"].includes(new URL(String(value || "")).protocol);
+  } catch {
+    return false;
+  }
+};
+const hasValidUniqueHttpUrls = (values, max, min = 0) => {
+  if (!Array.isArray(values) || values.length < min || values.length > max) {
+    return false;
+  }
+  const seen = new Set();
+  for (const value of values) {
+    if (!isHttpUrl(value)) return false;
+    const normalized = new URL(String(value).trim()).href;
+    if (seen.has(normalized)) return false;
+    seen.add(normalized);
+  }
+  return true;
+};
+
 // ─── Sub-schemas ────────────────────────────────────────────────────────────
 
 const variantSchema = new mongoose.Schema(
   {
-    sku: { type: String, trim: true, required: true },
-    title: { type: String, trim: true },
-    description: { type: String },
+    sku: {
+      type: String,
+      trim: true,
+      required: true,
+      minlength: 3,
+      maxlength: 64,
+      match: /^[A-Za-z0-9][A-Za-z0-9._/-]{1,62}[A-Za-z0-9]$/,
+    },
+    skuNormalized: { type: String, lowercase: true, trim: true, select: false },
+    title: { type: String, trim: true, maxlength: 100 },
+    description: { type: String, maxlength: 5000 },
     shortDescription: { type: String, trim: true, maxlength: 500 },
-    price: { type: Number, min: 0 },
-    mrp: { type: Number, min: 0 },
-    salePrice: { type: Number, min: 0 },
-    gstRate: { type: Number, min: 0, max: 100, default: 18 },
-    stock: { type: Number, min: 0, default: 0 },
-    reservedStock: { type: Number, min: 0, default: 0 },
-    barcode: { type: String, trim: true },
-    weight: { type: Number, min: 0 },
+    price: { type: Number, min: 0.01, max: 999999999.99, validate: hasAtMostTwoDecimals },
+    mrp: { type: Number, min: 0.01, max: 999999999.99, validate: hasAtMostTwoDecimals },
+    salePrice: { type: Number, min: 0.01, max: 999999999.99, validate: hasAtMostTwoDecimals },
+    gstRate: { type: Number, min: 0, max: 100, default: 18, validate: hasAtMostTwoDecimals },
+    stock: {
+      type: Number,
+      min: 0,
+      max: 1000000000,
+      default: 0,
+      validate: { validator: Number.isInteger, message: "Stock must be a whole number" },
+    },
+    reservedStock: {
+      type: Number,
+      min: 0,
+      max: 1000000000,
+      default: 0,
+      validate: {
+        validator(value) {
+          return Number.isInteger(value) && Number(value || 0) <= Number(this.stock || 0);
+        },
+        message: "Reserved stock must be a whole number no greater than stock",
+      },
+    },
+    barcode: {
+      type: String,
+      trim: true,
+      validate: {
+        validator: (value) => !value || /^\d{8,14}$/.test(value),
+        message: "Barcode must contain 8–14 digits",
+      },
+    },
+    weight: { type: Number, min: 0.000001, max: 1000000 },
     weightUnit: { type: String, default: "kg" },
     dimensions: {
-      length: { type: Number },
-      width: { type: Number },
-      height: { type: Number },
+      length: { type: Number, min: 0.000001, max: 1000000 },
+      width: { type: Number, min: 0.000001, max: 1000000 },
+      height: { type: Number, min: 0.000001, max: 1000000 },
+      weight: { type: Number, min: 0.000001, max: 1000000 },
+      weightUnit: { type: String },
       unit: { type: String, default: "cm" },
     },
     attributes: { type: Map, of: mongoose.Schema.Types.Mixed, default: {} },
     specifications: { type: Map, of: mongoose.Schema.Types.Mixed, default: {} },
-    images: [{ type: String }],
+    images: {
+      type: [String],
+      default: [],
+      validate: {
+        validator(images) {
+          return (
+            hasValidUniqueHttpUrls(images, 5, 1)
+          );
+        },
+        message: "Every variant must have 1–5 valid HTTP or HTTPS images",
+      },
+    },
     status: {
       type: String,
       enum: ["active", "inactive", "out_of_stock"],
@@ -79,11 +156,37 @@ const seoSchema = new mongoose.Schema(
   {
     metaTitle: { type: String, trim: true, maxlength: 70 },
     metaDescription: { type: String, trim: true, maxlength: 160 },
-    keywords: [{ type: String, trim: true }],
-    canonicalUrl: { type: String, trim: true },
-    ogTitle: { type: String, trim: true },
-    ogDescription: { type: String, trim: true },
-    ogImage: { type: String, trim: true },
+    keywords: {
+      type: [{ type: String, trim: true, minlength: 2, maxlength: 60 }],
+      validate: [
+        {
+          validator: (keywords) => keywords.length <= 20,
+          message: "SEO keywords may contain at most 20 items",
+        },
+        {
+          validator: (keywords) => new Set(keywords.map((keyword) => String(keyword).toLowerCase())).size === keywords.length,
+          message: "SEO keywords must be unique",
+        },
+      ],
+    },
+    canonicalUrl: {
+      type: String,
+      trim: true,
+      validate: {
+        validator: (value) => !value || isHttpUrl(value),
+        message: "Canonical URL must use HTTP or HTTPS",
+      },
+    },
+    ogTitle: { type: String, trim: true, maxlength: 70 },
+    ogDescription: { type: String, trim: true, maxlength: 160 },
+    ogImage: {
+      type: String,
+      trim: true,
+      validate: {
+        validator: (value) => !value || isHttpUrl(value),
+        message: "Pasted image URLs must be valid HTTP/HTTPS URLs.",
+      },
+    },
     structuredData: { type: Object },
   },
   { _id: false },
@@ -150,12 +253,18 @@ const bundleItemSchema = new mongoose.Schema(
 const shippingSchema = new mongoose.Schema(
   {
     freeShipping: { type: Boolean, default: false },
-    freeShippingMinOrder: { type: Number, min: 0 },
+    freeShippingMinOrder: { type: Number, min: 0, max: 999999999.99, validate: hasAtMostTwoDecimals },
     shippingClass: { type: String, trim: true },
-    additionalCost: { type: Number, min: 0, default: 0 },
-    shippingCharge: { type: Number, min: 0 },
-    handlingCharge: { type: Number, min: 0, default: 0 },
-    processingDays: { type: Number, min: 0, default: 1 },
+    additionalCost: { type: Number, min: 0, max: 999999999.99, default: 0, validate: hasAtMostTwoDecimals },
+    shippingCharge: { type: Number, min: 0, max: 999999999.99, validate: hasAtMostTwoDecimals },
+    handlingCharge: { type: Number, min: 0, max: 999999999.99, default: 0, validate: hasAtMostTwoDecimals },
+    processingDays: {
+      type: Number,
+      min: 0,
+      max: 1000000000,
+      default: 1,
+      validate: { validator: Number.isInteger, message: "Processing days must be a whole number" },
+    },
     serviceabilityMode: {
       type: String,
       enum: ["inherit", "all_pincodes", "allowlist", "regions", "disabled"],
@@ -167,8 +276,18 @@ const shippingSchema = new mongoose.Schema(
     states: [{ type: String, trim: true }],
     cities: [{ type: String, trim: true }],
     codAvailable: { type: Boolean },
-    estimatedDaysMin: { type: Number, min: 0 },
-    estimatedDaysMax: { type: Number, min: 0 },
+    estimatedDaysMin: {
+      type: Number,
+      min: 0,
+      max: 1000000000,
+      validate: { validator: Number.isInteger, message: "Minimum delivery ETA must be a whole number" },
+    },
+    estimatedDaysMax: {
+      type: Number,
+      min: 0,
+      max: 1000000000,
+      validate: { validator: Number.isInteger, message: "Maximum delivery ETA must be a whole number" },
+    },
     shippingPartner: { type: String, trim: true },
     shippingMethod: { type: String, trim: true, default: "standard" },
     dangerousGoods: { type: Boolean, default: false },
@@ -247,7 +366,19 @@ const productSchema = new mongoose.Schema(
     storeId: { type: String, index: true },
     warehouseId: { type: String, index: true },
     organizationSnapshot: { type: Object, default: {} },
-    title: { type: String, required: true, trim: true, index: true },
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 200,
+      index: true,
+      validate: {
+        validator(value) {
+          return /\p{L}/u.test(value) && !/[\u0000-\u001F\u007F-\u009F]/u.test(value) && !/\s{2,}/u.test(value);
+        },
+        message: "Product title must contain a letter and use valid spacing",
+      },
+    },
     slug: { type: String, required: true, unique: true, index: true },
     description: { type: String, required: true },
     shortDescription: { type: String, trim: true, maxlength: 500 },
@@ -273,15 +404,28 @@ const productSchema = new mongoose.Schema(
     category: { type: String, required: true, index: true },
     brand: { type: String, trim: true, index: true },
     productFamilyCode: { type: String, index: true },
-    tags: [{ type: String, trim: true, index: true }],
+    tags: {
+      type: [{ type: String, trim: true, minlength: 2, maxlength: 40, match: /^[a-z0-9]+(?:-[a-z0-9]+)*$/ }],
+      index: true,
+      validate: [
+        {
+          validator: (tags) => tags.length <= 20,
+          message: "A product can have at most 20 tags",
+        },
+        {
+          validator: (tags) => new Set(tags.map((tag) => String(tag).toLowerCase())).size === tags.length,
+          message: "Product tags must be unique",
+        },
+      ],
+    },
 
     // ── Pricing (root-level / simple product)
-    price: { type: Number, required: true, min: 0, index: true },
-    mrp: { type: Number, required: true, min: 0 },
-    salePrice: { type: Number, min: 0 },
-    costPrice: { type: Number, min: 0 },
+    price: { type: Number, required: true, min: 0.01, max: 999999999.99, index: true, validate: hasAtMostTwoDecimals },
+    mrp: { type: Number, required: true, min: 0.01, max: 999999999.99, validate: hasAtMostTwoDecimals },
+    salePrice: { type: Number, min: 0.01, max: 999999999.99, validate: hasAtMostTwoDecimals },
+    costPrice: { type: Number, min: 0, max: 999999999.99, validate: hasAtMostTwoDecimals },
     currency: { type: String, default: "INR" },
-    gstRate: { type: Number, required: true, default: 18, min: 0, max: 100 },
+    gstRate: { type: Number, required: true, default: 18, min: 0, max: 100, validate: hasAtMostTwoDecimals },
     gstInclusive: { type: Boolean, default: true },
     hsnCode: { type: String, index: true },
     complianceSnapshot: { type: complianceSnapshotSchema, default: null },
@@ -312,18 +456,34 @@ const productSchema = new mongoose.Schema(
 
     // ── Media
     images: [{ type: String }],
-    commonImages: [{ type: String }],
-    videos: [{ type: String }],
+    commonImages: {
+      type: [{ type: String, trim: true }],
+      default: [],
+      validate: {
+        validator: (images) => hasValidUniqueHttpUrls(images, 8),
+        message: "Product images must be unique valid HTTP or HTTPS URLs (maximum 8)",
+      },
+    },
+    videos: {
+      type: [{ type: String, trim: true }],
+      default: [],
+      validate: {
+        validator: (videos) => hasValidUniqueHttpUrls(videos, 1),
+        message: "Use at most one valid HTTP or HTTPS product video URL",
+      },
+    },
     documents: [{ type: String }],
 
     // ── Physical properties
     dimensions: {
-      length: { type: Number },
-      width: { type: Number },
-      height: { type: Number },
+      length: { type: Number, min: 0.000001, max: 1000000 },
+      width: { type: Number, min: 0.000001, max: 1000000 },
+      height: { type: Number, min: 0.000001, max: 1000000 },
+      weight: { type: Number, min: 0.000001, max: 1000000 },
+      weightUnit: { type: String },
       unit: { type: String, default: "cm" },
     },
-    weight: { type: Number, min: 0 },
+    weight: { type: Number, min: 0.000001, max: 1000000 },
     weightUnit: { type: String, default: "kg" },
 
     // ── Origin & compliance
@@ -335,33 +495,73 @@ const productSchema = new mongoose.Schema(
     warranty: {
       // No default keeps legacy products with complete warranty details valid.
       enabled: { type: Boolean },
-      period: { type: Number, min: 0 },
+      period: {
+        type: Number,
+        min: 0,
+        max: 365,
+        validate: { validator: Number.isInteger, message: "Warranty period must be a whole number" },
+      },
       periodUnit: {
         type: String,
         enum: ["days", "weeks", "months", "years"],
         default: "months",
       },
-      type: { type: String, default: "manufacturer" },
-      provider: { type: String },
-      terms: { type: String },
+      type: { type: String, maxlength: 100, default: "manufacturer" },
+      provider: { type: String, maxlength: 100 },
+      terms: { type: String, maxlength: 1000 },
       returnPolicy: {
         eligible: { type: Boolean, default: true },
         returnable: { type: Boolean, default: true },
-        days: { type: Number, min: 0, default: 0 },
-        returnWindowDays: { type: Number, min: 0, default: 0 },
+        days: {
+          type: Number,
+          min: 0,
+          max: 365,
+          default: 0,
+          validate: { validator: Number.isInteger, message: "Return window must be a whole number" },
+        },
+        returnWindowDays: {
+          type: Number,
+          min: 0,
+          max: 365,
+          default: 0,
+          validate: { validator: Number.isInteger, message: "Return window must be a whole number" },
+        },
         type: { type: String, enum: ["standard", "replacement_only", "non_returnable"], default: "standard" },
         resolution: { type: String, enum: ["refund", "replacement", "refund_or_replacement"], default: "refund_or_replacement" },
         requiresImages: { type: Boolean, default: false },
         inspectionRequired: { type: Boolean, default: true },
         shippingPaidBy: { type: String, enum: ["platform", "seller", "customer"], default: "seller" },
-        restockingFee: { type: Number, default: 0 },
+        restockingFee: {
+          type: Number,
+          min: 0,
+          max: 999999999.99,
+          default: 0,
+          validate: hasAtMostTwoDecimals,
+        },
       },
       serviceableCountries: [{ type: String }],
     },
 
     // ── Inventory
-    stock: { type: Number, required: true, default: 0, min: 0 },
-    reservedStock: { type: Number, required: true, default: 0, min: 0 },
+    stock: {
+      type: Number,
+      required: true,
+      default: 0,
+      min: 0,
+      validate: { validator: Number.isInteger, message: "Stock must be a whole number" },
+    },
+    reservedStock: {
+      type: Number,
+      required: true,
+      default: 0,
+      min: 0,
+      validate: {
+        validator(value) {
+          return Number.isInteger(value) && Number(value || 0) <= Number(this.stock || 0);
+        },
+        message: "Reserved stock must be a whole number no greater than stock",
+      },
+    },
     inventorySettings: { type: inventorySettingsSchema, default: () => ({}) },
 
     // ── Shipping
@@ -447,6 +647,14 @@ const productSchema = new mongoose.Schema(
 productSchema.index({ title: "text", description: "text", category: 1 });
 productSchema.index({ sellerId: 1, status: 1 });
 productSchema.index({ sellerId: 1, organizationId: 1, status: 1 });
+productSchema.index(
+  { sellerId: 1, "variants.skuNormalized": 1 },
+  {
+    unique: true,
+    name: "unique_seller_variant_sku_normalized",
+    partialFilterExpression: { "variants.skuNormalized": { $type: "string" } },
+  },
+);
 productSchema.index({ organizationId: 1, status: 1 });
 productSchema.index({ category: 1, status: 1, price: 1 });
 productSchema.index({ productType: 1, status: 1 });
@@ -464,6 +672,28 @@ productSchema.index({ status: 1, approvalStatus: 1, visibility: 1, categorySlug:
 productSchema.index({ status: 1, approvalStatus: 1, visibility: 1, categoryId: 1, "analytics.purchases": -1 });
 productSchema.index({ "seo.keywords": 1 });
 productSchema.index({ scheduledAt: 1, status: 1 });
+
+productSchema.pre("validate", function validateVariantContract(next) {
+  const variants = this.variants || [];
+  const etaMin = this.shipping?.estimatedDaysMin;
+  const etaMax = this.shipping?.estimatedDaysMax;
+  if (etaMin !== undefined && etaMax !== undefined && etaMin > etaMax) {
+    this.invalidate("shipping.estimatedDaysMin", "Minimum delivery ETA cannot exceed maximum ETA");
+  }
+  if (variants.length) {
+    const defaults = variants.filter((variant) => variant.isDefault === true);
+    if (defaults.length !== 1) {
+      this.invalidate("variants", "Exactly one variant must be marked as the default");
+    }
+    if (
+      this.status === PRODUCT_STATUS.ACTIVE &&
+      !variants.some((variant) => variant.status === "active")
+    ) {
+      this.invalidate("variants", "At least one variant must be active before activating the product");
+    }
+  }
+  next();
+});
 
 // ─── Virtual: available stock ────────────────────────────────────────────────
 
