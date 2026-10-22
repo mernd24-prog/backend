@@ -16,46 +16,7 @@ const attr = (key, label, type, opts = {}) => ({
 });
 
 const ATTR = {
-  color: attr("color", "Color", "select", {
-    options: [
-      "Black",
-      "White",
-      "Red",
-      "Blue",
-      "Green",
-      "Yellow",
-      "Navy",
-      "Grey",
-      "Brown",
-      "Pink",
-      "Purple",
-      "Orange",
-      "Maroon",
-      "Olive",
-      "Teal",
-      "Gold",
-      "Silver",
-      "Beige",
-      "Charcoal",
-      "Lavender",
-      "Mustard",
-      "Rust",
-      "Coral",
-      "Peach",
-    ],
-    isVariant: true,
-  }),
-  size_apparel: attr("size", "Size", "select", {
-    options: ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL", "Free Size"],
-    isVariant: true,
-    required: true,
-  }),
-  size_shoes: attr("size", "Shoe Size", "select", {
-    options: ["4", "5", "6", "7", "8", "9", "10", "11", "12", "13"],
-    isVariant: true,
-    required: true,
-  }),
-  material: attr("material", "Material", "select", {
+  material: attr("material", "Material", "multi_select", {
     options: [
       "Cotton",
       "Polyester",
@@ -169,26 +130,6 @@ const ATTR = {
       "Spot Clean",
     ],
   }),
-  ram: attr("ram", "RAM", "select", {
-    options: [
-      "2GB",
-      "3GB",
-      "4GB",
-      "6GB",
-      "8GB",
-      "12GB",
-      "16GB",
-      "32GB",
-      "64GB",
-    ],
-    isVariant: true,
-    unit: "GB",
-  }),
-  storage: attr("storage", "Internal Storage", "select", {
-    options: ["16GB", "32GB", "64GB", "128GB", "256GB", "512GB", "1TB", "2TB"],
-    isVariant: true,
-    unit: "GB",
-  }),
   display: attr("display_size", "Display Size", "number", { unit: "inches" }),
   resolution: attr("resolution", "Resolution", "select", {
     options: [
@@ -265,7 +206,7 @@ const ATTR = {
   weight_kg: attr("weight_capacity", "Weight Capacity", "number", {
     unit: "kg",
   }),
-  finish: attr("finish", "Finish", "select", {
+  finish: attr("finish", "Finish", "multi_select", {
     options: [
       "Matte",
       "Glossy",
@@ -464,19 +405,18 @@ const ATTR = {
   purity: attr("purity", "Purity (Karat)", "select", {
     options: ["14K", "18K", "22K", "24K", "925 Silver", "950 Platinum"],
   }),
-  warranty: attr("warranty", "Warranty", "select", {
-    options: [
-      "No Warranty",
-      "3 Months",
-      "6 Months",
-      "1 Year",
-      "2 Years",
-      "3 Years",
-      "5 Years",
-      "Lifetime",
-    ],
-  }),
-  brand_attr: attr("brand", "Brand", "text", { searchable: true }),
+  // warranty: attr("warranty", "Warranty", "select", {
+  //   options: [
+  //     "No Warranty",
+  //     "3 Months",
+  //     "6 Months",
+  //     "1 Year",
+  //     "2 Years",
+  //     "3 Years",
+  //     "5 Years",
+  //     "Lifetime",
+  //   ],
+  // }),
   country_origin: attr("country_of_origin", "Country of Origin", "select", {
     options: [
       "India",
@@ -892,17 +832,13 @@ const CATEGORY_TREE = [
     key: "electronics",
     name: "Electronics",
     order: 1,
-    attrs: [ATTR.brand_attr, ATTR.warranty, ATTR.country_origin],
+    attrs: [ ATTR.country_origin],
     subs: [
       {
         key: "mobiles",
         name: "Mobiles",
         attrs: [
-          ATTR.brand_attr,
-          ATTR.color,
           ATTR.processor,
-          ATTR.ram,
-          ATTR.storage,
           ATTR.display,
           ATTR.camera,
           ATTR.battery,
@@ -911,7 +847,7 @@ const CATEGORY_TREE = [
           ATTR.refresh_rate,
           ATTR.connectivity,
           ATTR.fast_charging,
-          ATTR.warranty,
+          
         ],
         children: [
           "Android Phones",
@@ -930,17 +866,14 @@ const CATEGORY_TREE = [
         key: "computers",
         name: "Computers",
         attrs: [
-          ATTR.brand_attr,
           ATTR.processor,
           ATTR.graphics,
-          ATTR.ram,
-          ATTR.storage,
           ATTR.storage_type,
           ATTR.display,
           ATTR.resolution,
           ATTR.os,
           ATTR.connectivity,
-          ATTR.warranty,
+          
         ],
         children: [
           "Laptops",
@@ -959,14 +892,13 @@ const CATEGORY_TREE = [
         key: "tv-audio",
         name: "TVs & Audio",
         attrs: [
-          ATTR.brand_attr,
           ATTR.display,
           ATTR.resolution,
           ATTR.refresh_rate,
           ATTR.os,
           ATTR.connectivity,
           ATTR.energy_star,
-          ATTR.warranty,
+          
         ],
         children: [
           "Smart TVs",
@@ -985,16 +917,12 @@ const CATEGORY_TREE = [
         key: "tablets",
         name: "Tablets",
         attrs: [
-          ATTR.brand_attr,
           ATTR.processor,
-          ATTR.ram,
-          ATTR.storage,
           ATTR.display,
           ATTR.os,
           ATTR.battery,
           ATTR.connectivity,
-          ATTR.color,
-          ATTR.warranty,
+          
         ],
         children: [
           "Android Tablets",
@@ -1013,12 +941,10 @@ const CATEGORY_TREE = [
         key: "wearables",
         name: "Wearables",
         attrs: [
-          ATTR.brand_attr,
-          ATTR.color,
           ATTR.display,
           ATTR.battery,
           ATTR.connectivity,
-          ATTR.warranty,
+          
         ],
         children: [
           "Smart Watches",
@@ -1036,7 +962,7 @@ const CATEGORY_TREE = [
       {
         key: "camera",
         name: "Camera",
-        attrs: [ATTR.brand_attr, ATTR.camera, ATTR.connectivity, ATTR.warranty],
+        attrs: [ATTR.camera, ATTR.connectivity, ATTR.warranty],
         children: [
           "DSLR Cameras",
           "Mirrorless Cameras",
@@ -1054,11 +980,9 @@ const CATEGORY_TREE = [
         key: "storage",
         name: "Storage",
         attrs: [
-          ATTR.brand_attr,
-          ATTR.storage,
           ATTR.storage_type,
           ATTR.interface,
-          ATTR.warranty,
+          
         ],
         children: [
           "External SSD",
@@ -1076,7 +1000,7 @@ const CATEGORY_TREE = [
       {
         key: "music-accessories",
         name: "Music Accessories",
-        attrs: [ATTR.brand_attr, ATTR.color, ATTR.connectivity, ATTR.warranty],
+        attrs: [ATTR.connectivity, ATTR.warranty],
         children: [
           "Headsets",
           "Chargers",
@@ -1094,11 +1018,9 @@ const CATEGORY_TREE = [
         key: "gaming",
         name: "Gaming",
         attrs: [
-          ATTR.brand_attr,
-          ATTR.color,
           ATTR.platform,
           ATTR.connectivity,
-          ATTR.warranty,
+          
         ],
         children: [
           "Gaming Consoles",
@@ -1116,7 +1038,7 @@ const CATEGORY_TREE = [
       {
         key: "smart-devices",
         name: "Smart Devices",
-        attrs: [ATTR.brand_attr, ATTR.connectivity, ATTR.warranty],
+        attrs: [ATTR.connectivity, ATTR.warranty],
         children: [
           "Smart Speakers",
           "Smart Bulbs",
@@ -1137,14 +1059,12 @@ const CATEGORY_TREE = [
     key: "fashion",
     name: "Fashion",
     order: 2,
-    attrs: [ATTR.brand_attr],
+    attrs: [],
     subs: [
       {
         key: "mens-topwear",
         name: "Men's Topwear",
         attrs: [
-          ATTR.color,
-          ATTR.size_apparel,
           ATTR.material,
           ATTR.fit,
           ATTR.pattern,
@@ -1171,8 +1091,6 @@ const CATEGORY_TREE = [
         key: "mens-bottomwear",
         name: "Men's Bottomwear",
         attrs: [
-          ATTR.color,
-          ATTR.size_apparel,
           ATTR.material,
           ATTR.fit,
           ATTR.pattern,
@@ -1197,8 +1115,6 @@ const CATEGORY_TREE = [
         key: "mens-ethnic-wear",
         name: "Men's Ethnic Wear",
         attrs: [
-          ATTR.color,
-          ATTR.size_apparel,
           ATTR.material,
           ATTR.fit,
           ATTR.pattern,
@@ -1222,8 +1138,6 @@ const CATEGORY_TREE = [
         key: "mens-footwear",
         name: "Men's Footwear",
         attrs: [
-          ATTR.color,
-          ATTR.size_shoes,
           ATTR.material,
           ATTR.closure_type,
           ATTR.occasion,
@@ -1244,7 +1158,7 @@ const CATEGORY_TREE = [
       {
         key: "mens-accessories",
         name: "Men's Accessories",
-        attrs: [ATTR.color, ATTR.material],
+        attrs: [ATTR.material],
         children: [
           "Men Watches",
           "Men Sunglasses",
@@ -1263,8 +1177,6 @@ const CATEGORY_TREE = [
         key: "womens-western-wear",
         name: "Women's Western Wear",
         attrs: [
-          ATTR.color,
-          ATTR.size_apparel,
           ATTR.material,
           ATTR.fit,
           ATTR.pattern,
@@ -1290,8 +1202,6 @@ const CATEGORY_TREE = [
         key: "womens-bottomwear",
         name: "Women's Bottomwear",
         attrs: [
-          ATTR.color,
-          ATTR.size_apparel,
           ATTR.material,
           ATTR.fit,
           ATTR.pattern,
@@ -1316,8 +1226,6 @@ const CATEGORY_TREE = [
         key: "womens-ethnic-wear",
         name: "Women's Ethnic Wear",
         attrs: [
-          ATTR.color,
-          ATTR.size_apparel,
           ATTR.material,
           ATTR.fit,
           ATTR.pattern,
@@ -1341,8 +1249,6 @@ const CATEGORY_TREE = [
         key: "womens-footwear",
         name: "Women's Footwear",
         attrs: [
-          ATTR.color,
-          ATTR.size_shoes,
           ATTR.material,
           ATTR.closure_type,
           ATTR.occasion,
@@ -1363,7 +1269,7 @@ const CATEGORY_TREE = [
       {
         key: "womens-accessories",
         name: "Women's Accessories",
-        attrs: [ATTR.color, ATTR.material],
+        attrs: [ATTR.material],
         children: [
           "Women Handbags",
           "Women Sling Bags",
@@ -1380,7 +1286,7 @@ const CATEGORY_TREE = [
       {
         key: "womens-jewellery",
         name: "Women's Jewellery",
-        attrs: [ATTR.color, ATTR.metal, ATTR.stone, ATTR.purity, ATTR.occasion],
+        attrs: [ATTR.metal, ATTR.stone, ATTR.purity, ATTR.occasion],
         children: [
           "Earrings",
           "Necklaces",
@@ -1400,8 +1306,6 @@ const CATEGORY_TREE = [
         name: "Kids' Clothing",
         attrs: [
           ATTR.age_group,
-          ATTR.color,
-          ATTR.size_apparel,
           ATTR.material,
           ATTR.fit,
           ATTR.pattern,
@@ -1424,7 +1328,7 @@ const CATEGORY_TREE = [
       {
         key: "infant-wear",
         name: "Infant Wear",
-        attrs: [ATTR.age_group, ATTR.color, ATTR.material, ATTR.wash],
+        attrs: [ATTR.age_group, ATTR.material, ATTR.wash],
         children: [
           "Rompers",
           "Bodysuits",
@@ -1443,8 +1347,6 @@ const CATEGORY_TREE = [
         name: "Kids' Footwear",
         attrs: [
           ATTR.age_group,
-          ATTR.color,
-          ATTR.size_shoes,
           ATTR.material,
           ATTR.closure_type,
         ],
@@ -1464,7 +1366,7 @@ const CATEGORY_TREE = [
       {
         key: "kids-accessories",
         name: "Kids' Accessories",
-        attrs: [ATTR.age_group, ATTR.color, ATTR.material],
+        attrs: [ATTR.age_group, ATTR.material],
         children: [
           "School Bags",
           "Lunch Boxes",
@@ -1482,7 +1384,7 @@ const CATEGORY_TREE = [
       {
         key: "bags-luggage",
         name: "Bags & Luggage",
-        attrs: [ATTR.color, ATTR.material, ATTR.closure_type, ATTR.warranty],
+        attrs: [ATTR.material, ATTR.closure_type, ATTR.warranty],
         children: [
           "Laptop Backpacks",
           "School Backpacks",
@@ -1502,7 +1404,7 @@ const CATEGORY_TREE = [
     key: "beauty",
     name: "Beauty & Personal Care",
     order: 5,
-    attrs: [ATTR.brand_attr, ATTR.country_origin],
+    attrs: [ATTR.country_origin],
     subs: [
       {
         key: "skincare",
@@ -1541,7 +1443,7 @@ const CATEGORY_TREE = [
       {
         key: "makeup",
         name: "Makeup",
-        attrs: [ATTR.color, ATTR.skin_type, ATTR.formulation, ATTR.finish],
+        attrs: [ATTR.skin_type, ATTR.formulation, ATTR.finish],
         children: [
           "Lipsticks & Glosses",
           "Foundations",
@@ -1681,19 +1583,18 @@ const CATEGORY_TREE = [
     key: "appliances",
     name: "Home Appliances",
     order: 6,
-    attrs: [ATTR.brand_attr, ATTR.country_origin, ATTR.warranty],
+    attrs: [ATTR.country_origin, ATTR.warranty],
     subs: [
       {
         key: "laundry",
         name: "Laundry",
         attrs: [
-          ATTR.color,
           ATTR.load_type,
           ATTR.function_type,
           ATTR.washing_capacity,
           ATTR.energy_star,
           ATTR.inverter_technology,
-          ATTR.warranty,
+          
         ],
         children: [
           "Front Load Washing Machines",
@@ -1711,7 +1612,7 @@ const CATEGORY_TREE = [
       {
         key: "heating",
         name: "Heating",
-        attrs: [ATTR.color, ATTR.wattage, ATTR.voltage, ATTR.warranty],
+        attrs: [ATTR.wattage, ATTR.voltage, ATTR.warranty],
         children: [
           "Instant Water Geysers",
           "Storage Water Geysers",
@@ -1729,14 +1630,13 @@ const CATEGORY_TREE = [
         key: "acs",
         name: "ACs",
         attrs: [
-          ATTR.color,
           ATTR.ac_type,
           ATTR.tonnage,
           ATTR.energy_star,
           ATTR.inverter_technology,
           ATTR.room_size,
           ATTR.wattage,
-          ATTR.warranty,
+          
         ],
         children: [
           "Split ACs",
@@ -1755,13 +1655,12 @@ const CATEGORY_TREE = [
         key: "fans",
         name: "Fans",
         attrs: [
-          ATTR.color,
           ATTR.fan_type,
           ATTR.air_delivery,
           ATTR.wattage,
           ATTR.voltage,
           ATTR.energy_star,
-          ATTR.warranty,
+          
         ],
         children: [
           "Ceiling Fans",
@@ -1780,11 +1679,10 @@ const CATEGORY_TREE = [
         key: "dishwashers",
         name: "Dishwashers",
         attrs: [
-          ATTR.color,
           ATTR.energy_star,
           ATTR.wattage,
           ATTR.voltage,
-          ATTR.warranty,
+          
         ],
         children: [
           "Freestanding Dishwashers",
@@ -1803,12 +1701,11 @@ const CATEGORY_TREE = [
         key: "microwaves",
         name: "Microwaves",
         attrs: [
-          ATTR.color,
           ATTR.microwave_type,
           ATTR.capacity_ltr,
           ATTR.wattage,
           ATTR.voltage,
-          ATTR.warranty,
+          
         ],
         children: [
           "Solo Microwave Ovens",
@@ -1827,13 +1724,12 @@ const CATEGORY_TREE = [
         key: "fridges",
         name: "Fridges",
         attrs: [
-          ATTR.color,
           ATTR.refrigerator_type,
           ATTR.capacity_ltr,
           ATTR.freezer_position,
           ATTR.energy_star,
           ATTR.inverter_technology,
-          ATTR.warranty,
+          
         ],
         children: [
           "Single Door Refrigerators",
@@ -1851,7 +1747,7 @@ const CATEGORY_TREE = [
       {
         key: "home",
         name: "Home",
-        attrs: [ATTR.color, ATTR.wattage, ATTR.voltage, ATTR.warranty],
+        attrs: [ATTR.wattage, ATTR.voltage, ATTR.warranty],
         children: [
           "RO Water Purifiers",
           "UV Water Purifiers",
@@ -1869,11 +1765,10 @@ const CATEGORY_TREE = [
         key: "kitchen",
         name: "Kitchen",
         attrs: [
-          ATTR.color,
           ATTR.capacity_ltr,
           ATTR.wattage,
           ATTR.voltage,
-          ATTR.warranty,
+          
         ],
         children: [
           "Mixer Grinders",
@@ -1892,11 +1787,10 @@ const CATEGORY_TREE = [
         key: "built-in",
         name: "Built-In",
         attrs: [
-          ATTR.color,
           ATTR.wattage,
           ATTR.voltage,
           ATTR.finish,
-          ATTR.warranty,
+          
         ],
         children: [
           "Wall-Mounted Chimneys",
@@ -1918,13 +1812,12 @@ const CATEGORY_TREE = [
     key: "home-kitchen",
     name: "Home",
     order: 7,
-    attrs: [ATTR.brand_attr, ATTR.country_origin],
+    attrs: [ATTR.country_origin],
     subs: [
       {
         key: "cookware",
         name: "Cookware",
         attrs: [
-          ATTR.color,
           ATTR.material,
           ATTR.finish,
           ATTR.capacity_ltr,
@@ -1950,7 +1843,6 @@ const CATEGORY_TREE = [
         key: "kitchen-storage",
         name: "Kitchen Storage",
         attrs: [
-          ATTR.color,
           ATTR.material,
           ATTR.capacity_ltr,
           ATTR.set_size,
@@ -1972,7 +1864,7 @@ const CATEGORY_TREE = [
       {
         key: "tableware",
         name: "Tableware",
-        attrs: [ATTR.color, ATTR.material, ATTR.finish, ATTR.set_size],
+        attrs: [ATTR.material, ATTR.finish, ATTR.set_size],
         children: [
           "Dinner Sets",
           "Plates",
@@ -1989,7 +1881,7 @@ const CATEGORY_TREE = [
       {
         key: "home-furnishing",
         name: "Home Furnishing",
-        attrs: [ATTR.color, ATTR.material, ATTR.pattern, ATTR.wash],
+        attrs: [ATTR.material, ATTR.pattern, ATTR.wash],
         children: [
           "Bedsheets",
           "Curtains",
@@ -2006,7 +1898,7 @@ const CATEGORY_TREE = [
       {
         key: "home-decor",
         name: "Home Decor",
-        attrs: [ATTR.color, ATTR.material, ATTR.finish],
+        attrs: [ATTR.material, ATTR.finish],
         children: [
           "Wall Art",
           "Wall Clocks",
@@ -2024,12 +1916,11 @@ const CATEGORY_TREE = [
         key: "lighting",
         name: "Lighting",
         attrs: [
-          ATTR.color,
           ATTR.material,
           ATTR.light_source,
           ATTR.wattage,
           ATTR.voltage,
-          ATTR.warranty,
+          
         ],
         children: [
           "LED Bulbs",
@@ -2047,7 +1938,7 @@ const CATEGORY_TREE = [
       {
         key: "bathroom",
         name: "Bathroom",
-        attrs: [ATTR.color, ATTR.material, ATTR.set_size],
+        attrs: [ATTR.material, ATTR.set_size],
         children: [
           "Bath Towels",
           "Hand Towels",
@@ -2081,7 +1972,7 @@ const CATEGORY_TREE = [
       {
         key: "gardening",
         name: "Gardening",
-        attrs: [ATTR.color, ATTR.material, ATTR.capacity_ltr],
+        attrs: [ATTR.material, ATTR.capacity_ltr],
         children: [
           "Plant Pots",
           "Planters",
@@ -2098,7 +1989,7 @@ const CATEGORY_TREE = [
       {
         key: "pooja-essentials",
         name: "Pooja Essentials",
-        attrs: [ATTR.color, ATTR.material],
+        attrs: [ATTR.material],
         children: [
           "Diyas",
           "Incense Sticks",
@@ -2119,7 +2010,7 @@ const CATEGORY_TREE = [
     key: "furniture",
     name: "Furniture",
     order: 8,
-    attrs: [ATTR.brand_attr, ATTR.country_origin, ATTR.warranty],
+    attrs: [ATTR.country_origin, ATTR.warranty],
     subs: [
       {
         key: "bedroom-furniture",
@@ -2132,7 +2023,7 @@ const CATEGORY_TREE = [
           ATTR.width,
           ATTR.height_attr,
           ATTR.depth,
-          ATTR.warranty,
+          
         ],
         children: [
           "Beds",
@@ -2158,7 +2049,7 @@ const CATEGORY_TREE = [
           ATTR.width,
           ATTR.height_attr,
           ATTR.depth,
-          ATTR.warranty,
+          
         ],
         children: [
           "Sofas",
@@ -2185,7 +2076,7 @@ const CATEGORY_TREE = [
           ATTR.width,
           ATTR.height_attr,
           ATTR.depth,
-          ATTR.warranty,
+          
         ],
         children: [
           "Dining Sets",
@@ -2211,7 +2102,7 @@ const CATEGORY_TREE = [
           ATTR.width,
           ATTR.height_attr,
           ATTR.depth,
-          ATTR.warranty,
+          
         ],
         children: [
           "Office Chairs",
@@ -2237,7 +2128,7 @@ const CATEGORY_TREE = [
           ATTR.width,
           ATTR.height_attr,
           ATTR.depth,
-          ATTR.warranty,
+          
         ],
         children: [
           "Storage Cabinets",
@@ -2263,7 +2154,7 @@ const CATEGORY_TREE = [
           ATTR.width,
           ATTR.height_attr,
           ATTR.depth,
-          ATTR.warranty,
+          
         ],
         children: [
           "Kids Beds",
@@ -2290,7 +2181,7 @@ const CATEGORY_TREE = [
           ATTR.width,
           ATTR.height_attr,
           ATTR.depth,
-          ATTR.warranty,
+          
         ],
         children: [
           "Patio Chairs",
@@ -2315,7 +2206,7 @@ const CATEGORY_TREE = [
           ATTR.width,
           ATTR.height_attr,
           ATTR.depth,
-          ATTR.warranty,
+          
         ],
         children: [
           "Memory Foam Mattresses",
@@ -2341,7 +2232,7 @@ const CATEGORY_TREE = [
           ATTR.width,
           ATTR.height_attr,
           ATTR.depth,
-          ATTR.warranty,
+          
         ],
         children: [
           "Wooden Temples",
@@ -2367,7 +2258,7 @@ const CATEGORY_TREE = [
           ATTR.width,
           ATTR.height_attr,
           ATTR.depth,
-          ATTR.warranty,
+          
         ],
         children: [
           "Console Tables",
@@ -2389,7 +2280,7 @@ const CATEGORY_TREE = [
     key: "food-beverages",
     name: "Food & Beverages",
     order: 9,
-    attrs: [ATTR.brand_attr, ATTR.country_origin],
+    attrs: [ATTR.country_origin],
     subs: [
       {
         key: "breakfast-cereals",
@@ -2761,13 +2652,12 @@ const CATEGORY_TREE = [
     key: "sports",
     name: "Sports & Fitness",
     order: 11,
-    attrs: [ATTR.brand_attr],
+    attrs: [],
     subs: [
       {
         key: "badminton",
         name: "Badminton",
         attrs: [
-          ATTR.color,
           ATTR.material,
           ATTR.skill_level,
           ATTR.playing_level,
@@ -2788,11 +2678,10 @@ const CATEGORY_TREE = [
         key: "fitness",
         name: "Fitness",
         attrs: [
-          ATTR.color,
           ATTR.material,
           ATTR.item_weight,
           ATTR.weight_kg,
-          ATTR.warranty,
+          
         ],
         children: [
           "Dumbbells",
@@ -2810,7 +2699,6 @@ const CATEGORY_TREE = [
         key: "cricket-gear",
         name: "Cricket Gear",
         attrs: [
-          ATTR.color,
           ATTR.material,
           ATTR.skill_level,
           ATTR.playing_level,
@@ -2831,12 +2719,11 @@ const CATEGORY_TREE = [
         key: "cycling",
         name: "Cycling",
         attrs: [
-          ATTR.color,
           ATTR.material,
           ATTR.cycle_size,
           ATTR.gear_count,
           ATTR.age_group,
-          ATTR.warranty,
+          
         ],
         children: [
           "Mountain Bikes",
@@ -2853,7 +2740,7 @@ const CATEGORY_TREE = [
       {
         key: "yoga",
         name: "Yoga",
-        attrs: [ATTR.color, ATTR.material],
+        attrs: [ATTR.material],
         children: [
           "Yoga Mats",
           "Yoga Blocks",
@@ -2869,7 +2756,7 @@ const CATEGORY_TREE = [
       {
         key: "running",
         name: "Running",
-        attrs: [ATTR.color, ATTR.material],
+        attrs: [ATTR.material],
         children: [
           "Running Shoes",
           "Running T-Shirts",
@@ -2885,7 +2772,7 @@ const CATEGORY_TREE = [
       {
         key: "swimming",
         name: "Swimming",
-        attrs: [ATTR.color, ATTR.size_apparel, ATTR.material, ATTR.skill_level],
+        attrs: [ATTR.material, ATTR.skill_level],
         children: [
           "Swimwear",
           "Swimming Goggles",
@@ -2902,12 +2789,11 @@ const CATEGORY_TREE = [
         key: "kids-cycles",
         name: "Kids' Cycles",
         attrs: [
-          ATTR.color,
           ATTR.material,
           ATTR.cycle_size,
           ATTR.gear_count,
           ATTR.age_group,
-          ATTR.warranty,
+          
         ],
         children: [
           "Kids Bicycles",
@@ -2924,7 +2810,7 @@ const CATEGORY_TREE = [
       {
         key: "exercise-bike",
         name: "Exercise Bike",
-        attrs: [ATTR.color, ATTR.material, ATTR.weight_kg, ATTR.warranty],
+        attrs: [ATTR.material, ATTR.weight_kg, ATTR.warranty],
         children: [
           "Upright Exercise Bikes",
           "Spin Bikes",
@@ -3094,11 +2980,9 @@ const CATEGORY_TREE = [
         key: "guitars",
         name: "Guitars",
         attrs: [
-          ATTR.brand_attr,
-          ATTR.color,
           ATTR.material,
           ATTR.skill_level,
-          ATTR.warranty,
+          
         ],
         children: [
           "Acoustic Guitars",
@@ -3116,11 +3000,9 @@ const CATEGORY_TREE = [
         key: "keyboards",
         name: "Keyboards",
         attrs: [
-          ATTR.brand_attr,
-          ATTR.color,
           ATTR.material,
           ATTR.skill_level,
-          ATTR.warranty,
+          
         ],
         children: [
           "Musical Keyboards",
@@ -3138,12 +3020,10 @@ const CATEGORY_TREE = [
         key: "microphones",
         name: "Microphones",
         attrs: [
-          ATTR.brand_attr,
-          ATTR.color,
           ATTR.connectivity,
           ATTR.microphone,
           ATTR.compatible_device,
-          ATTR.warranty,
+          
         ],
         children: [
           "Wired Microphones",
@@ -3161,11 +3041,9 @@ const CATEGORY_TREE = [
         key: "instruments",
         name: "Instruments",
         attrs: [
-          ATTR.brand_attr,
-          ATTR.color,
           ATTR.material,
           ATTR.skill_level,
-          ATTR.warranty,
+          
         ],
         children: [
           "Tabla",
@@ -3183,8 +3061,6 @@ const CATEGORY_TREE = [
         key: "accessories",
         name: "Accessories",
         attrs: [
-          ATTR.brand_attr,
-          ATTR.color,
           ATTR.material,
           ATTR.compatible_device,
         ],
@@ -3207,7 +3083,7 @@ const CATEGORY_TREE = [
     key: "toys",
     name: "Toys & Baby Products",
     order: 13,
-    attrs: [ATTR.brand_attr, ATTR.country_origin],
+    attrs: [ATTR.country_origin],
     subs: [
       {
         key: "baby-diapers",
@@ -3244,7 +3120,7 @@ const CATEGORY_TREE = [
       {
         key: "baby-bedding",
         name: "Bedding",
-        attrs: [ATTR.age_group, ATTR.color, ATTR.material, ATTR.wash],
+        attrs: [ATTR.age_group, ATTR.material, ATTR.wash],
         children: [
           "Baby Blankets",
           "Baby Bedding Sets",
@@ -3314,10 +3190,9 @@ const CATEGORY_TREE = [
         name: "Travel",
         attrs: [
           ATTR.age_group,
-          ATTR.color,
           ATTR.material,
           ATTR.weight_kg,
-          ATTR.warranty,
+          
         ],
         children: [
           "Baby Strollers",
@@ -3334,7 +3209,7 @@ const CATEGORY_TREE = [
       {
         key: "summer-play",
         name: "Summer Play",
-        attrs: [ATTR.minimum_age, ATTR.color],
+        attrs: [ATTR.minimum_age],
         children: [
           "Inflatable Pools",
           "Water Guns",
@@ -3366,7 +3241,7 @@ const CATEGORY_TREE = [
       {
         key: "pet-toys",
         name: "Pet Toys",
-        attrs: [ATTR.color, ATTR.material],
+        attrs: [ATTR.material],
         children: [
           "Dog Chew Toys",
           "Dog Balls",
@@ -3496,6 +3371,7 @@ class CategoriesSeed {
           // Merge root + sub attrs so child inherits the complete attribute set; dedupe by key
           const seenKeys = new Set();
           const mergedAttrs = [...root.attrs, ...sub.attrs].filter((a) => {
+            if (!a) return false;
             if (seenKeys.has(a.key)) return false;
             seenKeys.add(a.key);
             return true;
