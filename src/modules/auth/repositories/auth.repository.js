@@ -89,6 +89,11 @@ class AuthRepository {
          pan_number,
          gst_number,
          aadhaar_number,
+         pan_verified,
+         pan_verified_at,
+         aadhaar_verified,
+         aadhaar_verified_at,
+         aadhaar_reference_id,
          documents
        FROM seller_kyc
        WHERE seller_id = $1
