@@ -1003,7 +1003,6 @@ class SellerService {
         seller,
         actor,
         {
-          legalBusinessName: normalizedPayload.legalName,
           gstin: normalizedPayload.gstNumber || existingProfile.gstNumber || null,
           pan: normalizedPayload.panNumber || existingProfile.panNumber || null,
           ...(aadhaarVerificationSnapshot || panVerificationSnapshot || gstVerificationSnapshot
@@ -1047,6 +1046,10 @@ class SellerService {
           sellerId,
           verificationStatus: record.verification_status,
           legalName: record.legal_name,
+          // Keep one email identity across step saves, but start a new cycle after review.
+          submissionCycle: existingKyc?.reviewed_at
+            ? new Date(existingKyc.reviewed_at).toISOString()
+            : "initial",
         },
         {
           source: "seller-module",
@@ -1472,7 +1475,8 @@ class SellerService {
     }
 
     const kycRecord = await this.sellerRepository.findKycBySellerId(sellerId);
-    const nextProfile = this.mergeSellerProfile(existingSeller.sellerProfile || {}, payload);
+    const { submitOnboarding, ...profilePayload } = payload;
+    const nextProfile = this.mergeSellerProfile(existingSeller.sellerProfile || {}, profilePayload);
     const existingOrg = await sellerOrganizationService.getDefaultOrOnlyOrganization(sellerId);
     await sellerOrganizationService.assertNoIdentityConflicts(nextProfile, {
       sellerId,
@@ -1491,6 +1495,16 @@ class SellerService {
     ) {
       nextProfile.bankVerificationStatus = "submitted";
       nextProfile.bankRejectionReason = null;
+    }
+    if (submitOnboarding) {
+      const { checklist } = makeSellerOnboardingState({
+        sellerProfile: nextProfile, user: existingSeller, kyc: kycRecord,
+      });
+      if (!["profileCompleted", "kycSubmitted", "bankLinked", "billingAddressCompleted", "documentsSubmitted"]
+        .every((field) => checklist[field] === true) || nextProfile.kycStatus === "rejected") {
+        throw new AppError("Complete KYC, business details, documents and bank details before submitting onboarding", 400);
+      }
+      nextProfile.onboardingSubmittedAt = new Date();
     }
     const nextProfileWithOnboarding = this.withOnboardingState(nextProfile, kycRecord, existingSeller);
     const updatedSeller = await this.sellerRepository.updateSellerProfile(sellerId, nextProfileWithOnboarding);

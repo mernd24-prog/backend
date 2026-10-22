@@ -206,6 +206,15 @@ class SellerRepository {
       .where("seller_id", sellerId)
       .update({
         verification_status: payload.verificationStatus,
+        ...(payload.verificationStatus === "rejected" ? {
+          aadhaar_verified: false,
+          aadhaar_verified_at: null,
+          aadhaar_reference_id: null,
+          aadhaar_verification_response: null,
+          pan_verified: false,
+          pan_verified_at: null,
+          pan_verification_response: null,
+        } : {}),
         reviewed_by: payload.reviewedBy,
         rejection_reason: payload.rejectionReason || null,
         reviewed_at: knex.fn.now(),
