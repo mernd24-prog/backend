@@ -111,17 +111,24 @@ async function sendMail({ to, subject, html, text, from = env.defaultFromEmail, 
       },
       replyTo: process.env.REPLY_TO_EMAIL || process.env.SUPPORT_EMAIL || from,
     });
-    logger.info({
+    logger[type === "auth_otp" ? "warn" : "info"]({
       to: recipient,
       subject,
       messageId: result?.messageId,
       accepted: result?.accepted,
       rejected: result?.rejected,
       response: result?.response,
-    }, "Email delivered through SMTP");
+    }, "Email accepted by SMTP (inbox delivery not confirmed)");
     return result;
   } catch (error) {
-    logger.error({ err: error, to: recipient, subject }, "Email delivery failed");
+    logger.error({
+      to: recipient,
+      subject,
+      errorType: error.name,
+      code: error.code || null,
+      responseCode: error.responseCode || null,
+      command: error.command || null,
+    }, "Email delivery failed");
     throw new AppError("Email delivery failed. Please try again later.", 503);
   }
 }
