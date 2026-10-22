@@ -985,6 +985,7 @@ class SellerService {
           ...(normalizedPayload.dateOfBirth ? { dateOfBirth: normalizedPayload.dateOfBirth } : {}),
           kycStatus: KYC_STATUS.SUBMITTED,
           verificationStatus: KYC_STATUS.SUBMITTED,
+          onboardingSubmittedAt: null,
           ...(verificationResult?.panVerified
             ? {
                 panVerified: true,
@@ -1477,6 +1478,9 @@ class SellerService {
     const kycRecord = await this.sellerRepository.findKycBySellerId(sellerId);
     const { submitOnboarding, ...profilePayload } = payload;
     const nextProfile = this.mergeSellerProfile(existingSeller.sellerProfile || {}, profilePayload);
+    if (submitOnboarding === false) {
+      nextProfile.onboardingSubmittedAt = null;
+    }
     const existingOrg = await sellerOrganizationService.getDefaultOrOnlyOrganization(sellerId);
     await sellerOrganizationService.assertNoIdentityConflicts(nextProfile, {
       sellerId,
