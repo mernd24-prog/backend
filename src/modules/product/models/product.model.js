@@ -464,6 +464,18 @@ productSchema.index({ status: 1, approvalStatus: 1, visibility: 1, categorySlug:
 productSchema.index({ status: 1, approvalStatus: 1, visibility: 1, categoryId: 1, "analytics.purchases": -1 });
 productSchema.index({ "seo.keywords": 1 });
 productSchema.index({ scheduledAt: 1, status: 1 });
+// Variant SKUs are marketplace-wide identifiers, not seller-scoped values.
+// The service normalizes new values to uppercase; the collation also protects
+// against concurrent case-only duplicates across different sellers.
+productSchema.index(
+  { "variants.sku": 1 },
+  {
+    unique: true,
+    sparse: true,
+    name: "uniq_global_variant_sku",
+    collation: { locale: "en", strength: 2 },
+  },
+);
 
 // ─── Virtual: available stock ────────────────────────────────────────────────
 

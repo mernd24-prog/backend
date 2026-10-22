@@ -482,9 +482,10 @@ class ProductService {
 
     for (const variant of variants) {
       if (!variant?.sku) continue;
-      if (skus.has(variant.sku))
+      const normalizedSku = String(variant.sku).trim().toUpperCase();
+      if (skus.has(normalizedSku))
         throw new AppError("Variant SKU must be unique", 400);
-      skus.add(variant.sku);
+      skus.add(normalizedSku);
       if (variant.stock !== undefined && Number(variant.stock) < 0) {
         throw new AppError("Variant stock must be non-negative", 400);
       }
@@ -508,6 +509,41 @@ class ProductService {
         }
       }
     }
+  }
+
+  async assertGlobalSkuUniqueness(payload = {}, excludeProductId = null) {
+    const submittedSkus = [
+      payload.sku,
+      ...(Array.isArray(payload.variants)
+        ? payload.variants.map((variant) => variant?.sku)
+        : []),
+    ]
+      .map((sku) => String(sku || "").trim().toUpperCase())
+      .filter(Boolean);
+    const skus = Array.from(new Set(submittedSkus));
+    if (!skus.length) return;
+
+    const conflicts = await this.productRepository.findBySkus(
+      skus,
+      excludeProductId,
+    );
+    if (!conflicts.length) return;
+
+    const requested = new Set(skus);
+    const conflictingSku = conflicts
+      .flatMap((product) => [
+        product.sku,
+        ...(Array.isArray(product.variants)
+          ? product.variants.map((variant) => variant?.sku)
+          : []),
+      ])
+      .map((sku) => String(sku || "").trim().toUpperCase())
+      .find((sku) => requested.has(sku));
+
+    throw new AppError(
+      `SKU '${conflictingSku || skus[0]}' is already used by another product`,
+      409,
+    );
   }
 
   validatePricing(payload = {}, existingProduct = null, context = {}) {
@@ -710,6 +746,7 @@ class ProductService {
 
       if (!next.sku)
         next.sku = `${payload.sku || payload.title || "SKU"}-${index + 1}`;
+      next.sku = String(next.sku).trim().toUpperCase();
       next.price = this.toVariantNumber(
         next.price,
         hasVariantPayload ? 0 : this.toVariantNumber(payload.price, 0),
@@ -750,7 +787,7 @@ class ProductService {
 
     return {
       ...payload,
-      sku: payload.sku || defaultVariant.sku,
+      sku: String(payload.sku || defaultVariant.sku).trim().toUpperCase(),
       price: hasVariantPayload
         ? defaultVariantPrice
         : this.toVariantNumber(payload.price, defaultVariantPrice),
@@ -2092,6 +2129,7 @@ class ProductService {
       payload.attributes || {},
     );
     this.validateVariants(payload.variants || [], payload.options || []);
+    await this.assertGlobalSkuUniqueness(payload);
     this.validatePricing(payload);
     await this.validateProductReferences(payload, actor);
     this._validateProductType(productType, payload);
@@ -2250,6 +2288,14 @@ class ProductService {
     this.validateVariants(
       payload.variants || existingProduct.variants || [],
       nextOptions,
+    );
+    await this.assertGlobalSkuUniqueness(
+      {
+        ...payload,
+        sku: payload.sku || existingProduct.sku,
+        variants: payload.variants || existingProduct.variants || [],
+      },
+      existingProduct._id,
     );
     this.validatePricing(payload, existingProduct);
     await this.validateProductReferences(

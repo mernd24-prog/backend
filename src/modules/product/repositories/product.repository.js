@@ -39,6 +39,26 @@ class ProductRepository {
     return ProductModel.findOne(filter);
   }
 
+  async findBySkus(skus = [], excludeProductId = null) {
+    const normalizedSkus = Array.from(
+      new Set(skus.map((sku) => String(sku || "").trim()).filter(Boolean)),
+    );
+    if (!normalizedSkus.length) return [];
+
+    const filter = {
+      $or: [
+        { sku: { $in: normalizedSkus } },
+        { "variants.sku": { $in: normalizedSkus } },
+      ],
+    };
+    if (excludeProductId) filter._id = { $ne: excludeProductId };
+
+    return ProductModel.find(filter)
+      .select("sku variants.sku sellerId")
+      .collation({ locale: "en", strength: 2 })
+      .lean();
+  }
+
   async update(productId, payload) {
     return ProductModel.findByIdAndUpdate(productId, { $set: payload }, { new: true });
   }
