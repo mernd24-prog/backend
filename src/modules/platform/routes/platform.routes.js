@@ -91,6 +91,7 @@ platformRoutes.get(
 platformRoutes.post(
   "/categories",
   authenticate,
+  allowCatalogAdmin,
   allowActions(ACTIONS.CATALOG_MANAGE),
   checkInput(createCategorySchema),
   catchErrors(platformController.createCategory),
@@ -98,6 +99,7 @@ platformRoutes.post(
 platformRoutes.patch(
   "/categories/:categoryKey",
   authenticate,
+  allowCatalogAdmin,
   allowActions(ACTIONS.CATALOG_MANAGE),
   checkInput(updateCategorySchema),
   catchErrors(platformController.updateCategory),
@@ -113,6 +115,7 @@ platformRoutes.patch(
 platformRoutes.delete(
   "/categories/:categoryKey",
   authenticate,
+  allowCatalogAdmin,
   allowActions(ACTIONS.CATALOG_MANAGE),
   checkInput(categoryKeySchema),
   catchErrors(platformController.deleteCategory),

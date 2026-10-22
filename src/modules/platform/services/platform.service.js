@@ -170,12 +170,15 @@ class PlatformService {
   async createCategory(payload, req) {
     const actor = req?.auth || {};
     const context = catalogActorContext(actor);
+    if (!context.isAdmin) {
+      throw new AppError("Only administrators can create categories", 403);
+    }
     const category = await this.platformRepository.createCategory({
       ...payload,
-      active: context.isSeller ? false : payload.active !== false,
-      approvalStatus: context.isSeller ? "pending" : "approved",
-      submittedBySellerId: context.isSeller ? context.sellerId : "",
-      submittedByUserId: context.isSeller ? String(actor.userId || actor.sub || "") : "",
+      active: payload.active !== false,
+      approvalStatus: "approved",
+      submittedBySellerId: "",
+      submittedByUserId: "",
     });
     this.invalidateCatalogCaches();
     auditService.create(req, { module: "categories", entityId: category?._id || category?.categoryKey, entityType: "Category", newData: payload });
@@ -183,6 +186,9 @@ class PlatformService {
   }
 
   async updateCategory(categoryKey, payload, req) {
+    if (!catalogActorContext(req?.auth || {}).isAdmin) {
+      throw new AppError("Only administrators can update categories", 403);
+    }
     const category = await this.platformRepository.getCategory(categoryKey);
     if (!category) throw AppError.notFound("Category");
     const updated = await this.platformRepository.updateCategory(categoryKey, payload);
@@ -356,6 +362,9 @@ class PlatformService {
   }
 
   async deleteCategory(categoryKey, req) {
+    if (!catalogActorContext(req?.auth || {}).isAdmin) {
+      throw new AppError("Only administrators can delete categories", 403);
+    }
     const category = await this.platformRepository.getCategory(categoryKey);
     if (!category) throw AppError.notFound("Category");
     const result = await this.platformRepository.deleteCategory(categoryKey);
