@@ -1,3 +1,4 @@
+const { randomUUID } = require("node:crypto");
 const { AuthRepository } = require("../repositories/auth.repository");
 const { AppError } = require("../../../shared/errors/app-error");
 const { hashText, checkHash } = require("../../../shared/tools/hash");
@@ -267,20 +268,36 @@ class AuthService {
     return delivery;
   }
 
-  async sendOtpEmail({ email, existingUser = null, firstName = "", otp, purpose }) {
+  async sendOtpEmail({ email, existingUser = null, firstName = "", otp, purpose, diagnosticId }) {
     const emailName = String(email || "").split("@")[0];
     const html = otpEmailTemplate({
       firstName: firstName || existingUser?.profile?.firstName || emailName || "there",
       otp,
       purpose: this.getOtpPurposeLabel(purpose),
     });
-    const delivery = await sendMail({
+    const maskedEmail = String(email || "").replace(/^(.).*(@.*)$/, "$1***$2");
+    logger.warn({ diagnosticId, purpose, recipient: maskedEmail, smtpMode: env.smtp.mode,
+      smtpConfigured: env.smtp.configured, sendAuthOtpEmails: env.mail.sendAuthOtpEmails },
+    "OTP email delivery starting");
+    let delivery;
+    try {
+      delivery = await sendMail({
       to: email,
       subject: `OTP for ${this.getOtpPurposeLabel(purpose)}`,
       text: `Your Sam Global verification code is ${otp}. It will expire in 15 minutes. Please do not share it with anyone.`,
       html,
       type: "auth_otp",
     });
+    } catch (error) {
+      logger.error({ diagnosticId, purpose, recipient: maskedEmail, errorType: error.name,
+        statusCode: error.statusCode || null }, "OTP email delivery failed");
+      throw error;
+    }
+    logger.warn({ diagnosticId, purpose, recipient: maskedEmail, messageId: delivery?.messageId || null,
+      acceptedCount: delivery?.accepted?.length || 0, rejectedCount: delivery?.rejected?.length || 0,
+      smtpResponse: delivery?.response || null,
+      simulated: String(delivery?.messageId || "").startsWith("static-") },
+    "OTP email transport result (SMTP acceptance does not confirm inbox delivery)");
     if (env.auth.otpMode === "live" && (String(delivery?.messageId || "").startsWith("static-") || delivery?.accepted?.length === 0)) {
       throw new AppError("OTP email delivery is unavailable. Please try again later.", 503);
     }
@@ -1954,6 +1971,7 @@ class AuthService {
     };
   }
   async sendOtp(payload, requestContext = {}) {
+    const diagnosticId = randomUUID();
     const { email, mobile, purpose = "registration", role } = payload;
 
     const existingUser = await this.authRepository.findUserByEmail(email);
@@ -2060,6 +2078,7 @@ class AuthService {
             "Seller registration WhatsApp OTP failed; falling back to email",
           );
           delivery = await this.sendOtpEmail({
+            diagnosticId,
             email,
             existingUser,
             firstName: payload.profile?.firstName || payload.firstName,
@@ -2097,10 +2116,15 @@ class AuthService {
           deliveryMode = "third_party_sms";
         } catch (primaryError) {
           logger.warn(
-            { err: primaryError, purpose, role },
+            { diagnosticId, purpose, role, errorType: primaryError.name,
+              errorMessage: primaryError.message, statusCode: primaryError.statusCode || null,
+              providerCode: primaryError.providerCode || null,
+              mobile: `******${mobileNumber.slice(-4)}`,
+              templateKey: purpose === "registration" ? "REGISTER_OTP" : purpose === "login" ? "LOGIN_OTP" : purpose },
             "SMS OTP failed; falling back to email",
           );
           delivery = await this.sendOtpEmail({
+            diagnosticId,
             email,
             existingUser,
             firstName: payload.profile?.firstName || payload.firstName,
@@ -2119,6 +2143,7 @@ class AuthService {
         );
 
         delivery = await this.sendOtpEmail({
+            diagnosticId,
           email,
           existingUser,
           firstName: payload.profile?.firstName || payload.firstName,
