@@ -68,6 +68,7 @@ const sellerProfileSchema = new mongoose.Schema(
     verifiedAt: Date,
     goLiveApprovedBy: String,
     goLiveApprovedAt: Date,
+    onboardingSubmittedAt: { type: Date, default: null },
     onboardingStatus: {
       type: String,
       default: "initiated",

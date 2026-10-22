@@ -326,6 +326,7 @@ const reviewSellerKycSchema = Joi.object({
 
 const updateSellerProfileSchema = Joi.object({
   body: Joi.object({
+    submitOnboarding: Joi.boolean().default(false),
     displayName: Joi.string().pattern(businessNamePattern).min(2).max(120).allow("", null),
     businessName: Joi.string().pattern(businessNamePattern).min(2).max(160).allow("", null),
     legalBusinessName: Joi.string().pattern(legalBusinessNamePattern).min(2).max(160).required(),
