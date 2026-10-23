@@ -23,6 +23,8 @@ const {
   buyerOtpAuthSchema,
   influencerRegistrationSchema,
   influencerInviteSchema,
+  profileEmailOtpSchema,
+  verifyProfileEmailOtpSchema,
 } = require("../validation/auth.validation");
 
 const authRoutes = express.Router();
@@ -84,6 +86,8 @@ authRoutes.post("/resend-otp", checkInput(resendOtpSchema), catchErrors(authCont
 authRoutes.post("/forgot-password", checkInput(forgotPasswordSchema), catchErrors(authController.forgotPassword));
 authRoutes.post("/reset-password", checkInput(resetPasswordSchema), catchErrors(authController.resetPassword));
 authRoutes.post("/change-password", authenticate, checkInput(changePasswordSchema), catchErrors(authController.changePassword));
+authRoutes.post("/profile-email/send-otp", authenticate, checkInput(profileEmailOtpSchema), catchErrors(authController.sendProfileEmailOtp));
+authRoutes.post("/profile-email/verify-otp", authenticate, checkInput(verifyProfileEmailOtpSchema), catchErrors(authController.verifyProfileEmailOtp));
 authRoutes.get("/status", authenticateForStatus, catchErrors(authController.status));
 authRoutes.get(
   "/customer/status",

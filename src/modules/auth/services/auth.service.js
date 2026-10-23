@@ -182,7 +182,7 @@ class AuthService {
         ...requestContext,
         metadata: { reason: "duplicate_email", role: payload.role },
       });
-      throw new AppError(`${roleLabel} email already exists. Please login or use another email.`, 409);
+      throw new AppError(`email already exists. Please login or use another email.`, 409);
     }
 
     const existingByPhone = await this.authRepository.findUserByPhone(phone);
@@ -276,28 +276,34 @@ class AuthService {
       purpose: this.getOtpPurposeLabel(purpose),
     });
     const maskedEmail = String(email || "").replace(/^(.).*(@.*)$/, "$1***$2");
-    logger.warn({ diagnosticId, purpose, recipient: maskedEmail, smtpMode: env.smtp.mode,
-      smtpConfigured: env.smtp.configured, sendAuthOtpEmails: env.mail.sendAuthOtpEmails },
-    "OTP email delivery starting");
+    logger.warn({
+      diagnosticId, purpose, recipient: maskedEmail, smtpMode: env.smtp.mode,
+      smtpConfigured: env.smtp.configured, sendAuthOtpEmails: env.mail.sendAuthOtpEmails
+    },
+      "OTP email delivery starting");
     let delivery;
     try {
       delivery = await sendMail({
-      to: email,
-      subject: `OTP for ${this.getOtpPurposeLabel(purpose)}`,
-      text: `Your Sam Global verification code is ${otp}. It will expire in 15 minutes. Please do not share it with anyone.`,
-      html,
-      type: "auth_otp",
-    });
+        to: email,
+        subject: `OTP for ${this.getOtpPurposeLabel(purpose)}`,
+        text: `Your Sam Global verification code is ${otp}. It will expire in 15 minutes. Please do not share it with anyone.`,
+        html,
+        type: "auth_otp",
+      });
     } catch (error) {
-      logger.error({ diagnosticId, purpose, recipient: maskedEmail, errorType: error.name,
-        statusCode: error.statusCode || null }, "OTP email delivery failed");
+      logger.error({
+        diagnosticId, purpose, recipient: maskedEmail, errorType: error.name,
+        statusCode: error.statusCode || null
+      }, "OTP email delivery failed");
       throw error;
     }
-    logger.warn({ diagnosticId, purpose, recipient: maskedEmail, messageId: delivery?.messageId || null,
+    logger.warn({
+      diagnosticId, purpose, recipient: maskedEmail, messageId: delivery?.messageId || null,
       acceptedCount: delivery?.accepted?.length || 0, rejectedCount: delivery?.rejected?.length || 0,
       smtpResponse: delivery?.response || null,
-      simulated: String(delivery?.messageId || "").startsWith("static-") },
-    "OTP email transport result (SMTP acceptance does not confirm inbox delivery)");
+      simulated: String(delivery?.messageId || "").startsWith("static-")
+    },
+      "OTP email transport result (SMTP acceptance does not confirm inbox delivery)");
     if (env.auth.otpMode === "live" && (String(delivery?.messageId || "").startsWith("static-") || delivery?.accepted?.length === 0)) {
       throw new AppError("OTP email delivery is unavailable. Please try again later.", 503);
     }
@@ -649,8 +655,8 @@ class AuthService {
           : this.getRegistrationOtpMessage(payload.role),
       };
     } catch (error) {
-      await redis.del(regKey).catch(() => {});
-      await redis.del(this.makeOtpKey(payload.email, "registration")).catch(() => {});
+      await redis.del(regKey).catch(() => { });
+      await redis.del(this.makeOtpKey(payload.email, "registration")).catch(() => { });
       throw error;
     }
   }
@@ -1380,10 +1386,6 @@ class AuthService {
     const existingUser =
       await this.findBuyerOtpUser(identity);
 
-    if (!existingUser && identity.channel === "mobile") {
-      throw new AppError("This mobile number is not registered. Please create an account with your email and mobile number first.", 404);
-    }
-
     /*
      * Buyer OTP endpoint must never authenticate seller,
      * admin, influencer or other account types.
@@ -1421,8 +1423,8 @@ class AuthService {
         String(
           payload.profile?.firstName ||
           payload.firstName ||
-          "Customer",
-        ).trim() || "Customer",
+          "",
+        ).trim(),
 
       lastName: String(
         payload.profile?.lastName ||
@@ -1809,16 +1811,12 @@ class AuthService {
     if (!user) {
       authAction = "register";
 
-      if (identity.channel === "mobile") {
-        throw new AppError("This mobile number is not registered. Please create an account first.", 404);
-      }
-
       const profile = {
         firstName:
           String(
             authContext.profile?.firstName ||
-            "Customer",
-          ).trim() || "Customer",
+            "",
+          ).trim(),
 
         lastName:
           String(
@@ -1840,7 +1838,7 @@ class AuthService {
         email:
           identity.channel === "email"
             ? identity.email
-            : "",
+            : undefined,
 
         phone:
           identity.channel === "mobile"
@@ -1970,6 +1968,37 @@ class AuthService {
       },
     };
   }
+  async sendProfileEmailOtp(userId, { email }, requestContext = {}) {
+    const user = await this.authRepository.findUserById(userId);
+    if (!user) throw new AppError("User not found", 404);
+    if (user.emailVerified) {
+      throw new AppError("Your verified email address cannot be changed.", 409);
+    }
+    const existing = await this.authRepository.findUserByEmail(email);
+    if (existing && String(existing.id) !== String(userId)) {
+      throw new AppError("This email address is already in use.", 409);
+    }
+    return this.sendOtp({ email, purpose: "profile_email" }, requestContext);
+  }
+
+  async verifyProfileEmailOtp(userId, { email, otp }, requestContext = {}) {
+    const user = await this.authRepository.findUserById(userId);
+    if (!user) throw new AppError("User not found", 404);
+    if (user.emailVerified) {
+      throw new AppError("Your verified email address cannot be changed.", 409);
+    }
+    const existing = await this.authRepository.findUserByEmail(email);
+    if (existing && String(existing.id) !== String(userId)) {
+      throw new AppError("This email address is already in use.", 409);
+    }
+    await this.verifyOtp({ email, otp, purpose: "profile_email" }, requestContext);
+    const updatedUser = await this.authRepository.userRepository.updateById(userId, {
+      $set: { email, emailVerified: true },
+      $addToSet: { authProviders: { provider: "email_otp", providerUserId: email } },
+    });
+    return { message: "Email verified successfully", user: updatedUser };
+  }
+
   async sendOtp(payload, requestContext = {}) {
     const diagnosticId = randomUUID();
     const { email, mobile, purpose = "registration", role } = payload;
@@ -1977,7 +2006,7 @@ class AuthService {
     const existingUser = await this.authRepository.findUserByEmail(email);
     const roleLabel = this.getSignupRoleLabel(role);
     if (purpose === "registration" && existingUser) {
-      throw new AppError(`${roleLabel} email already exists. Please login or use another email.`, 409);
+      throw new AppError(`email already exists. Please login or use another email.`, 409);
     }
     const mobileNumber = String(mobile || existingUser?.phone || "").trim();
     if (purpose === "registration" && mobileNumber) {
@@ -2018,9 +2047,9 @@ class AuthService {
     const selectedOtpChannel =
       purpose === "registration" && role === ROLES.SELLER
         ? String(
-            process.env.AUTH_SELLER_REGISTRATION_OTP_CHANNEL ||
-              primaryOtpChannel,
-          ).toLowerCase()
+          process.env.AUTH_SELLER_REGISTRATION_OTP_CHANNEL ||
+          primaryOtpChannel,
+        ).toLowerCase()
         : primaryOtpChannel;
     const useSellerRegistrationWhatsapp =
       purpose === "registration" &&
@@ -2116,11 +2145,13 @@ class AuthService {
           deliveryMode = "third_party_sms";
         } catch (primaryError) {
           logger.warn(
-            { diagnosticId, purpose, role, errorType: primaryError.name,
+            {
+              diagnosticId, purpose, role, errorType: primaryError.name,
               errorMessage: primaryError.message, statusCode: primaryError.statusCode || null,
               providerCode: primaryError.providerCode || null,
               mobile: `******${mobileNumber.slice(-4)}`,
-              templateKey: purpose === "registration" ? "REGISTER_OTP" : purpose === "login" ? "LOGIN_OTP" : purpose },
+              templateKey: purpose === "registration" ? "REGISTER_OTP" : purpose === "login" ? "LOGIN_OTP" : purpose
+            },
             "SMS OTP failed; falling back to email",
           );
           delivery = await this.sendOtpEmail({
@@ -2143,7 +2174,7 @@ class AuthService {
         );
 
         delivery = await this.sendOtpEmail({
-            diagnosticId,
+          diagnosticId,
           email,
           existingUser,
           firstName: payload.profile?.firstName || payload.firstName,
@@ -2190,10 +2221,10 @@ class AuthService {
         : deliveryMode === "fallback_email"
           ? "Mobile OTP delivery failed. OTP has been sent to your email instead."
           : deliveryMode === "third_party_whatsapp"
-        ? "OTP sent successfully on WhatsApp"
-        : deliveryMode === "third_party_sms" || deliveryMode === "static_sms"
-          ? "OTP sent successfully on mobile"
-          : "OTP sent successfully on email",
+            ? "OTP sent successfully on WhatsApp"
+            : deliveryMode === "third_party_sms" || deliveryMode === "static_sms"
+              ? "OTP sent successfully on mobile"
+              : "OTP sent successfully on email",
       deliveryMode,
       ...(deliveryMode === "third_party_whatsapp" ? { whatsappSent: true } : {}),
       ...(isStaticOtp && env.auth.exposeStaticOtp ? { otp } : {}),

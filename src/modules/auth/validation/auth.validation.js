@@ -307,6 +307,7 @@ const sendOtpSchema = Joi.object({
         "forgot_password",
         "influencer_forgot_password",
         "login",
+        "profile_email",
       )
       .default("registration"),
   }).required(),
@@ -338,6 +339,7 @@ const verifyOtpSchema = Joi.object({
         "forgot_password",
         "influencer_forgot_password",
         "login",
+        "profile_email",
       )
       .default("registration"),
   }).required(),
@@ -347,6 +349,25 @@ const verifyOtpSchema = Joi.object({
 });
 
 const resendOtpSchema = sendOtpSchema;
+
+const profileEmailOtpSchema = Joi.object({
+  body: Joi.object({
+    email: Joi.string().trim().lowercase().email().required(),
+  }).required(),
+  query: emptyQuerySchema,
+  params: emptyParamsSchema,
+});
+
+const verifyProfileEmailOtpSchema = Joi.object({
+  body: Joi.object({
+    email: Joi.string().trim().lowercase().email().required(),
+    otp: Joi.string().trim().pattern(/^\d{6}$/).required().messages({
+      "string.pattern.base": "OTP must contain exactly 6 digits",
+    }),
+  }).required(),
+  query: emptyQuerySchema,
+  params: emptyParamsSchema,
+});
 
 const forgotPasswordSchema = Joi.object({
   body: Joi.object({
@@ -423,6 +444,8 @@ module.exports = {
   sendOtpSchema,
   verifyOtpSchema,
   resendOtpSchema,
+  profileEmailOtpSchema,
+  verifyProfileEmailOtpSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
   changePasswordSchema,

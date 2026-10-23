@@ -1,6 +1,7 @@
 const { okResponse } = require("../../../shared/http/reply");
 const { AuthService } = require("../services/auth.service");
 const { getRequestInfo } = require("../../../shared/tools/request");
+const { getCurrentUser } = require("../../../shared/auth/current-user");
 
 class AuthController {
   constructor({ authService = new AuthService() } = {}) {
@@ -116,6 +117,18 @@ class AuthController {
   resendOtp = async (req, res) => {
     const result = await this.authService.resendOtp(req.body, getRequestInfo(req));
     res.json(okResponse(result));
+  };
+
+  sendProfileEmailOtp = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.authService.sendProfileEmailOtp(actor.userId, req.body, getRequestInfo(req));
+    res.json(okResponse(result, { message: result?.message }));
+  };
+
+  verifyProfileEmailOtp = async (req, res) => {
+    const actor = getCurrentUser(req);
+    const result = await this.authService.verifyProfileEmailOtp(actor.userId, req.body, getRequestInfo(req));
+    res.json(okResponse(result, { message: result?.message }));
   };
 
   forgotPassword = async (req, res) => {

@@ -13,6 +13,7 @@
     "check": "node scripts/check-source.js",
     "test": "node scripts/run-tests.js",
     "db:migrate": "node scripts/db/run-sequelize-migrations.js",
+    "db:migrate:optional-user-email": "node scripts/db/migrate-optional-user-email.js",
     "db:migrate:undo": "node scripts/db/rollback-sequelize-migration.js",
     "db:setup": "npm run db:migrate && npm run db:seed:rbac && npm run db:seed:commerce",
     "db:create-super-admin": "node scripts/db/create-super-admin.js",
