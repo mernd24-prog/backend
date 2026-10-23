@@ -160,6 +160,10 @@ const seoSchema = new mongoose.Schema(
       type: [{ type: String, trim: true, minlength: 2, maxlength: 60 }],
       validate: [
         {
+          validator: (keywords) => keywords.length >= 1,
+          message: "At least one SEO keyword is required",
+        },
+        {
           validator: (keywords) => keywords.length <= 20,
           message: "SEO keywords may contain at most 20 items",
         },
