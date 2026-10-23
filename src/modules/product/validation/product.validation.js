@@ -13,6 +13,9 @@ const {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 const optionalString = () => Joi.string().trim().allow("", null);
+const productTitle = () => Joi.string().trim().min(3).max(200)
+  .pattern(/\p{L}/u)
+  .messages({ "string.pattern.base": "Product name must contain at least one letter." });
 const optionalPositiveNumber = () => Joi.number().positive().allow(null).empty("");
 const optionalNonNegativeInteger = () => Joi.number().integer().min(0).allow(null).empty("");
 const optionalNonNegativeNumber = () => Joi.number().min(0).allow(null).empty("");
@@ -205,7 +208,7 @@ const moderationChecklistSchema = Joi.object({
 // ─── Product body (shared between create/update) ─────────────────────────────
 
 const productBodyBase = {
-  title: Joi.string().min(3).max(200).trim(),
+  title: productTitle(),
   shortDescription: Joi.string().max(500).trim().allow("", null),
   sellerId: optionalString(),
   organizationId: optionalString(),
@@ -301,7 +304,7 @@ const productBodyBase = {
 const createProductSchema = Joi.object({
   body: Joi.object({
     ...productBodyBase,
-    title: Joi.string().min(3).max(200).trim().required(),
+    title: productTitle().required(),
     description: Joi.string().min(10).required(),
     category: Joi.string().required(),
     variants: Joi.array().items(variantSchema).min(1).required(),
@@ -576,7 +579,7 @@ const productLifecycleSchema = Joi.object({
   body: Joi.object({
     status: Joi.string().valid(...Object.values(PRODUCT_STATUS)),
     visibility: Joi.string().valid(...Object.values(PRODUCT_VISIBILITY)),
-    title: Joi.string().min(3).max(200).trim(),
+    title: productTitle(),
     sku: Joi.string().trim().allow("", null),
     reason: Joi.string().trim().max(1000).allow("", null),
   }).default({}),
