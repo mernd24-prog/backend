@@ -1188,7 +1188,7 @@ async function seedPolicyPages() {
               {
                 title: "GOVERNING LAW & JURISDICTION",
                 description:
-                  "These Terms shall be governed by the laws of India. Any disputes shall be subject to the jurisdiction of courts located in [Insert City].",
+                  "These Terms shall be governed by the laws of India. Any disputes shall be subject to the jurisdiction of courts located in Ludhiana, Punjab.",
 
                 image: {},
                 cta: {},
