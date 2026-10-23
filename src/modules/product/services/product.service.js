@@ -906,7 +906,7 @@ class ProductService {
   buildVariantsFromOptions(options = [], basePrice = 0, baseMrp = 0) {
     const combinations = this.generateVariantCombinations(options);
     return combinations.map((attributes, index) => ({
-      sku: `SKU-${Date.now()}-${index + 1}`,
+      sku: this.generateVariantSku(),
       title: Object.values(attributes).join(" / "),
       attributes,
       price: basePrice,
@@ -947,6 +947,12 @@ class ProductService {
     return plain;
   }
 
+  generateVariantSku() {
+    return `SKU-${Date.now().toString(36)}-${Math.random()
+      .toString(36)
+      .slice(2, 10)}`.toUpperCase();
+  }
+
   syncRootAndDefaultVariant(payload = {}, existingProduct = null) {
     const existingVariants = Array.isArray(existingProduct?.variants)
       ? existingProduct.variants.map((variant) => this.toPlainVariant(variant))
@@ -954,6 +960,11 @@ class ProductService {
     const submittedVariants = Array.isArray(payload.variants)
       ? payload.variants.map((variant) => this.toPlainVariant(variant))
       : [];
+    const existingVariantsById = new Map(
+      existingVariants
+        .filter((variant) => variant?._id)
+        .map((variant) => [String(variant._id), variant]),
+    );
     const hasVariantPayload = Object.prototype.hasOwnProperty.call(
       payload,
       "variants",
@@ -1006,8 +1017,12 @@ class ProductService {
       variants.findIndex((variant) => variant.isDefault === true),
     );
     variants = variants.map((variant, index) => {
+      const existingVariant = variant?._id
+        ? existingVariantsById.get(String(variant._id))
+        : null;
       const next = {
         ...variant,
+        ...(existingVariant?.sku ? { sku: existingVariant.sku } : {}),
         attributes: this.normalizeVariantAttributes(variant.attributes || {}),
         isDefault: index === defaultIndex,
         sortOrder: variant.sortOrder ?? index,
@@ -1039,7 +1054,7 @@ class ProductService {
         }
       }
 
-      if (!next.sku) next.sku = `SKU-${Date.now()}-${index + 1}`;
+      if (!next.sku) next.sku = this.generateVariantSku();
       next.price = this.toVariantNumber(
         next.price,
         hasVariantPayload ? 0 : this.toVariantNumber(payload.price, 0),
@@ -1325,13 +1340,21 @@ class ProductService {
     }
 
     const hsnRule = await this.platformRepository.getHsnCode(hsnCode);
+    const sellerId = String(
+      actor.ownerSellerId || actor.userId || actor.sub || "",
+    );
+    const isOwnPendingHsn =
+      isSellerRole(actor) &&
+      hsnRule?.approvalStatus === "pending" &&
+      String(hsnRule.submittedBySellerId || "") === sellerId;
     if (
       !hsnRule ||
-      hsnRule.active === false ||
-      ["pending", "rejected"].includes(hsnRule.approvalStatus)
+      hsnRule.approvalStatus === "rejected" ||
+      (!isOwnPendingHsn && hsnRule.active === false) ||
+      (!isOwnPendingHsn && hsnRule.approvalStatus === "pending")
     ) {
       throw new AppError(
-        "HSN code must be an active approved master record",
+        "HSN code must be approved or your own pending submission",
         400,
       );
     }
@@ -2068,6 +2091,36 @@ class ProductService {
     await this.validateCollectionReferences(payload.collectionIds || []);
   }
 
+  async assertProductBrandAndHsnApproved(product = {}) {
+    if (product.brand) {
+      const brand = await this.platformRepository.getBrandByValue(product.brand);
+      if (
+        !brand ||
+        brand.active === false ||
+        brand.approvalStatus !== "approved"
+      ) {
+        throw new AppError(
+          "Approve the product brand before approving this product",
+          409,
+        );
+      }
+    }
+
+    if (product.hsnCode) {
+      const hsn = await this.platformRepository.getHsnCode(product.hsnCode);
+      if (
+        !hsn ||
+        hsn.active === false ||
+        hsn.approvalStatus !== "approved"
+      ) {
+        throw new AppError(
+          "Approve the product HSN code before approving this product",
+          409,
+        );
+      }
+    }
+  }
+
   async validateShippingProfileReference(payload = {}, existingProduct = null) {
     const hasShippingPayload = Object.prototype.hasOwnProperty.call(
       payload,
@@ -2716,6 +2769,10 @@ class ProductService {
       );
 
       if (isApproval) {
+        await this.assertProductBrandAndHsnApproved({
+          ...existingProduct.toObject(),
+          ...updatePayload,
+        });
         updatePayload.status = PRODUCT_STATUS.ACTIVE;
         updatePayload.approvedBy = actor.userId;
         updatePayload.approvedAt = new Date();
@@ -4744,6 +4801,10 @@ class ProductService {
 
     if (isRejection && !payload.rejectionReason) {
       throw new AppError("Rejection reason is required", 400);
+    }
+
+    if (isApproval) {
+      await this.assertProductBrandAndHsnApproved(existingProduct);
     }
 
     const updatedProduct = await this.productRepository.reviewProduct(

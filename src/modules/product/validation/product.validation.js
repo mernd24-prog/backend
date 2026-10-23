@@ -183,14 +183,20 @@ const seoSchema = Joi.object({
   metaTitle: Joi.string().trim().max(70).allow("", null),
   metaDescription: Joi.string().trim().max(160).allow("", null),
   keywords: Joi.array()
-    .items(Joi.string().trim().min(2).max(60).required())
+    .items(Joi.string().trim().min(2).max(60))
+    .min(1)
+    .message("Add at least one SEO keyword.")
     .max(20)
-    .default([])
+    .required()
     .custom((keywords, helpers) =>
       uniqueTrimmedStrings(keywords)
         ? keywords
         : helpers.message({ custom: "SEO keywords must be unique" }),
-    ),
+    )
+    .messages({
+      "array.min": "Add at least one SEO keyword.",
+      "any.required": "Add at least one SEO keyword.",
+    }),
   canonicalUrl: optionalHttpUrl(),
   ogTitle: Joi.string().trim().max(70).allow("", null),
   ogDescription: Joi.string().trim().max(160).allow("", null),

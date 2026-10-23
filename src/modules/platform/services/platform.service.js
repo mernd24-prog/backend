@@ -141,10 +141,18 @@ function catalogActorContext(actor = {}) {
 function applyCatalogSubmissionVisibility(filter = {}, actor = {}) {
   const context = catalogActorContext(actor);
   if (context.isAdmin) return filter;
-  // Seller-owned pending submissions remain available through the dedicated
-  // submission endpoints, but generic catalog consumers only receive records
-  // that have explicitly completed approval and are active.
-  const visibility = { active: true, approvalStatus: "approved" };
+  const approved = { active: true, approvalStatus: "approved" };
+  const visibility = context.isSeller && context.sellerId
+    ? {
+        $or: [
+          approved,
+          {
+            approvalStatus: "pending",
+            submittedBySellerId: context.sellerId,
+          },
+        ],
+      }
+    : approved;
   return Object.keys(filter).length ? { $and: [filter, visibility] } : visibility;
 }
 
@@ -207,7 +215,13 @@ class PlatformService {
   assertCatalogSubmissionVisible(item, actor = {}, resource = "Catalog item") {
     const context = catalogActorContext(actor);
     const isApproved = item.approvalStatus === "approved";
-    if (!context.isAdmin && !isApproved) throw AppError.notFound(resource);
+    const isOwnPending =
+      context.isSeller &&
+      item.approvalStatus === "pending" &&
+      String(item.submittedBySellerId || "") === context.sellerId;
+    if (!context.isAdmin && !isApproved && !isOwnPending) {
+      throw AppError.notFound(resource);
+    }
   }
 
   normalizeCategoryAttributes(category = {}) {
@@ -2205,10 +2219,17 @@ class PlatformService {
     const includeOptionValues = query.includeOptionValues !== false && query.includeOptionValues !== "false";
     const includeCategoryAttributes =
       query.includeCategoryAttributes !== false && query.includeCategoryAttributes !== "false";
-    // Product/CMS prefills feed selectors. Pending seller submissions belong
-    // only in approval-management screens and must not become selectable by
-    // their owner (or by an admin) before approval.
+    const actorContext = catalogActorContext(actor);
     const visibleFilter = { active: true, approvalStatus: "approved" };
+    const sellerCatalogFilter = applyCatalogSubmissionVisibility({}, actor);
+    const reviewableCatalogFilter = actorContext.isAdmin
+      ? {
+          $or: [
+            visibleFilter,
+            { approvalStatus: "pending" },
+          ],
+        }
+      : sellerCatalogFilter;
     const activeApprovedFilter = { active: true, approvalStatus: "approved" };
     const activeFilter = { active: true };
     const [
@@ -2224,10 +2245,10 @@ class PlatformService {
       taxRules,
     ] = await Promise.all([
       this.platformRepository.listCategories(visibleFilter, { skip: 0, limit: 5000 }),
-      this.platformRepository.listBrands(visibleFilter, { skip: 0, limit: 500 }),
+      this.platformRepository.listBrands(reviewableCatalogFilter, { skip: 0, limit: 500 }),
       this.platformRepository.listProductFamilies({ status: "active" }, { skip: 0, limit: 500 }),
       this.platformRepository.listProductVariants({ status: "active" }, { skip: 0, limit: 500 }),
-      this.platformRepository.listHsnCodes(visibleFilter, { skip: 0, limit: 1000 }),
+      this.platformRepository.listHsnCodes(reviewableCatalogFilter, { skip: 0, limit: 1000 }),
       this.platformRepository.listAllProductOptions(activeApprovedFilter),
       includeOptionValues
         ? this.platformRepository.listAllProductOptionValues(activeApprovedFilter)
