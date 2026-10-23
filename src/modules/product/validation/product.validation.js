@@ -14,8 +14,13 @@ const {
 
 const optionalString = () => Joi.string().trim().allow("", null);
 const productTitle = () => Joi.string().trim().min(3).max(200)
-  .pattern(/\p{L}/u)
-  .messages({ "string.pattern.base": "Product name must contain at least one letter." });
+  .pattern(/\p{L}/u, "letter")
+  .pattern(/^[\p{L}\p{N}][\p{L}\p{M}\p{N} &/()%\-]*$/u, "format")
+  .pattern(/ {2,}/u, { invert: true, name: "repeated spaces" })
+  .messages({
+    "string.pattern.name": "Product name must start with a letter or number, contain at least one letter, and use only letters, numbers, spaces and & - / ( ) %.",
+    "string.pattern.invert.name": "Product name cannot contain repeated spaces."
+  });
 const optionalPositiveNumber = () => Joi.number().positive().allow(null).empty("");
 const optionalNonNegativeInteger = () => Joi.number().integer().min(0).allow(null).empty("");
 const optionalNonNegativeNumber = () => Joi.number().min(0).allow(null).empty("");
@@ -43,22 +48,7 @@ const skuSchema = Joi.string()
   .max(64)
   .pattern(/^[A-Za-z0-9][A-Za-z0-9._/-]{1,62}[A-Za-z0-9]$/)
   .required();
-const productTitleSchema = Joi.string()
-  .trim()
-  .min(3)
-  .max(200)
-  .custom((value, helpers) => {
-    if (!/\p{L}/u.test(value)) {
-      return helpers.message({ custom: "Product name must contain a letter" });
-    }
-    if (/[\u0000-\u001F\u007F-\u009F]/u.test(value)) {
-      return helpers.message({ custom: "Product name contains invalid characters" });
-    }
-    if (/\s{2,}/u.test(value)) {
-      return helpers.message({ custom: "Product name cannot contain repeated spaces" });
-    }
-    return value;
-  });
+const productTitleSchema = productTitle();
 const productDescriptionSchema = Joi.string().custom((value, helpers) => {
   const visibleText = value
     .replace(/<[^>]*>/g, "")

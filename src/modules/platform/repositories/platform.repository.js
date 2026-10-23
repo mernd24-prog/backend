@@ -549,8 +549,8 @@ class PlatformRepository {
     return PlatformBrandModel.create(payload);
   }
 
-  async updateBrand(brandId, payload) {
-    return PlatformBrandModel.findByIdAndUpdate(brandId, payload, { new: true });
+  async updateBrand(brandId, payload, conditions = {}) {
+    return PlatformBrandModel.findOneAndUpdate({ ...conditions, _id: brandId }, payload, { new: true });
   }
 
   async getBrand(brandId) {

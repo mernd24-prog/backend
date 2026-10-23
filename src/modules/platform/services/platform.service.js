@@ -1761,7 +1761,7 @@ class PlatformService {
     if (!item) throw AppError.notFound("Brand submission");
     const sellerId = String(actor.ownerSellerId || actor.userId || actor.sub || "");
     if (String(item.submittedBySellerId || "") !== sellerId) throw AppError.ownershipDenied();
-    if (item.approvalStatus !== "rejected") throw new AppError("Only rejected brand submissions can be resubmitted", 400);
+    if (!["pending", "rejected"].includes(item.approvalStatus)) throw new AppError("Only pending or rejected brand submissions can be updated", 400);
     if (payload.name && String(payload.name).trim().toLowerCase() !== String(item.name).trim().toLowerCase()) {
       await this.ensureBrandNameAvailable(payload.name, brandId);
     }
@@ -1774,7 +1774,8 @@ class PlatformService {
       reviewedBy: "",
       reviewedAt: null,
       submittedByUserId: String(actor.userId || actor.sub || ""),
-    });
+    }, { submittedBySellerId: sellerId, approvalStatus: { $in: ["pending", "rejected"] } });
+    if (!updated) throw new AppError("Brand status changed. Refresh before editing again.", 409);
     this.invalidateCatalogCaches();
     auditService.update(req, { module: "brands", entityId: brandId, entityType: "Brand resubmission", oldData: item, newData: updated });
     return updated;

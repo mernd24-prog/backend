@@ -2518,7 +2518,21 @@ class ProductService {
     }
     this._invalidateProductCache();
 
+    await this.notifyAdminOfSellerProduct(product, actor, "created");
     return product;
+  }
+
+  async notifyAdminOfSellerProduct(product, actor, action) {
+    if (!isSellerRole(actor)) return;
+    await eventPublisher.publish(makeEvent(DOMAIN_EVENTS.PRODUCT_SUBMITTED_V1, {
+      productId: String(product._id || product.id),
+      sellerId: String(product.sellerId || actor.ownerSellerId || actor.userId),
+      productName: product.title,
+      action,
+      status: product.status,
+      approvalStatus: product.approvalStatus,
+      viewUrl: "/app/products",
+    }, { source: "product-module", aggregateId: String(product._id || product.id) }));
   }
 
   // ─── Update ───────────────────────────────────────────────────────────────
@@ -2815,6 +2829,7 @@ class ProductService {
     }
     this._invalidateProductCache();
 
+    await this.notifyAdminOfSellerProduct(updatedProduct, actor, "updated");
     return updatedProduct;
   }
 

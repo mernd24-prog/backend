@@ -121,6 +121,14 @@ class FileUploadService {
     }
 
     const moduleName = sanitizeSegment(options.moduleName, "default");
+    if (moduleName.toLowerCase() === "brands") {
+      if (!["image/jpeg", "image/png", "image/webp"].includes(file.mimetype)) {
+        throw new AppError("Brand logo must be JPG, PNG, or WEBP", 400);
+      }
+      if (!file.size || file.size > 5 * 1024 * 1024) {
+        throw new AppError("Brand logo must be a non-empty image up to 5MB", 400);
+      }
+    }
     if (
       file.mimetype === SVG_IMAGE_MIME_TYPE &&
       !SVG_IMAGE_MODULES.has(moduleName)

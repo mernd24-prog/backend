@@ -7,6 +7,7 @@ const { eventPublisher } = require("../../../infrastructure/events/event-publish
 const { NotificationPreferenceModel } = require("../models/notification-preference.model");
 const { ROLES } = require("../../../shared/constants/roles");
 const { UserModel } = require("../../user/models/user.model");
+const { SellerOrganizationRepository } = require("../../seller/repositories/seller-organization.repository");
 const { ORDER_STATUS, PAYMENT_PROVIDER, PAYMENT_STATUS } = require("../../../shared/domain/commerce-constants");
 const { env } = require("../../../config/env");
 const { renderEmailTemplate } = require("./email-template-catalog");
@@ -214,7 +215,7 @@ class NotificationService {
           recipientType: "admin",
           adminName: admin.profile?.firstName || admin.email || "",
           sellerName,
-          legalBusinessName: businessName,
+          legalBusinessName: enrichedPayload.legalBusinessName || "Not provided",
           targetType: "seller_onboarding",
           viewUrl: `/app/seller-organizations?sellerId=${encodeURIComponent(enrichedPayload.sellerId || "")}`,
         };
@@ -293,7 +294,7 @@ class NotificationService {
           recipientType: "admin",
           adminName: admin.profile?.firstName || admin.email || "",
           sellerName,
-          legalBusinessName: businessName,
+          legalBusinessName: enrichedPayload.legalBusinessName || "Not provided",
           targetType: "seller_onboarding",
           viewUrl: `/app/seller-organizations?sellerId=${encodeURIComponent(enrichedPayload.sellerId || "")}`,
         };
@@ -386,6 +387,8 @@ class NotificationService {
 
     const profile = seller.profile || {};
     const sellerProfile = seller.sellerProfile || {};
+    const organizations = new SellerOrganizationRepository();
+    const organization = payload.legalBusinessName ? null : await organizations.findDefaultBySeller(sellerId);
     const sellerName = [profile.firstName, profile.lastName].filter(Boolean).join(" ").trim() ||
       sellerProfile.primaryContactName || payload.sellerName || payload.legalName || "Seller";
 
@@ -396,7 +399,7 @@ class NotificationService {
       sellerEmail: payload.sellerEmail || seller.email,
       phone: payload.phone || seller.phone,
       sellerPhone: payload.sellerPhone || seller.phone,
-      legalBusinessName: payload.legalBusinessName || sellerProfile.legalBusinessName || sellerProfile.businessName,
+      legalBusinessName: payload.legalBusinessName || organization?.legalBusinessName || sellerProfile.legalBusinessName || sellerProfile.businessName,
       storeDisplayName: payload.storeDisplayName || sellerProfile.displayName || sellerProfile.storeDisplayName,
       businessType: payload.businessType || sellerProfile.businessType,
       gstin: payload.gstin || sellerProfile.gstNumber,
@@ -612,6 +615,21 @@ class NotificationService {
   }
 
   registerProductSubscribers() {
+    eventBus.subscribe(DOMAIN_EVENTS.PRODUCT_SUBMITTED_V1, async (event) => {
+      const admins = await this.findAdminRecipients();
+      const action = event.payload.action === "updated" ? "updated" : "added";
+      const subject = action === "updated" ? "Seller Product Updated — Review Required" : "New Seller Product — Approval Required";
+      const message = `A seller ${action} ${event.payload.productName || "a product"}. Please review the product details.`;
+      await Promise.all(admins.map(async (admin) => {
+        const adminId = String(admin._id || admin.id);
+        const payload = { ...event.payload, eventName: event.eventName, eventId: event.id,
+          recipientType: "admin", targetType: "product", templateKey: "product_submitted_admin" };
+        await this.createNotification({ userId: adminId, channel: "in_app", subject, template: message,
+          payload, status: "queued", idempotencyKey: `${event.eventName}:${event.id}:${adminId}:admin:in_app` });
+        await this.queueEmailForUser(adminId, { subject, message, eventName: event.eventName,
+          eventId: event.id, recipientType: "admin", payload });
+      }));
+    });
     [
       [DOMAIN_EVENTS.PRODUCT_APPROVED_V1, "Product Approved", "Your product has been approved.", "product_approved"],
       [DOMAIN_EVENTS.PRODUCT_REJECTED_V1, "Product Needs Changes", "Your product was not approved. Please review the requested changes.", "product_rejected"],

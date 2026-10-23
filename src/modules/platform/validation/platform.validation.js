@@ -8,16 +8,20 @@ const listQuery = v.listQuery();
 const brandName = () =>
   Joi.string()
     .trim()
-    .min(3)
-    .max(200)
-    .pattern(/[\p{L}\p{N}]/u)
+    .replace(/ +/g, " ")
+    .min(2)
+    .max(50)
+    .pattern(/^[\p{L}\p{N}][\p{L}\p{M}\p{N} &.'’\-]*$/u)
     .messages({
       "string.empty": "Brand name is required.",
-      "string.min": "Brand name must contain at least 3 characters.",
-      "string.max": "Brand name cannot exceed 200 characters.",
-      "string.pattern.base": "Brand name must contain at least one letter or number.",
+      "string.min": "Brand name must contain at least 2 characters.",
+      "string.max": "Brand name cannot exceed 50 characters.",
+      "string.pattern.base": "Brand name must start with a letter or number and use only letters, numbers, spaces and & - . apostrophes.",
       "any.required": "Brand name is required.",
     });
+
+const brandDescription = () => Joi.string().trim().min(3).max(1000).allow("");
+const brandLogoFields = ["logo", "logoUrl", "thumbnails", "imageUrl"];
 
 const categoryAttributeDefinitionSchema = Joi.object({
   platformOptionId: Joi.string().trim().allow("", null),
@@ -603,13 +607,18 @@ const createBrandSchema = Joi.object({
   body: Joi.object({
     name:        brandName().required(),
     slug:        v.slug().optional(),
-    description: v.text({ max: 1000 }),
+    description: brandDescription(),
     logo:        v.url({ required: false }),
     logoUrl:     v.url({ required: false }),
     thumbnails:  v.url({ required: false }),
     imageUrl:    v.url({ required: false }),
     active:      Joi.boolean().default(true),
     sortOrder:   Joi.number().integer().default(0),
+  }).custom((value, helpers) => {
+    if (!brandLogoFields.some((key) => String(value[key] || "").trim())) {
+      return helpers.message({ custom: "Please upload a brand logo" });
+    }
+    return value;
   }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),
@@ -619,7 +628,7 @@ const updateBrandSchema = Joi.object({
   body: Joi.object({
     name: brandName().optional(),
     slug: Joi.string().trim().allow(""),
-    description: Joi.string().trim().allow(""),
+    description: brandDescription(),
     logo: Joi.string().allow(""),
     logoUrl: Joi.string().allow(""),
     thumbnails: Joi.string().allow(""),
@@ -648,11 +657,16 @@ const sellerBrandSubmissionSchema = Joi.object({
   body: Joi.object({
     name: brandName().required(),
     slug: v.slug().optional(),
-    description: v.text({ max: 1000 }),
+    description: brandDescription(),
     logo: v.url({ required: false }),
     logoUrl: v.url({ required: false }),
     thumbnails: v.url({ required: false }),
     imageUrl: v.url({ required: false }),
+  }).custom((value, helpers) => {
+    if (!brandLogoFields.some((key) => String(value[key] || "").trim())) {
+      return helpers.message({ custom: "Please upload a brand logo" });
+    }
+    return value;
   }).required(),
   query: Joi.object({}).required(),
   params: Joi.object({}).required(),

@@ -336,6 +336,10 @@ class SupportService {
       throw new AppError("Support query not found", 404);
     }
 
+    if (["resolved", "closed"].includes(existing.status)) {
+      throw new AppError("This ticket is resolved or closed. Please create a new support ticket.", 400);
+    }
+
     const message = String(payload.message || "").trim();
     if (!message) {
       throw new AppError("Message is required", 400);
@@ -348,7 +352,7 @@ class SupportService {
       senderName: this.getRequesterName(auth.user || {}, userType),
     });
     if (!updated) {
-      throw new AppError("Support query not found", 404);
+      throw new AppError("Ticket is no longer available for replies. Refresh its status.", 409);
     }
     return updated;
   }

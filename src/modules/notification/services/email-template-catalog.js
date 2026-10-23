@@ -183,7 +183,7 @@ const sellerOnboardingRows = (payload = {}) => {
   const submittedAt = payload.submittedAt ? new Date(payload.submittedAt) : null;
   return compactRows([
     row("Seller name", firstValue(payload.sellerName, payload.legalName)),
-    row("Legal business name", firstValue(payload.legalBusinessName, payload.storeDisplayName)),
+    row("Legal business name", firstValue(payload.legalBusinessName, "Not provided")),
     row("Store name", payload.storeDisplayName !== payload.legalBusinessName ? payload.storeDisplayName : ""),
     row("Business type", humanize(payload.businessType)),
     row("Email", firstValue(payload.sellerEmail, payload.email)),
@@ -460,6 +460,18 @@ const EMAIL_TEMPLATE_DEFINITIONS = {
     rows: shipmentRows,
     ctaText: "View details",
     tone: "alert",
+  },
+  product_submitted_admin: {
+    subject: "Seller Product — Review Required",
+    title: "Seller Product — Review Required",
+    intro: ({ action, productName }) => `A seller ${action === "updated" ? "updated" : "added"} ${productName || "a product"}. Please review the product details.`,
+    rows: (payload) => compactRows([
+      row("Product", payload.productName),
+      row("Action", humanize(payload.action)),
+      row("Status", humanize(payload.status)),
+      row("Approval status", humanize(payload.approvalStatus)),
+    ]),
+    ctaText: "Review product",
   },
   product_approved: {
     subject: "Product Approved",

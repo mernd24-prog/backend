@@ -130,7 +130,7 @@ class SupportRepository {
 
   async addReply(queryId, payload = {}) {
     const existing = await this.findByQueryId(queryId);
-    if (!existing) return null;
+    if (!existing || ["resolved", "closed"].includes(existing.status)) return null;
 
     const metadata = existing.metadata || {};
     const messages = Array.isArray(metadata.messages) ? metadata.messages : [];
@@ -148,6 +148,7 @@ class SupportRepository {
 
     const [row] = await knex(TABLE_NAME)
       .where("query_id", String(queryId || "").trim())
+      .whereNotIn("status", ["resolved", "closed"])
       .update({
         metadata: this.jsonb({
           ...metadata,
