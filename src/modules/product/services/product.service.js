@@ -74,6 +74,23 @@ const {
 // Temporarily disabled: sellers should update approved products directly.
 // Set to true when the product-revision approval workflow is reintroduced.
 const PRODUCT_REVISIONS_ENABLED = false;
+const normalizeHttpUrl = (value) => {
+  try {
+    const url = new URL(String(value || "").trim());
+    return ["http:", "https:"].includes(url.protocol) ? url.href : null;
+  } catch {
+    return null;
+  }
+};
+const countDecimalPlaces = (value) => {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/.test(text)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const [coefficient, exponentText = "0"] = text.split("e");
+  const fractionalDigits = coefficient.split(".")[1]?.length || 0;
+  return Math.max(0, fractionalDigits - Number(exponentText));
+};
 
 // A seller is a user account; the organization is the seller's business/store.
 // Keep these identities separate anywhere product responses expose sellerName.
@@ -384,18 +401,103 @@ class ProductService {
   validateDynamicAttributes(attributeSchema = [], attributes = {}) {
     const normalizedAttributes =
       attributes instanceof Map ? Object.fromEntries(attributes) : attributes;
+    const normalizedKeys = new Set();
+    for (const [key, value] of Object.entries(normalizedAttributes || {})) {
+      const normalizedKey = String(key || "").trim().toLowerCase();
+      if (!normalizedKey || normalizedKeys.has(normalizedKey)) {
+        throw new AppError("Attribute names must be unique", 400);
+      }
+      normalizedKeys.add(normalizedKey);
+      if (value === undefined || value === null || value === "") continue;
+      if (typeof value === "string" && value.length > 5000) {
+        throw new AppError(`Attribute '${key}' exceeds the maximum length`, 400);
+      }
+    }
+
     for (const field of attributeSchema) {
       const value = normalizedAttributes?.[field.key];
+      const isEmpty =
+        value === undefined ||
+        value === null ||
+        value === "" ||
+        (Array.isArray(value) && value.length === 0);
       if (
         field.required &&
-        (value === undefined || value === null || value === "")
+        isEmpty
       ) {
         throw new AppError(`Attribute '${field.key}' is required`, 400);
       }
-      if (value === undefined || value === null) continue;
-      if (field.type === "number" && Number.isNaN(Number(value))) {
-        throw new AppError(`Attribute '${field.key}' must be a number`, 400);
+      if (field.type === "multi_select" && Array.isArray(value)) {
+        if (
+          field.minSelections !== undefined && field.minSelections !== null &&
+          value.length < Number(field.minSelections)
+        ) {
+          throw new AppError(`Attribute '${field.key}' has too few selections`, 400);
+        }
+        if (
+          field.maxSelections !== undefined && field.maxSelections !== null &&
+          value.length > Number(field.maxSelections)
+        ) {
+          throw new AppError(`Attribute '${field.key}' has too many selections`, 400);
+        }
       }
+      if (isEmpty) continue;
+
+      if (["text", "select"].includes(field.type)) {
+        const text = String(value);
+        const minLength = Number(field.minLength ?? 0);
+        const maxLength = Number(field.maxLength ?? 5000);
+        if (text.length < minLength || text.length > maxLength) {
+          throw new AppError(
+            `Attribute '${field.key}' must be between ${minLength} and ${maxLength} characters`,
+            400,
+          );
+        }
+        if (field.pattern) {
+          let pattern;
+          try {
+            pattern = new RegExp(field.pattern);
+          } catch {
+            throw new AppError(`Attribute '${field.key}' has an invalid pattern`, 400);
+          }
+          if (!pattern.test(text)) {
+            throw new AppError(`Attribute '${field.key}' has an invalid format`, 400);
+          }
+        }
+      }
+
+      if (field.type === "number") {
+        const number = Number(value);
+        if (!Number.isFinite(number)) {
+          throw new AppError(`Attribute '${field.key}' must be a number`, 400);
+        }
+        if (field.min !== undefined && field.min !== null && field.min !== "" && number < Number(field.min)) {
+          throw new AppError(`Attribute '${field.key}' is below the minimum`, 400);
+        }
+        if (field.max !== undefined && field.max !== null && field.max !== "" && number > Number(field.max)) {
+          throw new AppError(`Attribute '${field.key}' exceeds the maximum`, 400);
+        }
+        if (field.precision !== undefined && field.precision !== null) {
+          const decimals = countDecimalPlaces(value);
+          if (decimals > Number(field.precision)) {
+            throw new AppError(`Attribute '${field.key}' has too many decimal places`, 400);
+          }
+        }
+      }
+
+      if (field.type === "date") {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+          throw new AppError(`Attribute '${field.key}' must be a valid date`, 400);
+        }
+        if (field.min && date < new Date(field.min)) {
+          throw new AppError(`Attribute '${field.key}' is before the allowed date range`, 400);
+        }
+        if (field.max && date > new Date(field.max)) {
+          throw new AppError(`Attribute '${field.key}' is after the allowed date range`, 400);
+        }
+      }
+
       if (field.type === "boolean" && typeof value !== "boolean") {
         throw new AppError(`Attribute '${field.key}' must be boolean`, 400);
       }
@@ -410,6 +512,9 @@ class ProductService {
       if (field.type === "multi_select") {
         if (!Array.isArray(value))
           throw new AppError(`Attribute '${field.key}' must be an array`, 400);
+        if (new Set(value.map((item) => String(item).trim().toLowerCase())).size !== value.length) {
+          throw new AppError(`Attribute '${field.key}' contains duplicate selections`, 400);
+        }
         if (Array.isArray(field.options) && field.options.length) {
           const bad = value.find(
             (item) => !field.options.includes(String(item)),
@@ -436,19 +541,11 @@ class ProductService {
 
   normalizeProductOptions(options = []) {
     if (!Array.isArray(options)) return [];
-    return options
-      .map((option, index) => {
+    return options.map((option, index) => {
         const name = String(option?.name || "").trim();
         const slug = this.normalizeVariantAxis(option);
-        const values = Array.from(
-          new Set(
-            (Array.isArray(option?.values) ? option.values : [])
-              .map((value) => String(value || "").trim())
-              .filter(Boolean),
-          ),
-        );
-
-        if (!name || !values.length) return null;
+        const values = (Array.isArray(option?.values) ? option.values : [])
+          .map((value) => String(value ?? "").trim());
 
         return {
           ...option,
@@ -457,8 +554,7 @@ class ProductService {
           values,
           sortOrder: Number(option.sortOrder) || index,
         };
-      })
-      .filter(Boolean);
+      });
   }
 
   normalizeVariantAttributes(attributes = {}) {
@@ -471,8 +567,26 @@ class ProductService {
     }, {});
   }
 
-  validateVariants(variants = [], options = []) {
+  validateVariants(variants = [], options = [], { activating = false } = {}) {
     const skus = new Set();
+    const optionNames = new Set();
+    for (const option of options || []) {
+      const name = String(option?.name || "").trim();
+      const normalizedName = name.toLowerCase();
+      const values = Array.isArray(option?.values) ? option.values : [];
+      const normalizedValues = values.map((value) => String(value || "").trim().toLowerCase());
+      if (name.length < 2 || name.length > 50 || optionNames.has(normalizedName)) {
+        throw new AppError("Variant option names must be unique and 2–50 characters", 400);
+      }
+      if (
+        !values.length ||
+        values.some((value) => !String(value || "").trim() || String(value).trim().length > 80) ||
+        new Set(normalizedValues).size !== normalizedValues.length
+      ) {
+        throw new AppError("Variant option values must be unique and 1–80 characters", 400);
+      }
+      optionNames.add(normalizedName);
+    }
     const optionMap = new Map(
       options.map((option) => [
         this.normalizeVariantAxis(option),
@@ -481,18 +595,98 @@ class ProductService {
     );
 
     for (const variant of variants) {
-      if (!variant?.sku) continue;
-      const normalizedSku = String(variant.sku).trim().toUpperCase();
+      const sku = String(variant?.sku || "").trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{1,62}[A-Za-z0-9]$/.test(sku)) {
+        throw new AppError("Variant SKU must be 3–64 letters, numbers, hyphens, underscores, periods, or slashes, and start and end with a letter or number", 400);
+      }
+      const normalizedSku = sku.toLowerCase();
       if (skus.has(normalizedSku))
         throw new AppError("Variant SKU must be unique", 400);
       skus.add(normalizedSku);
-      if (variant.stock !== undefined && Number(variant.stock) < 0) {
-        throw new AppError("Variant stock must be non-negative", 400);
+      const moneyFields = ["price", "mrp", "salePrice"];
+      for (const field of moneyFields) {
+        const value = variant[field];
+        const number = Number(value);
+        const decimals = countDecimalPlaces(value);
+        if (!Number.isFinite(number) || number <= 0 || number > 999999999.99 || decimals > 2) {
+          throw new AppError(`Variant ${field} must be positive, within the allowed maximum, and use at most two decimal places`, 400);
+        }
+      }
+      if (Number(variant.price) > Number(variant.mrp)) {
+        throw new AppError("Variant price cannot be greater than MRP", 400);
+      }
+      if (Number(variant.salePrice) > Number(variant.price)) {
+        throw new AppError("Variant sale price cannot be greater than price", 400);
+      }
+      if (variant.gstRate !== undefined && variant.gstRate !== null && variant.gstRate !== "") {
+        const gstRate = Number(variant.gstRate);
+        const decimals = countDecimalPlaces(variant.gstRate);
+        if (!Number.isFinite(gstRate) || gstRate < 0 || gstRate > 100 || decimals > 2) {
+          throw new AppError("Variant GST rate must be between 0 and 100 with at most two decimal places", 400);
+        }
+      }
+      const variantTitle = String(variant.title || "").trim();
+      const shortDescription = String(variant.shortDescription || "").trim();
+      const description = String(variant.description || "").trim();
+      if (variantTitle.length > 100) {
+        throw new AppError("Variant title must be 100 characters or fewer", 400);
+      }
+      if (/[\u0000-\u001F\u007F-\u009F]/u.test(variantTitle)) {
+        throw new AppError("Variant title contains invalid characters", 400);
+      }
+      if (shortDescription.length > 500) {
+        throw new AppError("Variant short description must be 500 characters or fewer", 400);
+      }
+      if (description && (description.length < 10 || description.length > 5000)) {
+        throw new AppError("Variant description must be between 10 and 5000 characters", 400);
+      }
+      const barcode = String(variant.barcode || "").trim();
+      if (barcode && !/^\d{8,14}$/.test(barcode)) {
+        throw new AppError("Variant barcode must contain 8–14 digits", 400);
+      }
+      const stock = Number(variant.stock ?? 0);
+      const reservedStock = Number(variant.reservedStock ?? 0);
+      if (!Number.isInteger(stock) || stock < 0 || stock > 1000000000) {
+        throw new AppError("Variant stock must be a whole number from 0 to 1000000000", 400);
+      }
+      if (!Number.isInteger(reservedStock) || reservedStock < 0 || reservedStock > stock) {
+        throw new AppError("Reserved stock must be a whole number from 0 to stock", 400);
+      }
+      if (!["active", "inactive", "out_of_stock"].includes(variant.status || "active")) {
+        throw new AppError("Variant status is invalid", 400);
+      }
+      if (variant.weight !== undefined && variant.weight !== null && variant.weight !== "") {
+        const weight = Number(variant.weight);
+        if (!Number.isFinite(weight) || weight <= 0 || weight > 1000000 || !variant.weightUnit) {
+          throw new AppError("Variant weight must be positive and include a unit", 400);
+        }
+      }
+      const dimensions = variant.dimensions || {};
+      const dimensionValues = [dimensions.length, dimensions.width, dimensions.height];
+      if (dimensionValues.some((value) => value !== undefined && value !== null && value !== "")) {
+        if (
+          dimensionValues.some((value) => value !== undefined && value !== null && value !== "" &&
+            (!Number.isFinite(Number(value)) || Number(value) <= 0 || Number(value) > 1000000)) ||
+          !dimensions.unit
+        ) {
+          throw new AppError("Variant dimensions must be positive and include a unit", 400);
+        }
+      }
+      if (!Array.isArray(variant.images) || variant.images.length === 0) {
+        throw new AppError("Every variant must have at least one image", 400);
       }
 
       const attributes = this.normalizeVariantAttributes(
         variant.attributes || {},
       );
+      for (const [key, value] of Object.entries(attributes)) {
+        if (key.length < 2 || key.length > 50) {
+          throw new AppError("Variant attribute names must be 2–50 characters", 400);
+        }
+        if (typeof value !== "string" || value.trim().length < 1 || value.trim().length > 80) {
+          throw new AppError("Variant attribute values must be 1–80 characters", 400);
+        }
+      }
       if (!optionMap.size) continue;
       for (const [axis, value] of Object.entries(attributes)) {
         if (!optionMap.has(axis)) {
@@ -509,6 +703,107 @@ class ProductService {
         }
       }
     }
+
+    const defaultVariants = variants.filter((variant) => variant.isDefault === true);
+    if (defaultVariants.length !== 1) {
+      throw new AppError("Exactly one variant must be marked as the default", 400);
+    }
+    if (activating && !variants.some((variant) => variant.status === "active")) {
+      throw new AppError("At least one variant must be active before activating the product", 400);
+    }
+  }
+
+  async validateProductSkusAndImages(payload = {}, sellerId, existingProduct = null) {
+    const variants = Array.isArray(payload.variants) && payload.variants.length
+      ? payload.variants
+      : Array.isArray(existingProduct?.variants)
+        ? existingProduct.variants
+        : [];
+    const commonImages = Array.isArray(payload.commonImages)
+      ? payload.commonImages
+      : Array.isArray(existingProduct?.commonImages)
+        ? existingProduct.commonImages
+        : [];
+    const normalizedCommonImages = commonImages
+      .map((image) => this.normalizeImageUrl(image))
+      .filter(Boolean);
+    const imageSet = new Set();
+    for (const image of normalizedCommonImages) {
+      const normalized = normalizeHttpUrl(image);
+      if (!normalized) {
+        throw new AppError("Product images must use a valid HTTP or HTTPS URL", 400);
+      }
+      if (imageSet.has(normalized)) {
+        throw new AppError("Product images must not contain duplicates", 400);
+      }
+      imageSet.add(normalized);
+    }
+
+    for (const variant of variants) {
+      const sku = String(variant?.sku || "").trim();
+      const normalizedSku = sku.toLowerCase();
+      variant.sku = sku;
+      variant.skuNormalized = normalizedSku;
+      const variantImages = (variant.images || [])
+        .map((image) => this.normalizeImageUrl(image))
+        .filter(Boolean);
+      if (!variantImages.length) {
+        throw new AppError("Every variant must have at least one image", 400);
+      }
+      const seenImages = new Set();
+      for (const image of variantImages) {
+        const normalizedImage = normalizeHttpUrl(image);
+        if (!normalizedImage) {
+          throw new AppError("Variant images must use a valid HTTP or HTTPS URL", 400);
+        }
+        if (seenImages.has(normalizedImage)) {
+          throw new AppError("Variant images must not contain duplicates", 400);
+        }
+        seenImages.add(normalizedImage);
+      }
+
+      const duplicate = await this.productRepository.findOne({
+        sellerId: String(sellerId),
+        _id: existingProduct?._id ? { $ne: existingProduct._id } : { $exists: true },
+        $or: [
+          { "variants.skuNormalized": normalizedSku },
+          { "variants.sku": new RegExp(`^${escapeRegExp(sku)}$`, "i") },
+          { sku: new RegExp(`^${escapeRegExp(sku)}$`, "i") },
+        ],
+      });
+      if (duplicate) {
+        throw new AppError(`SKU '${sku}' is already used by another product for this seller`, 409);
+      }
+    }
+  }
+
+  normalizeAndValidateManualAttributes(payload = {}, enabled = payload.metadata?.attributesManual) {
+    if (enabled !== true) return payload;
+    if (!Object.prototype.hasOwnProperty.call(payload, "attributes")) return payload;
+    const source =
+      payload.attributes instanceof Map
+        ? Object.fromEntries(payload.attributes)
+        : payload.attributes || {};
+    const normalized = {};
+    const seen = new Set();
+    for (const [rawKey, rawValue] of Object.entries(source)) {
+      const key = String(rawKey || "").trim();
+      const value = typeof rawValue === "string" ? rawValue.trim() : rawValue;
+      if (!key || value === undefined || value === null || value === "") continue;
+      const keyNormalized = key.toLowerCase();
+      if (seen.has(keyNormalized)) {
+        throw new AppError("Manual attribute keys must be unique", 400);
+      }
+      if (key.length < 2 || key.length > 50) {
+        throw new AppError("Manual attribute keys must be 2–50 characters", 400);
+      }
+      if (typeof value === "string" && value.length > 500) {
+        throw new AppError("Manual attribute values must be 500 characters or fewer", 400);
+      }
+      seen.add(keyNormalized);
+      normalized[key] = value;
+    }
+    return { ...payload, attributes: normalized };
   }
 
   async assertGlobalSkuUniqueness(payload = {}, excludeProductId = null) {
@@ -744,9 +1039,7 @@ class ProductService {
         }
       }
 
-      if (!next.sku)
-        next.sku = `${payload.sku || payload.title || "SKU"}-${index + 1}`;
-      next.sku = String(next.sku).trim().toUpperCase();
+      if (!next.sku) next.sku = `SKU-${Date.now()}-${index + 1}`;
       next.price = this.toVariantNumber(
         next.price,
         hasVariantPayload ? 0 : this.toVariantNumber(payload.price, 0),
@@ -833,8 +1126,21 @@ class ProductService {
     const variants = explicitVariants.length
       ? explicitVariants.map((variant, index) => {
           const plainVariant = this.toPlainVariant(variant);
+          const rawAttributes =
+            plainVariant.attributes instanceof Map
+              ? Object.fromEntries(plainVariant.attributes)
+              : plainVariant.attributes || {};
+          const normalizedAttributeKeys = Object.keys(rawAttributes).map((key) =>
+            this.normalizeVariantAxis({ name: key }),
+          );
+          if (
+            normalizedAttributeKeys.some((key) => !key) ||
+            new Set(normalizedAttributeKeys).size !== normalizedAttributeKeys.length
+          ) {
+            throw new AppError("Variant attribute names must be unique and valid", 400);
+          }
           const attributes = this.normalizeVariantAttributes(
-            plainVariant.attributes || {},
+            rawAttributes,
           );
           return {
             ...plainVariant,
@@ -1019,7 +1325,11 @@ class ProductService {
     }
 
     const hsnRule = await this.platformRepository.getHsnCode(hsnCode);
-    if (!hsnRule || hsnRule.active === false) {
+    if (
+      !hsnRule ||
+      hsnRule.active === false ||
+      ["pending", "rejected"].includes(hsnRule.approvalStatus)
+    ) {
       throw new AppError(
         "HSN code must be an active approved master record",
         400,
@@ -1739,7 +2049,12 @@ class ProductService {
       const family = await this.platformRepository.getProductFamily(
         payload.productFamilyCode,
       );
-      if (!family || family.status === "inactive" || family.active === false) {
+      if (
+        !family ||
+        family.status === "inactive" ||
+        family.active === false ||
+        ["pending", "rejected"].includes(family.approvalStatus)
+      ) {
         throw new AppError(
           "Product family must be an active master record",
           400,
@@ -2115,6 +2430,7 @@ class ProductService {
       forceSellerShipping: isSeller,
     });
     payload = await this.normalizeProductCompliance(payload, actor);
+    payload = this.normalizeAndValidateManualAttributes(payload);
     const productType =
       payload.hasVariants === true || (payload.variants || []).length > 0
         ? PRODUCT_TYPE.VARIABLE
@@ -2122,14 +2438,23 @@ class ProductService {
 
     const categoryKey = payload.categoryId || payload.category;
     const category = await this.platformRepository.getCategory(categoryKey);
-    if (!category) throw new AppError("Category not found", 400);
+    if (
+      !category ||
+      category.active === false ||
+      category.approvalStatus === "pending" ||
+      category.approvalStatus === "rejected"
+    ) {
+      throw new AppError("Category must be an active approved master record", 400);
+    }
 
     this.validateDynamicAttributes(
       this.normalizeCategoryAttributes(category),
       payload.attributes || {},
     );
-    this.validateVariants(payload.variants || [], payload.options || []);
-    await this.assertGlobalSkuUniqueness(payload);
+    this.validateVariants(payload.variants || [], payload.options || [], {
+      activating: payload.status === PRODUCT_STATUS.ACTIVE,
+    });
+    await this.validateProductSkusAndImages(payload, sellerId);
     this.validatePricing(payload);
     await this.validateProductReferences(payload, actor);
     this._validateProductType(productType, payload);
@@ -2263,6 +2588,11 @@ class ProductService {
       existingProduct.warranty,
       { forceSellerShipping: isSellerRole(actor) },
     );
+    payload = this.normalizeAndValidateManualAttributes(
+      payload,
+      payload.metadata?.attributesManual ??
+        existingProduct.metadata?.attributesManual,
+    );
     payload = await this.normalizeProductCompliance(
       payload,
       actor,
@@ -2276,7 +2606,14 @@ class ProductService {
       existingProduct.categoryId ||
       existingProduct.category;
     const category = await this.platformRepository.getCategory(categoryKey);
-    if (!category) throw new AppError("Category not found", 400);
+    if (
+      !category ||
+      category.active === false ||
+      category.approvalStatus === "pending" ||
+      category.approvalStatus === "rejected"
+    ) {
+      throw new AppError("Category must be an active approved master record", 400);
+    }
 
     const nextAttributes =
       payload.attributes || existingProduct.attributes || {};
@@ -2288,6 +2625,15 @@ class ProductService {
     this.validateVariants(
       payload.variants || existingProduct.variants || [],
       nextOptions,
+      {
+        activating:
+          (payload.status || existingProduct.status) === PRODUCT_STATUS.ACTIVE,
+      },
+    );
+    await this.validateProductSkusAndImages(
+      payload,
+      existingProduct.sellerId,
+      existingProduct,
     );
     await this.assertGlobalSkuUniqueness(
       {
