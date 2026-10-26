@@ -528,9 +528,11 @@ const customerCmsFallbackPages = [
         ["Seller Policies", "/seller-policies"],
       ]),
       footerLinkSection("About SAM", [
-        ["Who We Are", "/about-us#who-we-are"],
-        ["Why Choose Us", "/about-us#why-choose-us"],
-        ["Our Values", "/about-us#our-values"],
+        ["Our Story", "/about-us#who-we-are"],
+        ["Our Philosophy", "/about-us#our-values"],
+        ["What We Are Building", "/about-us#what-we-are-building"],
+        ["Privacy Policy", "/privacy-policy"],
+        ["Cookie Policy", "/cookie-policy"],
       ]),
       footerLinkSection("Help & Contact", [
         ["Customer Support", "/support"],
@@ -538,8 +540,6 @@ const customerCmsFallbackPages = [
         ["Shipping & Delivery Policy", "/shipping-policy"],
         ["Return & Refund Policy", "/refund-policy"],
         ["Terms of Use", "/terms-of-use"],
-        ["Privacy Policy", "/privacy-policy"],
-        ["Cookie Policy", "/cookie-policy"],
         ["FAQ", "/faq"],
       ]),
       {

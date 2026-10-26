@@ -34,6 +34,7 @@ const contentPointSchema = new mongoose.Schema(
 const contentSectionSchema = new mongoose.Schema(
   {
     type: { type: String, default: "content" },
+    badge: { type: String, default: "" },
     title: { type: String, default: "" },
     description: { type: String, default: "" },
     image: { type: imageSchema, default: () => ({}) },

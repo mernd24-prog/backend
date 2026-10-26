@@ -377,6 +377,7 @@ const cmsPointSchema = Joi.object({
 
 const cmsSectionSchema = Joi.object({
   type: Joi.string().allow("").default("content"),
+  badge: Joi.string().allow("").default(""),
   title: Joi.string().allow("").default(""),
   description: Joi.string().allow("").default(""),
   image: cmsImageSchema.default({}),

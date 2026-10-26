@@ -72,18 +72,25 @@ async function seedPolicyPages() {
         sections: [
           {
             type: "about-banner",
-            title: "",
-            description: "",
+            badge: "A New Way to Experience Retail",
+            title: "A New Way to Experience Retail",
+            description:
+              "Retail is evolving. Consumers are seeking more than just products—they seek experience, authenticity, and choice.",
             image: {
-              url: "/image/png/aboutBanner.png",
-              alt: "Modern and elegant fashion banner",
+              url: "/image/png/fallback/become-a-seller/ABOUT-BANNER.png",
+              alt: "A refined retail experience with curated fashion and accessories",
               title: "About Banner",
               caption: "",
               type: "image",
             },
             gallery: [],
             points: [],
-            cta: {},
+            cta: {
+              label: "Explore Our Platform",
+              href: "#who-we-are",
+              url: "#who-we-are",
+              target: "_self",
+            },
             sortOrder: 1,
           },
         ],
@@ -1557,15 +1564,33 @@ async function seedPolicyPages() {
 
     let insertedCustomerPages = 0;
     let skippedCustomerPages = 0;
+    const updateFooterOnly = process.argv.includes(
+      "--update-footerdata",
+    );
+    const updateCustomerFallbackPages = process.argv.includes(
+      "--update-customer-fallback-pages",
+    );
 
     for (const customerPage of customerCmsFallbackPages) {
-      const result = await ContentPageModel.updateOne(
-        { slug: customerPage.slug },
-        { $setOnInsert: customerPage },
-        { upsert: true },
-      );
+      if (updateFooterOnly && customerPage.slug !== "footerdata") continue;
 
-      if (result.upsertedCount) {
+      const shouldUpdate = updateCustomerFallbackPages || updateFooterOnly;
+      const result = shouldUpdate
+        ? await ContentPageModel.findOneAndUpdate(
+            { slug: customerPage.slug },
+            customerPage,
+            { new: true, upsert: true },
+          )
+        : await ContentPageModel.updateOne(
+            { slug: customerPage.slug },
+            { $setOnInsert: customerPage },
+            { upsert: true },
+          );
+
+      if (shouldUpdate) {
+        insertedCustomerPages += 1;
+        console.log(`✅ ${customerPage.slug} updated from fallback seed`);
+      } else if (result.upsertedCount) {
         insertedCustomerPages += 1;
         console.log(`✅ ${customerPage.slug} inserted`);
       } else {
@@ -1575,7 +1600,9 @@ async function seedPolicyPages() {
     }
 
     console.log(
-      `\nCustomer fallback CMS: ${insertedCustomerPages} inserted, ${skippedCustomerPages} preserved`,
+      updateCustomerFallbackPages || updateFooterOnly
+        ? `\nCustomer fallback CMS: ${insertedCustomerPages} updated`
+        : `\nCustomer fallback CMS: ${insertedCustomerPages} inserted, ${skippedCustomerPages} preserved`,
     );
 
     console.log("\n🎉 All Policy Pages Seeded Successfully");
