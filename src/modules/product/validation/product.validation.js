@@ -14,11 +14,9 @@ const {
 
 const optionalString = () => Joi.string().trim().allow("", null);
 const productTitle = () => Joi.string().trim().min(3).max(200)
-  .pattern(/\p{L}/u, "letter")
-  .pattern(/^[\p{L}\p{N}][\p{L}\p{M}\p{N} &/()%\-]*$/u, "format")
   .pattern(/ {2,}/u, { invert: true, name: "repeated spaces" })
   .messages({
-    "string.pattern.name": "Product name must start with a letter or number, contain at least one letter, and use only letters, numbers, spaces and & - / ( ) %.",
+    "string.pattern.name": "Start with a letter or number. Only letters, numbers, spaces and & - / ( ) % : are allowed.",
     "string.pattern.invert.name": "Product name cannot contain repeated spaces."
   });
 const optionalPositiveNumber = () => Joi.number().positive().allow(null).empty("");
