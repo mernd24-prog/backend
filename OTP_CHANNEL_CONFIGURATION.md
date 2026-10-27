@@ -80,7 +80,8 @@ Each approved content-template ID belongs in its matching key. Do not reuse one 
 | Use case | Environment key | Internal template |
 |---|---|---|
 | Mobile login OTP | `DLT_TEMPLATE_LOGIN_OTP` | `LOGIN_OTP` |
-| Mobile registration OTP | `DLT_TEMPLATE_REGISTER_OTP` | `REGISTER_OTP` |
+| Customer mobile registration OTP | `DLT_TEMPLATE_REGISTER_OTP` | `REGISTER_OTP` |
+| Seller mobile registration OTP | `DLT_TEMPLATE_SELLER_REGISTER_OTP` | `SELLER_REGISTER_OTP` |
 | Forgot-password OTP | `DLT_TEMPLATE_FORGOT_PASSWORD_OTP` | `FORGOT_PASSWORD_OTP` |
 | Password-reset confirmation | `DLT_TEMPLATE_RESET_PASSWORD_OTP` | `RESET_PASSWORD_OTP` |
 | Verify mobile number | `DLT_TEMPLATE_VERIFY_MOBILE_OTP` | `VERIFY_MOBILE_OTP` |

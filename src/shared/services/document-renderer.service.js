@@ -2662,8 +2662,18 @@ renderBoxLabelPdf(document = {}) {
           : isOrderReceipt
             ? "Total paid"
             : "Grand total";
-        text(totalLabel, 355, totalY - 2, isOrderReceipt ? 9 : 10, true);
-        text(isCreditNote ? reversalMoney(amounts.customerRefundAmount) : money(total), rightEdge, totalY - 2, 11, true, "right");
+        const totalLabelSize = isOrderReceipt ? 9 : 10;
+        const totalValue = isCreditNote ? reversalMoney(amounts.customerRefundAmount) : money(total);
+        if (isCreditNote) {
+          const totalValueWidth = pdfTextWidth(totalValue, 11);
+          const totalLabelWidth = rightEdge - 355 - totalValueWidth - 10;
+          const labelLines = textBoxLines(totalLabel, 355, totalY - 2, totalLabelWidth, totalLabelSize, true, 2, 11);
+          const totalValueY = labelLines > 1 ? totalY - 13 : totalY - 2;
+          text(totalValue, rightEdge, totalValueY, 11, true, "right");
+        } else {
+          text(totalLabel, 355, totalY - 2, totalLabelSize, true);
+          text(totalValue, rightEdge, totalY - 2, 11, true, "right");
+        }
         if (isCreditNote) {
           text(`Remaining invoice balance: ${money(amounts.remainingInvoiceBalance || 0)}`, 355, totalY - 16, 7.5);
           text(`Remaining customer-paid balance: ${money(amounts.remainingCustomerBalance || 0)}`, 355, totalY - 29, 7.5);

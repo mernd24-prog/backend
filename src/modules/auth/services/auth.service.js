@@ -285,7 +285,7 @@ class AuthService {
     try {
       delivery = await sendMail({
         to: email,
-        subject: `OTP for ${this.getOtpPurposeLabel(purpose)}`,
+        subject: `OTP For ${this.getOtpPurposeLabel(purpose)}`,
         text: `Your Sam Global verification code is ${otp}. It will expire in 15 minutes. Please do not share it with anyone.`,
         html,
         type: "auth_otp",
@@ -2047,20 +2047,38 @@ class AuthService {
     const selectedOtpChannel =
       purpose === "registration" && role === ROLES.SELLER
         ? String(
-          process.env.AUTH_SELLER_REGISTRATION_OTP_CHANNEL ||
-          primaryOtpChannel,
+          process.env.AUTH_SELLER_REGISTRATION_OTP_CHANNEL || "sms",
         ).toLowerCase()
-        : primaryOtpChannel;
+        : purpose === "registration" && role === ROLES.BUYER
+          ? "sms"
+          : primaryOtpChannel;
     const useSellerRegistrationWhatsapp =
       purpose === "registration" &&
       role === ROLES.SELLER &&
       Boolean(mobileNumber) &&
       selectedOtpChannel === "whatsapp";
-    const useSmsOtp =
-      (selectedOtpChannel === "sms" || purpose === "change_password" || (purpose === "registration" && role === ROLES.BUYER)) &&
-      Boolean(mobileNumber);
+    const useSmsOtp = selectedOtpChannel === "sms" && Boolean(mobileNumber);
     const isStaticOtp = env.auth.otpMode === "static";
     const otp = isStaticOtp ? env.auth.staticOtp : createOtp();
+    const smsTemplateKey = {
+      registration: role === ROLES.SELLER
+        ? SMS_TEMPLATE_KEYS.SELLER_REGISTER_OTP
+        : SMS_TEMPLATE_KEYS.REGISTER_OTP,
+      login: SMS_TEMPLATE_KEYS.LOGIN_OTP,
+      forgot_password: SMS_TEMPLATE_KEYS.FORGOT_PASSWORD_OTP,
+      change_password: SMS_TEMPLATE_KEYS.RESET_PASSWORD_OTP,
+      influencer_forgot_password: SMS_TEMPLATE_KEYS.ACCOUNT_RECOVERY_OTP,
+    }[purpose] || SMS_TEMPLATE_KEYS.ACCOUNT_RECOVERY_OTP;
+    const smsTemplateId = purpose === "registration"
+      ? role === ROLES.SELLER
+        ? env.sms.templateIds.sellerRegisterOtp
+        : env.sms.templateIds.registerOtp
+      : {
+        login: env.sms.templateIds.loginOtp,
+        forgot_password: env.sms.templateIds.forgotPasswordOtp,
+        change_password: env.sms.templateIds.resetPasswordOtp,
+        influencer_forgot_password: env.sms.templateIds.accountRecoveryOtp,
+      }[purpose] || env.sms.templateIds.accountRecoveryOtp;
     const otpKey = this.makeOtpKey(email, purpose);
 
     // Store OTP in Redis with 10 minute expiration
@@ -2071,15 +2089,32 @@ class AuthService {
 
     logger.info(
       {
+        diagnosticId,
         purpose,
+        role: role || null,
+        otpMode: env.auth.otpMode,
+        selectedChannel: selectedOtpChannel,
         staticOtp: isStaticOtp,
         hasMobile: Boolean(mobileNumber),
+        willSendSms: !isStaticOtp && useSmsOtp,
+        smsTemplateKey: useSmsOtp ? smsTemplateKey : null,
+        hasDltTemplateId: useSmsOtp ? Boolean(smsTemplateId) : false,
       },
-      "Auth OTP generated and stored locally",
+      "Auth OTP generated; delivery route selected",
     );
 
     try {
-      if (isStaticOtp) {
+      if (isStaticOtp && selectedOtpChannel === "email") {
+        delivery = await this.sendOtpEmail({
+          diagnosticId,
+          email,
+          existingUser,
+          firstName: payload.profile?.firstName || payload.firstName,
+          otp,
+          purpose,
+        });
+        deliveryMode = "static_email";
+      } else if (isStaticOtp) {
         delivery = { testMode: true };
       } else if (useSellerRegistrationWhatsapp) {
         logger.info(
@@ -2130,13 +2165,7 @@ class AuthService {
             mobile: mobileNumber,
             otp,
             purpose,
-            template: {
-              registration: SMS_TEMPLATE_KEYS.REGISTER_OTP,
-              login: SMS_TEMPLATE_KEYS.LOGIN_OTP,
-              forgot_password: SMS_TEMPLATE_KEYS.FORGOT_PASSWORD_OTP,
-              change_password: SMS_TEMPLATE_KEYS.RESET_PASSWORD_OTP,
-              influencer_forgot_password: SMS_TEMPLATE_KEYS.ACCOUNT_RECOVERY_OTP,
-            }[purpose] || SMS_TEMPLATE_KEYS.ACCOUNT_RECOVERY_OTP,
+            template: smsTemplateKey,
             validityMinutes: 10,
           });
           if (delivery?.skipped) {
@@ -2150,10 +2179,20 @@ class AuthService {
               errorMessage: primaryError.message, statusCode: primaryError.statusCode || null,
               providerCode: primaryError.providerCode || null,
               mobile: `******${mobileNumber.slice(-4)}`,
-              templateKey: purpose === "registration" ? "REGISTER_OTP" : purpose === "login" ? "LOGIN_OTP" : purpose
+              templateKey: purpose === "registration"
+                ? role === ROLES.SELLER ? "SELLER_REGISTER_OTP" : "REGISTER_OTP"
+                : purpose === "login" ? "LOGIN_OTP" : purpose
             },
-            "SMS OTP failed; falling back to email",
+            role === ROLES.SELLER && purpose === "registration"
+              ? "Seller registration SMS OTP failed; fallback is disabled"
+              : "SMS OTP failed; falling back to email",
           );
+          if (role === ROLES.SELLER && purpose === "registration") {
+            throw new AppError(
+              "Unable to send seller registration OTP by SMS. Please try again later.",
+              503,
+            );
+          }
           delivery = await this.sendOtpEmail({
             diagnosticId,
             email,
@@ -2216,7 +2255,7 @@ class AuthService {
     );
 
     return {
-      message: deliveryMode === "static"
+      message: ["static", "static_email"].includes(deliveryMode)
         ? "Testing mode: use the configured test OTP to verify your account."
         : deliveryMode === "fallback_email"
           ? "Mobile OTP delivery failed. OTP has been sent to your email instead."

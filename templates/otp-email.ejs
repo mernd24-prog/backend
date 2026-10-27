@@ -11,6 +11,7 @@ function otpEmailTemplate({ firstName, otp, purpose }) {
   const headerBrandName = process.env.EMAIL_HEADER_BRAND_NAME ||
     brandName.replace(/\s+E-?Commerce$/i, "") ||
     "Sam Global";
+  const logoUrl = String(process.env.EMAIL_LOGO_URL || "").trim();
   const displayName = escapeHtml(String(firstName || "there").trim());
   const displayPurpose = escapeHtml(String(purpose || "registration").trim());
   const displayOtp = escapeHtml(String(otp || "").replace(/\s+/g, ""));
@@ -50,7 +51,11 @@ function otpEmailTemplate({ firstName, otp, purpose }) {
                       <td valign="top">
                         <table role="presentation" cellpadding="0" cellspacing="0">
                           <tr>
-                            <td width="48" valign="middle" style="padding-right:8px;"><span style="display:inline-block;width:28px;height:28px;border-radius:7px;background:#d9a327;color:#0a1450;font-size:12px;line-height:28px;text-align:center;font-weight:800;">SG</span></td>
+                            <td width="48" valign="middle" style="padding-right:8px;">
+                              ${logoUrl
+                                ? `<img src="${escapeHtml(logoUrl)}" width="32" height="32" alt="${escapeHtml(headerBrandName)}" style="display:block;width:32px;height:32px;object-fit:contain;border:0;outline:none;text-decoration:none;">`
+                                : `<span style="display:inline-block;width:28px;height:28px;border-radius:7px;background:#d9a327;color:#0a1450;font-size:12px;line-height:28px;text-align:center;font-weight:800;">SG</span>`}
+                            </td>
                             <td valign="middle"><div class="sg-brand-text" style="font-size:11px;line-height:1.3;color:#ffc34d;text-transform:uppercase;letter-spacing:1.4px;font-weight:800;white-space:nowrap;">${escapeHtml(headerBrandName)}</div></td>
                           </tr>
                         </table>
