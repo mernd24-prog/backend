@@ -89,14 +89,39 @@ function isEmailLike(value = "") {
 }
 
 function productImageFromProduct(product = {}) {
-  return (
-    product.thumbnail ||
-    product.thumbnailUrl ||
-    product.image ||
-    product.imageUrl ||
-    product.images?.[0] ||
-    product.imageUrls?.[0] ||
-    ""
+  const firstImage = (...values) => {
+    for (const value of values) {
+      if (Array.isArray(value)) {
+        const nestedImage = firstImage(...value);
+        if (nestedImage) return nestedImage;
+        continue;
+      }
+      if (typeof value === "string" && value.trim()) return value.trim();
+      if (value && typeof value === "object") {
+        const nestedImage = firstImage(
+          value.url,
+          value.imageURL,
+          value.imageUrl,
+          value.secure_url,
+          value.src,
+          value.thumbnail,
+          value.thumbnailUrl,
+        );
+        if (nestedImage) return nestedImage;
+      }
+    }
+    return "";
+  };
+
+  return firstImage(
+    product.thumbnail,
+    product.thumbnailUrl,
+    product.image,
+    product.imageUrl,
+    product.images,
+    product.commonImages,
+    product.imageUrls,
+    product.variants?.map((variant) => [variant?.image, variant?.images]),
   );
 }
 
@@ -992,7 +1017,7 @@ class PlatformService {
     }
 
     const products = await ProductModel.find(productFilter)
-      .select("_id title name slug sku images imageUrls thumbnail thumbnailUrl image imageUrl sellerId organizationId rating reviewCount")
+      .select("_id title name slug sku images commonImages imageUrls thumbnail thumbnailUrl image imageUrl variants sellerId organizationId rating reviewCount")
       .lean();
 
     const productIds = products.map((product) => String(product._id));
@@ -1168,7 +1193,7 @@ class PlatformService {
     }
 
     const product = await ProductModel.findOne(productFilter)
-      .select("_id title name slug sku images imageUrls thumbnail thumbnailUrl image imageUrl sellerId organizationId rating reviewCount")
+      .select("_id title name slug sku images commonImages imageUrls thumbnail thumbnailUrl image imageUrl variants sellerId organizationId rating reviewCount")
       .lean();
     if (!product) {
       if (sellerScoped) {
