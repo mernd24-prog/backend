@@ -4517,19 +4517,30 @@ class ProductService {
     const product = await this.productRepository.findById(productId);
     if (!product) throw new AppError("Product not found", 404);
     this.assertCanAccessManagementProduct(product, actor);
-    const sellerId = String(product.sellerId || "");
-    const [pendingRevision, seller] = await Promise.all([
+    const plainProduct = this.toPlainObject(product);
+    const sellerId = String(plainProduct.sellerId || "");
+    const [pendingRevision, seller, decoratedProducts] = await Promise.all([
       this.productRepository.findPendingRevision(productId),
       mongoose.Types.ObjectId.isValid(sellerId)
         ? UserModel.findById(sellerId)
             .select("email profile sellerProfile")
             .lean()
         : null,
+      this.decorateProductMasterReferences([plainProduct]),
     ]);
     const sellerName = sellerAccountDisplayName(seller);
+    const decoratedProduct = decoratedProducts[0] || plainProduct;
 
     return {
-      ...this.toPlainObject(product),
+      ...decoratedProduct,
+      brandApprovalStatus:
+        decoratedProduct.brandRef?.approvalStatus ||
+        decoratedProduct.brandApprovalStatus ||
+        null,
+      brandActive:
+        decoratedProduct.brandRef?.active ??
+        decoratedProduct.brandActive ??
+        null,
       sellerName,
       sellerEmail: seller?.email || null,
       pendingRevision: pendingRevision
