@@ -327,7 +327,10 @@ class SettlementLifecycleService {
     if (!this.isAdmin(actor)) throw new AppError("Only admin users can verify COD collections", 403);
     const collection = await knex("cod_collections").where("id", collectionId).first();
     if (!collection) throw new AppError("COD collection not found", 404);
-    if (collection.status === "remitted" || collection.status === "verified") return collection;
+    if (collection.status === "remitted") return collection;
+    if (collection.status === "verified" && payload.markRemitted !== true) {
+      return collection;
+    }
     const collectedAmount = this.number(payload.collectedAmount ?? collection.collected_amount ?? collection.expected_amount);
     if (collectedAmount <= 0) throw new AppError("A collected COD amount is required", 400);
     const [updated] = await knex("cod_collections").where("id", collectionId).update({
@@ -340,6 +343,10 @@ class SettlementLifecycleService {
       verified_by: actor.userId || actor.sub || null,
       verified_at: knex.fn.now(),
       remitted_at: payload.markRemitted === true ? knex.fn.now() : collection.remitted_at,
+      metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({
+        liabilityStatus: payload.markRemitted === true ? "remitted" : "recoverable",
+        remittanceConfirmedByAdmin: payload.markRemitted === true,
+      })]),
       updated_at: knex.fn.now(),
     }).returning("*");
     await this.syncSettlementForVerifiedCollection(updated, actor);

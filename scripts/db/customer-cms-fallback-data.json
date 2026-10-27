@@ -1,0 +1,1372 @@
+{
+  "companyContact": {
+    "email": "info@samglobal1.com",
+    "phone": "+91 99154 29897",
+    "address": "202, KINGSTON1 OMAXE ROYAL RESIDENCY, PAKHOWAL ROAD, Lalton Kalan, Ludhiana, Ludhiana punjab 142022"
+  },
+  "contact": {
+    "title": "CONTACT US – SAM GLOBAL",
+    "excerpt": "Every great experience begins with a conversation.",
+    "sections": [
+      {
+        "type": "content",
+        "title": "contact-info",
+        "description": "We’d love to hear from you.",
+        "points": [
+          {
+            "title": "Email",
+            "description": "info@samglobal1.com"
+          },
+          {
+            "title": "Phone",
+            "description": "+91 99154 29897"
+          },
+          {
+            "title": "Address",
+            "description": "202, KINGSTON1 OMAXE ROYAL RESIDENCY, PAKHOWAL ROAD, Lalton Kalan, Ludhiana, Ludhiana punjab 142022"
+          }
+        ]
+      },
+      {
+        "type": "content",
+        "title": "subject",
+        "description": "",
+        "points": [
+          {
+            "title": "General inquiries",
+            "description": ""
+          },
+          {
+            "title": "Brand and partnership discussions",
+            "description": ""
+          },
+          {
+            "title": "Store and retail opportunities",
+            "description": ""
+          },
+          {
+            "title": "Customer support",
+            "description": ""
+          }
+        ]
+      }
+    ]
+  },
+  "heroSlides": [
+    {
+      "id": "static-hero-1",
+      "image": "/image/png/fallback/HeroImg1.jpg",
+      "badge": "END OF SEASON SALE | UP TO 50% OFF",
+      "title": "Shop Smarter Across",
+      "highlight": "Every Category",
+      "description": "Discover premium accessories, smart gadgets, travel gear, and everyday essentials designed to complement your modern lifestyle.",
+      "primaryButton": "Shop Now",
+      "primaryLink": "/products",
+      "secondaryButton": "Explore Categories",
+      "secondaryLink": "/categories"
+    },
+    {
+      "id": "static-hero-2",
+      "image": "/image/png/fallback/HeroImg2.jpg",
+      "badge": "NEW ARRIVALS",
+      "title": "Upgrade Your Daily",
+      "highlight": "Lifestyle Essentials",
+      "description": "From premium laptops and wireless headphones to everyday gadgets and accessories, find everything you need at unbeatable prices.",
+      "primaryButton": "Shop Now",
+      "primaryLink": "/products",
+      "secondaryButton": "Explore Categories",
+      "secondaryLink": "/categories"
+    },
+    {
+      "id": "static-hero-3",
+      "image": "/image/png/fallback/HeroImg3.jpg",
+      "badge": "LIMITED TIME OFFERS | SAVE UP TO 50%",
+      "title": "Upgrade Your Lifestyle",
+      "highlight": "With Smart Tech",
+      "description": "Discover stylish fashion, beauty, and everyday essentials curated for every occasion. Find quality products that bring comfort, confidence, and effortless style to your everyday life.",
+      "primaryButton": "Shop Now",
+      "primaryLink": "/products",
+      "secondaryButton": "Explore Categories",
+      "secondaryLink": "/categories"
+    }
+  ],
+  "promoCards": [
+    {
+      "image": "/image/png/fallback/diwali.webp",
+      "title": "Diwali Special Collection",
+      "description": "Celebrate the Festival of Lights with beautiful festive décor, traditional diyas, and special gifts for every occasion",
+      "ctaLabel": "Explore now",
+      "link": "/products"
+    },
+    {
+      "image": "/image/png/fallback/diwali3.webp",
+      "title": "Diwali Festive Wear",
+      "description": "Shine this Diwali with elegant ethnic outfits, vibrant colours, and timeless traditional styles.",
+      "ctaLabel": "Explore now",
+      "link": "/products"
+    },
+    {
+      "image": "/image/png/fallback/diwali1.webp",
+      "title": "Diwali Décor & Diyas",
+      "description": "Brighten your home with decorative diyas, glowing lights, and beautiful festive decorations.",
+      "ctaLabel": "Explore now",
+      "link": "/products"
+    },
+    {
+      "image": "/image/png/fallback/diwali4.webp",
+      "title": "Diwali Gifts & Hampers",
+      "description": "Share the joy of Diwali with thoughtful gifts, festive hampers, and delightful treats for your loved ones.",
+      "ctaLabel": "Explore now",
+      "link": "/products"
+    }
+  ],
+  "shoppingBanner": {
+    "image": "/image/png/fallback/bannerDeals.png",
+    "title": "Irresistible Brands,\nBest Prices",
+    "description": "20-30",
+    "cta": {
+      "url": "/deals"
+    }
+  },
+  "homeCategories": [
+    {
+      "categoryKey": "fashion",
+      "slug": "fashion",
+      "title": "Fashion",
+      "name": "Fashion",
+      "productCount": 1,
+      "active": true,
+      "isDashboardVisible": true
+    },
+    {
+      "categoryKey": "electronics",
+      "slug": "electronics",
+      "title": "Electronics",
+      "name": "Electronics",
+      "productCount": 1,
+      "active": true,
+      "isDashboardVisible": true
+    },
+    {
+      "categoryKey": "home-living",
+      "slug": "home-living",
+      "title": "Home & Living",
+      "name": "Home & Living",
+      "productCount": 1,
+      "active": true,
+      "isDashboardVisible": true
+    },
+    {
+      "categoryKey": "beauty",
+      "slug": "beauty",
+      "title": "Beauty",
+      "name": "Beauty",
+      "productCount": 1,
+      "active": true,
+      "isDashboardVisible": true
+    },
+    {
+      "categoryKey": "accessories",
+      "slug": "accessories",
+      "title": "Accessories",
+      "name": "Accessories",
+      "productCount": 1,
+      "active": true,
+      "isDashboardVisible": true
+    }
+  ],
+  "support": {
+    "topicImages": {
+      "order": "/image/png/fallback/Help&Support/Track-order.png",
+      "track": "/image/png/fallback/Help&Support/Track-order.png",
+      "return": "/image/png/fallback/Help&Support/Return-refund.png",
+      "refund": "/image/png/fallback/Help&Support/Return-refund.png",
+      "payment": "/image/png/fallback/Help&Support/payment-issues.png",
+      "paying": "/image/png/fallback/Help&Support/payment-issues.png",
+      "account": "/image/png/fallback/Help&Support/account-security.png",
+      "security": "/image/png/fallback/Help&Support/account-security.png"
+    },
+    "topics": [
+      {
+        "title": "Track Order",
+        "image": "/image/png/fallback/Help&Support/Track-order.png",
+        "path": "/orders"
+      },
+      {
+        "title": "Return & Refund",
+        "image": "/image/png/fallback/Help&Support/Return-refund.png",
+        "path": "/returns-refunds"
+      },
+      {
+        "title": "Payment Issues",
+        "image": "/image/png/fallback/Help&Support/payment-issues.png",
+        "path": "/payments"
+      },
+      {
+        "title": "Rewards Help",
+        "image": "/image/png/fallback/Help&Support/account-security.png",
+        "path": "#"
+      },
+      {
+        "title": "Account Security",
+        "image": "/image/png/fallback/Help&Support/account-security.png",
+        "path": "/account/profile"
+      }
+    ],
+    "faqs": [
+      {
+        "title": "How do I cancel an order?",
+        "description": "You can cancel an eligible order from My Orders before it is shipped."
+      },
+      {
+        "title": "When will I receive my refund?",
+        "description": "Refunds are processed within 5-7 business days after the returned item is inspected."
+      },
+      {
+        "title": "How do I track my order?",
+        "description": "Use the Track Order option under Quick Actions."
+      },
+      {
+        "title": "How do I contact a seller?",
+        "description": "Use Contact Seller from the product detail page."
+      },
+      {
+        "title": "How do I change my delivery address?",
+        "description": "Update your address from Account settings."
+      },
+      {
+        "title": "What payment methods do you accept?",
+        "description": "We accept cards, UPI, net banking, wallets, and eligible Cash on Delivery."
+      }
+    ],
+    "contacts": [
+      {
+        "type": "phone",
+        "title": "+91 99154 29897",
+        "description": "Call Us",
+        "path": "/contact-us"
+      },
+      {
+        "type": "mail",
+        "title": "info@samglobal1.com",
+        "description": "Email Support",
+        "path": "/contact-us"
+      },
+      {
+        "type": "ticket",
+        "title": "Raise a Ticket",
+        "description": "Submit a ticket and we will get back"
+      }
+    ]
+  },
+  "faq": {
+    "slug": "faq-details",
+    "title": "Frequently Asked Questions",
+    "description": "Everything You Need to Know",
+    "excerpt": "We believe great experiences come from clarity. Here are answers to some of the most common questions to help you navigate Sam Global with ease.",
+    "sections": [
+      {
+        "type": "faq-category",
+        "title": "Shopping & Orders",
+        "sortOrder": 1,
+        "points": [
+          {
+            "title": "How do I place an order?",
+            "description": "Browse through our collections, select your preferred products, and proceed to checkout. The process is designed to be simple, seamless, and secure.",
+            "sortOrder": 1
+          },
+          {
+            "title": "How can I track my order?",
+            "description": "Once your order is confirmed, you will receive tracking details so you can monitor your delivery in real time.",
+            "sortOrder": 2
+          },
+          {
+            "title": "Can I modify or cancel my order?",
+            "description": "Orders can be modified or canceled within a limited time window after placement. We recommend acting promptly or reaching out to our support team for assistance.",
+            "sortOrder": 3
+          }
+        ]
+      },
+      {
+        "type": "faq-category",
+        "title": "Shipping & Delivery",
+        "sortOrder": 2,
+        "points": [
+          {
+            "title": "What are the delivery timelines?",
+            "description": "Delivery timelines may vary based on your location and product availability. Estimated timelines will be shared at checkout.",
+            "sortOrder": 1
+          },
+          {
+            "title": "Do you offer free shipping?",
+            "description": "Shipping benefits may vary depending on ongoing offers, order value, or location. Applicable details will be visible during checkout.",
+            "sortOrder": 2
+          }
+        ]
+      },
+      {
+        "type": "faq-category",
+        "title": "Returns & Refunds",
+        "sortOrder": 3,
+        "points": [
+          {
+            "title": "What is your return policy?",
+            "description": "We offer a hassle-free return process within the specified return period, provided the product is unused and in its original condition.",
+            "sortOrder": 1
+          },
+          {
+            "title": "How are refunds processed?",
+            "description": "Refunds are initiated after product verification and processed to the original payment method within standard timelines.",
+            "sortOrder": 2
+          }
+        ]
+      },
+      {
+        "type": "faq-category",
+        "title": "Payments",
+        "sortOrder": 4,
+        "points": [
+          {
+            "title": "What payment methods are accepted?",
+            "description": "We support a range of secure payment options, including cards, UPI, net banking, and digital wallets.",
+            "sortOrder": 1
+          },
+          {
+            "title": "Is it safe to make payments on your platform?",
+            "description": "Yes, all transactions are secured through trusted payment gateways to ensure a safe and reliable experience.",
+            "sortOrder": 2
+          }
+        ]
+      },
+      {
+        "type": "faq-category",
+        "title": "Account & Support",
+        "sortOrder": 5,
+        "points": [
+          {
+            "title": "Do I need an account to shop?",
+            "description": "While you can browse freely, creating an account allows for a more personalized and seamless shopping experience.",
+            "sortOrder": 1
+          },
+          {
+            "title": "How can I contact customer support?",
+            "description": "You can reach out to us through the Contact Us page. Our team is always ready to assist you.",
+            "sortOrder": 2
+          }
+        ]
+      },
+      {
+        "type": "faq-category",
+        "title": "For Brands & Partners",
+        "sortOrder": 6,
+        "points": [
+          {
+            "title": "How can brands partner with Sam Global?",
+            "description": "We collaborate with brands looking to expand through a structured and scalable retail platform. You can connect with us through our business inquiry channels.",
+            "sortOrder": 1
+          },
+          {
+            "title": "Do you offer retail expansion opportunities?",
+            "description": "Yes, we actively work with partners to expand our retail presence across key markets through a disciplined, growth-focused approach.",
+            "sortOrder": 2
+          }
+        ]
+      }
+    ]
+  },
+  "sellerPage": {
+    "title": "Grow Your Business\nWith Sam Global",
+    "excerpt": "Reach more customers, manage orders easily, and grow with reliable support.",
+    "image": {
+      "url": "/image/png/fallback/sellerBanner.webp",
+      "alt": "Sam Global seller"
+    },
+    "sections": [
+      {
+        "type": "seller-stories",
+        "points": [
+          {
+            "title": "Sam Bhatia",
+            "description": "The Bear House is a contemporary menswear brand offering premium shirts, T-shirts, trousers, and stylish everyday clothing. With a focus on modern designs, quality fabrics, and versatile fashion, the brand brings together comfort, sophistication, and effortless style for today's men.",
+            "image": {
+              "url": "/image/png/fallback/become-a-seller/SellerStory5.jpg",
+              "alt": "Sam Bhatia - The Bear House"
+            },
+            "metadata": {
+              "role": "The Bear House"
+            },
+            "cta": {
+              "label": "Recently achieved 3.2x growth"
+            }
+          },
+          {
+            "title": "Nisha Kapoor",
+            "description": "The seller tools help us make better decisions every week.",
+            "image": {
+              "url": "/image/png/fallback/become-a-seller/SellerStory1.webp",
+              "alt": "Nisha Kapoor - Owner, Nivara Studio"
+            },
+            "metadata": {
+              "role": "Owner, Nivara Studio"
+            },
+            "cta": {
+              "label": "18,000+ orders delivered"
+            }
+          },
+          {
+            "title": "Kabir Shah",
+            "description": "Reliable payouts gave us the confidence to scale.",
+            "image": {
+              "url": "/image/png/fallback/become-a-seller/SellerStory2.webp",
+              "alt": "Kabir Shah - Director, K&S Essentials"
+            },
+            "metadata": {
+              "role": "Director, K&S Essentials"
+            },
+            "cta": {
+              "label": "200+ products listed"
+            }
+          },
+          {
+            "title": "Riya Malhotra",
+            "description": "The marketplace helped our family-run brand find customers beyond our city.",
+            "image": {
+              "url": "/image/png/fallback/become-a-seller/SellerStory3.webp",
+              "alt": "Riya Malhotra - Co-founder, Terra Crafts"
+            },
+            "metadata": {
+              "role": "Co-founder, Terra Crafts"
+            },
+            "cta": {
+              "label": "42 cities reached"
+            }
+          },
+          {
+            "title": "Dev Arora",
+            "description": "Sam Global made online selling feel approachable from day one.",
+            "image": {
+              "url": "/image/png/fallback/become-a-seller/SellerStory4.webp",
+              "alt": "Dev Arora - Owner, Volt Avenue"
+            },
+            "metadata": {
+              "role": "Owner, Volt Avenue"
+            },
+            "cta": {
+              "label": "4.8 average rating"
+            }
+          },
+          {
+            "title": "Meera Iyer",
+            "description": "Simple tools and dependable support let us focus on our customers.",
+            "image": {
+              "url": "/image/png/fallback/become-a-seller/SellerStory5.webp",
+              "alt": "Meera Iyer - Founder, Studio Meera"
+            },
+            "metadata": {
+              "role": "Founder, Studio Meera"
+            },
+            "cta": {
+              "label": "2.5x monthly growth"
+            }
+          }
+        ]
+      },
+      {
+        "type": "seller-benefits",
+        "title": "Why sell with us",
+        "description": "Everything you need to build a thriving online business.",
+        "points": [
+          {
+            "title": "Transparent earnings",
+            "description": "Clear fees and dependable payment cycles."
+          },
+          {
+            "title": "Nationwide reach",
+            "description": "Reach customers across India."
+          },
+          {
+            "title": "Insights that help",
+            "description": "Understand product performance."
+          }
+        ]
+      },
+      {
+        "type": "seller-steps",
+        "title": "Start selling",
+        "description": "Set up your storefront in a few simple steps.",
+        "points": [
+          {
+            "title": "Create your account",
+            "description": "Register your business and share basic details."
+          },
+          {
+            "title": "Build your storefront",
+            "description": "Add products, pricing, and inventory."
+          },
+          {
+            "title": "Receive and ship orders",
+            "description": "Manage orders from your seller dashboard."
+          },
+          {
+            "title": "Get paid and grow",
+            "description": "Track payouts and performance insights."
+          }
+        ]
+      }
+    ]
+  },
+  "about": {
+    "banner": {
+      "image": "/image/png/fallback/become-a-seller/ABOUT-BANNER.png",
+      "badge": "A New Way to Experience Retail",
+      "title": "A New Way to Experience Retail",
+      "description": "Retail is evolving. Consumers are seeking more than just products—they seek experience, authenticity, and choice.",
+      "cta": {
+        "label": "Explore Our Platform",
+        "href": "#who-we-are"
+      },
+      "highlights": []
+    },
+    "values": {
+      "title": "Our Philosophy",
+      "intro": "We believe retail is no longer transactional—it is experiential.",
+      "points": [
+        {
+          "title": "Confidence of Choice",
+          "description": "Curated brands and categories that customer \ntrust ",
+          "image": {
+            "url": "/image/png/fallback/icons/excellence.png",
+            "alt": ""
+          }
+        },
+        {
+          "title": "Ease of Discovery",
+          "description": "Seamless browsing across physical and digital platforms",
+          "image": {
+            "url": "/image/png/fallback/icons/customer.png",
+            "alt": ""
+          }
+        },
+        {
+          "title": "Consistency of Experience",
+          "description": "Every touchpoint designed to deliver quality and reliability",
+          "image": {
+            "url": "/image/png/fallback/icons/growth.png",
+            "alt": ""
+          }
+        }
+      ]
+    },
+    "story": {
+      "title": "Our Story",
+      "description": "Our journey is rooted in over 18 years of deep market experience—understanding how India shops, what drives decisions, and what creates lasting value. From building strong distribution networks to now creating a multi-category premium retail ecosystem, our evolution has been guided by one belief: Great retail is built on execution, but remembered for experience.",
+      "image": {
+        "url": "/image/png/fallback/become-a-seller/outStory.png",
+        "alt": "Sam Global story"
+      }
+    },
+    "brands": {
+      "title": "Experience Across Leading Brands",
+      "description": "",
+      "points": [
+        {
+          "title": "Adidas",
+          "image": {
+            "url": "/image/png/fallback/brands/adidas.png",
+            "alt": ""
+          }
+        },
+        {
+          "title": "Reebok",
+          "image": {
+            "url": "/image/png/fallback/brands/reebok.png",
+            "alt": ""
+          }
+        },
+        {
+          "title": "Levi's",
+          "image": {
+            "url": "/image/png/fallback/brands/levis.png",
+            "alt": ""
+          }
+        },
+        {
+          "title": "Pepe Jeans",
+          "image": {
+            "url": "/image/png/fallback/brands/pepejeans.png",
+            "alt": ""
+          }
+        },
+        {
+          "title": "Benetton",
+          "image": {
+            "url": "/image/png/fallback/brands/benetton.png",
+            "alt": ""
+          }
+        }
+      ]
+    },
+    "mission": {
+      "title": "What We Are Building",
+      "description": "Sam Global is not just a retail business. It is a curated retail platform designed for a new generation of consumers. A space where: <ul><li>Premium and aspirational brands find the right audience</li><li>Customers discover quality across categories</li><li>Every interaction feels seamless, consistent, and elevated</li></ul> From physical retail stores to digital touchpoints, we are creating an ecosystem that is scalable, accessible, and experience-driven.",
+      "image": {
+        "url": "/image/png/fallback/become-a-seller/hand.png",
+        "alt": "Our mission"
+      }
+    },
+    "whyChoose": {
+      "title": "Our Commitment",
+      "description": "",
+      "points": [
+        {
+          "title": "To our customers, we promise:",
+          "description": "Quality and curated selection \n• Seamless shopping experience \n• Trust and consistency",
+          "image": {
+            "url": "/image/png/fallback/icons/dummy.png",
+            "alt": ""
+          }
+        },
+        {
+          "title": "To our partners, we offer:",
+          "description": "Scalable growth opportunities \n• Strong execution and performance \n• Structured and reliable retail expansion",
+          "image": {
+            "url": "/image/png/fallback/icons/dummy1.png",
+            "alt": ""
+          }
+        }
+      ]
+    }
+  },
+  "policies": {
+    "shipping": {
+      "title": "Shipping & Delivery",
+      "description": "",
+      "sections": [
+        {
+          "type": "content",
+          "title": "Designed for Convenience. Delivered with Care.",
+          "description": "At Sam Global, we aim to ensure a seamless delivery experience. This Shipping Policy outlines the terms governing order processing, dispatch, and delivery.",
+          "points": [
+            {
+              "title": "Order Processing",
+              "description": "Orders are processed within standard business timelines after successful payment confirmation\nProcessing timelines may vary based on product availability, order volume, or operational factors\nSam Global reserves the right to cancel or delay orders in case of unforeseen circumstances, including stock unavailability or verification issues",
+              "sortOrder": 1
+            },
+            {
+              "title": "Delivery Timelines",
+              "description": "Estimated delivery timelines are indicative and will be displayed at checkout\nActual delivery may vary depending on location, logistics partner timelines, and external factors\nDelays caused by circumstances beyond our control (including but not limited to weather, strikes, regional restrictions, or logistics disruptions) shall not constitute a breach of obligation",
+              "sortOrder": 2
+            },
+            {
+              "title": "Shipping Coverage",
+              "description": "Delivery is subject to serviceable pincodes as determined by our logistics partners\nSam Global reserves the right to refuse delivery to certain locations without prior notice",
+              "sortOrder": 3
+            },
+            {
+              "title": "Shipping Charges",
+              "description": "Shipping charges, if applicable, will be displayed at checkout prior to order confirmation\nCharges may vary based on order value, delivery location, product category, or promotional offers",
+              "sortOrder": 4
+            },
+            {
+              "title": "Order Tracking",
+              "description": "Tracking details will be shared upon dispatch of the order\nThe Customer is responsible for monitoring shipment updates using the provided tracking information",
+              "sortOrder": 5
+            },
+            {
+              "title": "Delivery & Acceptance",
+              "description": "Delivery shall be deemed completed once the order is delivered to the address provided at the time of purchase\nAny person available at the delivery address shall be deemed authorized to receive the order on behalf of the Customer\nSam Global shall not be liable for loss or damage after successful delivery",
+              "sortOrder": 6
+            },
+            {
+              "title": "Limitation of Liability",
+              "description": "Sam Global shall not be liable for delays, non-delivery, or service interruptions caused by third-party logistics providers or events beyond reasonable control.",
+              "sortOrder": 7
+            },
+            {
+              "title": "Need Assistance?",
+              "description": "For any shipping-related queries, please contact our support team.\nReliable delivery, aligned with clarity and trust.",
+              "sortOrder": 8
+            }
+          ]
+        }
+      ]
+    },
+    "returns": {
+      "title": "Return & Refund Policy",
+      "description": "",
+      "sections": [
+        {
+          "type": "content",
+          "title": "Simple. Transparent. Hassle-Free.",
+          "description": "This Return & Refund Policy governs the conditions under which returns, exchanges, and refunds are processed.",
+          "points": [
+            {
+              "title": "Return Eligibility",
+              "description": "Returns will be accepted only if:\nThe return request is initiated within the specified return window\nThe product is unused, undamaged, and in its original condition\nAll original tags, packaging, and accessories are intact\nSam Global reserves the right to reject returns that do not meet the above conditions.",
+              "sortOrder": 1
+            },
+            {
+              "title": "Return Process",
+              "description": "Return requests must be initiated through the designated platform or support channels\nPickup or return instructions will be communicated upon request approval\nProducts must be handed over in the same condition as received\nFailure to comply may result in rejection of the return request.",
+              "sortOrder": 2
+            },
+            {
+              "title": "Verification & Approval",
+              "description": "All returned products are subject to inspection and quality checks\nApproval or rejection of returns shall be at the sole discretion of Sam Global based on product condition",
+              "sortOrder": 3
+            },
+            {
+              "title": "Refund Process",
+              "description": "Refunds will be initiated only after successful verification of returned products\nRefunds will be processed via the original mode of payment unless otherwise specified\nTimelines may vary depending on banking partners and payment gateways\nSam Global shall not be liable for delays caused by third-party financial institutions.",
+              "sortOrder": 4
+            },
+            {
+              "title": "Exchange Policy",
+              "description": "Exchanges are subject to product availability and eligibility\nIn cases where exchange is not possible, a refund may be issued as per policy",
+              "sortOrder": 5
+            },
+            {
+              "title": "Non-Returnable Items",
+              "description": "Certain products may not be eligible for return, including but not limited to:\nPersonal use or hygiene-sensitive items\nProducts marked as non-returnable at the time of purchase",
+              "sortOrder": 6
+            },
+            {
+              "title": "Damaged / Incorrect Products",
+              "description": "Any claims regarding damaged, defective, or incorrect products must be reported within 48 hours of delivery\nFailure to report within this timeframe may result in rejection of the claim",
+              "sortOrder": 7
+            },
+            {
+              "title": "Cancellation Policy",
+              "description": "Orders can be cancelled only within a limited time window before dispatch\nOnce dispatched, orders cannot be cancelled and will be treated under the return policy",
+              "sortOrder": 8
+            },
+            {
+              "title": "Limitation of Liability",
+              "description": "Sam Global shall not be liable for:\nImproper use or handling of products after delivery\nMinor variations in color, texture, or finish due to display differences\nDelays in refunds caused by external financial systems",
+              "sortOrder": 9
+            },
+            {
+              "title": "Need Help?",
+              "description": "For assistance, please reach out to our support team.\nClarity in process. Confidence in every purchase.",
+              "sortOrder": 10
+            }
+          ]
+        }
+      ]
+    },
+    "privacy": {
+      "title": "Privacy Policy",
+      "description": "",
+      "sections": [
+        {
+          "type": "content",
+          "title": "Your Privacy Matters",
+          "description": "At Sam Global, we are committed to protecting your personal information and ensuring transparency in how your data is collected, used, and safeguarded.",
+          "points": [
+            {
+              "title": "1. Information We Collect",
+              "description": "Personal Information: Name, phone number, email address; shipping and billing address\nAccount Information: Login details, preferences, and order history\nTransaction Data: Payment details processed securely via third-party gateways\nTechnical Data: IP address, browser type, device information, website usage and interaction data",
+              "sortOrder": 1
+            },
+            {
+              "title": "2. How We Use Your Information",
+              "description": "Process and deliver your orders\nProvide customer support\nImprove our platform and user experience\nSend order updates, service notifications, and relevant offers\nPrevent fraud and ensure platform security",
+              "sortOrder": 2
+            },
+            {
+              "title": "3. Sharing of Information",
+              "description": "We do not sell your personal data.\nWe may share information with logistics partners, payment gateways, technology and analytics providers, and sellers where applicable.\nAll partners are expected to maintain data confidentiality and security.",
+              "sortOrder": 3
+            },
+            {
+              "title": "4. Data Security",
+              "description": "We implement appropriate technical and organizational measures to protect your data.\nHowever, no system is completely secure, and we cannot guarantee absolute security.",
+              "sortOrder": 4
+            },
+            {
+              "title": "5. Cookies & Tracking",
+              "description": "We use cookies and similar technologies to enhance browsing, remember preferences, and analyse platform usage.\nRefer to our Cookie Policy for more details.",
+              "sortOrder": 5
+            },
+            {
+              "title": "6. Your Rights",
+              "description": "Access or update your personal information\nRequest deletion of your data, subject to legal requirements\nOpt out of marketing communications",
+              "sortOrder": 6
+            },
+            {
+              "title": "7. Data Retention",
+              "description": "We retain data only as long as necessary for order fulfilment, legal and regulatory compliance, and business operations.",
+              "sortOrder": 7
+            },
+            {
+              "title": "8. Third-Party Links",
+              "description": "Our platform may contain links to external websites. We are not responsible for the privacy practices of such third parties.",
+              "sortOrder": 8
+            },
+            {
+              "title": "9. Policy Updates",
+              "description": "We may update this Privacy Policy from time to time. Continued use of the platform implies acceptance of the updated policy.",
+              "sortOrder": 9
+            },
+            {
+              "title": "10. Contact Us",
+              "description": "For any privacy-related concerns, please contact us through our Contact page.\nYour trust is important to us, and we are committed to protecting it.",
+              "sortOrder": 10
+            }
+          ]
+        }
+      ]
+    },
+    "cookies": {
+      "title": "Cookie Policy",
+      "description": "This Cookie Policy explains how Sam Global uses cookies and similar technologies to enhance your experience on our platform.",
+      "sections": [
+        {
+          "type": "content",
+          "title": "Understanding How We Use Cookies",
+          "description": "This Cookie Policy explains how Sam Global uses cookies and similar technologies to enhance your experience on our platform.",
+          "image": {
+            "url": "",
+            "alt": "",
+            "title": "",
+            "caption": "",
+            "type": ""
+          },
+          "gallery": [],
+          "points": [
+            {
+              "title": "1. What Are Cookies?",
+              "description": "Cookies are small text files stored on your device when you visit a website.\nThey help improve functionality, performance, and user experience.",
+              "image": {
+                "url": "",
+                "alt": "",
+                "title": "",
+                "caption": "",
+                "type": ""
+              },
+              "cta": {
+                "label": "",
+                "url": "",
+                "target": "_self"
+              },
+              "sortOrder": 1
+            },
+            {
+              "title": "2. Types of Cookies We Use",
+              "description": "Essential Cookies\n Required for basic website functionality such as login and checkout.\nPerformance Cookies\n Help us understand how users interact with our platform to improve performance.\nFunctional Cookies\n Remember your preferences and settings for a personalized experience.\nAdvertising Cookies\n Used to deliver relevant ads and measure campaign effectiveness.",
+              "image": {
+                "url": "",
+                "alt": "",
+                "title": "",
+                "caption": "",
+                "type": ""
+              },
+              "cta": {
+                "label": "",
+                "url": "",
+                "target": "_self"
+              },
+              "sortOrder": 2
+            },
+            {
+              "title": "3. How We Use Cookies",
+              "description": "We use cookies to:\nEnable smooth navigation and functionality\nRemember your preferences and login details\nAnalyse website traffic and usage patterns\nImprove performance and user experience\nSupport marketing and advertising efforts",
+              "image": {
+                "url": "",
+                "alt": "",
+                "title": "",
+                "caption": "",
+                "type": ""
+              },
+              "cta": {
+                "label": "",
+                "url": "",
+                "target": "_self"
+              },
+              "sortOrder": 3
+            },
+            {
+              "title": "4. Third-Party Cookies",
+              "description": "We may allow trusted third-party services (such as analytics or advertising platforms) to place cookies on your device.\nThese cookies are governed by the respective third parties’ policies.",
+              "image": {
+                "url": "",
+                "alt": "",
+                "title": "",
+                "caption": "",
+                "type": ""
+              },
+              "cta": {
+                "label": "",
+                "url": "",
+                "target": "_self"
+              },
+              "sortOrder": 4
+            },
+            {
+              "title": "5. Managing Cookies",
+              "description": "You can control or disable cookies through your browser settings.\nPlease note that disabling cookies may affect certain features and functionality of the platform.",
+              "image": {
+                "url": "",
+                "alt": "",
+                "title": "",
+                "caption": "",
+                "type": ""
+              },
+              "cta": {
+                "label": "",
+                "url": "",
+                "target": "_self"
+              },
+              "sortOrder": 5
+            },
+            {
+              "title": "6. Consent",
+              "description": "By continuing to use our platform, you consent to our use of cookies as described in this policy.",
+              "image": {
+                "url": "",
+                "alt": "",
+                "title": "",
+                "caption": "",
+                "type": ""
+              },
+              "cta": {
+                "label": "",
+                "url": "",
+                "target": "_self"
+              },
+              "sortOrder": 6
+            },
+            {
+              "title": "7. Updates to This Policy",
+              "description": "We may update this Cookie Policy from time to time.",
+              "image": {
+                "url": "",
+                "alt": "",
+                "title": "",
+                "caption": "",
+                "type": ""
+              },
+              "cta": {
+                "label": "",
+                "url": "",
+                "target": "_self"
+              },
+              "sortOrder": 7
+            },
+            {
+              "title": "Closing Line",
+              "description": "Designed to enhance your experience while respecting your privacy.",
+              "image": {
+                "url": "",
+                "alt": "",
+                "title": "",
+                "caption": "",
+                "type": ""
+              },
+              "cta": {
+                "label": "",
+                "url": "",
+                "target": "_self"
+              },
+              "sortOrder": 8
+            }
+          ],
+          "cta": {
+            "label": "",
+            "url": "",
+            "target": "_self"
+          },
+          "sortOrder": 1
+        }
+      ]
+    },
+    "terms": {
+      "title": "Terms of Use",
+      "description": "",
+      "sections": [
+        {
+          "type": "content",
+          "title": "Please Read Carefully",
+          "description": "These Terms & Conditions (Terms) govern your access to and use of the Sam Global website, platform, and services (collectively, the Platform). By accessing, browsing, or using the Platform, you agree to be bound by these Terms. If you do not agree, please do not use the Platform.",
+          "points": [
+            {
+              "title": "1. Definitions",
+              "description": "Platform refers to the Sam Global website, mobile application, and related services\nUser / Customer refers to any individual accessing or using the Platform\nSeller refers to third-party vendors offering products through the Platform (where applicable)\nServices refers to all functionalities provided through the Platform",
+              "sortOrder": 1
+            },
+            {
+              "title": "2. Eligibility",
+              "description": "Users must be at least 18 years of age or legally competent to enter into a contract\nBy using the Platform, you represent that all information provided is accurate and complete",
+              "sortOrder": 2
+            },
+            {
+              "title": "3. Account & User Responsibility",
+              "description": "Users may be required to create an account to access certain features\nYou are responsible for maintaining the confidentiality of your login credentials\nAny activity conducted through your account shall be deemed your responsibility\nSam Global shall not be liable for unauthorized access arising from user negligence.",
+              "sortOrder": 3
+            },
+            {
+              "title": "4. Platform Usage",
+              "description": "Do not use the Platform for unlawful or fraudulent purposes\nDo not interfere with its operation, security, or functionality\nDo not attempt unauthorized access to systems, data, or accounts\nDo not use automated tools without permission\nSam Global reserves the right to restrict or terminate access for violations.",
+              "sortOrder": 4
+            },
+            {
+              "title": "5. Product Information & Pricing",
+              "description": "Product descriptions, images, and pricing are provided for informational purposes\nWhile efforts are made to ensure accuracy, errors may occur\nSam Global reserves the right to correct errors, update information, or cancel orders without prior notice\nPrices and availability are subject to change.",
+              "sortOrder": 5
+            },
+            {
+              "title": "6. Orders & Acceptance",
+              "description": "Placing an order constitutes an offer to purchase\nSam Global reserves the right to accept or reject any order at its discretion\nOrder confirmation does not guarantee acceptance; orders may be cancelled due to stock issues, pricing errors, or verification concerns",
+              "sortOrder": 6
+            },
+            {
+              "title": "7. Payments",
+              "description": "All payments must be made through approved payment methods available on the Platform\nTransactions are processed through secure third-party payment gateways\nSam Global shall not be liable for payment failures or delays caused by third-party providers",
+              "sortOrder": 7
+            },
+            {
+              "title": "8. Shipping, Returns & Refunds",
+              "description": "All policies relating to shipping, returns, and refunds are governed by separate policy pages available on the Platform. By using the Platform, you agree to be bound by such policies.",
+              "sortOrder": 8
+            },
+            {
+              "title": "9. Marketplace Disclaimer (If Applicable)",
+              "description": "The Platform may act as an intermediary connecting customers and third-party sellers\nSam Global does not manufacture, own, or directly control products listed by sellers\nResponsibility for product quality, legality, and compliance rests solely with the respective seller\nSam Global shall not be liable for disputes arising between users and sellers.",
+              "sortOrder": 9
+            },
+            {
+              "title": "10. Intellectual Property",
+              "description": "All content on the Platform, including text, images, logos, design, and software, is the property of Sam Global or its licensors\nUnauthorized use, reproduction, or distribution is strictly prohibited",
+              "sortOrder": 10
+            },
+            {
+              "title": "11. Limitation of Liability",
+              "description": "Indirect, incidental, or consequential damages\nLoss of profits, data, business, or goodwill\nDelays, interruptions, or technical failures\nActions or omissions of third-party sellers, logistics providers, or payment gateways",
+              "sortOrder": 11
+            },
+            {
+              "title": "12. Indemnity",
+              "description": "Your use of the Platform\nViolation of these Terms\nInfringement of third-party rights",
+              "sortOrder": 12
+            },
+            {
+              "title": "13. Termination",
+              "description": "Suspend or terminate user access at any time without prior notice\nRemove content or restrict access in case of policy violations",
+              "sortOrder": 13
+            },
+            {
+              "title": "14. Force Majeure",
+              "description": "Sam Global shall not be liable for failure or delay caused by events beyond reasonable control, including natural disasters, government actions, or technical disruptions.",
+              "sortOrder": 14
+            },
+            {
+              "title": "15. Governing Law & Jurisdiction",
+              "description": "These Terms shall be governed by the laws of India. Any disputes shall be subject to the jurisdiction of courts located in Ludhiana, Punjab.",
+              "sortOrder": 15
+            },
+            {
+              "title": "16. Modifications",
+              "description": "Sam Global reserves the right to update or modify these Terms at any time. Continued use of the Platform constitutes acceptance of revised Terms.",
+              "sortOrder": 16
+            },
+            {
+              "title": "17. Contact",
+              "description": "For any queries regarding these Terms, please contact us through the Contact Us page.",
+              "sortOrder": 17
+            }
+          ]
+        }
+      ]
+    },
+    "cookie": {
+      "title": "Cookie Policy",
+      "description": "",
+      "sections": [
+        {
+          "type": "content",
+          "title": "Understanding How We Use Cookies",
+          "description": "This Cookie Policy explains how Sam Global uses cookies and similar technologies to enhance your experience on our platform.",
+          "points": [
+            {
+              "title": "1. What Are Cookies?",
+              "description": "Cookies are small text files stored on your device when you visit a website. They help improve functionality, performance, and user experience.",
+              "sortOrder": 1
+            },
+            {
+              "title": "2. Types of Cookies We Use",
+              "description": "Essential Cookies: Required for basic website functionality such as login and checkout.\nPerformance Cookies: Help us understand how users interact with our platform to improve performance.\nFunctional Cookies: Remember your preferences and settings for a personalized experience.\nAdvertising Cookies: Used to deliver relevant ads and measure campaign effectiveness.",
+              "sortOrder": 2
+            },
+            {
+              "title": "3. How We Use Cookies",
+              "description": "Enable smooth navigation and functionality\nRemember your preferences and login details\nAnalyse website traffic and usage patterns\nImprove performance and user experience\nSupport marketing and advertising efforts",
+              "sortOrder": 3
+            },
+            {
+              "title": "4. Third-Party Cookies",
+              "description": "We may allow trusted third-party services, such as analytics or advertising platforms, to place cookies on your device. These cookies are governed by the respective third parties’ policies.",
+              "sortOrder": 4
+            },
+            {
+              "title": "5. Managing Cookies",
+              "description": "You can control or disable cookies through your browser settings. Please note that disabling cookies may affect certain features and functionality of the platform.",
+              "sortOrder": 5
+            },
+            {
+              "title": "6. Consent",
+              "description": "By continuing to use our platform, you consent to our use of cookies as described in this policy.",
+              "sortOrder": 6
+            },
+            {
+              "title": "7. Updates to This Policy",
+              "description": "We may update this Cookie Policy from time to time.",
+              "sortOrder": 7
+            },
+            {
+              "title": "Closing Line",
+              "description": "Designed to enhance your experience while respecting your privacy.",
+              "sortOrder": 8
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "cmsPageContent": {
+    "privacy-policy": {
+      "slug": "privacy-policy",
+      "title": "Privacy Policy",
+      "excerpt": "Your Privacy Matters",
+      "description": "At Sam Global, we are committed to protecting your personal information and ensuring transparency in how your data is collected, used, and safeguarded.",
+      "body": "\n      PRIVACY POLICY – SAM GLOBAL\n      Your Privacy Matters\n      At Sam Global, we are committed to protecting your personal information and ensuring transparency in how your data is collected, used, and safeguarded.\n\n      1. Information We Collect\n      We may collect the following types of information:\n      Personal Information\n      Name, phone number, email address\n      Shipping and billing address\n      Account Information\n      Login details, preferences, and order history\n      Transaction Data\n      Payment details (processed securely via third-party gateways)\n      Technical Data\n      IP address, browser type, device information\n      Website usage and interaction data\n\n      2. How We Use Your Information\n      Your information is used to:\n      Process and deliver your orders\n      Provide customer support\n      Improve our platform and user experience\n      Send order updates, service notifications, and relevant offers\n      Prevent fraud and ensure platform security\n\n      3. Sharing of Information\n      We do not sell your personal data.\n      We may share your information with:\n      Logistics partners for order delivery\n      Payment gateways for secure transactions\n      Technology and analytics providers for platform improvement\n      Sellers (if applicable) to fulfil your order\n      All partners are expected to maintain data confidentiality and security.\n\n      4. Data Security\n      We implement appropriate technical and organizational measures to protect your data.\n      However, no system is completely secure, and we cannot guarantee absolute security.\n\n      5. Cookies & Tracking\n      We use cookies and similar technologies to:\n      Enhance your browsing experience\n      Remember your preferences\n      Analyse platform usage\n      (Refer to our Cookie Policy for more details)\n\n      6. Your Rights\n      You may:\n      Access or update your personal information\n      Request deletion of your data (subject to legal requirements)\n      Opt out of marketing communications\n\n      7. Data Retention\n      We retain your data only as long as necessary for:\n      Order fulfilment\n      Legal and regulatory compliance\n      Business operations\n\n      8. Third-Party Links\n      Our platform may contain links to external websites.\n      We are not responsible for the privacy practices of such third parties.\n\n      9. Policy Updates\n      We may update this Privacy Policy from time to time.\n      Continued use of the platform implies acceptance of the updated policy.\n\n      10. Contact Us\n      For any privacy-related concerns, please contact us through our Contact page.\n\n      Closing Line\n      Your trust is important to us, and we are committed to protecting it.\n    ",
+      "metadata": {
+        "seoTitle": "Privacy Policy",
+        "seoDescription": "Learn how Sam Global collects, uses, and protects your personal information."
+      }
+    },
+    "cookie-policy": {
+      "slug": "cookie-policy",
+      "title": "Cookie Policy",
+      "excerpt": "Understanding How We Use Cookies",
+      "description": "This Cookie Policy explains how Sam Global uses cookies and similar technologies to enhance your experience on our platform.",
+      "body": "\n      COOKIE POLICY – SAM GLOBAL\n      Understanding How We Use Cookies\n      This Cookie Policy explains how Sam Global uses cookies and similar technologies to enhance your experience on our platform.\n\n      1. What Are Cookies?\n      Cookies are small text files stored on your device when you visit a website.\n      They help improve functionality, performance, and user experience.\n\n      2. Types of Cookies We Use\n      Essential Cookies\n       Required for basic website functionality such as login and checkout.\n      Performance Cookies\n       Help us understand how users interact with our platform to improve performance.\n      Functional Cookies\n       Remember your preferences and settings for a personalized experience.\n      Advertising Cookies\n       Used to deliver relevant ads and measure campaign effectiveness.\n\n      3. How We Use Cookies\n      We use cookies to:\n      Enable smooth navigation and functionality\n      Remember your preferences and login details\n      Analyse website traffic and usage patterns\n      Improve performance and user experience\n      Support marketing and advertising efforts\n\n      4. Third-Party Cookies\n      We may allow trusted third-party services (such as analytics or advertising platforms) to place cookies on your device.\n      These cookies are governed by the respective third parties’ policies.\n\n      5. Managing Cookies\n      You can control or disable cookies through your browser settings.\n      Please note that disabling cookies may affect certain features and functionality of the platform.\n\n      6. Consent\n      By continuing to use our platform, you consent to our use of cookies as described in this policy.\n\n      7. Updates to This Policy\n      We may update this Cookie Policy from time to time.\n\n      Closing Line\n      Designed to enhance your experience while respecting your privacy.\n    ",
+      "metadata": {
+        "seoTitle": "Cookie Policy",
+        "seoDescription": "Learn how Sam Global uses cookies, tracking tools, and related technologies."
+      }
+    }
+  },
+  "sellerPolicy": {
+    "title": "Seller Policy",
+    "excerpt": "Seller Guidelines",
+    "description": "Our Seller Policy defines the standards and responsibilities that create a trusted experience for sellers and customers.",
+    "image": {
+      "url": "/image/png/fallback/sellerPolicy.webp",
+      "alt": "Seller Policy"
+    },
+    "cta": {
+      "label": "Become a Seller",
+      "url": "/become-a-seller"
+    },
+    "sections": [
+      {
+        "type": "policy-highlights",
+        "title": "Everything You Need To Sell Confidently",
+        "description": "Our marketplace policies protect sellers and strengthen customer confidence.",
+        "points": [
+          {
+            "title": "Genuine Products",
+            "description": "Sell only authentic and legally sourced products."
+          },
+          {
+            "title": "Accurate Listings",
+            "description": "Provide correct titles, images, pricing and specifications."
+          },
+          {
+            "title": "Timely Shipping",
+            "description": "Dispatch orders within the promised timeline."
+          }
+        ]
+      },
+      {
+        "type": "seller-responsibilities",
+        "title": "Your Commitment Matters",
+        "description": "Follow these responsibilities to provide a trusted shopping experience.",
+        "points": [
+          {
+            "title": "List Authentic Products",
+            "description": "Upload only original products with complete details."
+          },
+          {
+            "title": "Maintain Accurate Listings",
+            "description": "Keep pricing, stock, and information updated."
+          },
+          {
+            "title": "Process Orders Quickly",
+            "description": "Accept, pack and dispatch every order on time."
+          },
+          {
+            "title": "Support Customers",
+            "description": "Respond professionally to customer queries and returns."
+          }
+        ]
+      },
+      {
+        "type": "account-compliance",
+        "title": "Maintain a Healthy Seller Account",
+        "description": "We monitor seller performance to ensure reliable service.",
+        "points": [
+          {
+            "title": "Good Standing",
+            "description": "Maintain accurate listings, timely shipping, and quality service."
+          },
+          {
+            "title": "Performance Review",
+            "description": "Accounts are reviewed using fulfillment and satisfaction data."
+          },
+          {
+            "title": "Policy Violations",
+            "description": "Repeated violations can lead to account restrictions."
+          }
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "slug": "footerdata",
+    "title": "footerData",
+    "logo": "/image/webp/logoWithName.webp",
+    "benefits": [
+      {
+        "title": "100% Secure Payments",
+        "description": "Multiple sale payment options",
+        "icon": "/image/png/fallback/footer/payment.png",
+        "alt": "Payment"
+      },
+      {
+        "title": "Easy Returns",
+        "description": "Hassle-free 10 days return",
+        "icon": "/image/png/fallback/footer/return.png",
+        "alt": "Returns and exchanges"
+      },
+      {
+        "title": "24/7 Support",
+        "description": "We’re here to help you.",
+        "icon": "/image/png/fallback/footer/support.png",
+        "alt": "Support"
+      }
+    ],
+    "linkGroups": [
+      {
+        "title": "Sell",
+        "links": [
+          {
+            "label": "Become a Seller",
+            "href": "/become-a-seller"
+          },
+          {
+            "label": "Seller Dashboard",
+            "href": "http://45.195.90.183:3000/login",
+            "target": "_blank"
+          },
+          {
+            "label": "Seller Policies",
+            "href": "/seller-policies"
+          }
+        ]
+      },
+      {
+        "title": "About SAM",
+        "links": [
+          {
+            "label": "Our Story",
+            "href": "/about-us#who-we-are"
+          },
+          {
+            "label": "Our Philosophy",
+            "href": "/about-us#our-values"
+          },
+          {
+            "label": "What We Are Building",
+            "href": "/about-us#what-we-are-building"
+          },
+          {
+            "label": "Privacy Policy",
+            "href": "/privacy-policy"
+          },
+          {
+            "label": "Cookie Policy",
+            "href": "/cookie-policy"
+          }
+        ]
+      },
+      {
+        "title": "Help & Contact",
+        "links": [
+          {
+            "label": "Customer Support",
+            "href": "/support"
+          },
+          {
+            "label": "Mobile App",
+            "href": "/mobile-app"
+          },
+          {
+            "label": "Shipping & Delivery Policy",
+            "href": "/shipping-policy"
+          },
+          {
+            "label": "Return & Refund Policy",
+            "href": "/refund-policy"
+          },
+          {
+            "label": "Terms of Use",
+            "href": "/terms-of-use"
+          },
+          {
+            "label": "FAQ",
+            "href": "/faq"
+          }
+        ]
+      }
+    ],
+    "appDownload": {
+      "title": "Download our app for a faster and smarter shopping experience.",
+      "links": [
+        {
+          "label": "Download on the App Store",
+          "href": "/mobile-app",
+          "image": "/image/png/fallback/footer/appStore.svg",
+          "alt": "Download on the App Store"
+        },
+        {
+          "label": "Get it on Google Play",
+          "href": "/mobile-app",
+          "image": "/image/png/fallback/footer/playStore.svg",
+          "alt": "Get it on Google Play"
+        }
+      ]
+    },
+    "copyright": "© 2026 Samglobal Marketplace Pvt. Ltd. All Rights Reserved.",
+    "socialLinks": [
+      {
+        "label": "Instagram",
+        "href": "/#",
+        "icon": "",
+        "alt": "Instagram"
+      },
+      {
+        "label": "Facebook",
+        "href": "/#",
+        "icon": "",
+        "alt": "Facebook"
+      },
+      {
+        "label": "YouTube",
+        "href": "/#",
+        "icon": "",
+        "alt": "YouTube"
+      }
+    ]
+  }
+}
