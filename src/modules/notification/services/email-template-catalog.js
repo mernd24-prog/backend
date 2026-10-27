@@ -612,6 +612,9 @@ function renderEmailTemplate({
   const bodyIntro = isOtpTemplate
     ? `Thank you for using ${brandName}. Please use the verification code below to confirm your email address and complete your account setup.`
     : message || intro;
+  const bodyIntroHtml = resolvedKey === "product_submitted_admin"
+    ? `A seller ${escapeHtml(payload.action === "updated" ? "updated" : "added")} <span style="color:#9a6500;">${escapeHtml(payload.productName || "a product")}</span>. Please review the product details.`
+    : escapeHtml(bodyIntro);
   const greeting = /^auth_|account_welcome/.test(resolvedKey || "")
     ? `Hello ${recipientNameOf(payload) || "User"},`
     : "";
@@ -699,7 +702,7 @@ function renderEmailTemplate({
                 <td class="sg-body" style="padding:22px 24px 8px;">
                   ${isAlert ? `<div style="margin:0 0 24px;border:1px solid #ffb7b7;background:#fff4f4;color:#c1121f;border-radius:9px;padding:8px 12px;font-size:12px;font-weight:800;line-height:1.5;">${escapeHtml(alertText)}</div>` : ""}
                   ${greeting ? `<p style="margin:0 0 8px;font-size:18px;line-height:1.5;color:#0a1450;font-weight:800;">${escapeHtml(greeting)}</p>` : ""}
-                  ${isAlert ? "" : `<p style="margin:0 0 12px;font-size:12px;line-height:1.45;color:#0a1450;">${escapeHtml(bodyIntro)}</p>`}
+                  ${isAlert ? "" : `<p style="margin:0 0 12px;font-size:12px;line-height:1.45;color:#0a1450;">${bodyIntroHtml}</p>`}
                   ${renderOtpCodeBlock(payload.otp)}
                   ${detailRows ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eef0f4;">${detailRows}</table>` : ""}
                   ${button}

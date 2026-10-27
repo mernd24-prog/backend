@@ -426,6 +426,7 @@ const env = {
     templateIds: {
       loginOtp: cleanEnvValue(process.env.DLT_TEMPLATE_LOGIN_OTP || ""),
       registerOtp: cleanEnvValue(process.env.DLT_TEMPLATE_REGISTER_OTP || ""),
+      sellerRegisterOtp: cleanEnvValue(process.env.DLT_TEMPLATE_SELLER_REGISTER_OTP || ""),
       forgotPasswordOtp: cleanEnvValue(process.env.DLT_TEMPLATE_FORGOT_PASSWORD_OTP || ""),
       resetPasswordOtp: cleanEnvValue(process.env.DLT_TEMPLATE_RESET_PASSWORD_OTP || ""),
       verifyMobileOtp: cleanEnvValue(process.env.DLT_TEMPLATE_VERIFY_MOBILE_OTP || ""),
