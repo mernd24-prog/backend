@@ -87,6 +87,12 @@ class SupportRepository {
     if (filters.userId) builder.where("user_id", String(filters.userId));
     if (filters.status) builder.where("status", filters.status);
     if (filters.category) builder.where("category", filters.category);
+    if (filters.fromDate) {
+      builder.where("created_at", ">=", this.normalizeDateRangeStart(filters.fromDate));
+    }
+    if (filters.toDate) {
+      builder.where("created_at", "<=", this.normalizeDateRangeEnd(filters.toDate));
+    }
     if (filters.search) {
       const term = `%${String(filters.search).trim()}%`;
       builder.where((q) => {
@@ -97,6 +103,18 @@ class SupportRepository {
           .orWhereILike("message", term);
       });
     }
+  }
+
+  isDateOnly(value) {
+    return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  }
+
+  normalizeDateRangeStart(value) {
+    return this.isDateOnly(value) ? `${value} 00:00:00.000` : value;
+  }
+
+  normalizeDateRangeEnd(value) {
+    return this.isDateOnly(value) ? `${value} 23:59:59.999` : value;
   }
 
   async list(filters = {}) {
