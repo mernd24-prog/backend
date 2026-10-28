@@ -2475,6 +2475,8 @@ class ProductService {
     payload = this.normalizeProductMedia(payload);
     payload = this.normalizeProductVariants(payload);
     payload = this.syncRootAndDefaultVariant(payload);
+    // Product prices are always GST-inclusive so checkout extracts GST from
+    // the displayed price instead of adding tax on top of it.
     payload = {
       ...payload,
       gstInclusive: true,
@@ -2650,6 +2652,9 @@ class ProductService {
     payload = this.normalizeProductMedia(payload);
     payload = this.normalizeProductVariants(payload);
     payload = this.syncRootAndDefaultVariant(payload, existingProduct);
+    // Preserve the catalog's GST-inclusive pricing rule on every update,
+    // including partial API updates that omit gstInclusive or send false.
+    payload.gstInclusive = true;
     payload.warranty = this.normalizeWarranty(
       payload.warranty,
       existingProduct.warranty,
