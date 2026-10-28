@@ -35,6 +35,9 @@ const optionalUdyogAadhaarSchema = Joi.string()
   .allow(null);
 const ifscPattern = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 const bankAccountPattern = /^[0-9]{9,18}$/;
+const indianPostalCodePattern = /^[1-9][0-9]{5}$/;
+const addressLinePattern = /^(?=.*\p{L})[\p{L}\p{N}][\p{L}\p{N} ,.'#()/\-]*$/u;
+const optionalAddressLinePattern = /^(?=.*\p{L})[\p{L}\p{N} ,.'#()/\-]+$/u;
 
 const sellerOrganizationAddressSchema = Joi.object({
   line1: Joi.string().allow("", null),
@@ -343,12 +346,12 @@ const updateSellerProfileSchema = Joi.object({
     primaryContactName: Joi.string().pattern(personNamePattern).max(120).allow("", null),
     bankDetails: sellerOrganizationBankSchema.default({}),
     businessAddress: Joi.object({
-      line1: Joi.string().allow("", null),
-      line2: Joi.string().allow("", null),
+      line1: Joi.string().trim().min(5).max(120).pattern(addressLinePattern).allow("", null),
+      line2: Joi.string().trim().max(120).pattern(optionalAddressLinePattern).allow("", null),
       city: Joi.string().allow("", null),
       state: Joi.string().allow("", null),
       country: Joi.string().default("India"),
-      postalCode: Joi.string().min(5).max(10).allow("", null),
+      postalCode: Joi.string().pattern(indianPostalCodePattern).allow("", null),
     }).default({}),
     billingAddress: Joi.object({
       line1: Joi.string().allow("", null),
@@ -359,12 +362,12 @@ const updateSellerProfileSchema = Joi.object({
       postalCode: Joi.string().min(5).max(10).allow("", null),
     }).default({}),
     pickupAddress: Joi.object({
-      line1: Joi.string().required(),
-      line2: Joi.string().allow("", null),
+      line1: Joi.string().trim().min(5).max(120).pattern(addressLinePattern).required(),
+      line2: Joi.string().trim().max(120).pattern(optionalAddressLinePattern).allow("", null),
       city: Joi.string().required(),
       state: Joi.string().required(),
       country: Joi.string().default("India"),
-      postalCode: Joi.string().min(5).max(10).required(),
+      postalCode: Joi.string().pattern(indianPostalCodePattern).required(),
     }).required(),
     returnAddress: Joi.object({
       line1: Joi.string().allow("", null),

@@ -1340,6 +1340,88 @@ class AuthService {
     );
   }
 
+  async assertBuyerOtpRole(user, requestContext = {}) {
+    if (!user || user.role === ROLES.BUYER) {
+      return;
+    }
+
+    await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
+      userId: user.id,
+      email: user.email,
+      provider: "otp",
+      ...requestContext,
+      metadata: {
+        reason: "customer_portal_role_mismatch",
+        role: user.role,
+      },
+    });
+
+    // Do not reveal which role owns the supplied identity.
+    throw new AppError("Invalid credentials", 401);
+  }
+
+  async findBuyerOtpIdentityConflict(identity) {
+    const [emailUser, phoneUser] = await Promise.all([
+      identity.channel === "email"
+        ? this.authRepository.findUserByEmail(identity.email)
+        : null,
+      identity.channel === "mobile"
+        ? this.authRepository.findUserByPhone(identity.mobile)
+        : null,
+    ]);
+
+    const matchedUser = emailUser || phoneUser;
+    const conflictingUsers = [emailUser, phoneUser]
+      .filter(Boolean)
+      .filter((candidate, index, users) =>
+        users.findIndex((entry) => String(entry.id) === String(candidate.id)) === index);
+
+    if (conflictingUsers.length > 1) {
+      throw new AppError(
+        "This email address and mobile number belong to different accounts. Please contact support.",
+        409,
+      );
+    }
+
+    return matchedUser;
+  }
+
+  async assertBuyerOtpEmailAvailableForPhone(email, phone, currentUserId = null) {
+    if (!email || !phone) {
+      return;
+    }
+
+    const [emailUser, phoneUser] = await Promise.all([
+      this.authRepository.findUserByEmail(email),
+      this.authRepository.findUserByPhone(phone),
+    ]);
+
+    if (
+      emailUser &&
+      phoneUser &&
+      String(emailUser.id) !== String(phoneUser.id)
+    ) {
+      throw new AppError(
+        "This email address and mobile number belong to different accounts. Please contact support.",
+        409,
+      );
+    }
+
+    if (
+      emailUser &&
+      String(emailUser.id) !== String(currentUserId || "")
+    ) {
+      throw new AppError("This email address is already in use.", 409);
+    }
+
+    if (
+      phoneUser &&
+      String(phoneUser.id) !== String(currentUserId || "")
+    ) {
+      throw new AppError("This mobile number is already in use.", 409);
+    }
+  }
+
   /*
    * SINGLE PUBLIC SERVICE METHOD
    *
@@ -1390,19 +1472,7 @@ class AuthService {
      * Buyer OTP endpoint must never authenticate seller,
      * admin, influencer or other account types.
      */
-    if (
-      existingUser &&
-      existingUser.role !== ROLES.BUYER
-    ) {
-      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
-        userId: existingUser.id,
-        email: existingUser.email,
-        provider: "otp",
-        ...requestContext,
-        metadata: { reason: "customer_portal_role_mismatch", role: existingUser.role },
-      });
-      throw new AppError("Invalid credentials", 401);
-    }
+    await this.assertBuyerOtpRole(existingUser, requestContext);
 
     if (existingUser) {
       await this.assertUserCanAuthenticate(existingUser);
@@ -1787,23 +1857,11 @@ class AuthService {
     ]);
 
     let user =
-      await this.findBuyerOtpUser(identity);
+      await this.findBuyerOtpIdentityConflict(identity);
 
     let authAction = "login";
 
-    if (
-      user &&
-      user.role !== ROLES.BUYER
-    ) {
-      await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_LOGIN_FAILED, "failed", {
-        userId: user.id,
-        email: user.email,
-        provider: "otp",
-        ...requestContext,
-        metadata: { reason: "customer_portal_role_mismatch", role: user.role },
-      });
-      throw new AppError("Invalid credentials", 401);
-    }
+    await this.assertBuyerOtpRole(user, requestContext);
 
     /*
      * REGISTER NEW BUYER
@@ -1838,7 +1896,9 @@ class AuthService {
         email:
           identity.channel === "email"
             ? identity.email
-            : undefined,
+            : this.makeMobileOnlyInternalEmail(
+              identity.mobile,
+            ),
 
         phone:
           identity.channel === "mobile"
@@ -1887,21 +1947,38 @@ class AuthService {
         /*
          * Handles two simultaneous verification requests.
          */
-        if (Number(error?.code) !== 11000) {
+        const isDuplicate =
+          Number(error?.code) === 11000 ||
+          error?.code === "DUPLICATE_ENTRY" ||
+          error?.code === "23505";
+
+        if (!isDuplicate) {
           throw error;
         }
 
         user =
-          await this.findBuyerOtpUser(identity);
+          await this.findBuyerOtpIdentityConflict(identity);
 
         if (!user) {
           throw error;
         }
 
+        await this.assertBuyerOtpRole(user, requestContext);
+
         authAction = "login";
       }
 
       if (authAction === "register") {
+        await this.assertBuyerOtpRole(user, requestContext);
+
+        if (identity.channel === "email" && user.phone) {
+          await this.assertBuyerOtpEmailAvailableForPhone(
+            identity.email,
+            user.phoneNormalized || user.phone,
+            user.id,
+          );
+        }
+
         await Promise.all([
           this.walletService.ensureWallet(
             user.id,
@@ -1923,6 +2000,14 @@ class AuthService {
        * LOGIN EXISTING BUYER
        */
       await this.assertUserCanAuthenticate(user);
+
+      if (identity.channel === "email" && user.phone) {
+        await this.assertBuyerOtpEmailAvailableForPhone(
+          identity.email,
+          user.phoneNormalized || user.phone,
+          user.id,
+        );
+      }
 
       const updatedUser =
         await this.authRepository
