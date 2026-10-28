@@ -299,6 +299,8 @@ const shippingSchema = new mongoose.Schema(
     // References a ShippingProfile (PostgreSQL UUID). When set, the profile
     // rules override the inline fields for serviceability, charges, and ETA.
     shippingProfileId: { type: String, trim: true, default: null },
+    copiedFromShippingTemplateId: { type: String, trim: true },
+    copiedFromShippingTemplateName: { type: String, trim: true },
   },
   { _id: false },
 );
