@@ -1549,6 +1549,7 @@ resolveSellerFeeTaxAmount(
       orderId: commission.order_id || null,
       status,
       orderStatus: orderStatus || null,
+      deliveredAt: deliveredAt?.toISOString() || null,
       netAmount,
       releaseStatus: "pending",
       available: false,
@@ -2688,6 +2689,7 @@ gstTcsAmount,
         payment_reference: offsetOnly ? `offset_${payoutId}` : options.paymentReference || null,
         metadata: this.jsonb({
           source: options.source || "batch_payout",
+          previousPayoutId: options.previousPayoutId || null,
           commissionIds: payoutCommissions.map((commission) => commission.id),
           skippedCommissions,
           recoverySettlementIds: [],
@@ -3169,13 +3171,61 @@ gstTcsAmount,
     return null;
   }
 
+  isRazorpayXReplacementSafe(providerStatus) {
+    return ["reversed", "rejected", "cancelled"].includes(
+      String(providerStatus || "").toLowerCase(),
+    );
+  }
+
   async retryFailedPayout(payoutId, options = {}) {
-    const payout = await knex("seller_payouts").where("id", payoutId).first();
+    let payout = await knex("seller_payouts").where("id", payoutId).first();
     if (!payout) throw new AppError("Payout not found", 404);
     if (payout.status !== "failed") {
       throw new AppError(`Only failed payouts can be retried`, 409);
     }
-    const payoutMetadata = this.parseJson(payout.metadata, {});
+    let payoutMetadata = this.parseJson(payout.metadata, {});
+    if (payoutMetadata.replacementPayoutId) {
+      throw new AppError(
+        `This payout was already replaced by payout ${payoutMetadata.replacementPayoutId}. Retry the replacement only if it fails safely.`,
+        409,
+      );
+    }
+
+    const paymentMethod = options.paymentMethod || payout.payment_method || null;
+    const providerPayoutId =
+      payout.payment_reference || payoutMetadata.razorpayX?.payoutId || null;
+    if (this.isRazorpayXRequested(paymentMethod) && providerPayoutId) {
+      if (!env.razorpayX.enabled) {
+        throw new AppError(
+          "RazorpayX status must be reconciled before retry, but RazorpayX is disabled.",
+          503,
+        );
+      }
+      const providerPayout = await this.razorpayXProvider.fetchPayout(
+        providerPayoutId,
+      );
+      const providerStatus = String(providerPayout.status || "").toLowerCase();
+      await this.handleRazorpayXPayoutWebhook(
+        providerPayout,
+        `payout.${providerStatus || "processing"}`,
+        options.actor,
+      );
+      if (["processed", "completed"].includes(providerStatus)) {
+        throw new AppError(
+          "The original RazorpayX payout has already been processed. No replacement was created.",
+          409,
+        );
+      }
+      if (!this.isRazorpayXReplacementSafe(providerStatus)) {
+        throw new AppError(
+          `The original RazorpayX payout is ${providerStatus || "unconfirmed"}. A replacement is blocked until RazorpayX confirms reversed, rejected, or cancelled. Sync its status instead.`,
+          409,
+        );
+      }
+      payout = await knex("seller_payouts").where("id", payoutId).first();
+      payoutMetadata = this.parseJson(payout.metadata, {});
+    }
+
     const retryCommissionIds = Array.isArray(payoutMetadata.commissionIds)
       ? payoutMetadata.commissionIds.filter(Boolean)
       : undefined;
@@ -3188,6 +3238,68 @@ gstTcsAmount,
       }, "Failed seller payout retry blocked because commission IDs are missing");
       throw new AppError("Cannot retry this payout because the original commission IDs are missing. Rebuild the seller payout from eligible commissions.", 409);
     }
+
+    await knex.transaction(async (trx) => {
+      const locked = await trx("seller_payouts")
+        .where("id", payoutId)
+        .first()
+        .forUpdate();
+      if (!locked) throw new AppError("Payout not found", 404);
+      const lockedMetadata = this.parseJson(locked.metadata, {});
+      const existingReplacement = await trx("seller_payouts")
+        .whereRaw("COALESCE(metadata, '{}'::jsonb) #>> '{previousPayoutId}' = ?", [
+          String(payoutId),
+        ])
+        .orderBy("created_at", "desc")
+        .first();
+      const linkedCommission = await trx("seller_commissions")
+        .whereIn("id", retryCommissionIds)
+        .whereNotNull("payout_id")
+        .whereNot("payout_id", payoutId)
+        .first("payout_id");
+      if (
+        lockedMetadata.replacementPayoutId ||
+        existingReplacement ||
+        linkedCommission
+      ) {
+        const replacementId =
+          lockedMetadata.replacementPayoutId ||
+          existingReplacement?.id ||
+          linkedCommission.payout_id;
+        if (!lockedMetadata.replacementPayoutId) {
+          await trx("seller_payouts")
+            .where("id", payoutId)
+            .update({
+              metadata: this.jsonb({
+                ...lockedMetadata,
+                replacementPayoutId: replacementId,
+                retryState: "replaced",
+              }),
+              updated_at: trx.fn.now(),
+            });
+        }
+        throw new AppError(
+          `This payout was already replaced by payout ${replacementId}.`,
+          409,
+        );
+      }
+      if (lockedMetadata.retryState === "creating") {
+        throw new AppError("A retry is already in progress for this payout.", 409);
+      }
+      await trx("seller_payouts")
+        .where("id", payoutId)
+        .update({
+          metadata: this.jsonb({
+            ...lockedMetadata,
+            retryState: "creating",
+            retryStartedAt: new Date().toISOString(),
+            retryStartedBy:
+              options.actor?.userId || options.actor?.sub || null,
+          }),
+          updated_at: trx.fn.now(),
+        });
+    });
+
     logger.info(
       {
         payoutId,
@@ -3220,6 +3332,18 @@ gstTcsAmount,
         actor: options.actor,
       });
     } catch (error) {
+      await knex("seller_payouts")
+        .where("id", payoutId)
+        .update({
+          metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [
+            JSON.stringify({
+              retryState: "failed_to_create",
+              retryCreateError: error.message,
+              retryCreateFailedAt: new Date().toISOString(),
+            }),
+          ]),
+          updated_at: knex.fn.now(),
+        });
       logger.error({
         err: error,
         payoutId,
@@ -3235,6 +3359,14 @@ gstTcsAmount,
     }
     const newPayoutId = this.resolvePayoutIdFromRetryResult(retryResult);
     if (!newPayoutId) {
+      await knex("seller_payouts")
+        .where("id", payoutId)
+        .update({
+          metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [
+            JSON.stringify({ retryState: "failed_to_create" }),
+          ]),
+          updated_at: knex.fn.now(),
+        });
       logger.error({
         payoutId,
         sellerId: payout.seller_id,
@@ -3243,6 +3375,18 @@ gstTcsAmount,
       }, "Failed seller payout retry returned no replacement payout ID");
       throw new AppError("Payout retry could not resolve the replacement payout ID. Check server logs for retryResult.", 500);
     }
+    await knex("seller_payouts")
+      .where("id", payoutId)
+      .update({
+        metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [
+          JSON.stringify({
+            replacementPayoutId: newPayoutId,
+            retryState: "replaced",
+            replacedAt: new Date().toISOString(),
+          }),
+        ]),
+        updated_at: knex.fn.now(),
+      });
     logger.info({
       previousPayoutId: payoutId,
       newPayoutId,
@@ -3378,6 +3522,7 @@ gstTcsAmount,
     const payoutPreference = await this.resolveSellerPayoutPreference(sellerId, query.organizationId || null, commerceSettings);
     const evaluations = await this.evaluateCommissionsRelease(commissions, commerceSettings);
     const balances = {
+      deliveredBalance: 0,
       pendingBalance: 0,
       availableBalance: 0,
       inProcessBalance: 0,
@@ -3390,6 +3535,7 @@ gstTcsAmount,
       ),
     };
     const counts = {
+      delivered: 0,
       pending: 0,
       available: 0,
       inProcess: 0,
@@ -3400,6 +3546,12 @@ gstTcsAmount,
     const nextEligibleDates = [];
 
     evaluations.forEach(({ release }) => {
+      if (release.deliveredAt && Number(release.netAmount || 0) > 0) {
+        balances.deliveredBalance = this.round(
+          balances.deliveredBalance + release.netAmount,
+        );
+        counts.delivered += 1;
+      }
       if (release.releaseStatus === "available") {
         balances.availableBalance = this.round(balances.availableBalance + release.netAmount);
         counts.available += 1;
@@ -4065,11 +4217,42 @@ gstTcsAmount,
       loadPayouts("failed", "updated_at", "desc"),
       this.listNegativeBalanceRecoveries({ ...query, limit, offset }),
     ]);
+    const failedCommissionIds = failedRows.flatMap((row) => {
+      const metadata = this.parseJson(row.metadata, {});
+      return Array.isArray(metadata.commissionIds)
+        ? metadata.commissionIds.filter(Boolean)
+        : [];
+    });
+    const replacementLinks = failedCommissionIds.length
+      ? await knex("seller_commissions")
+        .whereIn("id", failedCommissionIds)
+        .whereNotNull("payout_id")
+        .select("id", "payout_id")
+      : [];
+    const replacementByCommission = new Map(
+      replacementLinks.map((row) => [String(row.id), row.payout_id]),
+    );
+    const reconciledFailedRows = failedRows.map((row) => {
+      const metadata = this.parseJson(row.metadata, {});
+      if (metadata.replacementPayoutId) return row;
+      const replacementPayoutId = (metadata.commissionIds || [])
+        .map((commissionId) => replacementByCommission.get(String(commissionId)))
+        .find((candidate) => candidate && String(candidate) !== String(row.id));
+      if (!replacementPayoutId) return row;
+      return {
+        ...row,
+        metadata: {
+          ...metadata,
+          replacementPayoutId,
+          retryState: "replaced",
+        },
+      };
+    });
     const [pendingApproval, processing, onHold, failed] = await Promise.all([
       this.enrichFinanceRecords(pendingApprovalRows),
       this.enrichFinanceRecords(processingRows),
       this.enrichFinanceRecords(onHoldRows),
-      this.enrichFinanceRecords(failedRows),
+      this.enrichFinanceRecords(reconciledFailedRows),
     ]);
 
     return {
