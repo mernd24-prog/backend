@@ -1,5 +1,22 @@
 const Joi = require("joi");
 
+const listMyNotificationsSchema = Joi.object({
+  body: Joi.object({}).required(),
+  query: Joi.object({
+    page: Joi.number().integer().min(1).default(1),
+    limit: Joi.number().integer().min(1).max(100).default(20),
+    fromDate: Joi.date().iso().raw(),
+    toDate: Joi.date().iso().raw(),
+    type: Joi.string().trim().max(40),
+    channel: Joi.string().trim().max(40),
+    search: Joi.string().trim().max(128),
+    q: Joi.string().trim().max(128),
+    keyWord: Joi.string().trim().max(128),
+    raw: Joi.alternatives().try(Joi.boolean(), Joi.string().valid("0", "1", "true", "false", "yes", "no")),
+  }).default({}),
+  params: Joi.object({}).required(),
+});
+
 const createNotificationSchema = Joi.object({
   body: Joi.alternatives().try(
     Joi.object({
@@ -24,4 +41,4 @@ const createNotificationSchema = Joi.object({
   params: Joi.object({}).required(),
 });
 
-module.exports = { createNotificationSchema };
+module.exports = { createNotificationSchema, listMyNotificationsSchema };

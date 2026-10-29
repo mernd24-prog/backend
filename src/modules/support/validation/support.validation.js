@@ -86,9 +86,11 @@ const adminListSupportQueriesSchema = Joi.object({
     status: Joi.string().valid(...SUPPORT_QUERY_STATUSES),
     category: Joi.string().trim().uppercase().valid(...allCategories),
     search: Joi.string().trim().max(128),
-    fromDate: Joi.date().iso(),
-    toDate: Joi.date().iso(),
-    limit: Joi.number().integer().min(1).max(200).default(50),
+    // Keep the original ISO string so the repository can expand date-only
+    // toDate values to the end of that day.
+    fromDate: Joi.date().iso().raw(),
+    toDate: Joi.date().iso().raw(),
+    limit: Joi.number().integer().min(1).max(200).default(20),
     offset: Joi.number().integer().min(0).default(0),
   }).required(),
   params: Joi.object({}).required(),

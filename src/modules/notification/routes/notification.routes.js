@@ -2,7 +2,10 @@ const express = require("express");
 const { NotificationController } = require("../controllers/notification.controller");
 const { catchErrors } = require("../../../shared/middleware/catch-errors");
 const { checkInput } = require("../../../shared/middleware/check-input");
-const { createNotificationSchema } = require("../validation/notification.validation");
+const {
+  createNotificationSchema,
+  listMyNotificationsSchema,
+} = require("../validation/notification.validation");
 const { authenticate } = require("../../../shared/middleware/authenticate");
 const { allowActions } = require("../../../shared/middleware/access");
 const { ACTIONS } = require("../../../shared/constants/actions");
@@ -10,7 +13,12 @@ const { ACTIONS } = require("../../../shared/constants/actions");
 const notificationRoutes = express.Router();
 const notificationController = new NotificationController();
 
-notificationRoutes.get("/me", authenticate, catchErrors(notificationController.listMine));
+notificationRoutes.get(
+  "/me",
+  authenticate,
+  checkInput(listMyNotificationsSchema),
+  catchErrors(notificationController.listMine),
+);
 notificationRoutes.get(
   "/admin",
   authenticate,

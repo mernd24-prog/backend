@@ -8,9 +8,10 @@ class AdminSupportController {
   }
 
   listQueries = async (req, res) => {
+    const { user_type: userType, ...filters } = req.query;
     const result = await this.supportService.listForAdmin({
-      ...req.query,
-      userType: req.query.user_type,
+      ...filters,
+      userType,
     });
     res.json(okResponse(result.items, {
       pagination: paginationMeta(
