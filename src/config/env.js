@@ -354,6 +354,7 @@ const env = {
   },
   apitxt: {
     baseUrl: process.env.APITXT_BASE_URL || "",
+    alertEmail: cleanEnvValue(process.env.APITXT_ALERT_EMAIL || ""),
     apiKey: process.env.APITXT_API_KEY || "",
     authKey: process.env.APITXT_AUTH_KEY || process.env.APITXT_API_KEY || "",
     webhookSecret: cleanEnvValue(process.env.APITXT_WEBHOOK_SECRET || ""),

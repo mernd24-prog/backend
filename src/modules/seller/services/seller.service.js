@@ -76,6 +76,22 @@ class SellerService {
     return actor.ownerSellerId || actor.sellerId || actor.userId || actor.sub;
   }
 
+  async getSellerAlertName(sellerId) {
+    try {
+      const seller = await this.sellerRepository.findSellerById(sellerId);
+      const profile = seller?.sellerProfile || {};
+      const personalName = composeProfileName(
+        seller?.profile?.firstName,
+        seller?.profile?.lastName,
+      );
+      return String(
+        profile.displayName || profile.businessName || profile.legalBusinessName || personalName || "Seller",
+      ).trim();
+    } catch (error) {
+      return "Seller";
+    }
+  }
+
   normalizeDashboardGranularity(granularity, fromDate, toDate) {
     const requested = String(granularity || "").toLowerCase();
     if (["hour", "day", "week", "month"].includes(requested)) {
@@ -760,6 +776,7 @@ class SellerService {
 
   async submitKyc(payload, actor) {
     const sellerId = this.getSellerId(actor);
+    const sellerName = await this.getSellerAlertName(sellerId);
     const normalizedPayload = {
       ...payload,
       panNumber: sellerOrganizationService.normalizeCode(payload.panNumber),
@@ -862,7 +879,7 @@ class SellerService {
       const gstResult = shouldVerifyGst
         ? await this.kycVerificationService.verifyGstDetails({
             gstNumber: normalizedPayload.gstNumber,
-          })
+          }, { sellerId, sellerName })
         : null;
 
       logger.info(
@@ -901,6 +918,7 @@ class SellerService {
           : normalizedPayload,
         {
         sellerId,
+        sellerName,
         actor,
         },
       );
@@ -1108,6 +1126,7 @@ class SellerService {
     try {
       response = await this.kycVerificationService.sendAadhaarOtp(aadhaarNumber, {
         sellerId,
+        sellerName: await this.getSellerAlertName(sellerId),
         actor,
       });
     } catch (error) {
@@ -1313,7 +1332,7 @@ class SellerService {
       verificationResponse = await this.kycVerificationService.verifyAadhaarOtp({
         reference_id: referenceId,
         otp,
-      });
+      }, { sellerId, sellerName: await this.getSellerAlertName(sellerId) });
 
       const verifiedAt = verificationResponse?.verified ? new Date() : null;
       await this.sellerRepository.upsertAadhaarVerification(sellerId, {
@@ -1426,7 +1445,7 @@ class SellerService {
       panNumber,
       legalName,
       dateOfBirth,
-    });
+    }, { sellerId, sellerName: await this.getSellerAlertName(sellerId) });
 
     const panVerified = verificationResponse?.verified === true;
     const verifiedAt = panVerified ? new Date() : null;

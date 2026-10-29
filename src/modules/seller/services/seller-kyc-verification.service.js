@@ -3,6 +3,65 @@ const { apitxtService } = require("../../../integrations/apitxt");
 const { AppError } = require("../../../shared/errors/app-error");
 const { logger } = require("../../../shared/logger/logger");
 const { ApitxtError } = require("../../../integrations/apitxt/apitxt.errors");
+const { sendMail } = require("../../../infrastructure/mail/mailer");
+
+const escapeHtml = (value = "") => String(value).replace(/[&<>\"']/g, (character) => ({
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  "\"": "&quot;",
+  "'": "&#39;",
+}[character]));
+
+async function emailApitxtFailure(error, { operation, sellerName } = {}) {
+  const recipient = env.apitxt.alertEmail;
+  if (!recipient || !(error instanceof ApitxtError)) return;
+
+  const details = [
+    ["Operation", operation || "KYC verification"],
+    ["Occurred at", new Date().toISOString()],
+    ["HTTP status", error.statusCode || "unknown"],
+    ["Provider code", error.providerCode || "not provided"],
+    ["Seller", sellerName || "Seller name unavailable"],
+    ["Provider message", error.message || "No message provided"],
+  ];
+  const text = ["APITXT verification request failed", ...details.map(([label, value]) => `${label}: ${value}`)].join("\n");
+  const rows = details.map(([label, value]) => `<tr><td style=\"padding:10px 12px;color:#64748b;border-bottom:1px solid #e2e8f0;\">${escapeHtml(label)}</td><td style=\"padding:10px 12px;color:#0f172a;font-weight:600;border-bottom:1px solid #e2e8f0;\">${escapeHtml(value)}</td></tr>`).join("");
+  const safeOperation = escapeHtml(operation || "KYC verification");
+  const html = `
+    <div style="margin:0;background:#f1f5f9;padding:32px 12px;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
+      <div style="max-width:620px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;">
+        <div style="background:#123b35;padding:22px 28px;color:#ffffff;">
+          <div style="font-size:13px;letter-spacing:1.5px;text-transform:uppercase;color:#b8d8cf;">Sam Global · Operations</div>
+          <h1 style="margin:10px 0 0;font-size:22px;line-height:1.3;">APITXT verification alert</h1>
+        </div>
+        <div style="padding:26px 28px;">
+          <div style="display:inline-block;background:#fff1f0;color:#b42318;padding:6px 10px;border-radius:20px;font-size:12px;font-weight:700;">ACTION REQUIRED</div>
+          <h2 style="margin:16px 0 8px;font-size:18px;">${safeOperation} failed</h2>
+          <p style="margin:0 0 18px;color:#475569;line-height:1.6;">An APITXT verification request could not be completed. Check the provider dashboard for the request status and account access.</p>
+          <table style="width:100%;border-collapse:collapse;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">${rows}</table>
+          <p style="margin:20px 0 0;color:#64748b;font-size:12px;line-height:1.5;">This automated alert excludes Aadhaar, PAN, and GST numbers.</p>
+        </div>
+        <div style="padding:14px 28px;background:#f8fafc;border-top:1px solid #e2e8f0;color:#64748b;font-size:12px;">Sam Global · Automated provider monitoring</div>
+      </div>
+    </div>`;
+
+  try {
+    await sendMail({
+      to: recipient,
+      subject: `Action required | APITXT ${operation || "KYC verification"} failed`,
+      text,
+      html,
+      type: "general",
+    });
+  } catch (mailError) {
+    logger.error?.({
+      operation: operation || "KYC verification",
+      errorName: mailError.name,
+      errorMessage: mailError.message,
+    }, "Failed to send APITXT failure alert email");
+  }
+}
 
 
 class SellerKycVerificationService {
@@ -156,7 +215,7 @@ class SellerKycVerificationService {
           "\nVerifying GST..."
         );
         console.log("[SellerKYC][GST] starting", {
-          sellerId: context.sellerId || null,
+        sellerName: context.sellerName,
           verifyGst: this.verifyGst,
           hasGstNumber: Boolean(payload.gstNumber),
         });
@@ -254,6 +313,11 @@ class SellerKycVerificationService {
 
 
     } catch(error){
+
+      await emailApitxtFailure(error, {
+        operation: "Seller PAN/GST onboarding verification",
+        sellerName: context.sellerName,
+      });
 
 
       console.log(
@@ -407,7 +471,7 @@ class SellerKycVerificationService {
   async verifyAadhaarOtp({
     reference_id,
     otp
-  }) {
+  }, context = {}) {
 
     if (!this.enabled || !this.verifyAadhaar) {
       const verified = String(otp || "").trim() === this.staticOtp;
@@ -432,14 +496,19 @@ class SellerKycVerificationService {
       };
     }
 
-    const response =
-      await this.identityVerificationProvider.verifyAadhaarOtp({
+    let response;
+    try {
+      response = await this.identityVerificationProvider.verifyAadhaarOtp({
 
         reference_id,
 
         otp
 
       });
+    } catch (error) {
+      await emailApitxtFailure(error, { operation: "Aadhaar OTP verification", sellerName: context.sellerName });
+      throw error;
+    }
 
 
     return response;
@@ -452,7 +521,7 @@ class SellerKycVerificationService {
     name,
     dateOfBirth,
     dob,
-  } = {}) {
+  } = {}, context = {}) {
     if (!this.enabled || !this.verifyPan) {
       return {
         skipped: true,
@@ -471,11 +540,17 @@ class SellerKycVerificationService {
       };
     }
 
-    const result = await this.identityVerificationProvider.verifyPan({
-      panNumber,
-      name: name || legalName,
-      dob: dob || dateOfBirth,
-    });
+    let result;
+    try {
+      result = await this.identityVerificationProvider.verifyPan({
+        panNumber,
+        name: name || legalName,
+        dob: dob || dateOfBirth,
+      });
+    } catch (error) {
+      await emailApitxtFailure(error, { operation: "PAN verification", sellerName: context.sellerName });
+      throw error;
+    }
 
     this.assertVerified(
       result,
@@ -489,7 +564,7 @@ class SellerKycVerificationService {
   async verifyGstDetails({
     gstNumber,
     gstin,
-  } = {}) {
+  } = {}, context = {}) {
     if (!this.enabled || !this.verifyGst) {
       console.log("[SellerKYC][GST] skipped", {
         enabled: this.enabled,
@@ -519,9 +594,15 @@ class SellerKycVerificationService {
       hasGstNumber: Boolean(gstNumber || gstin),
     });
 
-    const result = await this.identityVerificationProvider.verifyGst(
-      gstNumber || gstin,
-    );
+    let result;
+    try {
+      result = await this.identityVerificationProvider.verifyGst(
+        gstNumber || gstin,
+      );
+    } catch (error) {
+      await emailApitxtFailure(error, { operation: "GST verification", sellerName: context.sellerName });
+      throw error;
+    }
 
     this.assertVerified(
       result,
@@ -537,7 +618,7 @@ class SellerKycVerificationService {
     return result;
   }
 
-  async sendAadhaarOtp(aadhaarNumber) {
+  async sendAadhaarOtp(aadhaarNumber, context = {}) {
     if (!this.enabled || !this.verifyAadhaar) {
       const referenceId = this.makeMockAadhaarReferenceId();
       return {
@@ -562,6 +643,7 @@ class SellerKycVerificationService {
     try {
       response = await this.identityVerificationProvider.sendAadhaarOtp(aadhaarNumber);
     } catch (error) {
+      await emailApitxtFailure(error, { operation: "Aadhaar OTP send", sellerName: context.sellerName });
       if (error instanceof ApitxtError) {
         const message =
           String(error.providerCode || "") === "310"
