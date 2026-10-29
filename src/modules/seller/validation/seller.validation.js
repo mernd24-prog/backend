@@ -21,6 +21,7 @@ const organizationKycStatuses = ["not_submitted", "submitted", "under_review", "
 const organizationBankStatuses = ["not_submitted", "submitted", "verified", "rejected"];
 const organizationGoLiveStatuses = ["pending", "ready", "live", "blocked", "rejected"];
 const personNamePattern = /^[A-Za-z][A-Za-z .'-]{1,119}$/;
+const indianMobilePattern = /^[6-9]\d{9}$/;
 const bankNamePattern = /^[A-Za-z][A-Za-z .&'-]{1,119}$/;
 const branchNamePattern = /^[A-Za-z0-9][A-Za-z0-9 .,&'/-]{1,119}$/;
 const businessNamePattern = /^[A-Za-z0-9][A-Za-z0-9 .,&'()/-]{1,179}$/;
@@ -65,7 +66,7 @@ const sellerOrganizationBodySchema = Joi.object({
   businessType: Joi.string().valid("individual", "proprietorship", "partnership", "private_limited", "llp", "public_limited").allow("", null),
   description: Joi.string().max(2000).allow("", null),
   supportEmail: Joi.string().email(),
-  supportPhone: Joi.string().pattern(/^\d{10,15}$/),
+  supportPhone: Joi.string().pattern(indianMobilePattern),
   registrationNumber: Joi.string().max(128).allow("", null),
   udyogAadhaarNumber: optionalUdyogAadhaarSchema,
   aadhaarNumber: Joi.string().pattern(aadhaarPattern).allow("", null),
@@ -335,7 +336,7 @@ const updateSellerProfileSchema = Joi.object({
     legalBusinessName: Joi.string().pattern(legalBusinessNamePattern).min(2).max(160).required(),
     description: Joi.string().max(2000).allow("", null),
     supportEmail: Joi.string().email().required(),
-    supportPhone: Joi.string().pattern(/^\d{10,15}$/).required(),
+    supportPhone: Joi.string().pattern(indianMobilePattern).required(),
     businessType: Joi.string().valid("individual", "proprietorship", "partnership", "private_limited", "llp", "public_limited").allow("", null),
     registrationNumber: Joi.string().allow("", null),
     gstNumber: Joi.string().uppercase().pattern(gstPattern).allow("", null),
@@ -461,7 +462,7 @@ const updateSellerMoreInfoSchema = Joi.object({
     primaryContactName: Joi.string().max(120).allow("", null),
     registrationNumber: Joi.string().allow("", null),
     supportEmail: Joi.string().email(),
-    supportPhone: Joi.string().min(10).max(15),
+    supportPhone: Joi.string().pattern(indianMobilePattern),
   })
     .min(1)
     .required(),
