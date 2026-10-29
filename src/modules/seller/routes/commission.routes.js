@@ -608,7 +608,7 @@ router.post("/payouts/:payoutId/release-hold", authenticate, platformFinanceOnly
 });
 
 // ==============================
-// Admin: Retry failed payout
+// Admin: Retry failed payout or reopen a cancelled payout
 // ==============================
 router.post("/payouts/:payoutId/retry", authenticate, platformFinanceOnly, financeManage, async (req, res, next) => {
   try {
@@ -620,7 +620,7 @@ router.post("/payouts/:payoutId/retry", authenticate, platformFinanceOnly, finan
     });
     return res.status(200).json({
       success: true,
-      message: "Payout retry started",
+      message: "Payout retry/reopen started",
       data: result,
     });
   } catch (err) {

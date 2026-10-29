@@ -65,13 +65,25 @@ paymentRoutes.get(
   }),
 );
 paymentRoutes.post(
+  "/cod-collections/shipments/:shipmentId/confirm",
+  authenticate,
+  allowPermissions("sellers/commissions:update"),
+  checkInput(codCollectionSubmitSchema),
+  catchErrors(async (req, res) => {
+    const collection = await settlementLifecycleService.submitSellerCodCollection(req.params.shipmentId, req.body, req.auth);
+    res.json({ success: true, message: "COD cash retention confirmed", data: collection });
+  }),
+);
+// Backward-compatible route name for deployed clients. Its contract is now the
+// same strict cash-retention confirmation contract as /confirm.
+paymentRoutes.post(
   "/cod-collections/shipments/:shipmentId/submit",
   authenticate,
   allowPermissions("sellers/commissions:update"),
   checkInput(codCollectionSubmitSchema),
   catchErrors(async (req, res) => {
     const collection = await settlementLifecycleService.submitSellerCodCollection(req.params.shipmentId, req.body, req.auth);
-    res.json({ success: true, message: "COD collection submitted for verification", data: collection });
+    res.json({ success: true, message: "COD cash retention confirmed", data: collection });
   }),
 );
 paymentRoutes.post(

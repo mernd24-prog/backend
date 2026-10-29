@@ -7,7 +7,13 @@ const allocatePayoutRecoveries = (availableAmount, recoveries = []) => {
   let remainingAvailable = available;
   const applications = [];
 
-  for (const recovery of recoveries) {
+  const orderedRecoveries = [...recoveries].sort((left, right) => {
+    const leftTime = new Date(left.created_at || left.createdAt || 0).getTime();
+    const rightTime = new Date(right.created_at || right.createdAt || 0).getTime();
+    if (leftTime !== rightTime) return leftTime - rightTime;
+    return String(left.id || "").localeCompare(String(right.id || ""));
+  });
+  for (const recovery of orderedRecoveries) {
     if (remainingAvailable <= 0) break;
     const recoveryAmount = roundMoney(recovery.net_amount ?? recovery.amount);
     if (recoveryAmount >= 0) continue;

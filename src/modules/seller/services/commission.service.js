@@ -23,6 +23,7 @@ const {
   resolveShippingPolicy,
 } = require("../../../shared/domain/seller-payout-rules");
 const { allocatePayoutRecoveries } = require("../../../shared/domain/payout-recovery-allocation");
+const { recoverySnapshot, restoreRecoveryAllocation } = require("../../../shared/domain/cod-recovery");
 
 class SellerCommissionService {
   constructor({ razorpayXProvider = new RazorpayXPayoutProvider(), walletService = new WalletService() } = {}) {
@@ -1447,6 +1448,61 @@ resolveSellerFeeTaxAmount(
     })));
   }
 
+  async releaseCancelledPayoutItems(trx, payoutId, context = {}) {
+    const commissions = await trx("seller_commissions")
+      .where("payout_id", payoutId)
+      .whereNotNull("order_item_id")
+      .select("id", "seller_id", "order_id", "order_item_id");
+    if (!commissions.length) return;
+
+    const items = await trx("order_items")
+      .whereIn("id", commissions.map((row) => row.order_item_id))
+      .select("id", "payout_status", "payout_eligible_at", "return_eligible_until", "payout_hold_reason");
+    const itemById = new Map(items.map((item) => [String(item.id), item]));
+    const protectedStatuses = new Set(["held", "refunded", "released", "paid"]);
+    const transitions = commissions.map((commission) => {
+      const item = itemById.get(String(commission.order_item_id)) || {};
+      const fromStatus = String(item.payout_status || "pending").toLowerCase();
+      const eligibleAt = this.toDate(item.payout_eligible_at || item.return_eligible_until);
+      const toStatus = protectedStatuses.has(fromStatus)
+        ? fromStatus
+        // A commission can enter this payout only after it has passed payout
+        // eligibility checks. Cancelling the payout restores that eligibility;
+        // it must not start a new return-window wait. Later holds/refunds/etc.
+        // are protected above and remain blocked.
+        : "eligible";
+      return { commission, item, fromStatus, toStatus, eligibleAt };
+    });
+
+    for (const transition of transitions) {
+      await trx("order_items").where("id", transition.commission.order_item_id).update({
+        payout_status: transition.toStatus,
+        payout_id: null,
+        payout_hold_reason:
+          transition.toStatus === "held" ? transition.item.payout_hold_reason || null : null,
+      });
+    }
+    await trx("payout_status_history").insert(transitions.map((transition) => ({
+      id: uuidv4(),
+      seller_id: transition.commission.seller_id,
+      order_id: transition.commission.order_id,
+      order_item_id: transition.commission.order_item_id,
+      commission_id: transition.commission.id,
+      payout_id: payoutId,
+      from_status: transition.fromStatus,
+      to_status: transition.toStatus,
+      reason: transition.toStatus === "eligible"
+        ? "payout_cancelled_released_for_repayment"
+        : "payout_cancelled_preserved_terminal_or_held_state",
+      actor_id: context.actor?.userId || context.actor?.sub || "system",
+      actor_role: context.actor?.role || "system",
+      metadata: this.jsonb({
+        cancellationReason: context.reason || null,
+        payoutEligibleAt: transition.eligibleAt?.toISOString() || null,
+      }),
+    })));
+  }
+
   isReleasedOrderStatus(status) {
     return [ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED, ORDER_STATUS.PARTIALLY_RETURNED].includes(status);
   }
@@ -2374,19 +2430,41 @@ gstTcsAmount,
         knex.raw("SUM(GREATEST(COALESCE(\"orderItem\".line_total, 0) - COALESCE(\"orderItem\".discount_amount, 0), 0)) AS seller_order_amount"),
       );
     const orderIds = orderRows.map((row) => row.id);
-    const [collections, commissionRows] = orderIds.length
+    const [collections, commissionRows, recoveryRows] = orderIds.length
       ? await Promise.all([
         knex("cod_collections").where("seller_id", sellerId).whereIn("order_id", orderIds),
         knex("seller_commissions").where("seller_id", sellerId).whereIn("order_id", orderIds).select("order_id"),
+        knex("seller_settlements")
+          .where("seller_id", sellerId)
+          .whereRaw("COALESCE(metadata, '{}'::jsonb) ->> 'source' = ?", ["seller_direct_cod_recovery"]),
       ])
-      : [[], []];
+      : [[], [], []];
+    const recoveryByCollection = new Map(recoveryRows.map((recovery) => {
+      const metadata = this.parseJson(recovery.metadata, {});
+      return [String(metadata.codCollectionId || ""), { recovery, metadata }];
+    }));
     const collectionByOrder = new Map();
     collections.forEach((row) => {
       const key = String(row.order_id);
-      const current = collectionByOrder.get(key) || { count: 0, amount: 0, statuses: [] };
+      const current = collectionByOrder.get(key) || {
+        count: 0, amount: 0, statuses: [], originalLiabilityAmount: 0,
+        recoveredAmount: 0, remainingAmount: 0,
+      };
+      const linkedRecovery = recoveryByCollection.get(String(row.id));
+      const original = this.round(linkedRecovery?.metadata.originalLiabilityAmount ?? row.expected_amount ?? 0);
+      const remaining = linkedRecovery
+        ? Math.max(this.round(linkedRecovery.metadata.remainingAmount ?? Math.abs(Number(linkedRecovery.recovery.net_amount || 0))), 0)
+        : (row.collected_by === "seller" && row.status !== "remitted" ? original : 0);
+      const recovered = Math.max(Math.min(
+        this.round(linkedRecovery?.metadata.recoveredAmount ?? (original - remaining)),
+        original,
+      ), 0);
       current.count += 1;
       current.amount = this.round(current.amount + Number(row.expected_amount || row.collected_amount || 0));
       current.statuses.push(row.status);
+      current.originalLiabilityAmount = this.round(current.originalLiabilityAmount + original);
+      current.recoveredAmount = this.round(current.recoveredAmount + recovered);
+      current.remainingAmount = this.round(current.remainingAmount + remaining);
       collectionByOrder.set(key, current);
     });
     const commissionedOrders = new Set(commissionRows.map((row) => String(row.order_id)));
@@ -2403,6 +2481,15 @@ gstTcsAmount,
         collectionCount: collection?.count || 0,
         collectionAmount: collection?.amount || 0,
         collectionStatuses: collection?.statuses || [],
+        collectionStatus: collection?.statuses?.length === 1 ? collection.statuses[0] : null,
+        originalLiabilityAmount: collection?.originalLiabilityAmount || 0,
+        recoveredAmount: collection?.recoveredAmount || 0,
+        remainingAmount: collection?.remainingAmount || 0,
+        recoveryStatus: !collection || collection.remainingAmount <= 0
+          ? "recovered"
+          : collection.recoveredAmount > 0
+            ? "partially_recovered"
+            : "pending",
         sellerOrderAmount: this.round(row.seller_order_amount || 0),
         currency: row.currency || "INR",
       };
@@ -2417,6 +2504,44 @@ gstTcsAmount,
       missingEarningOrders: items.filter((item) => item.delivered && !item.hasEarning).length,
       liabilityAmount: this.round(items.reduce((sum, item) => sum + item.collectionAmount, 0)),
       items,
+    };
+  }
+
+  async getCodRecoverySummary(sellerId, organizationId = null) {
+    const [collections, recoveries] = await Promise.all([
+      knex("cod_collections")
+        .where({ seller_id: sellerId, collected_by: "seller" })
+        .modify((builder) => { if (organizationId) builder.where("organization_id", organizationId); }),
+      knex("seller_settlements")
+        .where("seller_id", sellerId)
+        .whereRaw("COALESCE(metadata, '{}'::jsonb) ->> 'source' = ?", ["seller_direct_cod_recovery"])
+        .modify((builder) => { if (organizationId) builder.where("organization_id", organizationId); }),
+    ]);
+    const collectedAmount = this.round(collections
+      .filter((row) => ["confirmed", "verified", "remitted"].includes(String(row.status || "")))
+      .reduce((sum, row) => sum + Number(row.collected_amount || row.expected_amount || 0), 0));
+    const totals = recoveries.reduce((result, row) => {
+      const metadata = this.parseJson(row.metadata, {});
+      const snapshot = recoverySnapshot({ metadata, netAmount: row.net_amount });
+      result.original += snapshot.originalLiabilityAmount;
+      result.recovered += snapshot.recoveredAmount;
+      result.reserved += snapshot.reservedAmount;
+      result.remaining += snapshot.remainingAmount;
+      return result;
+    }, { original: 0, recovered: 0, reserved: 0, remaining: 0 });
+    return {
+      collectedAmount,
+      originalLiabilityAmount: this.round(totals.original),
+      recoveredAmount: this.round(totals.recovered),
+      reservedAmount: this.round(totals.reserved),
+      outstandingAmount: this.round(totals.remaining),
+      recoveryStatus: totals.reserved > 0
+        ? "recovery_in_process"
+        : totals.remaining <= 0
+        ? "recovered"
+        : totals.recovered > 0
+          ? "partially_recovered"
+          : "pending",
     };
   }
 
@@ -2550,7 +2675,10 @@ gstTcsAmount,
       const { eligible: payoutCommissions, evaluations } = await this.filterPayoutEligibleCommissions(commissions, {
         settings: commerceSettings,
         trx,
-        allowFailedPayoutItems: options.source === "failed_payout_retry",
+        // A replacement payout may be made only after the original transfer is
+        // known to be safe to replace. This also covers older cancelled rows
+        // whose order items were recorded as cancelled before they are reopened.
+        allowFailedPayoutItems: ["failed_payout_retry", "cancelled_payout_reopen"].includes(options.source),
       });
 
       logger.info(
@@ -2739,7 +2867,8 @@ gstTcsAmount,
               offsetPayoutId: payoutId,
               offsetAmount: -consumed,
               originalLiabilityAmount: Number(recoveryMetadata.originalLiabilityAmount || outstanding),
-              recoveredAmount: this.round(Number(recoveryMetadata.recoveredAmount || 0) + consumed),
+              recoveredAmount: this.round(Number(recoveryMetadata.recoveredAmount || 0) + (offsetOnly ? consumed : 0)),
+              reservedRecoveryAmount: this.round(Number(recoveryMetadata.reservedRecoveryAmount || 0) + (offsetOnly ? 0 : consumed)),
               remainingAmount: 0,
               updatedBy: options.actor?.userId || options.actor?.sub || null,
               updatedAt: new Date().toISOString(),
@@ -2754,7 +2883,8 @@ gstTcsAmount,
             metadata: this.jsonb({
               ...recoveryMetadata,
               originalLiabilityAmount: Number(recoveryMetadata.originalLiabilityAmount || outstanding),
-              recoveredAmount: this.round(Number(recoveryMetadata.recoveredAmount || 0) + consumed),
+              recoveredAmount: this.round(Number(recoveryMetadata.recoveredAmount || 0) + (offsetOnly ? consumed : 0)),
+              reservedRecoveryAmount: this.round(Number(recoveryMetadata.reservedRecoveryAmount || 0) + (offsetOnly ? 0 : consumed)),
               remainingAmount: remaining,
               lastOffsetPayoutId: payoutId,
               updatedAt: new Date().toISOString(),
@@ -2922,6 +3052,7 @@ gstTcsAmount,
             updated_at: knex.fn.now(),
           });
       }
+      await this.finalizePayoutRecoveries(trx, payout);
 
       logger.info(
         { payoutId, reference: paymentReference },
@@ -2941,6 +3072,75 @@ gstTcsAmount,
     }
 
     return completedPayout;
+  }
+
+  async restorePayoutRecoveries(trx, payout, reason) {
+    const payoutMetadata = this.parseJson(payout.metadata, {});
+    const applications = Array.isArray(payoutMetadata.recoveryApplications)
+      ? payoutMetadata.recoveryApplications
+      : [];
+    for (const application of applications) {
+      if (!application?.sourceSettlementId || Number(application.appliedAmount || 0) <= 0) continue;
+      const source = await trx("seller_settlements")
+        .where("id", application.sourceSettlementId)
+        .first()
+        .forUpdate();
+      if (!source) continue;
+      const metadata = this.parseJson(source.metadata, {});
+      // Idempotency: a failed/cancelled payout may be replayed by a provider
+      // webhook. Restore each payout allocation at most once.
+      const restoredPayoutIds = Array.isArray(metadata.restoredPayoutIds) ? metadata.restoredPayoutIds : [];
+      if (restoredPayoutIds.includes(String(payout.id))) continue;
+      const appliedAmount = this.round(application.appliedAmount);
+      const restored = restoreRecoveryAllocation({
+        remainingAmount: metadata.remainingAmount ?? Math.abs(Number(source.net_amount || 0)),
+        recoveredAmount: metadata.recoveredAmount || 0,
+        reservedAmount: metadata.reservedRecoveryAmount || 0,
+        appliedAmount,
+      });
+      const restoredRemaining = restored.remainingAmount;
+      const restoredRecovered = restored.recoveredAmount;
+      await trx("seller_settlements").where("id", source.id).update({
+        adjustment_amount: -restoredRemaining,
+        net_amount: -restoredRemaining,
+        status: "pending",
+        payout_id: null,
+        metadata: this.jsonb({
+          ...metadata,
+          recoveredAmount: restoredRecovered,
+          reservedRecoveryAmount: restored.reservedAmount,
+          remainingAmount: restoredRemaining,
+          restoredPayoutIds: [...restoredPayoutIds, String(payout.id)],
+          lastRecoveryRollbackReason: reason,
+          lastRecoveryRollbackAt: new Date().toISOString(),
+        }),
+        updated_at: trx.fn.now(),
+      });
+    }
+  }
+
+  async finalizePayoutRecoveries(trx, payout) {
+    const payoutMetadata = this.parseJson(payout.metadata, {});
+    const applications = Array.isArray(payoutMetadata.recoveryApplications) ? payoutMetadata.recoveryApplications : [];
+    for (const application of applications) {
+      if (!application?.sourceSettlementId || Number(application.appliedAmount || 0) <= 0) continue;
+      const source = await trx("seller_settlements").where("id", application.sourceSettlementId).first().forUpdate();
+      if (!source) continue;
+      const metadata = this.parseJson(source.metadata, {});
+      const finalizedPayoutIds = Array.isArray(metadata.finalizedPayoutIds) ? metadata.finalizedPayoutIds : [];
+      if (finalizedPayoutIds.includes(String(payout.id))) continue;
+      const appliedAmount = this.round(application.appliedAmount);
+      await trx("seller_settlements").where("id", source.id).update({
+        metadata: this.jsonb({
+          ...metadata,
+          recoveredAmount: this.round(Number(metadata.recoveredAmount || 0) + appliedAmount),
+          reservedRecoveryAmount: Math.max(this.round(Number(metadata.reservedRecoveryAmount || 0) - appliedAmount), 0),
+          finalizedPayoutIds: [...finalizedPayoutIds, String(payout.id)],
+          recoveryFinalizedAt: new Date().toISOString(),
+        }),
+        updated_at: trx.fn.now(),
+      });
+    }
   }
 
   async failPayout(payoutId, reason, actor = {}, options = {}) {
@@ -2988,11 +3188,13 @@ gstTcsAmount,
           updated_at: knex.fn.now(),
         });
       const payoutMetadata = this.parseJson(payout.metadata, {});
+      await this.restorePayoutRecoveries(trx, payout, "payout_failed");
       if (Array.isArray(payoutMetadata.recoverySettlementIds) && payoutMetadata.recoverySettlementIds.length) {
         await trx("seller_settlements")
           .whereIn("id", payoutMetadata.recoverySettlementIds)
+          .whereNotIn("id", (payoutMetadata.recoveryApplications || []).map((entry) => entry.sourceSettlementId).filter(Boolean))
           .update({
-            status: "pending",
+            status: "failed",
             metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({
               releasedFromFailedPayoutId: payoutId,
               releasedAt: new Date().toISOString(),
@@ -3019,30 +3221,54 @@ gstTcsAmount,
 
   async cancelPayout(payoutId, reason, actor = {}) {
     if (!String(reason || "").trim()) throw new AppError("Cancellation reason is required", 400);
-    return knex.transaction(async (trx) => {
+    const cancelledPayout = await knex.transaction(async (trx) => {
       const payout = await trx("seller_payouts").where("id", payoutId).first().forUpdate();
       if (!payout) throw new AppError("Payout not found", 404);
       if (["completed", "cancelled"].includes(payout.status)) {
         throw new AppError(`Payout cannot be cancelled from ${payout.status}`, 409);
       }
+      const currentMetadata = this.parseJson(payout.metadata, {});
+      const providerPayoutId = payout.payment_reference || currentMetadata.razorpayX?.payoutId;
+      const providerStatus = String(
+        currentMetadata.razorpayX?.status || currentMetadata.providerStatus || "",
+      ).toLowerCase();
+      // This application cannot safely cancel an in-flight RazorpayX transfer
+      // locally: RazorpayX may still credit the seller. The provider must first
+      // report a terminal, safe-to-replace state through webhook/sync.
+      if (
+        this.isRazorpayXRequested(payout.payment_method) &&
+        providerPayoutId &&
+        !this.isRazorpayXReplacementSafe(providerStatus)
+      ) {
+        throw new AppError(
+          "This RazorpayX transfer is still active or unconfirmed. Sync RazorpayX status and wait for reversed, rejected, or cancelled before cancelling locally.",
+          409,
+        );
+      }
       const [updated] = await trx("seller_payouts").where("id", payoutId).update({
         status: "cancelled",
         metadata: this.jsonb({
-          ...this.parseJson(payout.metadata, {}), cancellationReason: reason,
+          ...currentMetadata, cancellationReason: reason,
           cancelledBy: actor.userId || actor.sub || null, cancelledAt: new Date().toISOString(),
         }),
         updated_at: trx.fn.now(),
       }).returning("*");
-      await this.transitionPayoutItems(trx, payoutId, "cancelled", { reason, actor });
+      // Cancellation closes this payout record, but does not cancel the order
+      // item or its earnings. Because only eligible commissions can be added
+      // to a payout, restore them to eligible immediately; preserve any later
+      // hold, refund, release, or paid state.
+      await this.releaseCancelledPayoutItems(trx, payoutId, { reason, actor });
       await trx("seller_commissions").where("payout_id", payoutId).whereNot("status", "paid").update({
         status: "pending", payout_id: null, updated_at: trx.fn.now(),
       });
       const payoutMetadata = this.parseJson(payout.metadata, {});
+      await this.restorePayoutRecoveries(trx, payout, "payout_cancelled");
       if (Array.isArray(payoutMetadata.recoverySettlementIds) && payoutMetadata.recoverySettlementIds.length) {
         await trx("seller_settlements")
           .whereIn("id", payoutMetadata.recoverySettlementIds)
+          .whereNotIn("id", (payoutMetadata.recoveryApplications || []).map((entry) => entry.sourceSettlementId).filter(Boolean))
           .update({
-            status: "pending",
+            status: "cancelled",
             payout_id: null,
             metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({
               releasedFromCancelledPayoutId: payoutId,
@@ -3054,6 +3280,11 @@ gstTcsAmount,
       await this.publishPayoutEvent(updated, actor);
       return updated;
     });
+
+    // Payout Ops must stay empty after a cancellation. Once the item becomes
+    // eligible, Finance deliberately exposes "Payout This Order" so an admin
+    // explicitly creates the next payout and selects its payment method.
+    return cancelledPayout;
   }
 
   async approvePayout(payoutId, options = {}) {
@@ -3180,8 +3411,8 @@ gstTcsAmount,
   async retryFailedPayout(payoutId, options = {}) {
     let payout = await knex("seller_payouts").where("id", payoutId).first();
     if (!payout) throw new AppError("Payout not found", 404);
-    if (payout.status !== "failed") {
-      throw new AppError(`Only failed payouts can be retried`, 409);
+    if (!["failed", "cancelled"].includes(payout.status)) {
+      throw new AppError(`Only failed or cancelled payouts can be reopened`, 409);
     }
     let payoutMetadata = this.parseJson(payout.metadata, {});
     if (payoutMetadata.replacementPayoutId) {
@@ -3238,6 +3469,8 @@ gstTcsAmount,
       }, "Failed seller payout retry blocked because commission IDs are missing");
       throw new AppError("Cannot retry this payout because the original commission IDs are missing. Rebuild the seller payout from eligible commissions.", 409);
     }
+
+    const reopeningCancelledPayout = payout.status === "cancelled";
 
     await knex.transaction(async (trx) => {
       const locked = await trx("seller_payouts")
@@ -3324,11 +3557,18 @@ gstTcsAmount,
         organizationId: payout.organization_id || null,
         commissionIds: retryCommissionIds,
         skipPrePayoutRefresh: true,
-        source: "failed_payout_retry",
+        source: payout.status === "cancelled"
+          ? "cancelled_payout_reopen"
+          : "failed_payout_retry",
         previousPayoutId: payoutId,
         paymentReference: options.paymentReference,
-        paymentMethod: options.paymentMethod || payout.payment_method || null,
-        autoProcess: options.autoProcess === true,
+        // Reopening a cancellation always returns to the Ops queue for a new
+        // approval. It must not silently retry the cancelled RazorpayX method.
+        paymentMethod: reopeningCancelledPayout
+          ? options.paymentMethod || null
+          : options.paymentMethod || payout.payment_method || null,
+        autoProcess: reopeningCancelledPayout ? false : options.autoProcess === true,
+        forceManualApproval: reopeningCancelledPayout,
         actor: options.actor,
       });
     } catch (error) {
@@ -3608,7 +3848,10 @@ gstTcsAmount,
       updatedAt: commission.updated_at,
     }));
 
-    const codReconciliation = await this.getCodFinanceReconciliation(sellerId, query);
+    const [codReconciliation, codSummary] = await Promise.all([
+      this.getCodFinanceReconciliation(sellerId, query),
+      this.getCodRecoverySummary(sellerId, query.organizationId || null),
+    ]);
     return {
       sellerId,
       organizationId: query.organizationId || null,
@@ -3649,6 +3892,7 @@ gstTcsAmount,
         inProcessAmount: this.round(inProcessPayoutRow?.in_process_amount || 0),
       },
       codReconciliation,
+      codSummary,
       commissionReconciliation: commissionRepair,
       items,
       total: evaluations.length,
@@ -4308,6 +4552,7 @@ gstTcsAmount,
           codCollectionId: metadata.codCollectionId || null,
           originalLiabilityAmount: Number(metadata.originalLiabilityAmount || Math.abs(Number(item.net_amount || 0))),
           recoveredAmount: Number(metadata.recoveredAmount || 0),
+          reservedAmount: Number(metadata.reservedRecoveryAmount || 0),
           remainingAmount: Number(metadata.remainingAmount ?? Math.abs(Number(item.net_amount || 0))),
         };
       }),

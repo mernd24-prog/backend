@@ -8,9 +8,12 @@ const { commerceSettingsService } = require("../../admin/services/commerce-setti
 const { ReturnModel } = require("../../returns/models/return.model");
 const { ReferralService } = require("../../referral/services/referral.service");
 const { NotificationService } = require("../../notification/services/notification.service");
+const { recoverySnapshot, resolveCollectionAmount } = require("../../../shared/domain/cod-recovery");
 
 const ADMIN_ROLES = new Set(["admin", "sub-admin", "super-admin"]);
 const OPEN_RETURN_STATUSES = ["requested", "approved", "picked_up", "received", "qc_pending", "refund_pending"];
+// `remitted` is retained only for historical records. New seller-direct COD
+// follows pending -> confirmed -> verified and is recovered through payouts.
 const FINAL_COLLECTION_STATUSES = ["verified", "remitted"];
 
 class SettlementLifecycleService {
@@ -204,17 +207,30 @@ class SettlementLifecycleService {
       return existing;
     }
 
-    const [items, sellerShipmentCount, payment] = await Promise.all([
-      knex("order_items").select("seller_id", "line_total", "discount_amount").where("order_id", order.id),
-      knex("shipments").where({ order_id: order.id, seller_id: shipment.seller_id }).whereNot("direction", "reverse").count("id as count").first(),
+    const [items, sellerShipmentCount, orderShipmentCount, existingOrderCollections, payment] = await Promise.all([
+      knex("order_items").select("seller_id", "organization_id", "line_total", "discount_amount").where("order_id", order.id),
+      knex("shipments").where({ order_id: order.id, seller_id: shipment.seller_id })
+        .modify((builder) => { if (shipment.organization_id) builder.where("organization_id", shipment.organization_id); })
+        .whereNot("direction", "reverse").whereNotIn("status", ["cancelled", "failed", "rto"]).count("id as count").first(),
+      knex("shipments").where({ order_id: order.id }).whereNot("direction", "reverse")
+        .whereNotIn("status", ["cancelled", "failed", "rto"]).count("id as count").first(),
+      knex("cod_collections").where("order_id", order.id).select("expected_amount"),
       knex("payments").where({ order_id: order.id, provider: PAYMENT_PROVIDER.COD }).orderBy("created_at", "desc").first(),
     ]);
     const totalBase = items.reduce((sum, item) => sum + this.number(item.line_total) - this.number(item.discount_amount), 0);
     const sellerBase = items
-      .filter((item) => String(item.seller_id) === String(shipment.seller_id))
+      .filter((item) => String(item.seller_id) === String(shipment.seller_id) &&
+        (!shipment.organization_id || String(item.organization_id || "") === String(shipment.organization_id)))
       .reduce((sum, item) => sum + this.number(item.line_total) - this.number(item.discount_amount), 0);
     const shipmentCount = Math.max(Number(sellerShipmentCount?.count || 1), 1);
-    const expectedAmount = this.number((this.number(order.payable_amount || order.total_amount) * (sellerBase / Math.max(totalBase, 1))) / shipmentCount);
+    const calculatedAmount = this.number((this.number(order.payable_amount || order.total_amount) * (sellerBase / Math.max(totalBase, 1))) / shipmentCount);
+    const expectedCollectionCount = Math.max(Number(orderShipmentCount?.count || 1), 1);
+    const allocatedAmount = this.number(existingOrderCollections.reduce((sum, row) => sum + Number(row.expected_amount || 0), 0));
+    const paymentAmount = this.number(payment?.amount || order.payable_amount || order.total_amount);
+    const isFinalCollection = existingOrderCollections.length + 1 >= expectedCollectionCount;
+    const expectedAmount = resolveCollectionAmount({
+      calculatedAmount, paymentAmount, allocatedAmount, isFinalCollection,
+    });
     const shipmentMetadata = this.parseJson(shipment.metadata, {});
     const requestedCollectionMode = String(
       shipmentMetadata.codCollectionMode ||
@@ -263,7 +279,7 @@ class SettlementLifecycleService {
         userId: String(shipment.seller_id),
         channel: "in_app",
         subject: "COD collection requires your response",
-        template: `A delivered COD shipment created a liability of ${order.currency || "INR"} ${expectedAmount.toFixed(2)}. Confirm collection, report remittance, or dispute it before the due date.`,
+        template: `A delivered COD shipment created a liability of ${order.currency || "INR"} ${expectedAmount.toFixed(2)}. Confirm that you collected and retained the full customer cash amount before the due date.`,
         payload: {
           orderId: order.id,
           orderNumber: order.order_number || null,
@@ -295,27 +311,26 @@ class SettlementLifecycleService {
     if (!["seller_direct", "hybrid"].includes(collection.collection_mode) && !this.isAdmin(actor)) {
       throw new AppError("This shipment uses platform/courier COD collection", 409);
     }
-    if (FINAL_COLLECTION_STATUSES.includes(collection.status)) return collection;
-    const submissionType = payload.submissionType || "retained";
-    const amount = this.number(payload.collectedAmount);
-    if (submissionType !== "dispute" && amount <= 0) throw new AppError("Collected COD amount must be greater than zero", 400);
-    if (amount > this.number(collection.expected_amount) + 0.01) {
-      throw new AppError("Collected COD amount cannot exceed the expected COD amount", 400);
+    if (["confirmed", ...FINAL_COLLECTION_STATUSES].includes(collection.status)) return collection;
+    if (collection.status !== "pending") {
+      throw new AppError(`COD cash cannot be confirmed from ${collection.status}`, 409);
     }
+    if (payload.confirmation !== true) throw new AppError("COD cash-retention confirmation is required", 400);
+    const amount = this.number(collection.expected_amount);
     const [updated] = await knex("cod_collections").where("id", collection.id).update({
       collected_amount: amount,
-      collection_date: payload.collectionDate || new Date(),
-      reference_id: payload.referenceId || null,
-      proof_url: payload.proofUrl || null,
+      collection_date: collection.collection_date || new Date(),
+      reference_id: null,
+      proof_url: null,
       notes: payload.notes || null,
-      status: submissionType === "dispute" ? "disputed" : "submitted",
+      status: "confirmed",
       collected_by: "seller",
       submitted_by: actor.userId || actor.sub || null,
       submitted_at: knex.fn.now(),
       metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({
-        submittedFrom: "seller",
-        sellerSubmissionType: submissionType,
-        liabilityStatus: submissionType === "dispute" ? "disputed" : "acknowledged",
+        confirmedFrom: "seller",
+        sellerSubmissionType: "retained",
+        liabilityStatus: "acknowledged",
       })]),
       updated_at: knex.fn.now(),
     }).returning("*");
@@ -327,25 +342,30 @@ class SettlementLifecycleService {
     if (!this.isAdmin(actor)) throw new AppError("Only admin users can verify COD collections", 403);
     const collection = await knex("cod_collections").where("id", collectionId).first();
     if (!collection) throw new AppError("COD collection not found", 404);
-    if (collection.status === "remitted") return collection;
-    if (collection.status === "verified" && payload.markRemitted !== true) {
-      return collection;
+    if (FINAL_COLLECTION_STATUSES.includes(collection.status)) return collection;
+    // `submitted` is accepted for historical clients created before the
+    // confirmation-only contract was introduced.
+    const sellerDirect = ["seller_direct", "hybrid"].includes(collection.collection_mode);
+    if (sellerDirect && !["confirmed", "submitted"].includes(collection.status)) {
+      throw new AppError("Seller must confirm retained COD cash before verification", 409);
     }
-    const collectedAmount = this.number(payload.collectedAmount ?? collection.collected_amount ?? collection.expected_amount);
-    if (collectedAmount <= 0) throw new AppError("A collected COD amount is required", 400);
+    if (!sellerDirect && !["pending", "submitted"].includes(collection.status)) {
+      throw new AppError(`COD collection cannot be verified from ${collection.status}`, 409);
+    }
+    const collectedAmount = this.number(collection.expected_amount);
     const [updated] = await knex("cod_collections").where("id", collectionId).update({
       collected_amount: collectedAmount,
-      status: payload.markRemitted === true ? "remitted" : "verified",
-      collection_date: payload.collectionDate || collection.collection_date || new Date(),
-      reference_id: payload.referenceId || collection.reference_id || null,
-      proof_url: payload.proofUrl || collection.proof_url || null,
+      status: "verified",
+      collection_date: collection.collection_date || new Date(),
+      reference_id: null,
+      proof_url: null,
       notes: payload.notes || collection.notes || null,
       verified_by: actor.userId || actor.sub || null,
       verified_at: knex.fn.now(),
-      remitted_at: payload.markRemitted === true ? knex.fn.now() : collection.remitted_at,
+      remitted_at: null,
       metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({
-        liabilityStatus: payload.markRemitted === true ? "remitted" : "recoverable",
-        remittanceConfirmedByAdmin: payload.markRemitted === true,
+        liabilityStatus: "recoverable",
+        verifiedAsSellerHeldCash: true,
       })]),
       updated_at: knex.fn.now(),
     }).returning("*");
@@ -518,13 +538,29 @@ class SettlementLifecycleService {
     if (query.orderId) builder.where("c.order_id", query.orderId);
     if (query.sellerId && this.isAdmin(actor)) builder.where("c.seller_id", query.sellerId);
     const rows = await builder.orderBy("c.created_at", "desc").limit(Math.min(Math.max(Number(query.limit || 100), 1), 500));
+    const collectionIds = rows.map((row) => String(row.id));
+    const recoveries = collectionIds.length
+      ? await knex("seller_settlements")
+        .whereRaw("COALESCE(metadata, '{}'::jsonb) ->> 'source' = ?", ["seller_direct_cod_recovery"])
+        .whereIn(knex.raw("COALESCE(metadata, '{}'::jsonb) ->> 'codCollectionId'"), collectionIds)
+      : [];
+    const recoveryByCollection = new Map(recoveries.map((row) => {
+      const metadata = this.parseJson(row.metadata, {});
+      return [String(metadata.codCollectionId), { row, metadata }];
+    }));
     const now = Date.now();
     return rows.map((row) => {
       const metadata = this.parseJson(row.metadata, {});
       const dueAt = metadata.dueAt || null;
       const sellerActionRequired =
         ["seller_direct", "hybrid"].includes(row.collection_mode) &&
-        ["pending", "disputed"].includes(row.status);
+        row.status === "pending";
+      const recovery = recoveryByCollection.get(String(row.id));
+      const snapshot = recoverySnapshot({
+        metadata: recovery?.metadata || {},
+        netAmount: recovery?.row.net_amount || 0,
+        fallbackOriginal: row.collected_by === "seller" && row.status !== "remitted" ? row.expected_amount : 0,
+      });
       return {
         ...row,
         due_at: dueAt,
@@ -535,6 +571,11 @@ class SettlementLifecycleService {
         liability_status:
           metadata.liabilityStatus ||
           (row.status === "remitted" ? "remitted" : "provisional"),
+        original_liability_amount: snapshot.originalLiabilityAmount,
+        recovered_amount: snapshot.recoveredAmount,
+        reserved_amount: snapshot.reservedAmount,
+        remaining_amount: snapshot.remainingAmount,
+        recovery_status: snapshot.recoveryStatus,
       };
     });
   }
