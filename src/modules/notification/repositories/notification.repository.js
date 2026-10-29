@@ -77,6 +77,15 @@ class NotificationRepository {
         : {}),
     };
 
+    const fromDate = this.normalizeDateBound(options.fromDate, false);
+    const toDate = this.normalizeDateBound(options.toDate, true);
+    if (fromDate || toDate) {
+      filter.createdAt = {
+        ...(fromDate ? { $gte: fromDate } : {}),
+        ...(toDate ? { $lte: toDate } : {}),
+      };
+    }
+
     const limit = Math.min(Math.max(Number(options.limit || 50), 1), 100);
     const page = Math.max(Number(options.page || 1), 1);
     const skip = (page - 1) * limit;
@@ -90,6 +99,16 @@ class NotificationRepository {
       NotificationModel.countDocuments(filter),
     ]);
     return { items, total, page, limit };
+  }
+
+  normalizeDateBound(value, endOfDay = false) {
+    if (!value) return null;
+    const text = String(value).trim();
+    const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(text);
+    const date = new Date(dateOnly
+      ? `${text}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}Z`
+      : text);
+    return Number.isNaN(date.getTime()) ? null : date;
   }
 
   async listCompactCustomerFeed(filter, { page, limit, skip }) {

@@ -1049,6 +1049,8 @@ class NotificationService {
       channel: query.type || query.channel || null,
       page: query.page,
       limit: query.limit,
+      fromDate: query.fromDate,
+      toDate: query.toDate,
       search: query.search || query.q || query.keyWord,
       compactOrderGroups,
     });
