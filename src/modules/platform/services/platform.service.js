@@ -1047,10 +1047,12 @@ class PlatformService {
     }
     if (query.hasMedia === true || query.hasMedia === "true") reviewFilter["media.0"] = { $exists: true };
     if (query.hasMedia === false || query.hasMedia === "false") reviewFilter["media.0"] = { $exists: false };
-    if (query.startDate || query.endDate) {
+    const reviewFromDate = query.fromDate || query.startDate;
+    const reviewToDate = query.toDate || query.endDate;
+    if (reviewFromDate || reviewToDate) {
       reviewFilter.createdAt = {
-        ...(query.startDate ? { $gte: new Date(query.startDate) } : {}),
-        ...(query.endDate ? { $lte: endOfDay(query.endDate) } : {}),
+        ...(reviewFromDate ? { $gte: new Date(reviewFromDate) } : {}),
+        ...(reviewToDate ? { $lte: endOfDay(reviewToDate) } : {}),
       };
     }
     const summarySort = {
@@ -1219,10 +1221,12 @@ class PlatformService {
     }
     if (query.hasMedia === true || query.hasMedia === "true") filter["media.0"] = { $exists: true };
     if (query.hasMedia === false || query.hasMedia === "false") filter["media.0"] = { $exists: false };
-    if (query.startDate || query.endDate) {
+    const reviewFromDate = query.fromDate || query.startDate;
+    const reviewToDate = query.toDate || query.endDate;
+    if (reviewFromDate || reviewToDate) {
       filter.createdAt = {
-        ...(query.startDate ? { $gte: new Date(query.startDate) } : {}),
-        ...(query.endDate ? { $lte: endOfDay(query.endDate) } : {}),
+        ...(reviewFromDate ? { $gte: new Date(reviewFromDate) } : {}),
+        ...(reviewToDate ? { $lte: endOfDay(reviewToDate) } : {}),
       };
     }
     const q = String(query.q || query.search || "").trim();

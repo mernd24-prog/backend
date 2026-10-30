@@ -525,6 +525,8 @@ const listProductReviewsSchema = Joi.object({
       maxRating: Joi.number().min(1).max(5),
       hasMedia: Joi.boolean(),
       sortOrder: Joi.string().valid("asc", "desc"),
+      fromDate: Joi.date().iso(),
+      toDate: Joi.date().iso(),
     }),
   ),
   params: Joi.object({}).required(),
