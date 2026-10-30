@@ -4480,11 +4480,15 @@ class ProductService {
     ]);
 
     const enrichedProduct = enrichedProducts[0] || product;
+    const plainProduct = this.toPlainObject(enrichedProduct);
+    const [decoratedProduct] = await this.decorateProductMasterReferences([
+      plainProduct,
+    ]);
 
     const sellerName = sellerAccountDisplayName(seller);
 
     return {
-      ...this.toPlainObject(enrichedProduct),
+      ...decoratedProduct,
 
       sellerName,
 
@@ -5952,11 +5956,11 @@ class ProductService {
     return review || null;
   }
 
-  async getRelatedProducts(productId, { limit = 8 } = {}) {
+  async getRelatedProducts(productId, { limit = 20 } = {}) {
     const resolvedProductId = this.resolveProductRouteIdentifier(productId, {
       allowRawObjectId: true,
     });
-    const normalizedLimit = Math.min(Math.max(Number(limit) || 8, 1), 20);
+    const normalizedLimit = Math.min(Math.max(Number(limit) || 20, 1), 100);
     return remember(
       `products:related:${resolvedProductId}:${normalizedLimit}`,
       300,
@@ -5970,35 +5974,52 @@ class ProductService {
             return [];
           }
 
-          const currentCategoryKey =
-            product.categoryId || product.category || null;
+          const categoryReferences = [product.categoryId, product.category]
+            .filter(Boolean)
+            .map(String);
+          let currentCategory = null;
 
-          if (!currentCategoryKey) {
-            return [];
+          for (const categoryReference of new Set(categoryReferences)) {
+            const category = await this.platformRepository
+              .getCategory(categoryReference)
+              .catch(() => null);
+            if (category && category.active !== false) {
+              currentCategory = category;
+              break;
+            }
           }
-
-          // ---------------------------------------------------------
-          // 1. FIND CURRENT CATEGORY
-          // ---------------------------------------------------------
-
-          const currentCategory = await CategoryTreeModel.findOne({
-            categoryKey: currentCategoryKey,
-            active: true,
-          }).lean();
 
           if (!currentCategory) {
             return [];
           }
 
+          const currentCategoryKey = currentCategory.categoryKey;
+
           // ---------------------------------------------------------
           // 2. FIND SAME CATEGORY / SUBCATEGORY MATCHES
           // ---------------------------------------------------------
 
+          const parentCategory = currentCategory.parentKey
+            ? await this.platformRepository
+                .getCategory(currentCategory.parentKey)
+                .catch(() => null)
+            : null;
+          const recommendationCategory =
+            parentCategory && parentCategory.active !== false
+            ? parentCategory
+            : currentCategory;
           const descendantKeys = await this.platformRepository
-            .getCategoryDescendantKeys(currentCategoryKey)
+            .getCategoryDescendantKeys(recommendationCategory.categoryKey)
             .catch(() => []);
           const matchingCategoryKeys = [
-            ...new Set([currentCategoryKey, ...descendantKeys].filter(Boolean)),
+            ...new Set(
+              [
+                recommendationCategory.categoryKey,
+                String(recommendationCategory._id || ""),
+                currentCategoryKey,
+                ...descendantKeys,
+              ].filter(Boolean),
+            ),
           ];
 
           // ---------------------------------------------------------
@@ -6175,22 +6196,26 @@ class ProductService {
             return [];
           }
 
-          const currentCategoryKey =
-            product.categoryId || product.category || null;
+          const categoryReferences = [product.categoryId, product.category]
+            .filter(Boolean)
+            .map(String);
+          let currentCategory = null;
 
-          if (!currentCategoryKey) {
-            return [];
+          for (const categoryReference of new Set(categoryReferences)) {
+            const category = await this.platformRepository
+              .getCategory(categoryReference)
+              .catch(() => null);
+            if (category && category.active !== false) {
+              currentCategory = category;
+              break;
+            }
           }
-
-          // 1. Find current category
-          const currentCategory = await CategoryTreeModel.findOne({
-            categoryKey: currentCategoryKey,
-            active: true,
-          }).lean();
 
           if (!currentCategory) {
             return [];
           }
+
+          const currentCategoryKey = currentCategory.categoryKey;
 
           // 2. Find root category
           let rootCategory = currentCategory;
@@ -6203,7 +6228,7 @@ class ProductService {
 
             const parentCategory = await CategoryTreeModel.findOne({
               categoryKey: parentKey,
-              active: true,
+              active: { $ne: false },
             }).lean();
 
             if (!parentCategory) {
@@ -6218,7 +6243,7 @@ class ProductService {
 
           // 3. Find all categories under same root
           const allRootCategories = await CategoryTreeModel.find({
-            active: true,
+            active: { $ne: false },
           })
             .select("categoryKey parentKey")
             .lean();

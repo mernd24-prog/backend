@@ -71,7 +71,7 @@ class PlatformRepository {
           connectFromField: "categoryKey",
           connectToField: "parentKey",
           as: "descendants",
-          restrictSearchWithMatch: { active: true },
+          restrictSearchWithMatch: { active: { $ne: false } },
         },
       },
       {

@@ -372,7 +372,7 @@ class ProductController {
   };
 
   relatedProducts = async (req, res) => {
-    const limit = Math.min(Number(req.query.limit || 8), 20);
+    const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 100);
     const products = await this.productService.getRelatedProducts(req.params.productId, { limit });
     res.json(okResponse({ items: products, total: products.length }));
   };
