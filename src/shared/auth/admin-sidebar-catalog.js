@@ -893,7 +893,7 @@ const SELLER_SIDEBAR_MODULES = [
   // { moduleName: "My Store", moduleKey: "seller-my-organizations", moduleSlug: "seller-my-organizations", icon: "MdBusiness", routePath: "/app/my-organizations", moduleType: "page", order: 62, parentModule: "seller-access-management", requiredModule: "seller-management" },
 
   {
-    moduleName: "My Finance & Payouts",
+    moduleName: "Finance & Payouts",
     moduleKey: "seller-finance-management",
     moduleSlug: "seller-finance-management",
     icon: "MdAccountBalanceWallet",
@@ -947,7 +947,7 @@ const SELLER_SIDEBAR_MODULES = [
     requiredModule: "sellers/commissions",
   },
   {
-    moduleName: "My COD Collections",
+    moduleName: "COD Collections",
     moduleKey: "seller-cod-collections",
     moduleSlug: "seller-cod-collections",
     icon: "MdPayments",
