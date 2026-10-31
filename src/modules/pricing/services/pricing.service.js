@@ -20,6 +20,8 @@ const { commerceSettingsService } = require("../../admin/services/commerce-setti
 const { sellerChargeSettingsService } = require("../../seller/services/seller-charge-settings.service");
 const { ReferralService } = require("../../referral/services/referral.service");
 
+const { evaluateMarketing } = require("../../marketing/services/marketing-policy");
+
 class PricingService {
   constructor({
     pricingRepository = new PricingRepository(),
@@ -187,13 +189,16 @@ class PricingService {
     );
 
     const subtotalAmount = pricedItems.reduce((sum, item) => sum + item.lineTotal, 0);
+    const commerceSettings = await commerceSettingsService.getSettings();
     const discount = await this.calculateDiscount(
       couponCode,
       subtotalAmount,
       userId,
       pricedItems,
+      commerceSettings.referralMarketing,
     );
-    const commerceSettings = await commerceSettingsService.getSettings();
+    const marketingPolicy = discount.discountSource === "influencer" ? commerceSettings.referralMarketing : commerceSettings.marketing;
+    await this.applyMarketingPolicy(discount, marketingPolicy, { userId, subtotalAmount, items: pricedItems });
     const sellerFundingPercent = Number(discount.sellerFundingPercent || 0);
     const taxBreakup = await this.calculateTaxBreakup(
       pricedItems,
@@ -317,9 +322,11 @@ class PricingService {
     );
     const walletBreakup = await this.calculateWalletUsage(
       userId,
-      walletAmount,
+      discount.marketing && !marketingPolicy.allowWallet ? 0 : walletAmount,
       totalAmount,
-      commerceSettings.wallet,
+      discount.marketing && !marketingPolicy.allowWallet
+        ? { ...commerceSettings.wallet, partialPaymentMode: "disabled" }
+        : commerceSettings.wallet,
     );
     const payableAmount = Number((totalAmount - walletBreakup.walletAppliedAmount).toFixed(2));
     const settlement = this.calculateSellerSettlement(
@@ -372,6 +379,7 @@ class PricingService {
           checkout: commerceSettings.checkout,
         },
       },
+      marketing: discount.marketing || null,
       couponToConsume: discount.couponToConsume,
       referralContext: discount.referralContext || null,
       walletToReserveAmount: walletBreakup.walletAppliedAmount,
@@ -1025,7 +1033,20 @@ const incomeTaxTdsAmount = Number(
     return taxData;
   }
 
-  async calculateDiscount(couponCode, subtotalAmount, userId = null, items = []) {
+  async applyMarketingPolicy(discount, policy, { userId, subtotalAmount, items }) {
+    if (!policy?.enabled || !discount.appliedCouponCode) return discount;
+    const isReferral = discount.discountSource === "influencer";
+    if ((policy.scope === "coupons" && isReferral) || (policy.scope === "referrals" && !isReferral)) return discount;
+    if (!userId) throw new AppError("Sign in to use this marketing offer", 400);
+    const context = discount.referralContext;
+    const usage = await this.pricingRepository.getMarketingUsage({
+      campaignKey: policy.campaignKey, policyType: policy.scope, userId, code: discount.appliedCouponCode,
+      partnerIds: context ? [context.influencerId, context.parentInfluencerId].filter(Boolean) : [],
+    });
+    return evaluateMarketing(policy, discount, usage, { subtotalAmount, items });
+  }
+
+  async calculateDiscount(couponCode, subtotalAmount, userId = null, items = [], marketingPolicy = null) {
     if (!couponCode) {
       return {
         discountAmount: 0,
@@ -1045,6 +1066,7 @@ const incomeTaxTdsAmount = Number(
         subtotalAmount,
         userId,
         items,
+        marketingPolicy,
       );
       if (!referralContext) throw new AppError("Invalid coupon or influencer code", 400);
       return {

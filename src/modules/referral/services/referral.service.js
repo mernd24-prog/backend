@@ -1173,6 +1173,7 @@ class ReferralService {
     items = [],
     rule = {},
     eligibleAmount = 0,
+    marketingPolicy = null,
   ) {
     // Referral funding is explicitly product-scoped. An item without an active
     // product amount must never inherit a global percentage/fixed discount.
@@ -1183,25 +1184,24 @@ class ReferralService {
     const configByProduct = new Map(
       configs.map((config) => [String(config.productId), config]),
     );
-    let configuredPool = 0;
+    const pools = [];
     for (const item of items) {
-      const lineAmount = Math.max(Number(item.lineTotal || 0), 0);
       const config = configByProduct.get(String(item.productId));
-      if (!config) continue;
-      const raw =
-        config.amountType === "percentage"
-          ? (lineAmount * Number(config.amountValue || 0)) / 100
-          : Number(config.amountValue || 0) *
-            Math.max(Number(item.quantity || 1), 1);
+      if (!config || config.active === false) continue;
+      const quantity = Math.max(Number(item.quantity || 1), 1);
+      // Use one unit's price for percentage configurations and affordability.
+      // Neither duplicate rows nor increased quantities can multiply a pool.
+      const unitAmount = Math.max(Number(item.lineTotal || 0) / quantity, 0);
+      const raw = config.amountType === "percentage"
+        ? unitAmount * Number(config.amountValue || 0) / 100
+        : Number(config.amountValue || 0);
       const cap = Number(config.maximumAmount || 0);
-      configuredPool += Math.min(
-        Math.max(cap > 0 ? Math.min(raw, cap) : raw, 0),
-        lineAmount,
-      );
+      const pool = Math.min(Math.max(cap > 0 ? Math.min(raw, cap) : raw, 0), unitAmount);
+      if (Number.isFinite(pool) && pool > 0) pools.push(pool);
     }
-    return Number(
-      Math.min(configuredPool, Number(eligibleAmount || 0)).toFixed(2),
-    );
+    // One pool per order: ignore non-referral products and select the lowest
+    // positive eligible product pool, irrespective of quantity or code owner.
+    return Number(Math.min(pools.length ? Math.min(...pools) : 0, Math.max(Number(eligibleAmount || 0), 0)).toFixed(2));
   }
 
   async resolveInfluencerCodeForCheckout(
@@ -1209,6 +1209,7 @@ class ReferralService {
     eligibleAmount,
     customerId = null,
     items = [],
+    marketingPolicy = null,
   ) {
     const code = await this.referralRepository.getReferralCodeByCode(
       this.normalizeCode(codeValue),
@@ -1274,20 +1275,18 @@ class ReferralService {
     this.validateDistributionShares(configuredShares);
     const codeOwnerPartnerType =
       influencer.influencerType === "parent" ? "growth_partner" : "brand_associate";
-    const codeOwnerSharePercent = Number(
-      codeOwnerPartnerType === "growth_partner"
-        ? rule.parentSharePercent
-        : rule.childSharePercent,
-    );
-    const directParentSharePercent =
-      codeOwnerPartnerType === "brand_associate"
-        ? Number(rule.parentSharePercent || 0)
-        : 0;
+    // Distribution follows the recipient's role in this referral, not their
+    // account type: the owner always receives the configured owner share.
+    const codeOwnerSharePercent = Number(rule.childSharePercent || 0);
+    const directParentSharePercent = influencer.parentInfluencerId
+      ? Number(rule.parentSharePercent || 0)
+      : 0;
     const referralPoolAmount =
       await this.calculateReferralPoolWithProductAmounts(
         items,
         rule,
         eligibleAmount,
+        marketingPolicy,
       );
     if (referralPoolAmount <= 0) {
       throw new AppError(
@@ -1358,19 +1357,10 @@ class ReferralService {
       metadata: {
         referralPoolAmount: Number(context.referralPoolAmount || 0),
         codeOwnerPartnerType: context.codeOwnerPartnerType || "brand_associate",
-        undistributedBrandAssociateAmount:
-          context.codeOwnerPartnerType === "growth_partner"
-            ? Number(
-                (
-                  (Number(context.referralPoolAmount || 0) *
-                    Number(rule.childSharePercent || 0)) /
-                  100
-                ).toFixed(2),
-              )
-            : 0,
+        undistributedBrandAssociateAmount: 0,
         undistributedParentAmount: context.parentInfluencerId
           ? 0
-          : Number(context.parentAmount || 0),
+          : Number(((Number(context.referralPoolAmount || 0) * Number(rule.parentSharePercent || 0)) / 100).toFixed(2)),
         missingParentPolicy: context.parentInfluencerId
           ? "allocated_to_parent"
           : "retain_by_funding_source",
@@ -3741,20 +3731,18 @@ class ReferralService {
     const payoutChanged =
       payload.payout !== undefined &&
       !valuesEqual(payout, details.payout || {});
+    const dateKey = (value) => value ? new Date(value).toISOString().slice(0, 10) : null;
+    const personalDetailsChanged = phoneChanged ||
+      (payload.dateOfBirth !== undefined && dateKey(payload.dateOfBirth) !== dateKey(details.dateOfBirth)) ||
+      (payload.gender !== undefined && (payload.gender || null) !== (details.gender || null)) ||
+      (payload.address !== undefined && !valuesEqual(nextDetails.address || {}, details.address || {}));
+    const kycChanged = documentsChanged || personalDetailsChanged;
     const detailsChanged = !valuesEqual(nextDetails, details);
 
     if (!accountProfileChanged && !phoneChanged && !detailsChanged) {
       return this.getMyInfluencerProfile(actor);
     }
 
-    if (accountProfileChanged || phoneChanged) {
-      await this.referralRepository.updateInfluencerAccount(accountId, {
-        $set: {
-          ...(accountProfileChanged ? { profile: accountProfile } : {}),
-          ...(phoneChanged ? { phone: payload.phone } : {}),
-        },
-      });
-    }
     const kycComplete = [
       documents.panCardUrl,
       documents.aadhaarCardUrl,
@@ -3769,7 +3757,7 @@ class ReferralService {
             payout.accountNumber &&
             payout.ifscCode,
           );
-    const nextKycStatus = documentsChanged
+    const nextKycStatus = kycChanged
       ? kycComplete
         ? "submitted"
         : "not_submitted"
@@ -3782,11 +3770,22 @@ class ReferralService {
     const hasSubmission =
       ["submitted", "verified"].includes(nextKycStatus) &&
       ["submitted", "verified"].includes(nextBankStatus);
-    const verificationChanged = documentsChanged || payoutChanged;
+    const verificationChanged = kycChanged || payoutChanged;
     await this.referralRepository.updateInfluencerProfile(
       this.getRecordId(profile),
       {
-        metadata: { ...currentMetadata, details: nextDetails },
+        metadata: {
+          ...currentMetadata,
+          details: nextDetails,
+          ...(verificationChanged ? {
+            verificationResubmission: {
+              submittedAt: new Date().toISOString(),
+              kycChanged,
+              payoutChanged,
+              reason: "Partner updated verification details; referral codes blocked pending approval",
+            },
+          } : {}),
+        },
         ...(verificationChanged
           ? {
               onboardingStatus: hasSubmission
@@ -3797,7 +3796,7 @@ class ReferralService {
             }
           : {}),
         ...(payoutChanged ? { payoutProfileStatus: nextBankStatus } : {}),
-        ...(documentsChanged ? { kycStatus: nextKycStatus } : {}),
+        ...(kycChanged ? { kycStatus: nextKycStatus } : {}),
       },
     );
     if (verificationChanged) {
@@ -3805,6 +3804,14 @@ class ReferralService {
         this.getRecordId(profile),
         { status: "suspended" },
       );
+    }
+    if (accountProfileChanged || phoneChanged) {
+      await this.referralRepository.updateInfluencerAccount(accountId, {
+        $set: {
+          ...(accountProfileChanged ? { profile: accountProfile } : {}),
+          ...(phoneChanged ? { phone: payload.phone } : {}),
+        },
+      });
     }
     return this.getMyInfluencerProfile(actor);
   }

@@ -1,9 +1,12 @@
 const { knex } = require("../../../infrastructure/postgres/postgres-client");
 const { env } = require("../../../config/env");
 
+const { DEFAULT_MARKETING, normalizeMarketing } = require("../../marketing/services/marketing-policy");
+
 const SETTINGS_KEY = "commerce_policy";
 
 const DEFAULT_SETTINGS = {
+  marketing: DEFAULT_MARKETING,
   productWorkflow: {
     moderationRevisionTiming: "parallel",
     revisionDiffStatus: "in_progress",
@@ -265,6 +268,8 @@ class CommerceSettingsService {
   normalize(payload = {}) {
     const source = this.mergeRaw(DEFAULT_SETTINGS, payload);
     return {
+      marketing: normalizeMarketing({ ...source.marketing, scope: "coupons", enabled: source.marketing.enabled && source.marketing.scope !== "referrals" }),
+      referralMarketing: normalizeMarketing(payload.referralMarketing || { ...source.marketing, scope: "referrals", enabled: source.marketing.enabled && source.marketing.scope !== "coupons" }),
       productWorkflow: {
         moderationRevisionTiming: pickAllowed(
           source.productWorkflow.moderationRevisionTiming,

@@ -371,6 +371,9 @@ class OrderService {
   async createOrder(payload, actor) {
     const operation = () => this.createOrderLocked(payload, actor);
     const keys = [
+      // All promotional checkouts share budget/customer limits across codes.
+      payload.couponCode ? "marketing:global" : null,
+      `customer:${actor.userId}`,
       payload.idempotencyKey ? `buyer:${actor.userId}:${payload.idempotencyKey}` : null,
       payload.couponCode ? `coupon:${String(payload.couponCode).trim().toUpperCase()}` : null,
     ];
@@ -501,6 +504,7 @@ class OrderService {
               sellerPayoutAmount: pricedOrder.pricing.sellerPayoutAmount,
               sellerSettlementBreakup: pricedOrder.pricing.sellerSettlementBreakup,
             },
+            marketing: pricedOrder.marketing || undefined,
             idempotencyKey: payload.idempotencyKey || undefined,
             referral: pricedOrder.referralContext
               ? {
@@ -659,6 +663,7 @@ class OrderService {
         buyerId: quoteUserId,
         quotedBy: actor.userId,
         quotedByRole: actor.role,
+        marketing: pricedOrder.marketing || null,
         referral: pricedOrder.referralContext
           ? {
               code: pricedOrder.referralContext.code,

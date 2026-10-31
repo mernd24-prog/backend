@@ -2,6 +2,7 @@
 const { execSync } = require("child_process");
 const { connectMongo, mongoose } = require("../../src/infrastructure/mongo/mongo-client");
 const { postgresPool } = require("../../src/infrastructure/postgres/postgres-client");
+const { resetSearchData } = require("../utils/reset-search-data");
 const { env } = require("../../src/config/env");
 
 function redactUri(uri) {
@@ -41,10 +42,11 @@ function resetSchemaAndSeed() {
 }
 
 async function main() {
+  await resetSearchData();
   await resetMongo();
   await resetPostgres();
   resetSchemaAndSeed();
-  process.stdout.write("All databases reset and rebuilt successfully\n");
+  process.stdout.write("All databases reset and rebuilt; Elasticsearch product data cleared\n");
 }
 
 main().catch((error) => {

@@ -221,6 +221,14 @@ class SellerOrganizationRepository {
     }
   }
 
+  async findNamesByIds(organizationIds = []) {
+    const ids = [...new Set(organizationIds.filter(Boolean).map(String))];
+    if (!ids.length) return [];
+    return knex("seller_organizations")
+      .select("id", "store_display_name", "legal_business_name")
+      .whereIn("id", ids);
+  }
+
   async findById(organizationId) {
     const [row] = await knex("seller_organizations")
       .where("id", organizationId)

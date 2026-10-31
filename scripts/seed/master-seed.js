@@ -18,6 +18,7 @@ const fs = require('fs');
 require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 
 const dbConnection = require('./utils/db-connection');
+const { resetSearchData } = require('../utils/reset-search-data');
 
 // Initialize master logger
 const masterLogger = pino({
@@ -146,6 +147,10 @@ class MasterSeed {
   async resetDatabase() {
     try {
       this.logger.warn('⚠ Resetting database (truncating PostgreSQL, clearing MongoDB)');
+
+      // Clear search first so an unavailable search cluster cannot leave stale
+      // documents behind after the source data has been removed.
+      await resetSearchData({ logger: this.logger });
 
       // PostgreSQL tables to truncate
       const pgTables = [

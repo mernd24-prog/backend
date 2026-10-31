@@ -68,13 +68,23 @@ class ShippingProfilesService {
     });
 
     const serializedRows = rows.map(this._serialize);
-    const sellerMap = await this._getSellerMap(serializedRows.map((profile) => profile.sellerId));
+    const [sellerMap, organizations] = await Promise.all([
+      this._getSellerMap(serializedRows.map((profile) => profile.sellerId)),
+      this.organizationRepository.findNamesByIds(serializedRows.map((profile) => profile.organizationId)),
+    ]);
+    const organizationMap = new Map(organizations.map((organization) => [String(organization.id), organization.store_display_name || organization.legal_business_name || "Unnamed organization"]));
 
     return {
       total: count,
       limit,
       offset,
-      profiles: rows.map((row) => this._serialize(row)),
+      profiles: serializedRows.map((profile) => ({
+        ...profile,
+        sellerName: sellerMap.get(String(profile.sellerId))?.name || "Unknown seller",
+        organizationName: profile.organizationId
+          ? organizationMap.get(String(profile.organizationId)) || "Unknown organization"
+          : "All organizations",
+      })),
     };
   }
 
