@@ -1742,9 +1742,9 @@ class AdminService {
     if (role === ROLES.BUYER) {
       return [];
     }
-    return DEFAULT_PLATFORM_MODULES.filter((module) =>
-      sidebarScope.has(cleanModuleName(module)),
-    );
+    // API-only modules (reports, ledgers, bonus progress, etc.) also need
+    // assignable permissions even when they have no sidebar entry.
+    return [...DEFAULT_PLATFORM_MODULES];
   }
 
   roleUsesAssignedModules(role) {

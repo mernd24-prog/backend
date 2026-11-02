@@ -622,12 +622,13 @@ class SellerChargeSettingsService {
         continue;
       }
       this.ensureProfileForItem(profile, profileGroup.items[0], group);
-      const serviceability = shippingProfilesService.checkPincodeAgainstProfile(
-        profile,
-        parts.pincode,
-        parts.city,
-        parts.state,
-      );
+      // Every product sharing a profile must allow the destination independently.
+      const serviceability = profileGroup.items.map((item) =>
+        shippingProfilesService.checkPincodeAgainstProfile(
+          profile, parts.pincode, parts.city, parts.state,
+          item.shipping || item.productSnapshot?.shipping || item.product_snapshot?.shipping || {},
+        ),
+      ).find((check) => !check.allowed) || { allowed: true };
       if (!serviceability.allowed) {
         const productTitle = profileGroup.items[0]?.title || profileGroup.items[0]?.productTitle || "Selected product";
         throw new AppError(

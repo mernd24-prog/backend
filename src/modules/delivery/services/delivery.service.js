@@ -95,7 +95,8 @@ class DeliveryService {
             profile,
             pincode,
             response.city,
-            response.state
+            response.state,
+            product.shipping || {},
           );
 
           if (!check.allowed) {

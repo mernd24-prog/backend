@@ -97,7 +97,13 @@ const METHOD_ACTIONS = {
 
 function inferRequestAction(req) {
   const method = String(req.method || "GET").toUpperCase();
-  const path = String(req.originalUrl || req.path || "").toLowerCase();
+  const path = String(req.originalUrl || req.path || "").split("?")[0].toLowerCase();
+
+  // Reading an approval/recovery screen is view access. Export/import are
+  // separate capabilities even when an endpoint uses GET.
+  if (path.includes("/import")) return "import";
+  if (path.includes("/export")) return "export";
+  if (method === "GET" || method === "HEAD") return "view";
 
   if (path.includes("/approve") || path.includes("/approval")) return "approve";
   if (path.includes("/reject")) return "reject";
@@ -128,9 +134,6 @@ function inferRequestAction(req) {
   }
   if (path.includes("/inventory")) return method === "GET" ? "view" : "adjust";
   if (path.includes("/bulk")) return method === "GET" ? "view" : "bulk_action";
-  if (path.includes("/import")) return "import";
-  if (path.includes("/export")) return "export";
-
   return normalizePermissionAction(METHOD_ACTIONS[method] || "view");
 }
 

@@ -363,7 +363,7 @@ class ShippingProfilesService {
   }
 
   // Check if a pincode is serviceable according to a profile's rules.
-  checkPincodeAgainstProfile(profile, pincode, city, state) {
+  checkPincodeAgainstProfile(profile, pincode, city, state, shipping = {}) {
     if (!profile) return { allowed: true };
     if (profile.active === false || profile.archivedAt) {
       return { allowed: false, reason: "Shipping profile is inactive" };
@@ -372,6 +372,13 @@ class ShippingProfilesService {
     const mode = profile.serviceabilityMode;
     const pin = String(pincode || "").trim();
 
+    const additionalPincodes = [
+      ...(shipping.allowPincodes || []),
+      ...(shipping.serviceablePincodes || []),
+    ].map((value) => String(value).trim());
+    if (["all_india", "selected_pincodes"].includes(mode) && additionalPincodes.includes(pin)) {
+      return { allowed: true };
+    }
     if (mode === "all_india") return { allowed: true };
 
     if (mode === "selected_pincodes") {

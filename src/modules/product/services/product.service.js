@@ -2183,12 +2183,19 @@ class ProductService {
       );
     }
 
-    // A selected profile is the only delivery-rule source. Keep product-level
-    // serviceability unrestricted and clear stale manual location filters.
+    // Preserve product-specific additions alongside the profile's coverage.
     if (hasShippingPayload) {
+      const shipping = { ...(existingProduct?.shipping || {}), ...payload.shipping };
+      const pincodes = Array.from(new Set(
+        (shipping.allowPincodes || shipping.serviceablePincodes || [])
+          .map((value) => String(value || "").trim()).filter(Boolean),
+      ));
+      if (pincodes.some((pincode) => !/^\d{6}$/.test(pincode))) {
+        throw new AppError("Every allowed delivery pincode must be a valid 6-digit pincode", 400);
+      }
       payload.shipping.serviceabilityMode = "all_pincodes";
-      payload.shipping.allowPincodes = [];
-      payload.shipping.serviceablePincodes = [];
+      payload.shipping.allowPincodes = pincodes;
+      payload.shipping.serviceablePincodes = pincodes;
       payload.shipping.regions = [];
       payload.shipping.states = [];
       payload.shipping.cities = [];

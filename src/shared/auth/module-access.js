@@ -254,9 +254,9 @@ const MODULE_ALIASES = {
   payout: "sellers/commissions",
 
   // Referral sub-modules
-  "influencer-management": "referral",
-  influencer_management: "referral",
-  influencers: "referral",
+  "influencer-management": "influencer-management",
+  influencer_management: "influencer-management",
+  influencers: "influencer-management",
 
   // Analytics events
   "analytics-events": "reports",
@@ -342,6 +342,12 @@ function getRequestModule(req) {
   const fourth = parts[startIndex + 3];
 
   if (first === "admin") {
+    // Referral marketing controls live on the Rules & Coins page, while
+    // the remaining commerce settings retain their platform-admin scope.
+    if (second === "commerce-settings" && third === "marketing-policy" && fourth === "referrals") {
+      return "referral-rules";
+    }
+
     if (second === "access" && third === "modules") {
       return null;
     }
@@ -486,13 +492,22 @@ function getRequestModule(req) {
       analytics: "reports",
       reports: "reports",
       returns: "returns",
+      cancellations: "cancellations",
+      wallets: "wallets",
+      deals: "deals",
+      notifications: "notifications",
+      "ca-analytics": "ca-analytics",
       support: "queries",
       queries: "queries",
       referral: "referral",
       system: "admin",
     };
 
-    if (second === "platform" && third === "feature-flags") {
+    if (second === "platform" && third === "subscription-plans") {
+      return "subscriptions";
+    }
+
+    if (second === "platform" && ["feature-flags", "api-keys", "webhooks"].includes(third)) {
       return "admin";
     }
 
@@ -509,7 +524,10 @@ function getRequestModule(req) {
     return null;
   }
   if (first === "sellers" && second === "me" && third === "dashboard") {
-    return "analytics";
+    return "seller-dashboard";
+  }
+  if (first === "sellers" && second === "me" && third === "ca-analytics") {
+    return "ca-analytics";
   }
   if (first === "sellers" && second === "me" && third === "tracking") {
     return "orders";
@@ -520,6 +538,9 @@ function getRequestModule(req) {
     (third === "access" || third === "sidebar")
   ) {
     return null;
+  }
+  if (first === "platform" && second === "subscription-plans") {
+    return "subscriptions";
   }
   if (first === "platform" && second === "cms") {
     return "cms_pages";
