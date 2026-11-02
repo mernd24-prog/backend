@@ -1738,7 +1738,11 @@ class PlatformService {
       sortDir: query.sortDir || query.sortOrder,
     };
     const filter = buildMongoFilter({
-      search:      query.q || query.keyWord || query.search,
+      // Product-derived brands are merged in the repository, so apply search
+      // after that merge instead of filtering only master brand documents.
+      search:      actorContext.isAdmin || actorContext.isSeller
+        ? query.q || query.keyWord || query.search
+        : "",
       searchFields:["name"],
     });
     if (query.active !== undefined) filter.active = query.active === true || query.active === "true";
@@ -1765,12 +1769,32 @@ class PlatformService {
     if (!actorContext.isAdmin && !actorContext.isSeller) {
       const cacheKey = JSON.stringify({ visibleFilter, pagination, options });
       const cached = this.brandListCache.get(cacheKey);
-      if (cached && cached.expiresAt > Date.now()) return cached.value;
+      if (cached && cached.expiresAt > Date.now()) {
+        const search = String(query.q || query.keyWord || query.search || "")
+          .trim()
+          .toLowerCase();
+        if (!search) return cached.value;
+      }
+      const search = String(query.q || query.keyWord || query.search || "")
+        .trim()
+        .toLowerCase();
       const value = await this.platformRepository.listBrands(
         visibleFilter,
-        pagination,
+        search ? { ...pagination, skip: 0, limit: 5000 } : pagination,
         options,
       );
+      if (search) {
+        const matchingItems = value.items.filter((brand) =>
+          String(brand.name || "").toLowerCase().includes(search),
+        );
+        const total = matchingItems.length;
+        const start = (page - 1) * limit;
+        value.items = matchingItems.slice(start, start + limit);
+        value.total = total;
+        value.page = page;
+        value.limit = limit;
+        value.totalPages = Math.ceil(total / limit);
+      }
       this.brandListCache.set(cacheKey, {
         value,
         expiresAt: Date.now() + 5 * 60 * 1000,
@@ -1778,7 +1802,30 @@ class PlatformService {
       return value;
     }
 
-    return this.platformRepository.listBrands(visibleFilter, pagination, options);
+    const search = String(query.q || query.keyWord || query.search || "")
+      .trim()
+      .toLowerCase();
+    const result = await this.platformRepository.listBrands(
+      visibleFilter,
+      search && !actorContext.isAdmin && !actorContext.isSeller
+        ? { ...pagination, skip: 0, limit: 5000 }
+        : pagination,
+      options,
+    );
+    if (!search || actorContext.isAdmin || actorContext.isSeller) return result;
+    const matchingItems = result.items.filter((brand) =>
+      String(brand.name || "").toLowerCase().includes(search),
+    );
+    const total = matchingItems.length;
+    const start = (page - 1) * limit;
+    return {
+      ...result,
+      items: matchingItems.slice(start, start + limit),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   async submitBrand(payload, actor = {}, req) {
