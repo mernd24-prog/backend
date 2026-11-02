@@ -2286,7 +2286,7 @@ class SellerService {
     const actorPermissionMap = await this.getActorAssignablePermissionMap(actor);
     const rbacModulesBySlug = this.getRbacModuleMap(permissionMatrix.modules);
     const includePermissions = query.includePermissions !== false;
-    const modules = DEFAULT_SELLER_MODULES
+    const modules = require("../../../shared/auth/rbac-module-policy").modulesForRole("seller")
       .filter((moduleSlug) => {
         if (!actorPermissionMap) return true;
         const actorActions = actorPermissionMap.get(cleanModuleName(moduleSlug));
@@ -2386,7 +2386,7 @@ class SellerService {
 
   sanitizeModules(modules) {
     const normalized = Array.from(new Set((modules || []).map(cleanModuleName).filter(Boolean)));
-    return normalized.filter((moduleName) => DEFAULT_SELLER_MODULES.includes(moduleName));
+    return normalized.filter(moduleName => require("../../../shared/auth/rbac-module-policy").modulesForRole("seller").includes(moduleName));
   }
 
   async getActorAssignablePermissionMap(actor = {}) {
@@ -2617,9 +2617,6 @@ class SellerService {
   async updateSellerSubAdminModules(userId, payload, actor) {
     const sellerId = this.assertSellerOwnerActor(actor);
     let allowedModules = this.sanitizeModules(payload.allowedModules);
-    if (!allowedModules.length) {
-      throw new AppError("At least one valid seller module is required", 400);
-    }
     let modulePermissions = this.normalizeModulePermissions(
       payload.modulePermissions,
       allowedModules,

@@ -9,6 +9,7 @@ const { settlementLifecycleService } = require("../services/settlement-lifecycle
 const { commissionValidation } = require("../../validation");
 
 const financeView = allowPermissions("sellers/commissions:view");
+const financeExport = allowPermissions("sellers/commissions:export");
 const financeManage = allowPermissions("sellers/commissions:update");
 const SELLER_ROLES = new Set(["seller", "seller-admin", "seller-sub-admin"]);
 
@@ -78,7 +79,7 @@ router.get("/my-commissions", authenticate, financeView, async (req, res, next) 
 // ==============================
 // Seller: Export commission breakdown
 // ==============================
-router.get("/my-commissions/export", authenticate, financeView, async (req, res, next) => {
+router.get("/my-commissions/export", authenticate, financeExport, async (req, res, next) => {
   try {
     const userId = req.auth?.ownerSellerId || req.auth?.sub;
 
@@ -122,7 +123,7 @@ router.get("/my-payouts", authenticate, financeView, async (req, res, next) => {
 });
 
 // Seller requests payout; admin approval and transfer remain separate actions.
-router.post("/my-payouts/request", authenticate, financeView, async (req, res, next) => {
+router.post("/my-payouts/request", authenticate, financeManage, async (req, res, next) => {
   try {
     const sellerId = req.auth?.ownerSellerId || req.auth?.sub;
     if (!sellerId) return res.status(401).json({ success: false, message: "Unauthorized" });
@@ -142,7 +143,7 @@ router.post("/my-payouts/request", authenticate, financeView, async (req, res, n
 // ==============================
 // Seller: Export payout history
 // ==============================
-router.get("/my-payouts/export", authenticate, financeView, async (req, res, next) => {
+router.get("/my-payouts/export", authenticate, financeExport, async (req, res, next) => {
   try {
     const userId = req.auth?.ownerSellerId || req.auth?.sub;
 
@@ -185,7 +186,7 @@ router.get("/my-wallet", authenticate, financeView, async (req, res, next) => {
   }
 });
 
-router.patch("/my-payout-preference", authenticate, financeView, async (req, res, next) => {
+router.patch("/my-payout-preference", authenticate, financeManage, async (req, res, next) => {
   try {
     const userId = req.auth?.ownerSellerId || req.auth?.sub;
 
@@ -268,7 +269,7 @@ router.get("/my-settlements", authenticate, financeView, async (req, res, next) 
 // ==============================
 // Seller: Export settlement history
 // ==============================
-router.get("/my-settlements/export", authenticate, financeView, async (req, res, next) => {
+router.get("/my-settlements/export", authenticate, financeExport, async (req, res, next) => {
   try {
     const userId = req.auth?.ownerSellerId || req.auth?.sub;
 
@@ -359,7 +360,7 @@ router.get("/", authenticate, platformFinanceOnly, financeView, async (req, res,
 // ==============================
 // Admin: Export seller commissions
 // ==============================
-router.get("/export", authenticate, platformFinanceOnly, financeView, async (req, res, next) => {
+router.get("/export", authenticate, platformFinanceOnly, financeExport, async (req, res, next) => {
   try {
     const document = await CommissionService.exportSellerCommissions(req.query);
     return sendDocument(res, document);
@@ -386,7 +387,7 @@ router.get("/payouts", authenticate, platformFinanceOnly, financeView, async (re
 // ==============================
 // Admin: Export seller payouts
 // ==============================
-router.get("/payouts/export", authenticate, platformFinanceOnly, financeView, async (req, res, next) => {
+router.get("/payouts/export", authenticate, platformFinanceOnly, financeExport, async (req, res, next) => {
   try {
     const document = await CommissionService.exportSellerPayouts(req.query);
     return sendDocument(res, document);
@@ -775,7 +776,7 @@ router.get(
   "/settlements/export",
   authenticate,
   platformFinanceOnly,
-  financeView,
+  financeExport,
   async (req, res, next) => {
     try {
       const document = await CommissionService.exportSettlements(req.query);

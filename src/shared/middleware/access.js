@@ -1,3 +1,4 @@
+const { getRoutePermission } = require("../auth/request-route-policy");
 const { AppError } = require("../errors/app-error");
 const { canDo } = require("../auth/access-rules");
 const { ROLES } = require("../constants/roles");
@@ -96,6 +97,8 @@ const METHOD_ACTIONS = {
 };
 
 function inferRequestAction(req) {
+  const declared = getRoutePermission(req);
+  if (declared) return declared.action;
   const method = String(req.method || "GET").toUpperCase();
   const path = String(req.originalUrl || req.path || "").split("?")[0].toLowerCase();
 
@@ -149,7 +152,6 @@ function buildPermissionCandidates(permissionSlug = "") {
   return Array.from(
     new Set([
       value,
-      ...actionCandidates,
       ...actionCandidates.map((action) => `${moduleSlug}:${action}`),
     ]),
   );
@@ -396,14 +398,6 @@ function allowPermissions(...permissionSlugs) {
       if (permissionCandidates.some((candidate) => grantedPermissions.includes(candidate))) {
         return true;
       }
-      if (
-        permission.startsWith("rbac:") &&
-        permissionCandidates
-          .map((candidate) => candidate.replace(/^rbac:/, ""))
-          .some((candidate) => grantedPermissions.includes(candidate))
-      ) {
-        return true;
-      }
       return userRoles.some(
         (role) => isPlatformAdminRole(role) && canDo(role, permission),
       );
@@ -451,6 +445,7 @@ function allowPlatformModule(moduleSlug) {
 }
 
 module.exports = {
+  inferRequestAction,
   allowRoles,
   allowActions,
   allowPermissions,

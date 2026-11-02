@@ -219,7 +219,7 @@ rbacRoutes.post(
 rbacRoutes.delete(
   "/roles/:roleId/permissions",
   checkInput({ ...roleParamSchema, body: removePermissionSchema.body }),
-  allowPermissions("rbac:delete"),
+  allowPermissions("rbac:assign"),
   catchErrors(roleController.removePermissionFromRole),
 );
 
@@ -282,7 +282,7 @@ rbacRoutes.delete(
     ...userPermissionParamSchema,
     body: removePermissionSchema.body,
   }),
-  allowPermissions("rbac:delete"),
+  allowPermissions("rbac:assign"),
   catchErrors(permissionAssignmentController.removePermissionFromUser),
 );
 
@@ -340,7 +340,7 @@ rbacRoutes.delete(
     ...userPermissionParamSchema,
     body: removeRoleSchema.body,
   }),
-  allowPermissions("rbac:delete"),
+  allowPermissions("rbac:assign"),
   catchErrors(permissionAssignmentController.removeRoleFromUser),
 );
 

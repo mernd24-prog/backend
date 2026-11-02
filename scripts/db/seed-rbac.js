@@ -1,4 +1,5 @@
-#!/usr/bin/env node
+const { moduleCode, supportedActions } = require("../../src/shared/auth/rbac-module-policy");
+const { normalizePermissionAction, permissionSlug } = require("../../src/shared/auth/rbac-permissions");
 /**
  * Canonical RBAC seed script — idempotent, safe to re-run at any time.
  *
@@ -79,8 +80,6 @@ const LEGACY_MODULE_SLUGS = [
   "locations",
 ];
 
-const NON_SYSTEM_ROLE_SLUGS = ["moderator", "product-manager"];
-
 function makePlatformModuleList() {
   return MODULE_CATALOG.map((module, index) => ({
     id: uuidv4(),
@@ -94,7 +93,7 @@ function makePlatformModuleList() {
     parentModuleId: null,
     moduleType: "module",
     status: "active",
-    actions: CANONICAL_ACTIONS,
+    actions: CANONICAL_ACTIONS.filter(action => supportedActions(module.slug).includes(action.key)),
     isVisibleInSidebar: false,
     order: Math.round(Number(module.order || index + 1) * 10),
     metadata: {
@@ -120,7 +119,7 @@ function makeSidebarModuleList() {
     parentModuleId: null,
     moduleType: module.moduleType || "page",
     status: module.status || "active",
-    actions: SIDEBAR_ACTIONS,
+    actions: module.moduleType === "group" ? [] : SIDEBAR_ACTIONS.filter(action => supportedActions(module.requiredModule || module.moduleKey).includes(action.key)),
     isVisibleInSidebar: module.isVisibleInSidebar !== false,
     order: Number(module.order || 0),
     metadata: {
@@ -389,7 +388,6 @@ async function upsertRole(role, transaction) {
            description = :description,
            type = :type,
            is_super_admin = :isSuperAdmin,
-           active = true,
            updated_at = NOW()
        WHERE id = :roleId`,
       {
@@ -416,7 +414,7 @@ async function upsertRole(role, transaction) {
     );
   }
 
-  return roleId;
+  return { roleId, created: existing.length === 0 };
 }
 
 async function syncRolePermissions(roleId, desiredPermissionIds, transaction) {
@@ -463,6 +461,62 @@ async function syncRolePermissions(roleId, desiredPermissionIds, transaction) {
         transaction,
       },
     );
+  }
+}
+
+// Copy equivalent legacy/sidebar grants before retiring invalid permission rows.
+// Source rows remain for audit history. Explicit user denies take precedence.
+async function migrateEquivalentAssignments(permissionBySlug, transaction) {
+  const [rows] = await sequelize.query(
+    `SELECT p.id, p.slug, p.action, m.slug AS "moduleSlug", m.metadata
+     FROM permissions p JOIN modules m ON m.id = p.module_id`, { transaction });
+  for (const row of rows) {
+    const code = moduleCode({ slug: row.moduleSlug, metadata: row.metadata });
+    const targetId = permissionBySlug[permissionSlug(code, normalizePermissionAction(row.action))];
+    if (!targetId || targetId === row.id) continue;
+    const replacements = { sourceId: row.id, targetId };
+    await sequelize.query(
+      `INSERT INTO role_permissions (id, role_id, permission_id, created_at)
+       SELECT md5(random()::text || clock_timestamp()::text)::uuid, rp.role_id, :targetId, NOW()
+       FROM role_permissions rp WHERE rp.permission_id = :sourceId
+       AND NOT EXISTS (SELECT 1 FROM role_permissions target
+         WHERE target.role_id = rp.role_id AND target.permission_id = :targetId)`,
+      { replacements, transaction });
+    await sequelize.query(
+      `INSERT INTO user_permissions (id, user_id, permission_id, granted_by, granted_at, metadata)
+       SELECT md5(random()::text || clock_timestamp()::text)::uuid,
+         source.user_id, :targetId, source.granted_by, source.granted_at, source.metadata
+       FROM user_permissions source WHERE source.permission_id = :sourceId AND source.revoked_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM user_permissions target WHERE target.user_id = source.user_id
+         AND target.permission_id = :targetId AND target.revoked_at IS NULL)`,
+      { replacements, transaction });
+    await sequelize.query(
+      `UPDATE user_permissions target SET metadata = COALESCE(target.metadata, '{}'::jsonb) || '{"effect":"deny"}'::jsonb
+       WHERE target.permission_id = :targetId AND target.revoked_at IS NULL
+       AND EXISTS (SELECT 1 FROM user_permissions source WHERE source.permission_id = :sourceId
+         AND source.user_id = target.user_id AND source.revoked_at IS NULL AND source.metadata->>'effect' = 'deny')`,
+      { replacements, transaction });
+  }
+}
+
+async function migrateTemplatePermissionSlugs(transaction) {
+  const [permissions] = await sequelize.query(
+    `SELECT p.slug, p.action, p.active, m.slug AS "moduleSlug", m.metadata
+     FROM permissions p JOIN modules m ON m.id = p.module_id`, { transaction });
+  const active = new Set(permissions.filter(row => row.active).map(row => row.slug));
+  const equivalents = new Map(permissions.map(row => [row.slug,
+    permissionSlug(moduleCode({ slug: row.moduleSlug, metadata: row.metadata }), normalizePermissionAction(row.action))]));
+  const [templates] = await sequelize.query(`SELECT id, permission_slugs FROM permission_templates`, { transaction });
+  for (const template of templates) {
+    const previous = Array.isArray(template.permission_slugs) ? template.permission_slugs : [];
+    const slugs = Array.from(new Set(previous.map(slug => {
+      const canonical = equivalents.get(slug);
+      return canonical && active.has(canonical) ? canonical : active.has(slug) ? slug : null;
+    }).filter(Boolean)));
+    if (JSON.stringify(previous) !== JSON.stringify(slugs)) {
+      await sequelize.query(`UPDATE permission_templates SET permission_slugs = CAST(:slugs AS jsonb), updated_at = NOW() WHERE id = :id`,
+        { replacements: { id: template.id, slugs: JSON.stringify(slugs) }, transaction });
+    }
   }
 }
 
@@ -558,6 +612,7 @@ async function seedRbac() {
 
     const permissions = makePermissionList(allModules);
     const permissionBySlug = await upsertPermissions(permissions, transaction);
+    await migrateEquivalentAssignments(permissionBySlug, transaction);
 
     console.log(`✓ Upserted ${permissions.length} permissions`);
 
@@ -585,14 +640,6 @@ async function seedRbac() {
         bind: [LEGACY_ACTION_KEYS],
         transaction,
       },
-    );
-
-    await sequelize.query(
-      `DELETE FROM role_permissions
-       WHERE permission_id IN (
-         SELECT id FROM permissions WHERE active = false
-       )`,
-      { transaction },
     );
 
     await sequelize.query(
@@ -688,38 +735,21 @@ async function seedRbac() {
     ];
 
     for (const role of SYSTEM_ROLES) {
-      const roleId = await upsertRole(role, transaction);
+      const { roleId, created } = await upsertRole(role, transaction);
 
       const desiredIds = role.permissionSlugs
         .map((slug) => permissionBySlug[slug])
         .filter(Boolean);
 
-      await syncRolePermissions(roleId, desiredIds, transaction);
+      // Existing role defaults are user-managed. A catalog refresh must not
+      // restore revoked rights or overwrite valid customized assignments.
+      if (created) await syncRolePermissions(roleId, desiredIds, transaction);
     }
 
     console.log(`✓ Upserted ${SYSTEM_ROLES.length} system roles`);
     SYSTEM_ROLES.forEach((role) => {
       console.log(`  ${role.slug.padEnd(16)} → ${role.permissionSlugs.length} permissions`);
     });
-
-    await sequelize.query(
-      `UPDATE roles
-       SET active = false,
-           updated_at = NOW()
-       WHERE slug = ANY($1::text[])`,
-      {
-        bind: [NON_SYSTEM_ROLE_SLUGS],
-        transaction,
-      },
-    );
-
-    await sequelize.query(
-      `DELETE FROM role_permissions
-       WHERE role_id IN (
-         SELECT id FROM roles WHERE active = false
-       )`,
-      { transaction },
-    );
 
     // STEP 13 — seed permission templates
     const PERMISSION_TEMPLATES = [
@@ -828,13 +858,7 @@ async function seedRbac() {
            (id, slug, name, description, role_scope, permission_slugs, is_active, metadata, created_at, updated_at)
          VALUES
            (:id, :slug, :name, :description, :roleScope, :permissionSlugs, true, '{}', NOW(), NOW())
-         ON CONFLICT (slug) DO UPDATE
-           SET name             = EXCLUDED.name,
-               description      = EXCLUDED.description,
-               role_scope        = EXCLUDED.role_scope,
-               permission_slugs  = EXCLUDED.permission_slugs,
-               is_active         = true,
-               updated_at        = NOW()`,
+         ON CONFLICT (slug) DO NOTHING`,
         {
           replacements: {
             id: uuidv4(),
@@ -851,6 +875,7 @@ async function seedRbac() {
 
     console.log(`✓ Upserted ${PERMISSION_TEMPLATES.length} permission templates`);
 
+    await migrateTemplatePermissionSlugs(transaction);
     await transaction.commit();
     committed = true;
 
@@ -892,9 +917,7 @@ async function seedRbac() {
     console.log(
       `Legacy module slugs deactivated   : ${LEGACY_MODULE_SLUGS.join(", ")}`,
     );
-    console.log(
-      `Non-system roles deactivated      : ${NON_SYSTEM_ROLE_SLUGS.join(", ")}`,
-    );
+    console.log("Existing roles and customized role assignments preserved");
 
     process.exit(0);
   } catch (error) {
@@ -910,4 +933,5 @@ async function seedRbac() {
   }
 }
 
-seedRbac();
+if (require.main === module) seedRbac();
+module.exports = { makePlatformModuleList, makeSidebarModuleList, makePermissionList, upsertModule, upsertPermissions, upsertRole, validateSeedCatalog, migrateEquivalentAssignments, migrateTemplatePermissionSlugs, seedRbac };

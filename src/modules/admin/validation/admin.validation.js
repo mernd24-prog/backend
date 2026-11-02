@@ -707,7 +707,7 @@ const listPlatformSubAdminsSchema = Joi.object({
 
 const updatePlatformSubAdminModulesSchema = Joi.object({
   body: Joi.object({
-    allowedModules: Joi.array().items(Joi.string()).min(1).required(),
+    allowedModules: Joi.array().items(Joi.string()).required(),
     modulePermissions: Joi.array().items(
       Joi.object({
         module: Joi.string().required(),

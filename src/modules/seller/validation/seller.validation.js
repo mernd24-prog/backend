@@ -580,7 +580,7 @@ const listSellerSubAdminsSchema = Joi.object({
 
 const updateSellerSubAdminModulesSchema = Joi.object({
   body: Joi.object({
-    allowedModules: Joi.array().items(Joi.string()).min(1).required(),
+    allowedModules: Joi.array().items(Joi.string()).required(),
     modulePermissions: modulePermissionSchema,
   }).required(),
   query: Joi.object({}).required(),

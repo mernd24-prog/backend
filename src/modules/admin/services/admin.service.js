@@ -21,11 +21,9 @@ const { AuditLogModel } = require("../../../shared/logger/audit-log.model");
 const { UserModel } = require("../../user/models/user.model");
 const { ReturnModel } = require("../../returns/models/return.model");
 const {
-  DEFAULT_PLATFORM_MODULES,
   DEFAULT_SELLER_MODULES,
   cleanModuleName,
 } = require("../../../shared/auth/module-access");
-const { SIDEBAR_MODULES } = require("../../../shared/auth/admin-sidebar-catalog");
 const {
   PERMISSION_ACTIONS,
   normalizePermissionAction: normalizeRbacPermissionAction,
@@ -1720,31 +1718,7 @@ class AdminService {
   }
 
   getAssignableModuleSlugs(role) {
-    const sidebarScope = new Set(
-      SIDEBAR_MODULES
-        .filter((module) =>
-          SELLER_SIDE_ROLES.includes(role)
-            ? String(module.moduleKey || "").startsWith("seller-")
-            : !String(module.moduleKey || "").startsWith("seller-"),
-        )
-        .flatMap((module) => [
-          module.requiredModule,
-          module.metadata?.requiredModule,
-        ])
-        .map(cleanModuleName)
-        .filter(Boolean),
-    );
-    if (SELLER_SIDE_ROLES.includes(role)) {
-      return DEFAULT_SELLER_MODULES.filter((module) =>
-        sidebarScope.has(cleanModuleName(module)),
-      );
-    }
-    if (role === ROLES.BUYER) {
-      return [];
-    }
-    // API-only modules (reports, ledgers, bonus progress, etc.) also need
-    // assignable permissions even when they have no sidebar entry.
-    return [...DEFAULT_PLATFORM_MODULES];
+    return require("../../../shared/auth/rbac-module-policy").modulesForRole(role);
   }
 
   roleUsesAssignedModules(role) {
@@ -1752,7 +1726,7 @@ class AdminService {
   }
 
   roleHasFullModuleAccess(role) {
-    return role === ROLES.SUPER_ADMIN || role === ROLES.ADMIN;
+    return role === ROLES.SUPER_ADMIN;
   }
 
   getRbacModuleMap(modules = []) {
@@ -2482,9 +2456,6 @@ class AdminService {
     }
 
     let allowedModules = this.sanitizeModules(payload.allowedModules, existingUser.role);
-    if (!allowedModules.length) {
-      throw new AppError("At least one valid module is required", 400);
-    }
     let modulePermissions = this.normalizeModulePermissions(
       payload.modulePermissions,
       allowedModules,

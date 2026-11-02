@@ -1,20 +1,6 @@
 const Joi = require("joi");
 
-const permissionActions = [
-  "view",
-  "create",
-  "update",
-  "delete",
-  "approve",
-  "reject",
-  "assign",
-  "export",
-  "import",
-  "status_change",
-  "restore",
-  "bulk_action",
-  "adjust",
-];
+const { PERMISSION_ACTIONS: permissionActions } = require("../../../shared/auth/rbac-permissions");
 
 const createModuleSchema = {
   body: Joi.object({
@@ -32,8 +18,8 @@ const createModuleSchema = {
     order: Joi.number().integer().default(0),
     status: Joi.string().valid("active", "inactive", "draft").default("active"),
     allowedRoles: Joi.array().items(Joi.string().trim().min(2).max(64)).default([]),
-    permissions: Joi.array().items(Joi.string()).default([]),
-    modulePermissions: Joi.array().items(Joi.string()).default([]),
+    permissions: Joi.array().items(Joi.string().valid(...permissionActions)).default([]),
+    modulePermissions: Joi.array().items(Joi.string().valid(...permissionActions)).default([]),
     isVisibleInSidebar: Joi.boolean().default(true),
     active: Joi.boolean().default(true),
     metadata: Joi.object().default({}),
@@ -56,11 +42,10 @@ const updateModuleSchema = {
     order: Joi.number().integer(),
     status: Joi.string().valid("active", "inactive", "draft"),
     allowedRoles: Joi.array().items(Joi.string().trim().min(2).max(64)),
-    permissions: Joi.array().items(Joi.string()),
-    modulePermissions: Joi.array().items(Joi.string()),
+    permissions: Joi.array().items(Joi.string().valid(...permissionActions)),
+    modulePermissions: Joi.array().items(Joi.string().valid(...permissionActions)),
     isVisibleInSidebar: Joi.boolean(),
-    active: Joi.boolean().allow(null),
-    includeInactive: Joi.boolean().default(false),
+    active: Joi.boolean(),
     metadata: Joi.object(),
   }).min(1),
 };
@@ -72,6 +57,7 @@ const listModulesSchema = {
     status: Joi.string().valid("active", "inactive", "draft"),
     q: Joi.string().allow(""),
     sidebar: Joi.boolean(),
+    scope: Joi.string().valid("backend", "sidebar").default("backend"),
     parentModuleId: Joi.string().uuid().allow("", null),
     limit: Joi.number().integer().min(1).max(1000).default(100),
     offset: Joi.number().integer().min(0).default(0),
@@ -177,6 +163,7 @@ const updateRoleSchema = {
 const listRolesSchema = {
   query: Joi.object({
     active: Joi.boolean(),
+    includeInactive: Joi.boolean().default(false),
     limit: Joi.number().integer().min(1).max(1000).default(100),
     offset: Joi.number().integer().min(0).default(0),
   }),

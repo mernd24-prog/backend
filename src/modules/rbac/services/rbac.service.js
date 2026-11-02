@@ -1,3 +1,4 @@
+const { canonicalModules, modulesForRole, moduleCode, supportedActions } = require("../../../shared/auth/rbac-module-policy");
 const { v4: uuidv4 } = require("uuid");
 const { RbacRepository } = require("../repositories/rbac.repository");
 const { AppError } = require("../../../shared/errors/app-error");
@@ -12,6 +13,7 @@ const {
   PERMISSION_ACTIONS,
   SIDEBAR_PERMISSION_ACTIONS,
   modulePermissionAssignmentsWithImplicitView,
+  actionsWithImplicitView,
   normalizePermissionAction,
   permissionSlug,
 } = require("../../../shared/auth/rbac-permissions");
@@ -45,7 +47,7 @@ class RbacService {
     const moduleName = moduleData.moduleName || moduleData.name;
     const moduleKey = slugifyModule(moduleData.moduleKey || moduleData.key || moduleData.slug || moduleName);
     const moduleSlug = slugifyModule(moduleData.moduleSlug || moduleData.slug || moduleKey);
-    const status = moduleData.status || (moduleData.active === false ? "inactive" : "active");
+    const status = moduleData.active === false ? "inactive" : moduleData.status || "active";
     const metadata = {
       ...(moduleData.metadata || {}),
       ...(moduleData.requiredModule
@@ -66,8 +68,8 @@ class RbacService {
       moduleType: moduleData.moduleType || "module",
       order: Number(moduleData.order || 0),
       status,
-      active: moduleData.active !== undefined ? Boolean(moduleData.active) : status === "active",
-      modulePermissions: Array.isArray(moduleData.permissions)
+      active: status === "active",
+      modulePermissions: Array.isArray(moduleData.permissions) && moduleData.permissions.every(value => typeof value === "string")
         ? moduleData.permissions
         : Array.isArray(moduleData.modulePermissions)
           ? moduleData.modulePermissions
@@ -75,6 +77,17 @@ class RbacService {
       isVisibleInSidebar: moduleData.isVisibleInSidebar !== false,
       metadata,
     };
+    if (payload.modulePermissions.some(action => !PERMISSION_ACTIONS.includes(normalizePermissionAction(action)))) {
+      throw new AppError("Module includes invalid permission actions", 400);
+    }
+    payload.modulePermissions = payload.moduleType === "group" ? [] : actionsWithImplicitView(payload.modulePermissions);
+    if (payload.modulePermissions.some(action => !supportedActions(moduleCode({ ...payload, slug: payload.slug })).includes(action))) {
+      throw new AppError("Module includes unsupported permission actions", 400);
+    }
+    if (metadata.source === "sidebar-seed") {
+      payload.name = moduleData.name || `Sidebar ${moduleKey.replace(/^sidebar-/, "")}`;
+      metadata.displayName = moduleData.moduleName || metadata.displayName || moduleName;
+    }
     if (!payload.name) throw new AppError("Module name is required", 400);
     if (!payload.moduleKey) throw new AppError("Module key is required", 400);
     if (
@@ -133,17 +146,23 @@ class RbacService {
       userId,
       makeSessionInvalidationUpdate(reason),
       { new: true },
-    ).catch(() => null);
+    );
   }
 
   async invalidateUsersForRole(roleId, reason = SESSION_INVALIDATION_REASONS.PERMISSIONS_CHANGED) {
-    const userIds = await this.rbacRepository.getUserIdsForRole(roleId).catch(() => []);
+    const userIds = await this.rbacRepository.getUserIdsForRole(roleId);
     if (!userIds.length) return { invalidated: 0 };
     await UserModel.updateMany(
       { _id: { $in: userIds } },
       makeSessionInvalidationUpdate(reason),
     );
     return { invalidated: userIds.length };
+  }
+
+  async invalidateUsersForModule(moduleId) {
+    const userIds = await this.rbacRepository.getUserIdsForModule(moduleId);
+    if (userIds.length) await UserModel.updateMany({ _id: { $in: userIds } },
+      makeSessionInvalidationUpdate(SESSION_INVALIDATION_REASONS.PERMISSIONS_CHANGED));
   }
 
   async getModule(id) {
@@ -155,11 +174,20 @@ class RbacService {
   }
 
   async listModules(filters) {
-    const result = await this.rbacRepository.listModules(filters);
-    return {
-      ...result,
-      items: result.items.map((item) => this.serializeModule(item)),
-    };
+    const options = filters || {};
+    if (options.scope === "sidebar") {
+      const result = await this.rbacRepository.listModules(options);
+      return { ...result, items: result.items.map(item => this.serializeModule(item)) };
+    }
+    const result = await this.rbacRepository.listModules({ ...options, includeInactive: true, q: undefined, status: undefined, limit: 1000, offset: 0 });
+    let items = canonicalModules(result.items.map(item => this.serializeModule(item)));
+    if (!options.includeInactive) items = items.filter(item => item.active === (options.active ?? true));
+    if (options.status) items = items.filter(item => item.status === options.status);
+    if (options.q) {
+      const q = String(options.q).toLowerCase();
+      items = items.filter(item => [item.name, item.slug, item.routePath, ...(item.aliases || [])].some(value => String(value || "").toLowerCase().includes(q)));
+    }
+    return { items: items.slice(options.offset || 0, (options.offset || 0) + (options.limit || 100)), total: items.length };
   }
 
   async listSidebarModules(filters = {}, actor = {}) {
@@ -170,9 +198,6 @@ class RbacService {
           .filter((parts) => parts[1] === "view")
           .map((parts) => cleanModuleName(parts[0]))
           .filter(Boolean)
-      : [];
-    const allowedModules = Array.isArray(actor.allowedModules)
-      ? actor.allowedModules.map(cleanModuleName).filter(Boolean)
       : [];
     const ownerSellerModules =
       actor.role === ROLES.SELLER
@@ -187,7 +212,6 @@ class RbacService {
       : [];
     const viewModuleScope = new Set([
       ...viewModules,
-      ...allowedModules,
       ...ownerPlatformModules,
       ...ownerSellerModules,
     ]);
@@ -315,6 +339,33 @@ class RbacService {
         .map((module) => this.applySidebarPermissionAssignments(module, assignedSlugs));
       matrix.total = matrix.items.length;
     }
+    if (filters.scope !== "sidebar") {
+      let targetRole = matrix.role?.slug;
+      if (filters.userId) {
+        const target = await UserModel.findById(filters.userId).select("role").lean();
+        targetRole = target?.role;
+      }
+      const inactive = new Set(await this.rbacRepository.getInactiveModuleCodes());
+      matrix.items = canonicalModules(matrix.items, { role: targetRole })
+        .filter(module => filters.active === false || !inactive.has(module.slug));
+      matrix.total = matrix.items.length;
+    }
+    let canManageRole = false;
+    if (matrix.role?.id && actor.userId) {
+      try { await this.assertCanManageRole(matrix.role.id, [], actor); canManageRole = true; }
+      catch (error) { if (!(error instanceof AppError) || error.statusCode !== 403) throw error; }
+    }
+    if (actor.userId && !actor.isSuperAdmin && actor.role !== ROLES.SUPER_ADMIN) {
+      const grants = new Set((actor.permissions || []).map(slug => {
+        const [code, action] = String(slug).split(":");
+        return permissionSlug(cleanModuleName(code), normalizePermissionAction(action));
+      }));
+      matrix.items = matrix.items.map(module => ({ ...module,
+        permissions: module.permissions.map(permission => ({ ...permission,
+          assignable: grants.has(permissionSlug(cleanModuleName(module.slug), permission.action)),
+        })),
+      }));
+    }
     const permissionCount = matrix.items.reduce(
       (total, module) => total + module.permissions.length,
       0,
@@ -330,6 +381,7 @@ class RbacService {
 
     return {
       role: matrix.role,
+      canManageRole,
       modules: matrix.items,
       totals: {
         modules: matrix.total,
@@ -384,6 +436,17 @@ class RbacService {
     if (!ids.length) return [];
 
     const permissions = await this.rbacRepository.getPermissionsByIds(ids);
+    const inactiveModules = new Set(await this.rbacRepository.getInactiveModuleCodes());
+    if (permissions.length !== ids.length) throw new AppError("Unknown permission in assignment", 400);
+    for (const row of permissions) {
+      const permission = typeof row.toJSON === "function" ? row.toJSON() : row;
+      const code = moduleCode(permission.module || { slug: permission.slug?.split(":")[0] });
+      const action = normalizePermissionAction(permission.action);
+      if (permission.active === false || permission.module?.active === false || inactiveModules.has(code) ||
+          !supportedActions(code).includes(action)) {
+        throw new AppError(`Inactive or unsupported permission: ${permission.slug}`, 400);
+      }
+    }
     const impliedSlugs = new Set();
 
     permissions.forEach((permission) => {
@@ -400,7 +463,7 @@ class RbacService {
         moduleKey.startsWith("sidebar-");
       const targetModule = isSidebarModule && requiredModule
         ? requiredModule
-        : moduleSlug;
+        : cleanModuleName(moduleSlug);
 
       if (!targetModule) return;
       impliedSlugs.add(permissionSlug(targetModule, action));
@@ -411,6 +474,9 @@ class RbacService {
 
     const impliedPermissionIds =
       await this.rbacRepository.getPermissionIdsBySlugs(Array.from(impliedSlugs));
+    if (impliedPermissionIds.length !== impliedSlugs.size) {
+      throw new AppError("Backend permission mapping is incomplete; reconcile the RBAC catalog first", 400);
+    }
     return Array.from(new Set([...ids, ...impliedPermissionIds]));
   }
 
@@ -420,9 +486,22 @@ class RbacService {
       throw new AppError("Module not found", 404);
     }
 
+    if (updates.parentModuleId === id || updates.parentModule === id) {
+      throw new AppError("A module cannot be its own parent", 400);
+    }
     // Check if slug is being updated and if it's unique
-    const payload = this.normalizeModulePayload({ ...module.toJSON(), ...updates });
+    const merged = { ...module.toJSON(), ...updates };
+    if (Object.prototype.hasOwnProperty.call(updates, "status")) merged.active = updates.status === "active";
+    if (Object.prototype.hasOwnProperty.call(updates, "active") && !Object.prototype.hasOwnProperty.call(updates, "status")) {
+      merged.status = updates.active ? "active" : "inactive";
+    }
+    const payload = this.normalizeModulePayload(merged);
 
+    const seeded = require("../../../shared/auth/module-catalog").MODULE_CATALOG.some(item => item.slug === module.slug) || module.metadata?.source === "sidebar-seed";
+    if (seeded && (payload.slug !== module.slug || payload.moduleKey !== module.moduleKey ||
+        (module.metadata?.source !== "sidebar-seed" && payload.name !== module.name))) {
+      throw new AppError("Existing application module keys cannot be renamed", 400);
+    }
     if (payload.slug && payload.slug !== module.slug) {
       const existing = await this.rbacRepository.getModuleBySlug(payload.slug);
       if (existing) {
@@ -434,19 +513,18 @@ class RbacService {
       if (existing) throw new AppError("Module with this key already exists", 409);
     }
 
-    return this.serializeModule(await this.rbacRepository.updateModule(id, payload));
+    const result = await this.rbacRepository.updateModule(id, payload);
+    await this.invalidateUsersForModule(id);
+    return this.serializeModule(result);
   }
 
   async changeModuleStatus(id, status) {
     if (!["active", "inactive", "draft"].includes(status)) {
       throw new AppError("Invalid module status", 400);
     }
-    return this.serializeModule(
-      await this.rbacRepository.updateModule(id, {
-        status,
-        active: status === "active",
-      }),
-    );
+    const result = await this.rbacRepository.updateModule(id, { status, active: status === "active" });
+    await this.invalidateUsersForModule(id);
+    return this.serializeModule(result);
   }
 
   async reorderModules(items = []) {
@@ -464,7 +542,8 @@ class RbacService {
   }
 
   async deleteModule(id) {
-    return this.rbacRepository.deleteModule(id);
+    // Archive instead of destroying permission and assignment history.
+    return this.changeModuleStatus(id, "inactive");
   }
 
   // PERMISSION OPERATIONS
@@ -476,6 +555,11 @@ class RbacService {
       throw new AppError("Module not found", 404);
     }
 
+    const action = normalizePermissionAction(permissionData.action || "view");
+    if (!supportedActions(moduleCode(module)).includes(action) ||
+        permissionData.slug !== permissionSlug(module.slug, action)) {
+      throw new AppError("Permission slug must match its module and supported action", 400);
+    }
     const existingPermission = await this.rbacRepository.getPermissionBySlug(
       permissionData.slug,
     );
@@ -494,8 +578,19 @@ class RbacService {
     return permission;
   }
 
-  async listPermissions(filters) {
-    return this.rbacRepository.listPermissions(filters);
+  async listPermissions(filters = {}) {
+    if (filters.active === false) return this.rbacRepository.listPermissions(filters);
+    const matrix = await this.rbacRepository.listPermissionManagementModules({ active: true });
+    const inactive = new Set(await this.rbacRepository.getInactiveModuleCodes());
+    let modules = canonicalModules(matrix.items).filter(module => !inactive.has(module.slug));
+    if (filters.moduleId) {
+      const target = await this.rbacRepository.getModuleById(filters.moduleId);
+      modules = modules.filter(module => module.slug === moduleCode(target || {}));
+    }
+    const permissions = modules.flatMap(module => module.permissions.map(permission => ({ ...permission,
+      module: { id: module.id, slug: module.slug, name: module.name },
+    })));
+    return { items: permissions.slice(filters.offset || 0, (filters.offset || 0) + (filters.limit || 100)), total: permissions.length };
   }
 
   async updatePermission(id, updates) {
@@ -504,6 +599,11 @@ class RbacService {
       throw new AppError("Permission not found", 404);
     }
 
+    const action = normalizePermissionAction(updates.action || permission.action);
+    if (!supportedActions(moduleCode(permission.module || { slug: permission.slug.split(":")[0] })).includes(action) ||
+        (updates.slug || permission.slug) !== permissionSlug(permission.module?.slug || permission.slug.split(":")[0], action)) {
+      throw new AppError("Permission slug must match its module and supported action", 400);
+    }
     if (updates.slug && updates.slug !== permission.slug) {
       const existing = await this.rbacRepository.getPermissionBySlug(
         updates.slug,
@@ -513,16 +613,50 @@ class RbacService {
       }
     }
 
-    return this.rbacRepository.updatePermission(id, updates);
+    const result = await this.rbacRepository.updatePermission(id, updates);
+    await this.invalidateUsersForModule(permission.moduleId);
+    return result;
   }
 
   async deletePermission(id) {
-    await this.getPermission(id);
-    return this.rbacRepository.deletePermission(id);
+    const permission = await this.getPermission(id);
+    const result = await this.rbacRepository.updatePermission(id, { active: false });
+    await this.invalidateUsersForModule(permission.moduleId);
+    return result;
+  }
+
+  async validateRolePermissionScope(roleId, permissionIds) {
+    const role = await this.getRole(roleId);
+    if (role.type !== "system") return;
+    const allowed = new Set(modulesForRole(role.slug));
+    const permissions = await this.rbacRepository.getPermissionsByIds(permissionIds);
+    if (permissions.some(row => !allowed.has(this.normalizePermissionRow(row).moduleSlug))) {
+      throw new AppError("Permission is outside this role's module scope", 403);
+    }
+  }
+
+  async assertCanManageRole(roleId, permissionIds = [], actor = {}) {
+    const role = await this.getRole(roleId);
+    if (role.slug === ROLES.SUPER_ADMIN) {
+      throw new AppError("Super-admin permissions are managed by the system", 403);
+    }
+    if (!actor.userId || actor.isSuperAdmin || actor.role === ROLES.SUPER_ADMIN) return role;
+    if (role.type !== "custom") throw new AppError("Only super-admin can change system role defaults", 403);
+    const actorGrants = new Set((await this.getUserEffectivePermissions(actor.userId)).map(row => this.normalizePermissionRow(row).slug));
+    const existing = await this.rbacRepository.getRolePermissions(roleId);
+    const requested = await this.rbacRepository.getPermissionsByIds(permissionIds);
+    const all = [...requested, ...existing.map(row => row.permission || row)];
+    if (all.some(row => !actorGrants.has(this.normalizePermissionRow(row).slug))) {
+      throw new AppError("Forbidden: cannot manage role permissions beyond your own access", 403);
+    }
+    return role;
   }
 
   // ROLE OPERATIONS
-  async createRole(roleData) {
+  async createRole(roleData, actor = {}) {
+    if (roleData.isSuperAdmin || roleData.type === "system" || Object.values(ROLES).includes(roleData.slug)) {
+      throw new AppError("System roles cannot be created through role management", 403);
+    }
     const existingRole = await this.rbacRepository.getRoleBySlug(roleData.slug);
     if (existingRole) {
       throw new AppError("Role with this slug already exists", 409);
@@ -543,12 +677,20 @@ class RbacService {
     return this.rbacRepository.listRoles(filters);
   }
 
-  async updateRole(id, updates) {
+  async updateRole(id, updates, actor = {}) {
+    await this.assertCanManageRole(id, [], actor);
     const role = await this.rbacRepository.getRoleById(id);
     if (!role) {
       throw new AppError("Role not found", 404);
     }
 
+    if (role.type === "system" && ((updates.slug && updates.slug !== role.slug) || updates.type === "custom")) {
+      throw new AppError("System role identity cannot be changed", 400);
+    }
+    if (role.type !== "system" && updates.slug && Object.values(ROLES).includes(updates.slug)) {
+      throw new AppError("System role slugs are reserved", 400);
+    }
+    if (updates.type === "system") throw new AppError("Custom roles cannot become system roles", 403);
     if (updates.slug && updates.slug !== role.slug) {
       const existing = await this.rbacRepository.getRoleBySlug(updates.slug);
       if (existing) {
@@ -566,32 +708,43 @@ class RbacService {
     return result;
   }
 
-  async deleteRole(id) {
-    await this.getRole(id);
+  async deleteRole(id, actor = {}) {
+    const role = await this.assertCanManageRole(id, [], actor);
+    if (role.type === "system") throw new AppError("System roles cannot be deleted", 400);
     await this.invalidateUsersForRole(id, SESSION_INVALIDATION_REASONS.ROLE_CHANGED);
     return this.rbacRepository.deleteRole(id);
   }
 
   // ROLE PERMISSION ASSIGNMENT
-  async assignPermissionToRole(roleId, permissionId) {
-    return this.bulkAssignPermissionsToRole(roleId, [permissionId]);
+  async assignPermissionToRole(roleId, permissionId, actor = {}) {
+    return this.bulkAssignPermissionsToRole(roleId, [permissionId], actor);
   }
 
-  async removePermissionFromRole(roleId, permissionId) {
-    const result = await this.rbacRepository.removePermissionFromRole(roleId, permissionId);
-    await this.invalidateUsersForRole(roleId);
-    return result;
+  async removePermissionFromRole(roleId, permissionId, actor = {}) {
+    await this.assertCanManageRole(roleId, [], actor);
+    const permission = this.normalizePermissionRow(await this.getPermission(permissionId));
+    const current = await this.rbacRepository.getRolePermissions(roleId);
+    const keepIds = current.map(row => row.permission || row).filter(row => {
+      const candidate = this.normalizePermissionRow(row);
+      return candidate.moduleSlug !== permission.moduleSlug ||
+        (permission.action !== "view" && candidate.action !== permission.action);
+    }).map(row => row.id);
+    return this.syncRolePermissions(roleId, keepIds, actor);
   }
 
-  async syncRolePermissions(roleId, permissionIds = []) {
+  async syncRolePermissions(roleId, permissionIds = [], actor = {}) {
+    await this.assertCanManageRole(roleId, permissionIds, actor);
     const expandedPermissionIds = await this.expandSidebarPermissionIds(permissionIds);
+    await this.validateRolePermissionScope(roleId, expandedPermissionIds);
     const result = await this.rbacRepository.syncRolePermissions(roleId, expandedPermissionIds);
     await this.invalidateUsersForRole(roleId);
     return result;
   }
 
-  async bulkAssignPermissionsToRole(roleId, permissionIds) {
+  async bulkAssignPermissionsToRole(roleId, permissionIds, actor = {}) {
+    await this.assertCanManageRole(roleId, permissionIds, actor);
     const expandedPermissionIds = await this.expandSidebarPermissionIds(permissionIds);
+    await this.validateRolePermissionScope(roleId, expandedPermissionIds);
     const results = [];
     const errors = [];
 
@@ -622,7 +775,18 @@ class RbacService {
   }
 
   // USER PERMISSION ASSIGNMENT
+  async validateUserPermissionScope(userId, permissionIds) {
+    const user = await UserModel.findById(userId).select("role").lean();
+    if (!user) throw new AppError("User not found", 404);
+    const allowed = new Set(modulesForRole(user.role));
+    const requested = await this.rbacRepository.getPermissionsByIds(permissionIds);
+    if (requested.some(row => !allowed.has(this.normalizePermissionRow(row).moduleSlug))) {
+      throw new AppError("Permission is outside the target user's role scope", 403);
+    }
+  }
+
   async assertCanAssignUserPermissions(actor = {}, targetUserId, permissionIds = []) {
+    await this.validateUserPermissionScope(targetUserId, permissionIds);
     if (!actor.userId) return;
     if (actor.isSuperAdmin || actor.role === ROLES.SUPER_ADMIN) return;
 
@@ -645,8 +809,9 @@ class RbacService {
     }
 
     const actorPermissions = await this.getUserEffectivePermissions(actor.userId);
-    const actorPermissionIds = new Set(actorPermissions.map((permission) => permission.id).filter(Boolean));
-    const denied = permissionIds.filter((permissionId) => !actorPermissionIds.has(permissionId));
+    const actorSlugs = new Set(actorPermissions.map(permission => this.normalizePermissionRow(permission).slug));
+    const requested = await this.rbacRepository.getPermissionsByIds(permissionIds);
+    const denied = requested.filter(permission => !actorSlugs.has(this.normalizePermissionRow(permission).slug));
     if (denied.length) {
       throw new AppError("Forbidden: cannot assign permissions you do not have", 403);
     }
@@ -687,9 +852,12 @@ class RbacService {
 
   async removePermissionFromUser(userId, permissionId, actor = {}) {
     await this.assertCanAssignUserPermissions(actor, userId, []);
-    const result = await this.rbacRepository.removePermissionFromUser(userId, permissionId);
-    await this.invalidateUserAuthSession(userId);
-    return result;
+    const permission = this.normalizePermissionRow(await this.getPermission(permissionId));
+    const effective = await this.getUserEffectivePermissions(userId);
+    const keepIds = effective.filter(candidate => candidate.moduleSlug !== permission.moduleSlug ||
+      (permission.action !== "view" && candidate.action !== permission.action)).map(row => row.id);
+    const denied = await this.rbacRepository.getUserDeniedPermissions(userId);
+    return this.syncUserPermissions(userId, keepIds, denied.map(row => row.id), actor.userId, actor);
   }
 
   async bulkAssignPermissionsToUser(userId, permissionIds, grantedBy, actor = {}) {
@@ -733,15 +901,20 @@ class RbacService {
       deniedPermissionIds,
       { includeImplicitView: false },
     );
-    await this.assertCanAssignUserPermissions(
-      actor,
-      userId,
-      Array.from(new Set([...expandedPermissionIds, ...expandedDeniedPermissionIds])),
-    );
+    if (expandedPermissionIds.some(id => expandedDeniedPermissionIds.includes(id))) {
+      throw new AppError("A permission cannot be both granted and denied", 400);
+    }
+    await this.assertCanAssignUserPermissions(actor, userId, expandedPermissionIds);
+    const selectedSlugs = new Set((await this.rbacRepository.getPermissionsByIds(expandedPermissionIds))
+      .map(row => this.normalizePermissionRow(row).slug));
+    const inherited = await this.rbacRepository.getUserRoleEffectivePermissions(userId);
+    const inheritedDenials = inherited
+      .filter(row => !selectedSlugs.has(this.normalizePermissionRow(row).slug))
+      .map(row => row.id);
     const result = await this.rbacRepository.syncUserPermissions(
       userId,
       expandedPermissionIds,
-      expandedDeniedPermissionIds,
+      Array.from(new Set([...expandedDeniedPermissionIds, ...inheritedDenials])),
       grantedBy,
     );
     await this.invalidateUserAuthSession(userId);
@@ -758,11 +931,14 @@ class RbacService {
       modulePermissions,
       cleanModuleName,
     );
-    const result = await this.rbacRepository.syncUserModulePermissions(
-      userId,
-      normalizedModulePermissions,
-      grantedBy,
-    );
+    const slugs = normalizedModulePermissions.flatMap(item =>
+      item.actions.map(action => permissionSlug(item.module, action)));
+    const rows = await this.rbacRepository.getPermissionsBySlugs(slugs);
+    if (rows.length !== new Set(slugs).size) {
+      throw new AppError("Assignment includes an unavailable module or permission; reconcile the RBAC catalog first", 400);
+    }
+    const ids = rows.map(row => row.id);
+    const result = await this.syncUserPermissions(userId, ids, [], grantedBy, actor);
     await this.invalidateUserAuthSession(userId);
     if (actor.userId) {
       const user = await UserModel.findById(userId).select("role").lean().catch(() => null);
@@ -782,15 +958,16 @@ class RbacService {
 
   // USER ROLE ASSIGNMENT
   async assertCanAssignUserRole(actor = {}, userId, roleId) {
-    if (!actor.userId) return;
-    if (actor.isSuperAdmin || actor.role === ROLES.SUPER_ADMIN) return;
-    const role = await this.rbacRepository.getRoleById(roleId).catch(() => null);
-    const target = await UserModel.findById(userId).select("role ownerAdminId ownerSellerId");
-    const roleSlug = role?.slug;
-    if (!target || !roleSlug || roleSlug !== target.role) {
-      throw new AppError("Forbidden: cannot assign mismatched or higher-level role", 403);
+    const role = await this.rbacRepository.getRoleById(roleId);
+    const target = await UserModel.findById(userId).select("role ownerAdminId ownerSellerId").lean();
+    if (!role || role.active === false) throw new AppError("Role is missing or inactive", 400);
+    if (!target) throw new AppError("User not found", 404);
+    if (role.type !== "custom" && role.slug !== target.role) {
+      throw new AppError("System role must match the user's account type", 403);
     }
-    await this.assertCanAssignUserPermissions(actor, userId, []);
+    const rows = await this.rbacRepository.getRolePermissions(roleId);
+    const permissionIds = rows.map(row => (row.permission || row).id).filter(Boolean);
+    await this.assertCanAssignUserPermissions(actor, userId, permissionIds);
   }
 
   async assignRoleToUser(userId, roleId, assignedBy, actor = {}, options = {}) {
@@ -899,7 +1076,10 @@ class RbacService {
 
   normalizePermissionRow(permission = {}) {
     const plain = typeof permission.toJSON === "function" ? permission.toJSON() : permission;
-    const moduleSlug = plain.module?.slug || plain.moduleSlug || plain.slug?.split(":")[0];
+    const moduleSlug = moduleCode(plain.module || {
+      slug: plain.moduleSlug || plain.slug?.split(":")[0],
+      metadata: plain.moduleMetadata || {},
+    });
     const action = normalizePermissionAction(plain.action || plain.slug?.split(":")[1]);
     const normalizedSlug = permissionSlug(moduleSlug, action);
     return {
@@ -917,11 +1097,15 @@ class RbacService {
       return permissions;
     }
 
+    // Legacy role-only accounts have no stored module scope. Preserve their
+    // explicit role links; an explicitly empty scope still revokes all access.
+    if (!Array.isArray(user.allowedModules)) return permissions;
+
     const allowedModuleSet = new Set(
       (user.allowedModules || []).map(cleanModuleName).filter(Boolean),
     );
     if (!allowedModuleSet.size) {
-      return permissions;
+      return [];
     }
 
     return permissions.filter((permission) =>
@@ -940,7 +1124,9 @@ class RbacService {
     const missingViewSlugs = new Set();
 
     permissions.map((permission) => this.normalizePermissionRow(permission)).forEach((permission) => {
-      if (!permission.id || deniedIds.has(permission.id) || deniedSlugs.has(permission.slug)) {
+      if (!permission.id || permission.active === false || permission.module?.active === false ||
+          deniedIds.has(permission.id) || deniedSlugs.has(permission.slug) ||
+          deniedSlugs.has(permissionSlug(permission.moduleSlug, "view"))) {
         return;
       }
       byId.set(permission.id, permission);
@@ -989,11 +1175,14 @@ class RbacService {
       deniedPermissions,
       rolePermissionRows,
       directPermissionRows,
+      inactiveModuleCodes,
     ] = await Promise.all([
       this.rbacRepository.getUserDeniedPermissions(userId),
       this.rbacRepository.getUserRoleEffectivePermissions(userId),
       this.rbacRepository.getUserDirectEffectivePermissions(userId),
+      this.rbacRepository.getInactiveModuleCodes(),
     ]);
+    const inactiveModules = new Set(inactiveModuleCodes);
     const normalizedDeniedPermissions =
       deniedPermissions.map((permission) => this.normalizePermissionRow(permission));
     const deniedIds = new Set(normalizedDeniedPermissions.map((permission) => permission.id).filter(Boolean));
@@ -1007,7 +1196,10 @@ class RbacService {
     const byId = new Map();
 
     [...rolePermissions, ...directPermissions].forEach((permission) => {
-      if (!permission.id || deniedIds.has(permission.id) || deniedSlugs.has(permission.slug)) {
+      if (inactiveModules.has(permission.moduleSlug)) return;
+      if (!permission.id || permission.active === false || permission.module?.active === false ||
+          deniedIds.has(permission.id) || deniedSlugs.has(permission.slug) ||
+          deniedSlugs.has(permissionSlug(permission.moduleSlug, "view"))) {
         return;
       }
       byId.set(permission.id, permission);
@@ -1219,7 +1411,7 @@ class RbacService {
     let expandedIds = [];
 
     if (copyPermissions) {
-      const sourcePerms = await this.rbacRepository.getUserDirectEffectivePermissions(sourceUserId);
+      const sourcePerms = await this.getUserEffectivePermissions(sourceUserId);
       const permissionIds = sourcePerms.map((p) => p.id).filter(Boolean);
       if (permissionIds.length) {
         expandedIds = await this.expandSidebarPermissionIds(permissionIds);
@@ -1231,14 +1423,14 @@ class RbacService {
       await this.assertCanAssignUserPermissions(actor, targetUserId, expandedIds);
     }
 
-    if (copyModules && source.allowedModules?.length) {
-      let srcModules = source.allowedModules;
+    if (copyModules) {
+      let srcModules = (source.allowedModules || []).map(cleanModuleName);
       // Constrain copied modules to what actor is allowed to assign
       if (!actor.isSuperAdmin && actor.role !== ROLES.SUPER_ADMIN) {
         const actorModuleScope = new Set((actor.allowedModules || []).map(cleanModuleName));
         srcModules = srcModules.filter((m) => actorModuleScope.has(cleanModuleName(m)));
       }
-      if (srcModules.length) {
+      if (srcModules.length || mergeMode === "replace") {
         const newModules = mergeMode === "merge"
           ? Array.from(new Set([...(target.allowedModules || []), ...srcModules]))
           : srcModules;
@@ -1246,13 +1438,11 @@ class RbacService {
       }
     }
 
-    if (copyPermissions && expandedIds.length) {
+    if (copyPermissions) {
       if (mergeMode === "replace") {
-        await this.rbacRepository.syncUserPermissions(targetUserId, expandedIds, [], grantedBy);
-      } else {
-        for (const pid of expandedIds) {
-          await this.rbacRepository.assignPermissionToUser(targetUserId, pid, grantedBy).catch(() => {});
-        }
+        await this.syncUserPermissions(targetUserId, expandedIds, [], grantedBy, actor);
+      } else if (expandedIds.length) {
+        await this.bulkAssignPermissionsToUser(targetUserId, expandedIds, grantedBy, actor);
       }
     }
 
@@ -1289,7 +1479,22 @@ class RbacService {
     return template;
   }
 
+  async validateTemplatePermissions(data) {
+    const slugs = Array.from(new Set(data.permissionSlugs || []));
+    const rows = await this.rbacRepository.getPermissionsBySlugs(slugs);
+    if (rows.length !== slugs.length) throw new AppError("Template contains unknown or inactive permissions", 400);
+    await this.expandSidebarPermissionIds(rows.map(row => row.id));
+    for (const role of data.roleScope || []) {
+      const allowed = new Set(modulesForRole(role));
+      if (rows.some(row => !allowed.has(this.normalizePermissionRow(row).moduleSlug))) {
+        throw new AppError(`Template includes permissions unavailable to ${role}`, 400);
+      }
+    }
+    return slugs;
+  }
+
   async createPermissionTemplate(data) {
+    data.permissionSlugs = await this.validateTemplatePermissions(data);
     const existing = await PermissionTemplate.findOne({ where: { slug: data.slug } });
     if (existing) throw new AppError("Template with this slug already exists", 409);
     return PermissionTemplate.create({ id: uuidv4(), ...data });
@@ -1297,6 +1502,7 @@ class RbacService {
 
   async updatePermissionTemplate(idOrSlug, updates) {
     const template = await this.getPermissionTemplate(idOrSlug);
+    await this.validateTemplatePermissions({ ...(template.toJSON ? template.toJSON() : template), ...updates });
     await template.update(updates);
     return template;
   }
@@ -1314,6 +1520,7 @@ class RbacService {
 
     const slugs = template.permissionSlugs || [];
     const permissionIds = await this.rbacRepository.getPermissionIdsBySlugs(slugs);
+    if (permissionIds.length !== new Set(slugs).size) throw new AppError("Template contains unknown or inactive permissions", 400);
     const expandedIds = await this.expandSidebarPermissionIds(permissionIds);
 
     // Validate hierarchy + that actor has every permission in the template
@@ -1322,11 +1529,9 @@ class RbacService {
     }
 
     if (mergeMode === "replace") {
-      await this.rbacRepository.syncUserPermissions(userId, expandedIds, [], actor.userId);
+      await this.syncUserPermissions(userId, expandedIds, [], actor.userId, actor);
     } else {
-      for (const pid of expandedIds) {
-        await this.rbacRepository.assignPermissionToUser(userId, pid, actor.userId).catch(() => {});
-      }
+      await this.bulkAssignPermissionsToUser(userId, expandedIds, actor.userId, actor);
     }
 
     await this.invalidateUserAuthSession(userId);

@@ -23,7 +23,7 @@ const routes = [
   ['/admin/platform/api-keys', 'admin'],
   ['/admin/platform/webhooks', 'admin'],
   ['/sellers/me/dashboard', 'seller-dashboard'],
-  ['/sellers/me/ca-analytics/summary', 'ca-analytics'],
+  ['/sellers/me/ca-analytics/summary', 'sellers/commissions'],
   ['/admin/referral/influencers', 'influencer-management'],
   ['/admin/referral/reports/hierarchy', 'referral-hierarchy'],
   ['/admin/referral/codes', 'referral-codes'],

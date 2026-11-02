@@ -1,3 +1,4 @@
+const { moduleCode } = require("../../../shared/auth/rbac-module-policy");
 const { v4: uuidv4 } = require("uuid");
 const { Op } = require("sequelize");
 const {
@@ -27,11 +28,26 @@ const PERMISSION_ACTION_ORDER = PERMISSION_ACTIONS.reduce(
 
 class RbacRepository {
   // MODULES
+  async syncModulePermissionRows(module, transaction) {
+    const actions = module.moduleType === "group" ? [] : (module.modulePermissions || []);
+    for (const action of actions) {
+      const slug = `${module.slug}:${action}`;
+      const [permission] = await Permission.findOrCreate({ where: { slug }, transaction,
+        defaults: { id: uuidv4(), moduleId: module.id, name: `${action.replace(/_/g, " ")} ${module.name}`, action, active: true },
+      });
+      if (!permission.active) await permission.update({ active: true }, { transaction });
+    }
+    // Retain rows/assignments as history; inactive actions cannot authorize APIs.
+    await Permission.update({ active: false }, { where: { moduleId: module.id,
+      ...(actions.length ? { action: { [Op.notIn]: actions } } : {}),
+    }, transaction });
+  }
+
   async createModule(moduleData) {
-    const id = uuidv4();
-    return Module.create({
-      id,
-      ...moduleData,
+    return sequelize.transaction(async transaction => {
+      const module = await Module.create({ id: uuidv4(), ...moduleData }, { transaction });
+      await this.syncModulePermissionRows(module, transaction);
+      return module;
     });
   }
 
@@ -51,6 +67,8 @@ class RbacRepository {
   async listModules(filters = {}) {
     const { active = true, includeInactive = false, limit = 100, offset = 0, q, status, sidebar, parentModuleId } = filters;
     const where = includeInactive || active === null ? {} : { active };
+    if (filters.scope === "sidebar") where.slug = { [Op.like]: "sidebar-%" };
+    else where.slug = { [Op.notLike]: "sidebar-%" };
     if (status) where.status = status;
     if (sidebar !== undefined) where.isVisibleInSidebar = sidebar;
     if (parentModuleId !== undefined) where.parentModuleId = parentModuleId || null;
@@ -64,6 +82,7 @@ class RbacRepository {
 
     const { count, rows } = await Module.findAndCountAll({
       where,
+      distinct: true,
       include: [{ association: "permissions" }, { association: "parentModule" }],
       limit,
       offset,
@@ -214,11 +233,39 @@ class RbacRepository {
   }
 
   async updateModule(id, updates) {
-    const module = await Module.findByPk(id);
-    if (!module) {
-      throw new AppError("Module not found", 404);
-    }
-    return module.update(updates);
+    return sequelize.transaction(async transaction => {
+      const module = await Module.findByPk(id, { transaction });
+      if (!module) throw new AppError("Module not found", 404);
+      await module.update(updates, { transaction });
+      if (Object.prototype.hasOwnProperty.call(updates, "modulePermissions")) {
+        await this.syncModulePermissionRows(module, transaction);
+      }
+      return module;
+    });
+  }
+
+  async getInactiveModuleCodes() {
+    const rows = await Module.findAll({ where: { active: false }, attributes: ["slug", "metadata"] });
+    return rows.filter(row => row.slug === moduleCode(row)).map(row => row.slug);
+  }
+
+  async getUserIdsForModule(moduleId) {
+    const target = await Module.findByPk(moduleId);
+    if (!target) return [];
+    const code = moduleCode(target);
+    const equivalent = (await Module.findAll({ attributes: ["id", "slug", "metadata"] }))
+      .filter(row => moduleCode(row) === code).map(row => row.id);
+    const rows = await sequelize.query(
+      `SELECT DISTINCT up.user_id FROM user_permissions up
+       JOIN permissions p ON p.id = up.permission_id
+       WHERE p.module_id IN (:equivalent) AND up.revoked_at IS NULL
+       UNION
+       SELECT DISTINCT ur.user_id FROM user_roles ur
+       JOIN role_permissions rp ON rp.role_id = ur.role_id
+       JOIN permissions p ON p.id = rp.permission_id
+       WHERE p.module_id IN (:equivalent) AND ur.revoked_at IS NULL`,
+      { replacements: { equivalent }, type: sequelize.QueryTypes.SELECT });
+    return rows.map(row => row.user_id);
   }
 
   async deleteModule(id) {
@@ -352,10 +399,11 @@ class RbacRepository {
 
   async listRoles(filters = {}) {
     const { active = true, limit = 100, offset = 0 } = filters;
-    const where = active !== null ? { active } : {};
+    const where = filters.includeInactive || active === null ? {} : { active };
 
     const { count, rows } = await Role.findAndCountAll({
       where,
+      distinct: true,
       include: [
         {
           association: "rolePermissions",
@@ -818,20 +866,24 @@ class RbacRepository {
           p.*,
           m.slug AS "moduleSlug",
           m.module_key AS "moduleKey",
-          m.name AS "moduleName"
+          m.name AS "moduleName",
+          m.metadata AS "moduleMetadata"
         FROM permissions p
         INNER JOIN modules m ON m.id = p.module_id
         INNER JOIN role_permissions rp ON p.id = rp.permission_id
         INNER JOIN user_roles ur ON rp.role_id = ur.role_id
+        INNER JOIN roles r ON r.id = ur.role_id AND r.active = true
         WHERE ur.user_id = :userId
           AND ur.revoked_at IS NULL
           AND p.active = true
+          AND m.active = true
         UNION
         SELECT DISTINCT
           p.*,
           m.slug AS "moduleSlug",
           m.module_key AS "moduleKey",
-          m.name AS "moduleName"
+          m.name AS "moduleName",
+          m.metadata AS "moduleMetadata"
         FROM permissions p
         INNER JOIN modules m ON m.id = p.module_id
         INNER JOIN user_permissions up ON p.id = up.permission_id
@@ -839,6 +891,7 @@ class RbacRepository {
           AND up.revoked_at IS NULL
           AND COALESCE(up.metadata->>'effect', 'allow') <> 'deny'
           AND p.active = true
+          AND m.active = true
       )
       SELECT DISTINCT granted.*
       FROM granted
@@ -861,7 +914,8 @@ class RbacRepository {
         p.*,
         m.slug AS "moduleSlug",
         m.module_key AS "moduleKey",
-        m.name AS "moduleName"
+        m.name AS "moduleName",
+          m.metadata AS "moduleMetadata"
       FROM permissions p
       INNER JOIN modules m ON m.id = p.module_id
       INNER JOIN user_permissions up ON p.id = up.permission_id
@@ -869,6 +923,7 @@ class RbacRepository {
         AND up.revoked_at IS NULL
         AND COALESCE(up.metadata->>'effect', 'allow') <> 'deny'
         AND p.active = true
+          AND m.active = true
       ORDER BY p.id
     `;
 
@@ -885,14 +940,17 @@ class RbacRepository {
         p.*,
         m.slug AS "moduleSlug",
         m.module_key AS "moduleKey",
-        m.name AS "moduleName"
+        m.name AS "moduleName",
+          m.metadata AS "moduleMetadata"
       FROM permissions p
       INNER JOIN modules m ON m.id = p.module_id
       INNER JOIN role_permissions rp ON p.id = rp.permission_id
       INNER JOIN user_roles ur ON rp.role_id = ur.role_id
+        INNER JOIN roles r ON r.id = ur.role_id AND r.active = true
       WHERE ur.user_id = :userId
         AND ur.revoked_at IS NULL
         AND p.active = true
+          AND m.active = true
       ORDER BY p.id
     `;
 
@@ -909,7 +967,8 @@ class RbacRepository {
         p.*,
         m.slug AS "moduleSlug",
         m.module_key AS "moduleKey",
-        m.name AS "moduleName"
+        m.name AS "moduleName",
+          m.metadata AS "moduleMetadata"
       FROM permissions p
       INNER JOIN modules m ON m.id = p.module_id
       INNER JOIN user_permissions up ON p.id = up.permission_id
@@ -917,6 +976,7 @@ class RbacRepository {
         AND up.revoked_at IS NULL
         AND COALESCE(up.metadata->>'effect', 'allow') = 'deny'
         AND p.active = true
+          AND m.active = true
       ORDER BY p.id
     `;
 

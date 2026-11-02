@@ -1,3 +1,5 @@
+const { supportedActions } = require("../../src/shared/auth/rbac-module-policy");
+const { cleanModuleName } = require("../../src/shared/auth/module-access");
 const {
   DEFAULT_PLATFORM_MODULES,
   DEFAULT_SELLER_MODULES,
@@ -52,7 +54,7 @@ function getDefaultPermissionSlugsForRole(roleSlug) {
   return Array.from(
     new Set(
       (policy.modules || []).flatMap((moduleSlug) =>
-        (policy.actions || []).map((action) => `${moduleSlug}:${action}`),
+        (policy.actions || []).filter(action => supportedActions(moduleSlug).includes(action)).map((action) => `${cleanModuleName(moduleSlug)}:${action}`),
       ),
     ),
   );
@@ -60,7 +62,7 @@ function getDefaultPermissionSlugsForRole(roleSlug) {
 
 function getDefaultModulesForRole(roleSlug) {
   return Array.from(
-    new Set(ROLE_PERMISSION_DEFAULTS[roleSlug]?.modules || []),
+    new Set((ROLE_PERMISSION_DEFAULTS[roleSlug]?.modules || []).map(cleanModuleName)),
   );
 }
 

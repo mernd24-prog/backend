@@ -1,3 +1,4 @@
+const { getRoutePermission } = require("./request-route-policy");
 const {
   DEFAULT_PLATFORM_MODULES,
   DEFAULT_SELLER_MODULES,
@@ -12,6 +13,9 @@ const ROLES_WITH_MODULE_ACCESS = new Set([
 ]);
 
 const MODULE_ALIASES = {
+  user: "users",
+  settings: "admin",
+  locations: "countries",
   home: "admin",
   dashboard: "admin",
   admin: "admin",
@@ -45,14 +49,14 @@ const MODULE_ALIASES = {
   categories: "categories",
   "category-attributes": "categories",
   category_attributes: "categories",
-  "sub-category": "sub_categories",
-  "sub-categories": "sub_categories",
-  sub_category: "sub_categories",
-  sub_categories: "sub_categories",
-  "sub-sub-category": "sub_sub_categories",
-  "sub-sub-categories": "sub_sub_categories",
-  sub_sub_category: "sub_sub_categories",
-  sub_sub_categories: "sub_sub_categories",
+  "sub-category": "categories",
+  "sub-categories": "categories",
+  sub_category: "categories",
+  sub_categories: "categories",
+  "sub-sub-category": "categories",
+  "sub-sub-categories": "categories",
+  sub_sub_category: "categories",
+  sub_sub_categories: "categories",
   brand: "brands",
   brands: "brands",
   "product-options": "option_masters",
@@ -155,6 +159,7 @@ const MODULE_ALIASES = {
   "cms-pages": "cms_pages",
   cms_pages: "cms_pages",
   cms: "cms_pages",
+  analytics: "reports",
   reports: "reports",
   analytics_reports: "reports",
   "reports-sales": "reports",
@@ -317,12 +322,19 @@ function cleanModuleName(value) {
   const normalized = String(value || "")
     .trim()
     .toLowerCase();
+  if (normalized.startsWith("sidebar-")) {
+    const sidebar = require("./admin-sidebar-catalog").SIDEBAR_MODULES.find(module =>
+      `sidebar-${module.moduleSlug}` === normalized || `sidebar-${module.moduleKey}` === normalized);
+    if (sidebar?.requiredModule) return cleanModuleName(sidebar.requiredModule);
+  }
   return MODULE_ALIASES[normalized] || normalized;
 }
 
 function getRequestModule(req) {
+  const declared = getRoutePermission(req);
+  if (declared) return cleanModuleName(declared.module);
   const withoutQuery = String(req.originalUrl || "").split("?")[0];
-  const parts = withoutQuery.split("/").filter(Boolean);
+  const parts = withoutQuery.split("/").filter(Boolean).map(part => part.toLowerCase());
   const apiIndex = parts.indexOf("api");
   if (apiIndex === -1) {
     return null;
@@ -482,6 +494,7 @@ function getRequestModule(req) {
       sellers: "sellers",
       products: "products",
       orders: "orders",
+      carts: "carts",
       payments: "payments",
       payouts: "payments",
       inventory: "inventory",
@@ -514,6 +527,10 @@ function getRequestModule(req) {
     return adminModuleMap[second] || "admin";
   }
 
+  if (first === "payments" && second === "cod-collections" &&
+      (third === "mine" || (third === "shipments" && ["confirm", "submit"].includes(parts[startIndex + 4])))) {
+    return "sellers/commissions";
+  }
   if (first === "sellers" && second === "commissions") {
     return "sellers/commissions";
   }
@@ -527,7 +544,7 @@ function getRequestModule(req) {
     return "seller-dashboard";
   }
   if (first === "sellers" && second === "me" && third === "ca-analytics") {
-    return "ca-analytics";
+    return "sellers/commissions";
   }
   if (first === "sellers" && second === "me" && third === "tracking") {
     return "orders";
