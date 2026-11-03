@@ -1,12 +1,13 @@
 const { ProductModel } = require("../models/product.model");
 const { ProductRevisionModel } = require("../models/product-revision.model");
 const { knex } = require("../../../infrastructure/postgres/postgres-client");
+const { saveWithSkuRetry } = require("../services/sku-policy");
 
 class ProductRepository {
   // ─── Create & basic CRUD ──────────────────────────────────────────────────
 
   async create(payload) {
-    return ProductModel.create(payload);
+    return saveWithSkuRetry(payload, (candidate) => ProductModel.create(candidate));
   }
 
   async findById(productId) {
@@ -60,7 +61,8 @@ class ProductRepository {
   }
 
   async update(productId, payload) {
-    return ProductModel.findByIdAndUpdate(productId, { $set: payload }, { new: true });
+    return saveWithSkuRetry(payload, (candidate) =>
+      ProductModel.findByIdAndUpdate(productId, { $set: candidate }, { new: true }));
   }
 
   async delete(productId) {

@@ -7,6 +7,7 @@ const {
   deleteUnreferencedMedia,
 } = require("../../../shared/storage/media-cleanup");
 const slugify = require("slugify");
+const { AUTO_SKU, generateSku, assignGeneratedSku, regenerateSku } = require("./sku-policy");
 const { getPage } = require("../../../shared/tools/page");
 const {
   decodeProductRouteToken,
@@ -713,7 +714,7 @@ class ProductService {
     }
   }
 
-  async validateProductSkusAndImages(payload = {}, sellerId, existingProduct = null) {
+  async validateProductSkusAndImages(payload = {}, sellerId, existingProduct = null, skuAttempt = 0) {
     const variants = Array.isArray(payload.variants) && payload.variants.length
       ? payload.variants
       : Array.isArray(existingProduct?.variants)
@@ -772,6 +773,10 @@ class ProductService {
         ],
       });
       if (duplicate) {
+        if (variant[AUTO_SKU] && skuAttempt < 4) {
+          regenerateSku(payload, variant);
+          return this.validateProductSkusAndImages(payload, sellerId, existingProduct, skuAttempt + 1);
+        }
         throw new AppError(`SKU '${sku}' is already used by another product for this seller`, 409);
       }
     }
@@ -804,41 +809,6 @@ class ProductService {
       normalized[key] = value;
     }
     return { ...payload, attributes: normalized };
-  }
-
-  async assertGlobalSkuUniqueness(payload = {}, excludeProductId = null) {
-    const submittedSkus = [
-      payload.sku,
-      ...(Array.isArray(payload.variants)
-        ? payload.variants.map((variant) => variant?.sku)
-        : []),
-    ]
-      .map((sku) => String(sku || "").trim().toUpperCase())
-      .filter(Boolean);
-    const skus = Array.from(new Set(submittedSkus));
-    if (!skus.length) return;
-
-    const conflicts = await this.productRepository.findBySkus(
-      skus,
-      excludeProductId,
-    );
-    if (!conflicts.length) return;
-
-    const requested = new Set(skus);
-    const conflictingSku = conflicts
-      .flatMap((product) => [
-        product.sku,
-        ...(Array.isArray(product.variants)
-          ? product.variants.map((variant) => variant?.sku)
-          : []),
-      ])
-      .map((sku) => String(sku || "").trim().toUpperCase())
-      .find((sku) => requested.has(sku));
-
-    throw new AppError(
-      `SKU '${conflictingSku || skus[0]}' is already used by another product`,
-      409,
-    );
   }
 
   validatePricing(payload = {}, existingProduct = null, context = {}) {
@@ -906,7 +876,7 @@ class ProductService {
   buildVariantsFromOptions(options = [], basePrice = 0, baseMrp = 0) {
     const combinations = this.generateVariantCombinations(options);
     return combinations.map((attributes, index) => ({
-      sku: this.generateVariantSku(),
+      sku: "",
       title: Object.values(attributes).join(" / "),
       attributes,
       price: basePrice,
@@ -948,9 +918,7 @@ class ProductService {
   }
 
   generateVariantSku() {
-    return `SKU-${Date.now().toString(36)}-${Math.random()
-      .toString(36)
-      .slice(2, 10)}`.toUpperCase();
+    return generateSku();
   }
 
   syncRootAndDefaultVariant(payload = {}, existingProduct = null) {
@@ -983,7 +951,7 @@ class ProductService {
     if (!variants.length && rootHasInventoryOrPricing) {
       variants = [
         {
-          sku: payload.sku || `${payload.title || payload.name || "SKU"}-1`,
+          sku: payload.sku || "",
           title:
             payload.color && payload.color !== "default"
               ? String(payload.color)
@@ -1054,7 +1022,7 @@ class ProductService {
         }
       }
 
-      if (!next.sku) next.sku = this.generateVariantSku();
+      if (!String(next.sku || "").trim()) assignGeneratedSku(next);
       next.price = this.toVariantNumber(
         next.price,
         hasVariantPayload ? 0 : this.toVariantNumber(payload.price, 0),
@@ -2713,14 +2681,6 @@ class ProductService {
       payload,
       existingProduct.sellerId,
       existingProduct,
-    );
-    await this.assertGlobalSkuUniqueness(
-      {
-        ...payload,
-        sku: payload.sku || existingProduct.sku,
-        variants: payload.variants || existingProduct.variants || [],
-      },
-      existingProduct._id,
     );
     this.validatePricing(payload, existingProduct);
     await this.validateProductReferences(
@@ -5449,13 +5409,27 @@ class ProductService {
     delete source.pendingRevisionId;
 
     const title = payload.title || `Copy of ${existingProduct.title}`;
+    source.variants = (source.variants || []).map((variant) => {
+      const copy = { ...variant };
+      delete copy._id;
+      return assignGeneratedSku(copy);
+    });
+    const defaultVariant = source.variants.find((variant) => variant.isDefault) || source.variants[0];
+    if (String(payload.sku || "").trim() && defaultVariant) {
+      defaultVariant.sku = String(payload.sku).trim();
+      defaultVariant.skuNormalized = defaultVariant.sku.toLowerCase();
+      delete defaultVariant[AUTO_SKU];
+      if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{1,62}[A-Za-z0-9]$/.test(defaultVariant.sku)) {
+        throw new AppError("Variant SKU must be 3–64 valid SKU characters", 400);
+      }
+    }
+    source.sku = defaultVariant?.sku || this.generateVariantSku();
+    await this.validateProductSkusAndImages(source, existingProduct.sellerId);
     const duplicate = await this.productRepository.create({
       ...source,
       title,
       slug: slugify(`${title}-${Date.now()}`, { lower: true, strict: true }),
-      sku:
-        payload.sku ||
-        (source.sku ? `${source.sku}-COPY-${Date.now()}` : source.sku),
+      sku: source.sku,
       status: PRODUCT_STATUS.DRAFT,
       approvalStatus: PRODUCT_APPROVAL_STATUS.PENDING,
       visibility: PRODUCT_VISIBILITY.PRIVATE,

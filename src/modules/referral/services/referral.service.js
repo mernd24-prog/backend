@@ -12,6 +12,7 @@ const { ReferralRepository } = require("../repositories/referral.repository");
 const { WalletService } = require("../../wallet/services/wallet.service");
 const { ReturnModel } = require("../../returns/models/return.model");
 const { knex } = require("../../../infrastructure/postgres/postgres-client");
+const { coinOrderContext } = require("../utils/coin-order-context");
 
 const comparableValue = (value) => {
   if (Array.isArray(value)) return value.map(comparableValue);
@@ -2817,6 +2818,7 @@ class ReferralService {
       coins: amount,
       signedCoins: direction === "debit" ? -amount : amount,
       status: plain.status,
+      coinStatus: ["pending", "locked"].includes(plain.status) ? "locked" : plain.status,
       commissionType: plain.commissionType,
       orderId: plain.orderId || null,
       referralOrderId: plain.referralOrderId || null,
@@ -2954,7 +2956,7 @@ class ReferralService {
       pendingPayouts,
       chart,
       bonusProgress,
-      orderStatus,
+      orderStatusRows,
     ] = await Promise.all([
       this.referralRepository.ensureWallet(influencerId),
       this.referralRepository.aggregateReferralPerformance({
@@ -3006,6 +3008,7 @@ class ReferralService {
       pendingPayouts.total,
       minimumWithdrawalCoins,
     );
+    const orderStatus = await this.summarizeLiveOrderStatuses(orderStatusRows);
 
     return {
       profile: this.makeInfluencerSnapshot(profile),
@@ -3025,6 +3028,7 @@ class ReferralService {
       charts: {
         dailyEarnings: chart,
         orderStatus,
+        referralOrderStatus: this.groupOrderStatusRows(orderStatusRows, "referralStatus"),
       },
       bonusTargets: bonusProgress.items,
       recentOrders: recentOrders.items,
@@ -3056,6 +3060,53 @@ class ReferralService {
         ),
       ),
     };
+  }
+
+  groupOrderStatusRows(rows, field) {
+    const groups = new Map();
+    for (const row of rows) {
+      const status = row[field] || "unknown";
+      const group = groups.get(status) || { status, value: 0, amount: 0 };
+      group.value += Number(row.value || 0);
+      group.amount = this.roundCoins(group.amount + Number(row.amount || 0));
+      groups.set(status, group);
+    }
+    return [...groups.values()].sort((a, b) => b.value - a.value);
+  }
+
+  async summarizeLiveOrderStatuses(rows = []) {
+    const ids = [...new Set(rows.map((row) => row.orderId).filter(Boolean).map(String))];
+    const orders = ids.length
+      ? await knex("orders").whereIn("id", ids).select("id", "status") : [];
+    const statuses = new Map(orders.map((order) => [String(order.id), order.status]));
+    return this.groupOrderStatusRows(rows.map((row) => ({
+      ...row, orderStatus: statuses.get(String(row.orderId)) || row.orderStatus || "unknown",
+    })), "orderStatus");
+  }
+
+  async enrichCoinOrderContext(items = []) {
+    const orderIds = [...new Set(items.map((item) => item.orderId).filter(Boolean).map(String))];
+    if (!orderIds.length) return items;
+    const [orders, returns] = await Promise.all([
+      knex("orders").whereIn("id", orderIds).select(
+        "id", "status", "payment_status", "return_eligible_until", "fulfillment_eligible_at",
+      ),
+      ReturnModel.find({ orderId: { $in: orderIds } })
+        .select("orderId status qcReview.status createdAt")
+        .sort({ createdAt: -1 }).lean(),
+    ]);
+    const ordersById = new Map(orders.map((order) => [String(order.id), order]));
+    const returnsByOrder = new Map();
+    for (const entry of returns) {
+      const id = String(entry.orderId);
+      if (!returnsByOrder.has(id)) returnsByOrder.set(id, []);
+      returnsByOrder.get(id).push(entry);
+    }
+    return items.map((item) => item.orderId ? {
+      ...item,
+      coinStatus: item.coinStatus || (["pending", "locked"].includes(item.status) ? "locked" : item.status),
+      ...coinOrderContext(ordersById.get(String(item.orderId)), returnsByOrder.get(String(item.orderId)), item.coinStatus || item.status),
+    } : item);
   }
 
   async listMyReferralOrders(actor = {}, query = {}) {
@@ -3150,6 +3201,7 @@ class ReferralService {
         yourEarning: this.roundCoins(ledgerSummary.coinsEarned),
         reversedCoins: this.roundCoins(ledgerSummary.reversedCoins),
         status: statusForCoins,
+        coinStatus: statusForCoins,
         referralOrderStatus: order.status,
         orderStatus: order.orderStatus || null,
         paymentStatus: order.paymentStatus || null,
@@ -3160,7 +3212,7 @@ class ReferralService {
     });
     return {
       ...result,
-      items,
+      items: await this.enrichCoinOrderContext(items),
       pageSummary: {
         displayedOrders: items.length,
         orderAmount: this.roundCoins(
@@ -3190,9 +3242,9 @@ class ReferralService {
       page: Number(query.page || 1),
       limit: Number(query.limit || 50),
     });
-    const items = result.items.map((entry) =>
+    const items = await this.enrichCoinOrderContext(result.items.map((entry) =>
       this.formatMobileLedgerEntry(entry),
-    );
+    ));
     return {
       items,
       total: result.total,
@@ -3556,6 +3608,7 @@ class ReferralService {
       throw new AppError("Associate not found in your network", 404);
     }
     const influencerId = this.getRecordId(child);
+    await this.releaseMaturedInfluencerCoins(influencerId);
     const enriched = await this.enrichInfluencer(child);
     const code = enriched.primaryCode?.code || null;
     const [performance, ledgerTotals, orders, ledger, bonusProgress] =
@@ -3591,6 +3644,9 @@ class ReferralService {
         }),
         this.getBonusProgressReport({ influencerId, page: 1, limit: 20 }),
       ]);
+    const ledgerByOrder = await this.referralRepository.aggregateLedgerByOrderForInfluencer({
+      influencerId, orderIds: orders.items.map((order) => order.orderId),
+    });
     return {
       associate: {
         ...this.publicInfluencerNode(enriched),
@@ -3613,19 +3669,21 @@ class ReferralService {
         0,
         await this.getMinimumWithdrawalCoins(),
       ),
-      recentOrders: orders.items.map((order) => ({
+      recentOrders: await this.enrichCoinOrderContext(orders.items.map((order) => ({
         orderId: order.orderId,
         code: order.code,
         orderAmount: this.roundCoins(order.eligibleAmount),
         customerDiscount: this.roundCoins(order.discountAmount),
         status: order.status,
+        referralOrderStatus: order.status,
+        coinStatus: this.getOrderCoinStatus(order, ledgerByOrder.get(String(order.orderId)) || {}),
         orderStatus: order.orderStatus || null,
         paymentStatus: order.paymentStatus || null,
         orderDate: order.createdAt || null,
-      })),
-      recentCoinActivity: ledger.items.map((entry) =>
+      }))),
+      recentCoinActivity: await this.enrichCoinOrderContext(ledger.items.map((entry) =>
         this.formatMobileLedgerEntry(entry),
-      ),
+      )),
       bonusTargets: bonusProgress.items,
     };
   }
@@ -3832,6 +3890,7 @@ class ReferralService {
       summary: dashboard.summaryCards,
       dailyEarnings: dashboard.charts?.dailyEarnings || [],
       orderStatus: dashboard.charts?.orderStatus || [],
+      referralOrderStatus: dashboard.charts?.referralOrderStatus || [],
       codePerformance: dashboard.codePerformance || [],
       recentOrders: dashboard.recentOrders || [],
       bonusTargets: dashboard.bonusTargets || [],

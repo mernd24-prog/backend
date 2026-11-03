@@ -1459,8 +1459,8 @@ class ReferralRepository {
     }
     return ReferralOrderModel.aggregate([
       { $match: filter },
-      { $group: { _id: "$status", value: { $sum: 1 }, amount: { $sum: "$eligibleAmount" } } },
-      { $project: { _id: 0, status: { $ifNull: ["$_id", "pending"] }, value: 1, amount: 1 } },
+      { $group: { _id: { orderId: "$orderId", orderStatus: "$orderStatus", referralStatus: "$status" }, value: { $sum: 1 }, amount: { $sum: "$eligibleAmount" } } },
+      { $project: { _id: 0, orderId: "$_id.orderId", orderStatus: "$_id.orderStatus", referralStatus: "$_id.referralStatus", value: 1, amount: 1 } },
       { $sort: { value: -1 } },
     ]);
   }

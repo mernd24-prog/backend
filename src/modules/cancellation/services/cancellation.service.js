@@ -1044,6 +1044,9 @@ class CancellationService {
     if (cancellation.refund_status !== "manual_review") {
       throw new AppError("Cancellation is not awaiting refund approval", 409);
     }
+    if (cancellation.metadata?.refundSubmissionUncertain) {
+      throw new AppError("Verify the previous refund in Razorpay before taking further action", 409);
+    }
     const order = await this.orderRepository.findByIdWithItems(cancellation.order_id);
     if (!order) throw new AppError("Order not found", 404);
     const providerAmount = Number(cancellation.provider_refund_amount || 0);
@@ -1055,6 +1058,43 @@ class CancellationService {
     }
     cancellation = await this.cancellationRepository.claimRefundApproval(cancellationId, actor, payload.note);
     if (!cancellation) throw new AppError("Cancellation refund is already being processed", 409);
+    return cancellation;
+  }
+
+  async processQueuedRefunds({ limit = 25 } = {}) {
+    const result = { processed: 0, failed: 0 };
+    const interrupted = await this.cancellationRepository.findInterruptedRefunds();
+    for (const row of interrupted) {
+      await this.cancellationRepository.update(row.id, {
+        status: "manual_review", refundStatus: "manual_review",
+        lastError: "Refund submission was interrupted. Verify Razorpay before retrying or transferring money.",
+        metadata: { refundSubmissionState: "needs_review", refundSubmissionUncertain: true },
+      });
+    }
+    const queued = await this.cancellationRepository.findQueuedRefunds(limit);
+    for (const row of queued) {
+      const claimed = await this.cancellationRepository.claimQueuedRefund(row.id);
+      if (!claimed) continue;
+      try {
+        await this.processApprovedRefund(claimed);
+        result.processed += 1;
+      } catch (error) {
+        await this.cancellationRepository.update(row.id, {
+          status: "manual_review", refundStatus: "manual_review", lastError: error.message,
+          metadata: { refundSubmissionState: "needs_review", refundSubmissionUncertain: true },
+        });
+        result.failed += 1;
+      }
+    }
+    return result;
+  }
+
+  async processApprovedRefund(cancellation) {
+    const cancellationId = cancellation.id;
+    const actor = { userId: cancellation.metadata?.refundApprovedBy, role: "system", isSuperAdmin: true };
+    const payload = { note: cancellation.metadata?.refundApprovalNote };
+    const order = await this.orderRepository.findByIdWithItems(cancellation.order_id);
+    if (!order) throw new AppError("Order not found", 404);
 
     if (!cancellation.metadata?.walletProcessed && Number(cancellation.wallet_refund_amount || 0) > 0) {
       await this.processWallet(cancellation, order, actor);
@@ -1078,6 +1118,15 @@ class CancellationService {
       throw error;
     }
     const refundCompleted = ["completed", "not_required"].includes(refundResult.refundStatus);
+    // Persist the provider reference before finance work; reconciliation can
+    // finish the refund after a process interruption without resubmitting it.
+    if (refundResult.providerRefundId) {
+      await this.cancellationRepository.update(cancellationId, {
+        providerRefundId: refundResult.providerRefundId,
+        refundStatus: refundResult.refundStatus,
+        metadata: { refundSubmissionState: "submitted", refundSubmittedAt: new Date().toISOString() },
+      });
+    }
     if (refundCompleted) cancellation = await this.applyCancellationProjection(cancellation);
     const financeResult = refundCompleted ? await this.processSellerFinance(cancellation, actor) : null;
     cancellation = await this.cancellationRepository.update(cancellationId, {
@@ -1088,7 +1137,9 @@ class CancellationService {
       completedAt: refundCompleted ? new Date() : null,
       metadata: {
         refundApprovedBy: actor.userId,
-        refundApprovedAt: new Date().toISOString(),
+        refundSubmissionState: "submitted",
+        refundSubmittedAt: new Date().toISOString(),
+        refundApprovedAt: cancellation.metadata?.refundApprovedAt || new Date().toISOString(),
         refundApprovalNote: payload.note || null,
         walletProcessed: Number(cancellation.wallet_refund_amount || 0) > 0 || Boolean(cancellation.metadata?.walletProcessed),
         walletProcessedAt: Number(cancellation.wallet_refund_amount || 0) > 0
@@ -1113,6 +1164,9 @@ class CancellationService {
 
   async retry(cancellationId, actor = {}) {
     const cancellation = await this.get(cancellationId, actor);
+    if (["queued", "submitting"].includes(cancellation.metadata?.refundSubmissionState) || cancellation.metadata?.refundSubmissionUncertain) {
+      throw new AppError("Refund submission is queued, in progress, or needs provider verification", 409);
+    }
     if (!["failed", "refund_pending"].includes(cancellation.status)) {
       throw new AppError("Only failed or pending cancellations can be retried", 409);
     }

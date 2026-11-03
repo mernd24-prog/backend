@@ -83,6 +83,15 @@ class CancellationRepository {
     if (payload.metadata !== undefined) {
       values.metadata = knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify(payload.metadata || {})]);
     }
+    if (payload.refundStatus !== undefined) {
+      values.metadata = knex.raw(`(COALESCE(metadata, '{}'::jsonb) || ?::jsonb) ||
+        jsonb_build_object('refundTimeline', COALESCE(metadata->'refundTimeline', '[]'::jsonb) ||
+          CASE WHEN refund_status IS DISTINCT FROM ? THEN ?::jsonb ELSE '[]'::jsonb END)`, [
+        JSON.stringify(payload.metadata || {}), payload.refundStatus,
+        JSON.stringify([{ status: payload.refundStatus, at: new Date().toISOString(),
+          providerRefundId: payload.providerRefundId || null, note: payload.lastError || null }]),
+      ]);
+    }
     const [row] = await knex("order_cancellations").where("id", id).update(values).returning("*");
     return row || null;
   }
@@ -98,11 +107,37 @@ class CancellationRepository {
           refundApprovedBy: actor.userId || actor.sub || null,
           refundApprovedAt: new Date().toISOString(),
           refundApprovalNote: note || null,
+          refundSubmissionState: "queued",
+          refundQueuedAt: new Date().toISOString(),
         })]),
         updated_at: knex.fn.now(),
       })
       .returning("*");
     return row || null;
+  }
+
+  async findQueuedRefunds(limit = 25) {
+    return knex("order_cancellations").where("refund_status", "pending")
+      .whereRaw("metadata->>'refundSubmissionState' = 'queued'")
+      .orderBy("updated_at", "asc").limit(limit);
+  }
+
+  async claimQueuedRefund(id) {
+    const [row] = await knex("order_cancellations").where("id", id)
+      .where("refund_status", "pending")
+      .whereRaw("metadata->>'refundSubmissionState' = 'queued'")
+      .update({ updated_at: knex.fn.now(), metadata: knex.raw(
+        "COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({
+          refundSubmissionState: "submitting", refundSubmissionStartedAt: new Date().toISOString(),
+        })],
+      ) }).returning("*");
+    return row || null;
+  }
+
+  async findInterruptedRefunds() {
+    return knex("order_cancellations").where("refund_status", "pending")
+      .whereRaw("metadata->>'refundSubmissionState' = 'submitting'")
+      .where("updated_at", "<", new Date(Date.now() - 15 * 60 * 1000)).limit(25);
   }
 
   async claimCancellationApproval(id, actor = {}, note = null) {

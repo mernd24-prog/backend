@@ -45,7 +45,8 @@ const skuSchema = Joi.string()
   .min(3)
   .max(64)
   .pattern(/^[A-Za-z0-9][A-Za-z0-9._/-]{1,62}[A-Za-z0-9]$/)
-  .required();
+  .allow("", null)
+  .optional();
 const productTitleSchema = productTitle();
 const productDescriptionSchema = Joi.string().custom((value, helpers) => {
   const visibleText = value

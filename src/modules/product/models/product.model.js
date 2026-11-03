@@ -693,6 +693,14 @@ productSchema.index(
 
 productSchema.pre("validate", function validateVariantContract(next) {
   const variants = this.variants || [];
+  const seenSkus = new Set();
+  for (const variant of variants) {
+    variant.skuNormalized = String(variant.sku || "").trim().toLowerCase();
+    if (seenSkus.has(variant.skuNormalized)) {
+      this.invalidate("variants", "Variant SKU must be unique within a product");
+    }
+    seenSkus.add(variant.skuNormalized);
+  }
   const etaMin = this.shipping?.estimatedDaysMin;
   const etaMax = this.shipping?.estimatedDaysMax;
   if (etaMin !== undefined && etaMax !== undefined && etaMin > etaMax) {

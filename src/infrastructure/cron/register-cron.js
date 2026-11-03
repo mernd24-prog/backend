@@ -142,6 +142,9 @@ function registerCronJobs() {
       autoPayouts,
     };
   }, 15 * 60 * 1000);
+  runPeriodicJob("cancellation-refund-submission", async () => {
+    return cancellationService.processQueuedRefunds({ limit: 25 });
+  }, 5 * 1000);
   runPeriodicJob("cancellation-refund-reconciliation", async () => {
     return cancellationService.reconcileProviderRefunds({ limit: 100 });
   }, 5 * 60 * 1000);
