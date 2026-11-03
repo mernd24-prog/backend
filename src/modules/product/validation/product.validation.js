@@ -123,7 +123,8 @@ const variantSchema = Joi.object({
   shortDescription: Joi.string().trim().max(500).allow("", null),
   price: money().required(),
   mrp: money().required(),
-  salePrice: money().required(),
+  // Special price is optional; clients that omit it use the regular variant price.
+  salePrice: money().allow(null, "").default((parent) => parent.price),
   gstRate: gstRateSchema(),
   stock: optionalNonNegativeInteger().max(MAX_INVENTORY).default(0),
   reservedStock: optionalNonNegativeInteger().max(MAX_INVENTORY).default(0),
@@ -725,7 +726,7 @@ const bulkProductSchema = Joi.object({
 const specialPriceVariantUpdateSchema = Joi.object({
   variantId: optionalString(),
   variantSku: optionalString(),
-  salePrice: optionalNonNegativeNumber().required(),
+  salePrice: optionalNonNegativeNumber(),
 }).or("variantId", "variantSku").required();
 
 const specialPriceProductUpdateSchema = Joi.object({
