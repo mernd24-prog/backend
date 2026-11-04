@@ -3706,9 +3706,10 @@ gstTcsAmount,
         if (query.toDate) builder.where("created_at", "<=", this.normalizeDateRangeEnd(query.toDate));
       });
 
-    const [commerceSettings, commissions, paidPayoutRow, inProcessPayoutRow, adjustmentRow, codLiabilityRow, walletRow, walletTransactions] = await Promise.all([
+    const [commerceSettings, commissions, pageCommissions, paidPayoutRow, inProcessPayoutRow, adjustmentRow, codLiabilityRow, walletRow, walletTransactions] = await Promise.all([
       commerceSettingsService.getSettings(),
       buildCommissionQuery().orderBy("created_at", "desc"),
+      buildCommissionQuery().orderBy("created_at", "desc").limit(limit).offset(offset),
       knex("seller_payouts")
         .where({ seller_id: sellerId, status: "completed" })
         .modify((builder) => {
@@ -3761,6 +3762,7 @@ gstTcsAmount,
     const payoutPolicy = this.getPayoutPolicy(commerceSettings);
     const payoutPreference = await this.resolveSellerPayoutPreference(sellerId, query.organizationId || null, commerceSettings);
     const evaluations = await this.evaluateCommissionsRelease(commissions, commerceSettings);
+    const pageEvaluations = await this.evaluateCommissionsRelease(pageCommissions, commerceSettings);
     const balances = {
       deliveredBalance: 0,
       pendingBalance: 0,
@@ -3781,7 +3783,7 @@ gstTcsAmount,
       inProcess: 0,
       paid: 0,
       blocked: 0,
-      totalCommissions: evaluations.length,
+      totalCommissions: commissions.length,
     };
     const nextEligibleDates = [];
 
@@ -3829,7 +3831,7 @@ gstTcsAmount,
         ? 0
         : this.round(payoutPolicy.minimumPayoutAmount - balances.effectiveAvailablePayout),
     );
-    const items = evaluations.slice(offset, offset + limit).map(({ commission, release }) => ({
+    const items = pageEvaluations.map(({ commission, release }) => ({
       commissionId: commission.id,
       orderId: commission.order_id,
       payoutId: commission.payout_id || null,
@@ -3895,7 +3897,7 @@ gstTcsAmount,
       codSummary,
       commissionReconciliation: commissionRepair,
       items,
-      total: evaluations.length,
+      total: commissions.length,
       limit,
       offset,
     };

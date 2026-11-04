@@ -93,6 +93,8 @@ const taxDocumentDownloadSchema = (paramName) => Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
     format: Joi.string().valid("pdf", "html", "text", "csv", "json").default("pdf"),
+    page: Joi.number().integer().min(1).default(1),
+    limit: Joi.number().integer().min(1).max(200).default(20),
   }).required(),
   params: Joi.object({
     [paramName]: uuid.required(),

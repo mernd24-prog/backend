@@ -72,7 +72,11 @@ class TaxController {
 
   getInvoice = async (req, res) => {
     const actor = getCurrentUser(req);
-    const invoice = await this.taxService.getInvoice(req.params.invoiceId, actor);
+    const invoice = await this.taxService.getInvoice(
+      req.params.invoiceId,
+      actor,
+      req.query,
+    );
     res.json(okResponse(invoice));
   };
 

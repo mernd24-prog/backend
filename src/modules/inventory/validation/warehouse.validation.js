@@ -70,6 +70,7 @@ const listVariantInventorySchema = Joi.object({
       "availableStock",
     ),
     sortDir: Joi.string().valid("asc", "desc"),
+    sortOrder: Joi.string().valid("asc", "desc"),
   }).required(),
   params: Joi.object({}).required(),
 });

@@ -122,6 +122,8 @@ const codCollectionListSchema = Joi.object({
     orderId: uuid,
     sellerId: Joi.string().max(64),
     limit: Joi.number().integer().min(1).max(500).default(100),
+    page: Joi.number().integer().min(1).default(1),
+    offset: Joi.number().integer().min(0),
   }).required(),
   params: Joi.object({}).required(),
 });

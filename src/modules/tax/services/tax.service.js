@@ -153,9 +153,25 @@ class TaxService {
     });
   }
 
-  normalizeInvoiceResponse(invoice = {}) {
+  normalizeInvoiceResponse(invoice = {}, { page = 1, limit = 20, paginateLineItems = false } = {}) {
     if (!invoice) return null;
     const metadata = this.normalizeJson(invoice.metadata, {});
+    const lineItems = Array.isArray(metadata.lineItems) ? metadata.lineItems : [];
+    const safePage = Math.max(Number(page) || 1, 1);
+    const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 200);
+    const lineItemsStart = (safePage - 1) * safeLimit;
+    if (paginateLineItems) {
+      metadata.lineItems = lineItems.slice(lineItemsStart, lineItemsStart + safeLimit);
+    }
+    const organizationSnapshot = this.normalizeJson(invoice.organization_snapshot, {});
+    const organizationName =
+      organizationSnapshot.storeDisplayName ||
+      organizationSnapshot.legalBusinessName ||
+      organizationSnapshot.name ||
+      metadata.organization?.storeDisplayName ||
+      metadata.organization?.legalBusinessName ||
+      metadata.organization?.name ||
+      null;
     const invoiceType = this.invoiceType(invoice);
     const sellerName = metadata.organization?.legalBusinessName || metadata.organization?.storeDisplayName ||
       metadata.seller?.legalBusinessName || metadata.seller?.businessName || metadata.seller?.displayName || "Seller";
@@ -176,6 +192,7 @@ class TaxService {
       buyerId: invoice.buyer_id,
       sellerId: invoice.seller_id,
       organizationId: invoice.organization_id,
+      organizationName,
       taxableAmount: Number(invoice.taxable_amount || 0),
       taxAmount: Number(invoice.tax_amount || 0),
       cgstAmount: Number(invoice.cgst_amount || 0),
@@ -191,7 +208,17 @@ class TaxService {
       issuedAt: invoice.issued_at,
       createdAt: invoice.created_at,
       metadata,
-      organizationSnapshot: this.normalizeJson(invoice.organization_snapshot, {}),
+      ...(paginateLineItems
+        ? {
+            lineItemsPagination: {
+              page: safePage,
+              limit: safeLimit,
+              total: lineItems.length,
+              totalPages: Math.ceil(lineItems.length / safeLimit),
+            },
+          }
+        : {}),
+      organizationSnapshot,
     };
   }
 
@@ -251,13 +278,17 @@ class TaxService {
     return { grossFee, taxableAmount: grossFee, taxAmount: 0, taxRate };
   }
 
-  async getInvoice(invoiceId, actor = {}) {
+  async getInvoice(invoiceId, actor = {}, query = {}) {
     const invoice = await this.taxRepository.findInvoiceById(invoiceId);
     if (!invoice) {
       throw new AppError("Invoice not found", 404);
     }
     await this.assertInvoiceViewAccess(invoice, actor);
-    return this.normalizeInvoiceResponse(invoice);
+    return this.normalizeInvoiceResponse(invoice, {
+      page: query.page,
+      limit: query.limit,
+      paginateLineItems: true,
+    });
   }
 
   async getOrderInvoice(orderId, actor = {}) {

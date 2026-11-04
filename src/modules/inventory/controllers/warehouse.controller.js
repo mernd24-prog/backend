@@ -34,6 +34,8 @@ class WarehouseController {
       page: result.page,
       limit: result.limit,
       productTotal: result.productTotal,
+      productPageTotal: result.productTotal,
+      variantTotal: result.total,
     }));
   };
 

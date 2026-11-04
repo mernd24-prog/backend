@@ -526,18 +526,30 @@ class SettlementLifecycleService {
 
   async listCodCollections(query = {}, actor = {}) {
     const sellerId = actor.ownerSellerId || actor.sellerId || actor.userId || actor.sub;
-    const builder = knex({ c: "cod_collections" })
-      .leftJoin({ o: "orders" }, "o.id", "c.order_id")
-      .leftJoin({ s: "shipments" }, "s.id", "c.shipment_id")
-      .select("c.*", "o.order_number", "o.status as order_status", "s.awb_number", "s.courier_name");
-    if (!this.isAdmin(actor)) builder.where("c.seller_id", sellerId);
-    if (query.sellerActionableOnly === true) {
-      builder.whereIn("c.collection_mode", ["seller_direct", "hybrid"]);
-    }
-    if (query.status) builder.where("c.status", query.status);
-    if (query.orderId) builder.where("c.order_id", query.orderId);
-    if (query.sellerId && this.isAdmin(actor)) builder.where("c.seller_id", query.sellerId);
-    const rows = await builder.orderBy("c.created_at", "desc").limit(Math.min(Math.max(Number(query.limit || 100), 1), 500));
+    const limit = Math.min(Math.max(Number(query.limit || 100), 1), 500);
+    const page = Math.max(Number(query.page || 1), 1);
+    const offset = Math.max(Number(query.offset ?? ((page - 1) * limit)), 0);
+    const buildBase = () => {
+      const builder = knex({ c: "cod_collections" })
+        .leftJoin({ o: "orders" }, "o.id", "c.order_id")
+        .leftJoin({ s: "shipments" }, "s.id", "c.shipment_id");
+      if (!this.isAdmin(actor)) builder.where("c.seller_id", sellerId);
+      if (query.sellerActionableOnly === true) {
+        builder.whereIn("c.collection_mode", ["seller_direct", "hybrid"]);
+      }
+      if (query.status) builder.where("c.status", query.status);
+      if (query.orderId) builder.where("c.order_id", query.orderId);
+      if (query.sellerId && this.isAdmin(actor)) builder.where("c.seller_id", query.sellerId);
+      return builder;
+    };
+    const [rows, countRow] = await Promise.all([
+      buildBase()
+        .select("c.*", "o.order_number", "o.status as order_status", "s.awb_number", "s.courier_name")
+        .orderBy("c.created_at", "desc")
+        .limit(limit)
+        .offset(offset),
+      buildBase().countDistinct({ total: "c.id" }).first(),
+    ]);
     const collectionIds = rows.map((row) => String(row.id));
     const recoveries = collectionIds.length
       ? await knex("seller_settlements")
@@ -549,7 +561,7 @@ class SettlementLifecycleService {
       return [String(metadata.codCollectionId), { row, metadata }];
     }));
     const now = Date.now();
-    return rows.map((row) => {
+    const items = rows.map((row) => {
       const metadata = this.parseJson(row.metadata, {});
       const dueAt = metadata.dueAt || null;
       const sellerActionRequired =
@@ -578,6 +590,8 @@ class SettlementLifecycleService {
         recovery_status: snapshot.recoveryStatus,
       };
     });
+    const total = Number(countRow?.total || 0);
+    return { items, total, limit, offset, page: Math.floor(offset / limit) + 1, totalPages: Math.ceil(total / limit) };
   }
 
   async finalizeEligibleOrders() {

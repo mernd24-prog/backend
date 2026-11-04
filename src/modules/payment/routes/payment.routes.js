@@ -48,7 +48,7 @@ paymentRoutes.get(
   checkInput(codCollectionListSchema),
   catchErrors(async (req, res) => {
     const collections = await settlementLifecycleService.listCodCollections(req.query, req.auth);
-    res.json({ success: true, data: { items: collections, total: collections.length } });
+    res.json({ success: true, data: collections });
   }),
 );
 paymentRoutes.get(
@@ -61,7 +61,7 @@ paymentRoutes.get(
       ...req.query,
       sellerActionableOnly: true,
     }, req.auth);
-    res.json({ success: true, data: { items: collections, total: collections.length } });
+    res.json({ success: true, data: collections });
   }),
 );
 paymentRoutes.post(

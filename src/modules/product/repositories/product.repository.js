@@ -447,7 +447,7 @@ class ProductRepository {
       updatedAt: "updatedAt",
       createdAt: "createdAt",
     };
-    const sortBy = sortMap[pagination.sortBy] || "updatedAt";
+    const sortBy = sortMap[pagination.sortBy] || "product.inventoryLastUpdated";
 
     const query = {
       ...filter,
@@ -465,6 +465,125 @@ class ProductRepository {
     ]);
 
     return { items, total, page: safePage, limit: safeLimit };
+  }
+
+  async listInventoryProductsByVariantFilter(filter = {}, pagination = {}) {
+    const safePage = Math.max(1, Number(pagination.page || 1));
+    const safeLimit = Math.min(100, Math.max(1, Number(pagination.limit || 20)));
+    const direction = pagination.sortDir === "asc" ? 1 : -1;
+    const sortMap = {
+      productName: "product.title",
+      title: "product.title",
+      sku: "product.sku",
+      status: "product.status",
+      updatedAt: "product.inventoryLastUpdated",
+      createdAt: "product.createdAt",
+      currentStock: "product.inventoryTotals.currentStock",
+      reservedStock: "product.inventoryTotals.reservedStock",
+      availableStock: "product.inventoryTotals.availableStock",
+    };
+    const sortBy = sortMap[pagination.sortBy] || "updatedAt";
+    const pipeline = [
+      { $match: { ...filter, variants: { $exists: true, $ne: [] } } },
+      { $unwind: "$variants" },
+      ...(pagination.variantSku
+        ? [{ $match: { "variants.sku": pagination.variantSku } }]
+        : []),
+      {
+        $addFields: {
+          "variants.inventoryStock": { $ifNull: ["$variants.stock", 0] },
+          "variants.inventoryReservedStock": { $ifNull: ["$variants.reservedStock", 0] },
+          "variants.inventoryAvailableStock": {
+            $max: [0, { $subtract: [
+              { $ifNull: ["$variants.stock", 0] },
+              { $ifNull: ["$variants.reservedStock", 0] },
+            ] }],
+          },
+          "variants.inventoryThreshold": { $ifNull: ["$inventorySettings.lowStockThreshold", 5] },
+        },
+      },
+      {
+        $addFields: {
+          "variants.inventoryStatus": {
+            $cond: [
+              { $lte: ["$variants.inventoryAvailableStock", 0] },
+              "out_of_stock",
+              { $cond: [
+                { $lte: ["$variants.inventoryAvailableStock", "$variants.inventoryThreshold"] },
+                "low_stock",
+                "in_stock",
+              ] },
+            ],
+          },
+        },
+      },
+      ...(pagination.variantStatus
+        ? [{ $match: { $or: [
+            { "variants.status": pagination.variantStatus },
+            { "variants.status": { $exists: false }, status: pagination.variantStatus },
+          ] } }]
+        : []),
+      {
+        $group: {
+          _id: "$_id",
+          product: { $first: "$$ROOT" },
+          variants: { $push: "$variants" },
+          currentStock: { $sum: "$variants.inventoryStock" },
+          reservedStock: { $sum: "$variants.inventoryReservedStock" },
+          availableStock: { $sum: "$variants.inventoryAvailableStock" },
+          lastVariantUpdated: { $max: "$variants.updatedAt" },
+        },
+      },
+      {
+        $addFields: {
+          "product.variants": "$variants",
+          "product.inventoryTotals": {
+            currentStock: "$currentStock",
+            reservedStock: "$reservedStock",
+            availableStock: "$availableStock",
+          },
+          "product.inventoryLastUpdated": { $ifNull: ["$lastVariantUpdated", "$product.updatedAt"] },
+          "product.inventoryStatus": {
+            $cond: [
+              { $lte: ["$availableStock", 0] },
+              "out_of_stock",
+              { $cond: [
+                { $in: ["low_stock", "$variants.inventoryStatus"] },
+                "low_stock",
+                "in_stock",
+              ] },
+            ],
+          },
+        },
+      },
+      ...(pagination.stockStatus
+        ? [{ $match: { "product.inventoryStatus": pagination.stockStatus } }]
+        : []),
+      {
+        $facet: {
+          items: [
+            { $sort: { [sortBy]: direction, _id: 1 } },
+            { $skip: (safePage - 1) * safeLimit },
+            { $limit: safeLimit },
+            { $replaceRoot: { newRoot: "$product" } },
+          ],
+          counts: [{ $group: {
+            _id: null,
+            productTotal: { $sum: 1 },
+            variantTotal: { $sum: { $size: "$variants" } },
+          } }],
+        },
+      },
+    ];
+    const [result = {}] = await ProductModel.aggregate(pipeline).allowDiskUse(true);
+    const counts = result.counts?.[0] || {};
+    return {
+      items: result.items || [],
+      productTotal: Number(counts.productTotal || 0),
+      variantTotal: Number(counts.variantTotal || 0),
+      page: safePage,
+      limit: safeLimit,
+    };
   }
 
   _buildSort(sortBy = "newest", sortDir = "desc") {

@@ -456,7 +456,7 @@ class InventoryService {
       sellerId: product.sellerId || "",
       sellerName: sellerDisplayName(product),
       seller: sellerDisplayName(product),
-      lastUpdated: variant.updatedAt || product.updatedAt || product.createdAt || null,
+      lastUpdated: variant.updatedAt || product.inventoryLastUpdated || product.updatedAt || product.createdAt || null,
       category: product.category?.name || product.category?.title || product.category || "",
       brand: product.brand?.name || product.brand || "",
     };
@@ -466,12 +466,14 @@ class InventoryService {
     const page = Math.max(1, Number(query.page || 1));
     const limit = Math.min(100, Math.max(1, Number(query.limit || query.size || 20)));
     const productFilter = this.buildInventoryProductFilter(query, actor);
-    const batchLimit = Math.min(200, Math.max(limit * 5, limit));
-    const products = await this.productRepository.listInventoryProducts(productFilter, {
-      page: 1,
-      limit: batchLimit,
+    const products = await this.productRepository.listInventoryProductsByVariantFilter(productFilter, {
+      page,
+      limit,
       sortBy: query.sortBy,
-      sortDir: query.sortDir,
+      sortDir: query.sortDir || query.sortOrder,
+      stockStatus: query.stockStatus,
+      variantStatus: query.variantStatus,
+      variantSku: query.variantSku,
     });
 
     let rows = [];
@@ -480,36 +482,12 @@ class InventoryService {
         rows.push(this.toVariantInventoryRow(product, variant));
       }
     }
-
-    if (query.variantSku) {
-      const sku = normalizeText(query.variantSku).toLowerCase();
-      rows = rows.filter((row) => row.variantSku.toLowerCase() === sku);
-    }
-
-    if (query.stockStatus) {
-      rows = rows.filter((row) => row.status === query.stockStatus);
-    }
-
-    if (query.variantStatus) {
-      rows = rows.filter((row) => row.variantStatus === query.variantStatus);
-    }
-
-    if (["currentStock", "reservedStock", "availableStock"].includes(query.sortBy)) {
-      const direction = query.sortDir === "asc" ? 1 : -1;
-      rows.sort(
-        (left, right) =>
-          (toNumber(left?.[query.sortBy]) - toNumber(right?.[query.sortBy])) * direction,
-      );
-    }
-
-    const rowOffset = (page - 1) * limit;
-    const pagedRows = rows.slice(rowOffset, rowOffset + limit);
     return {
-      items: pagedRows,
-      total: rows.length,
+      items: rows,
+      total: products.variantTotal,
       page,
       limit,
-      productTotal: products.total,
+      productTotal: products.productTotal,
     };
   }
 
