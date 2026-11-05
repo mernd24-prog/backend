@@ -16,6 +16,16 @@ const attr = (key, label, type, opts = {}) => ({
 });
 
 const ATTR = {
+    size_apparel: attr("size", "Size", "select", {
+    options: ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL", "Free Size"],
+    isVariant: true,
+    required: true,
+  }),
+  size_shoes: attr("size", "Shoe Size", "select", {
+    options: ["4", "5", "6", "7", "8", "9", "10", "11", "12", "13"],
+    isVariant: true,
+    required: true,
+  }),
   material: attr("material", "Material", "multi_select", {
     options: [
       "Cotton",
