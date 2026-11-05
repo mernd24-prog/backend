@@ -744,31 +744,12 @@ class OrderRepository {
     if (deliveryStatus) {
       const statusParameter = `$${nextIndex()}`;
       values.push(deliveryStatus);
-      const shipmentScope = [
-        "ds.order_id = o.id",
-        "COALESCE(ds.direction, 'forward') <> 'reverse'",
-        "COALESCE(ds.shipment_type, 'forward') <> 'return'",
-      ];
-      if (filters.sellerId) {
-        shipmentScope.push(`ds.seller_id = $${nextIndex()}`);
-        values.push(filters.sellerId);
-      }
-      if (organizationId) {
-        shipmentScope.push(`ds.organization_id = $${nextIndex()}::uuid`);
-        values.push(organizationId);
-      }
-      const scopeSql = shipmentScope.join(" AND ");
-      const shipmentMatch = deliveryStatus === "partially_delivered"
-        ? `EXISTS (SELECT 1 FROM shipments ds WHERE ${scopeSql} AND ds.status = 'delivered')
-           AND EXISTS (SELECT 1 FROM shipments ds WHERE ${scopeSql} AND ds.status IS DISTINCT FROM 'delivered')`
-        : `EXISTS (SELECT 1 FROM shipments ds WHERE ${scopeSql} AND ds.status = ${statusParameter})`;
-      clauses.push(`(
-        (${shipmentMatch})
-        OR (
-          NOT EXISTS (SELECT 1 FROM shipments ds WHERE ${scopeSql})
-          AND o.delivery_status = ${statusParameter}
-        )
-      )`);
+      // The list row exposes the order-level delivery_status. Filtering by
+      // existence of a shipment with this status can include a partially
+      // delivered order (for example, one delivered shipment plus pending
+      // items) in the Delivered results. Keep the filter consistent with the
+      // status shown on the order row.
+      clauses.push(`o.delivery_status = ${statusParameter}`);
     }
     if (buyerId) {
       clauses.push(`o.buyer_id = $${nextIndex()}`);

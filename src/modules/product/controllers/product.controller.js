@@ -4,6 +4,7 @@ const { ProductService } = require("../services/product.service");
 const { getCurrentUser } = require("../../../shared/auth/current-user");
 const { auditService } = require("../../../shared/logger/audit.service");
 const { logger } = require("../../../shared/logger/logger");
+const { ROLES } = require("../../../shared/constants/roles");
 
 class ProductController {
   constructor({ productService = new ProductService() } = {}) {
@@ -305,7 +306,12 @@ class ProductController {
 
   inventoryStats = async (req, res) => {
     const actor = getCurrentUser(req);
-    const sellerId = actor.role === "admin" ? req.query.sellerId : actor.ownerSellerId || actor.userId;
+    const isAdmin =
+      [ROLES.ADMIN, ROLES.SUB_ADMIN, ROLES.SUPER_ADMIN].includes(actor.role) ||
+      actor.isSuperAdmin;
+    const sellerId = isAdmin
+      ? req.query.sellerId || null
+      : actor.ownerSellerId || actor.userId;
     const createdBy = ["seller-admin", "seller-sub-admin"].includes(actor.role) ? actor.userId : null;
     const stats = await this.productService.getInventoryStats(sellerId, createdBy);
     res.json(okResponse(stats));

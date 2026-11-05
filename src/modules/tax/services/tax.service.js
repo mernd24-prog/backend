@@ -712,11 +712,39 @@ class TaxService {
   }
 
   async listCreditNotes(query = {}) {
-    return this.taxRepository.listCreditNotes({
+    const result = await this.taxRepository.listCreditNotes({
       ...query,
       limit: Number(query.limit || 50),
       offset: Number(query.offset || 0),
     });
+
+    const rows = result?.list || [];
+    const buyerIds = Array.from(new Set(
+      rows
+        .map((creditNote) => String(creditNote.buyer_id || creditNote.buyerId || ""))
+        .filter((id) => UserModel.db.base.Types.ObjectId.isValid(id)),
+    ));
+    const buyers = buyerIds.length
+      ? await UserModel.find({ _id: { $in: buyerIds } })
+        .select("email profile.firstName profile.lastName")
+        .lean()
+      : [];
+    const buyerNames = new Map(buyers.map((buyer) => {
+      const name = [buyer.profile?.firstName, buyer.profile?.lastName]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+      return [String(buyer._id), name || buyer.email || "Unknown buyer"];
+    }));
+
+    return {
+      ...result,
+      list: rows.map((creditNote) => {
+        const buyerId = String(creditNote.buyer_id || creditNote.buyerId || "");
+        const buyerName = buyerNames.get(buyerId) || "Unknown buyer";
+        return { ...creditNote, buyerName, buyer_name: buyerName };
+      }),
+    };
   }
 
   async getInvoiceDocument(invoiceId, query = {}, actor = {}) {
@@ -2291,10 +2319,13 @@ class TaxService {
           orderNumber: metadata.orderNumber || null,
           referenceType: creditNote.reference_type,
           referenceId: creditNote.reference_id,
-          referenceNumber: metadata.referenceNumber || metadata.rmaNumber || metadata.cancellationNumber || creditNote.reference_id || null,
+          referenceNumber: metadata.referenceNumber || metadata.returnNumber || metadata.rmaNumber || metadata.cancellationNumber || creditNote.reference_id || null,
           reason: creditNote.reason,
           sourceType: metadata.parentReferenceType || creditNote.reference_type || null,
-          reversalMode: metadata.reversalMode || metadata.cancellationScope || metadata.returnScope || null,
+          reversalMode: metadata.reversalMode || metadata.cancellationScope || metadata.returnScope ||
+            (metadata.refundRatio !== undefined && metadata.refundRatio !== null
+              ? Number(metadata.refundRatio) >= 1 ? "full" : "partial"
+              : null),
           issuedAt: creditNote.issued_at || creditNote.created_at,
           currency,
           scope: metadata.creditNoteScope || null,

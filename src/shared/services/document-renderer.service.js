@@ -2498,8 +2498,11 @@ renderBoxLabelPdf(document = {}) {
       text(isCreditNote ? "Return / Cancel Ref." : "Place of Supply", 350, 700, 8);
       text(compact(isCreditNote ? inv.referenceNumber || "-" : inv.placeOfSupply || "-", 28), rightEdge, 700, 9, true, "right");
       if (isCreditNote) {
+        const displayStatus = (value) => String(value || "-")
+          .replace(/[_-]+/g, " ")
+          .replace(/\b\w/g, (letter) => letter.toUpperCase());
         text(`Reason: ${compact(inv.reason || "-", 46)}`, 350, 684, 7.5);
-        text(`Source: ${compact(inv.sourceType || "-", 18)} · Mode: ${compact(inv.reversalMode || "-", 18)}`, 350, 672, 7.5);
+        text(`Source: ${compact(displayStatus(inv.sourceType), 18)}`, 350, 672, 7.5);
       }
       line(contentLeftEdge, 666, contentRightEdge, 666, 0.8);
 
@@ -2567,7 +2570,17 @@ renderBoxLabelPdf(document = {}) {
         text(String(pageIndex * invoiceRowsPerPage + index + 1), 43, y, 8);
         text(compact(title, isCreditNote ? 30 : 34), 62, y, 8, true);
         const sku = item.productSku || item.variantSku || item.product_sku || item.variant_sku;
-        if (sku) text(`SKU: ${compact(sku, 30)}`, 62, y - 11, 7);
+        const lineDetails = [];
+        if (isCommission && Number(item.commissionRate || 0) > 0) {
+          lineDetails.push(`Commission: ${Number(item.commissionRate).toFixed(2)}%`);
+        }
+        if (sku) lineDetails.push(`SKU: ${compact(sku, 18)}`);
+        if (isCreditNote && item.reversalWeight !== undefined) {
+          lineDetails.push(`Reversal: ${(Number(item.reversalWeight || 0) * 100).toFixed(2)}%`);
+        }
+        if (lineDetails.length) {
+          text(compact(lineDetails.join(" | "), 58), 62, y - 11, 7);
+        }
         const customerPromotion = Number(
           item.customerDiscountAmount ?? item.discountAmount ?? item.discount_amount ?? 0,
         );
@@ -2581,13 +2594,7 @@ renderBoxLabelPdf(document = {}) {
               : "seller funded";
           text(`Promotion: -${money(customerPromotion)} (${fundingLabel})`, 140, y - 11, 7);
         }
-        if (isCommission && Number(item.commissionRate || 0) > 0) {
-          text(`Commission: ${Number(item.commissionRate).toFixed(2)}%`, 160, y - 11, 7);
-        }
         text(hsn, 270, y, 8);
-        if (isCreditNote && item.reversalWeight !== undefined) {
-          text(`Reversal: ${(Number(item.reversalWeight || 0) * 100).toFixed(2)}%`, 160, y - 11, 7);
-        }
         text(isCreditNote ? reversalQty(qty) : String(qty), 330, y, 8);
         text(isCreditNote ? reversalMoney(taxable) : money(taxable), 414, y, 8, false, "right");
         text(isCreditNote ? reversalMoney(tax) : money(tax), 484, y, 8, false, "right");
@@ -2656,7 +2663,9 @@ renderBoxLabelPdf(document = {}) {
         const totalY = summaryTop - summaryRows.length * 16 - 4;
         line(350, totalY + 12, contentRightEdge, totalY + 12, 0.8);
         const totalLabel = isCreditNote
-          ? "Customer refund / total credit"
+          ? isCommission
+            ? "Total credit"
+            : "Customer refund / total credit"
           : isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0
           ? "Amount paid by customer"
           : isOrderReceipt
