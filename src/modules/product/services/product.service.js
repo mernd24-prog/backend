@@ -3667,7 +3667,14 @@ class ProductService {
       }
 
       const projection = buildProductListProjection(query);
-      const cacheKey = `products:management:v3:${JSON.stringify({ filter, pagination, projection })}`;
+      // JSON.stringify normally drops RegExp contents, making different
+      // search terms share the same cached management listing.
+      const cacheKey = `products:management:v4:${JSON.stringify(
+        { filter, pagination, projection },
+        (_key, value) => value instanceof RegExp
+          ? { $regex: value.source, $options: value.flags }
+          : value,
+      )}`;
       const result = await remember(cacheKey, 30, () =>
         this.productRepository.paginate(filter, pagination, {
           projection,
@@ -4257,20 +4264,16 @@ class ProductService {
     };
 
     if (term) {
-      const regex = new RegExp(escapeRegExp(term), "i");
-      filter.$or = [
-        { title: regex },
-        { shortDescription: regex },
-        { description: regex },
-        { category: regex },
-        { categoryId: regex },
-        { brand: regex },
-        { sku: regex },
-        { color: regex },
-        { hsnCode: regex },
-        { productFamilyCode: regex },
-        { tags: regex },
+      const fields = [
+        "title", "shortDescription", "description", "category", "categoryId",
+        "brand", "sku", "color", "hsnCode", "productFamilyCode", "tags",
+        "attributes.color", "variants.attributes.color",
       ];
+      // Require every word, allowing different order and matches across fields.
+      for (const token of new Set(term.split(/\s+/))) {
+        const regex = new RegExp(escapeRegExp(token), "i");
+        addFilter({ $or: fields.map((field) => ({ [field]: regex })) });
+      }
     }
 
     const category = query.category || query.categoryId || query.categorySlug;

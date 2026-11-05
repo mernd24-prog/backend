@@ -33,6 +33,7 @@ const taxReportSchema = Joi.object({
 const listInvoicesSchema = Joi.object({
   body: Joi.object({}).required(),
   query: Joi.object({
+    orderId: uuid,
     fromDate: Joi.date().iso(),
     toDate: Joi.date().iso(),
     sellerId: Joi.string(),
@@ -151,6 +152,7 @@ const taxExportSchema = (type) => {
   const byType = {
     invoices: {
       ...common,
+      orderId: uuid,
       sellerId: Joi.string(),
       organizationId: uuid,
       buyerId: Joi.string(),

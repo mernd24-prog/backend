@@ -154,6 +154,7 @@ class TaxRepository {
   }
 
   async listInvoices({
+    orderId = null,
     fromDate = null,
     toDate = null,
     sellerId = null,
@@ -174,6 +175,10 @@ class TaxRepository {
     const clauses = [];
     let idx = 1;
 
+    if (orderId) {
+      clauses.push(`ti.order_id = $${idx++}`);
+      values.push(orderId);
+    }
     if (fromDate) {
       clauses.push(`ti.issued_at >= $${idx++}`);
       values.push(fromDate);
@@ -228,7 +233,7 @@ class TaxRepository {
       values.push(hsnCode);
     }
     if (search) {
-      clauses.push(`(ti.invoice_number ILIKE $${idx} OR ti.order_id::text ILIKE $${idx} OR COALESCE(ti.reference_id, '') ILIKE $${idx})`);
+      clauses.push(`(ti.invoice_number ILIKE $${idx} OR ti.order_id::text ILIKE $${idx} OR o.order_number ILIKE $${idx} OR COALESCE(ti.reference_id, '') ILIKE $${idx})`);
       values.push(`%${search}%`);
       idx += 1;
     }
@@ -257,6 +262,7 @@ class TaxRepository {
            ti.*,
            ti.invoice_number AS "invoiceNumber",
            ti.order_id AS "orderId",
+           o.order_number AS "orderNumber",
            ti.buyer_id AS "buyerId",
            ti.seller_id AS "sellerId",
            ti.organization_id AS "organizationId",
@@ -271,6 +277,7 @@ class TaxRepository {
            ti.issued_at AS "issuedAt",
            ti.created_at AS "createdAt"
          FROM tax_invoices ti
+         LEFT JOIN orders o ON o.id = ti.order_id
          ${whereSql}
          ORDER BY ${orderColumn} ${orderDirection}, ti.issued_at DESC
          LIMIT $${idx++} OFFSET $${idx}`,
@@ -279,6 +286,7 @@ class TaxRepository {
       postgresPool.query(
         `SELECT COUNT(*)::INT AS total
          FROM tax_invoices ti
+         LEFT JOIN orders o ON o.id = ti.order_id
          ${whereSql}`,
         values,
       ),
