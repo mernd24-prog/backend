@@ -1164,17 +1164,21 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
 }
 
   async downloadBoxLabel(orderId, shipmentId, actor, format = "pdf") {
-    const order = await this.orderRepository.findByIdWithItems(orderId);
-    if (!order) throw AppError.notFound("Order");
-    await this.getOrder(orderId, actor);
+    const order = await this.getOrder(orderId, actor);
 
     if (!this.isBoxLabelAllowed(order)) {
       throw new AppError("Box label is available only after order is confirmed or COD order is accepted", 409);
     }
 
     const shipment = (order.relations?.shipments || []).find((item) => String(item.id) === String(shipmentId));
-    if (!shipment || String(shipment.direction || "forward") === "reverse") {
-      throw AppError.notFound("Shipment");
+    if (!shipment) {
+      throw new AppError("This shipment is no longer available for this order or your seller account. Refresh the order to load its current shipments.", 404, null, "SHIPMENT_NOT_AVAILABLE");
+    }
+    if (String(shipment.direction || "forward").toLowerCase() === "reverse") {
+      throw new AppError("Box labels are only available for outgoing shipments. This is a return shipment; use its return shipping documents.", 409, null, "BOX_LABEL_REVERSE_SHIPMENT");
+    }
+    if (["cancelled", "canceled"].includes(String(shipment.status || "").toLowerCase())) {
+      throw new AppError("A box label cannot be downloaded for a cancelled shipment.", 409, null, "BOX_LABEL_SHIPMENT_CANCELLED");
     }
 
     const document = this.buildBoxLabelDocument(order, shipment);

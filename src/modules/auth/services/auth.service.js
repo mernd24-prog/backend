@@ -1297,18 +1297,6 @@ class AuthService {
       .endsWith("@mobile.samglobal.local");
   }
 
-  makeMobileOnlyInternalEmail(mobile) {
-    const digits =
-      String(mobile || "").replace(/\D/g, "");
-
-    /*
-     * Your current refresh-token flow searches users by
-     * token email. Mobile-only accounts therefore receive
-     * a stable internal email.
-     */
-    return `mobile-${digits}@mobile.samglobal.local`;
-  }
-
   secureOtpMatches(storedOtp, providedOtp) {
     const stored = Buffer.from(
       String(storedOtp || ""),
@@ -1889,16 +1877,11 @@ class AuthService {
           : "mobile_otp";
 
       const userPayload = {
-        /*
-         * Keep email populated because your current refresh
-         * token flow finds users by token email.
-         */
+        // Omit absent emails so the sparse unique index allows mobile-only users.
         email:
           identity.channel === "email"
             ? identity.email
-            : this.makeMobileOnlyInternalEmail(
-              identity.mobile,
-            ),
+            : undefined,
 
         phone:
           identity.channel === "mobile"
@@ -2023,6 +2006,10 @@ class AuthService {
       user = updatedUser || user;
     }
 
+    if (identity.channel === "mobile" && this.isInternalMobileEmail(user.email)) {
+      user = (await this.authRepository.clearInternalMobileEmail(user.id)) || user;
+    }
+
     await this.authRepository.updateLastLogin(
       user.id,
       new Date(),
@@ -2121,8 +2108,9 @@ class AuthService {
       );
     }
 
+    const otpIdentifier = email || mobileNumber;
     const dailyLimitKey = await this.assertAndConsumeDailyOtpQuota(
-      email,
+      otpIdentifier,
       purpose,
     );
 
@@ -2130,7 +2118,9 @@ class AuthService {
       process.env.AUTH_PRIMARY_OTP_CHANNEL || "email",
     ).toLowerCase();
     const selectedOtpChannel =
-      purpose === "registration" && role === ROLES.SELLER
+      purpose === "change_password" && !email && mobileNumber
+        ? "sms"
+        : purpose === "registration" && role === ROLES.SELLER
         ? String(
           process.env.AUTH_SELLER_REGISTRATION_OTP_CHANNEL || "sms",
         ).toLowerCase()
@@ -2164,7 +2154,7 @@ class AuthService {
         change_password: env.sms.templateIds.resetPasswordOtp,
         influencer_forgot_password: env.sms.templateIds.accountRecoveryOtp,
       }[purpose] || env.sms.templateIds.accountRecoveryOtp;
-    const otpKey = this.makeOtpKey(email, purpose);
+    const otpKey = this.makeOtpKey(otpIdentifier, purpose);
 
     // Store OTP in Redis with 10 minute expiration
     await redis.setex(otpKey, 600, otp);
@@ -2272,6 +2262,9 @@ class AuthService {
               ? "Seller registration SMS OTP failed; fallback is disabled"
               : "SMS OTP failed; falling back to email",
           );
+          if (!email) {
+            throw new AppError("Unable to send OTP by SMS. Please try again later.", 503);
+          }
           if (role === ROLES.SELLER && purpose === "registration") {
             throw new AppError(
               "Unable to send seller registration OTP by SMS. Please try again later.",
@@ -2506,22 +2499,23 @@ class AuthService {
     }
     await this.assertUserCanAuthenticate(user);
 
-    if (!user.passwordHash) {
-      throw new AppError("Password login not enabled", 400);
+    if (user.passwordHash) {
+      const isMatch = currentPassword && await checkHash(currentPassword, user.passwordHash);
+      if (!isMatch) {
+        throw new AppError("Current password is incorrect", 400);
+      }
     }
 
-    const isMatch = await checkHash(currentPassword, user.passwordHash);
-    if (!isMatch) {
-      throw new AppError("Current password is incorrect", 400);
-    }
-
-    const otpKey = this.makeOtpKey(user.email, "change_password");
+    const email = this.isInternalMobileEmail(user.email) ? undefined : user.email;
+    const mobile = user.phoneNormalized || user.phone;
+    if (!email && !mobile) throw new AppError("Add a verified email or mobile before setting a password", 400);
+    const otpKey = this.makeOtpKey(email || mobile, "change_password");
     const contextKey = `password_change:${user.id}`;
     const passwordDigest = createHash("sha256").update(newPassword).digest("hex");
     if (!otp) {
       const delivery = await this.sendOtp({
-        email: user.email,
-        mobile: user.phone,
+        email,
+        mobile,
         role: user.role,
         purpose: "change_password",
       }, requestContext);
@@ -2630,7 +2624,9 @@ class AuthService {
       };
     }
 
-    const user = await this.authRepository.findUserByEmail(payload.email);
+    const user = payload.sub
+      ? await this.authRepository.findUserWithPasswordById(payload.sub)
+      : null;
     if (!user) {
       await this.recordSecurityEvent(SECURITY_EVENTS.AUTH_REFRESH_FAILED, "failed", {
         email: payload.email,

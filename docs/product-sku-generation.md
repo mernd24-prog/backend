@@ -29,5 +29,4 @@ migration or rewrite historical order/inventory SKU references.
 
 Verification:
 
-    node scripts/test-product-sku-policy.js
     node scripts/check-source.js

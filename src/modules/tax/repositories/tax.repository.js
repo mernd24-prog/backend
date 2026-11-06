@@ -398,7 +398,7 @@ class TaxRepository {
       values.push(referenceType);
     }
     if (search) {
-      clauses.push(`(credit_note_number ILIKE $${idx} OR order_id::text ILIKE $${idx} OR reference_id ILIKE $${idx})`);
+      clauses.push(`(credit_note_number ILIKE $${idx} OR order_id::text ILIKE $${idx} OR EXISTS (SELECT 1 FROM orders o WHERE o.id = tax_credit_notes.order_id AND o.order_number ILIKE $${idx}) OR reference_id ILIKE $${idx})`);
       values.push(`%${search}%`);
       idx += 1;
     }
@@ -426,6 +426,7 @@ class TaxRepository {
            credit_note_number AS "creditNoteNumber",
            invoice_id AS "invoiceId",
            order_id AS "orderId",
+           (SELECT o.order_number FROM orders o WHERE o.id = tax_credit_notes.order_id) AS "orderNumber",
            buyer_id AS "buyerId",
            organization_id AS "organizationId",
            reference_type AS "referenceType",

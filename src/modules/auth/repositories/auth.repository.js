@@ -25,6 +25,13 @@ class AuthRepository {
     return this.userRepository.create(payload);
   }
 
+  async clearInternalMobileEmail(userId) {
+    return this.userRepository.updateOne(
+      { _id: userId, email: /@mobile\.samglobal\.local$/i },
+      { $unset: { email: "" }, $set: { emailVerified: false } },
+    );
+  }
+
   async findUserById(userId) {
     return this.userRepository.findById(userId);
   }

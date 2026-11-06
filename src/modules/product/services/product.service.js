@@ -2436,6 +2436,20 @@ class ProductService {
 
   // ─── Create ───────────────────────────────────────────────────────────────
 
+  async validateProductName(title, sellerId, existingProduct = null) {
+    const words = String(title || "").trim().split(/\s+/u).filter(Boolean);
+    if (!words.length) return;
+    // Match legacy names too, including leading/trailing and repeated whitespace.
+    const filter = {
+      sellerId: String(sellerId),
+      title: new RegExp(`^\\s*${words.map(escapeRegExp).join("\\s+")}\\s*$`, "i"),
+    };
+    if (existingProduct?._id) filter._id = { $ne: existingProduct._id };
+    if (await this.productRepository.findOne(filter)) {
+      throw new AppError("A product with this name already exists for this seller. Please use a different product name.", 409);
+    }
+  }
+
   async createProduct(payload, actor) {
     const isSeller = isSellerRole(actor);
     const sellerId = isSeller
@@ -2484,6 +2498,7 @@ class ProductService {
     this.validateVariants(payload.variants || [], payload.options || [], {
       activating: payload.status === PRODUCT_STATUS.ACTIVE,
     });
+    await this.validateProductName(payload.title, sellerId);
     await this.validateProductSkusAndImages(payload, sellerId);
     this.validatePricing(payload);
     await this.validateProductReferences(payload, actor);
@@ -2676,6 +2691,11 @@ class ProductService {
         activating:
           (payload.status || existingProduct.status) === PRODUCT_STATUS.ACTIVE,
       },
+    );
+    await this.validateProductName(
+      payload.title ?? existingProduct.title,
+      existingProduct.sellerId,
+      existingProduct,
     );
     await this.validateProductSkusAndImages(
       payload,
@@ -5412,6 +5432,7 @@ class ProductService {
     delete source.pendingRevisionId;
 
     const title = payload.title || `Copy of ${existingProduct.title}`;
+    await this.validateProductName(title, existingProduct.sellerId);
     source.variants = (source.variants || []).map((variant) => {
       const copy = { ...variant };
       delete copy._id;
