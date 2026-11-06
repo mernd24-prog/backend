@@ -2467,6 +2467,9 @@ class AuthService {
     }
     await this.assertUserCanAuthenticate(user);
 
+    if (user.passwordHash && await checkHash(newPassword, user.passwordHash)) {
+      throw new AppError("New password must be different from current password", 400);
+    }
     await this.authRepository.updatePassword(user.id, passwordHash);
     await redis.del(this.makeOtpKey(email, "forgot_password"));
     await redis.del(this.makeVerifiedOtpKey(email, "forgot_password"));
@@ -2503,6 +2506,9 @@ class AuthService {
       const isMatch = currentPassword && await checkHash(currentPassword, user.passwordHash);
       if (!isMatch) {
         throw new AppError("Current password is incorrect", 400);
+      }
+      if (await checkHash(newPassword, user.passwordHash)) {
+        throw new AppError("New password must be different from current password", 400);
       }
     }
 
