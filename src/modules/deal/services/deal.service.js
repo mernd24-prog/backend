@@ -796,14 +796,12 @@ class DealService {
 
   async generatePayout(payload = {}, actor = {}) {
     if (!this.isAdmin(actor)) throw new AppError("Only admin users can generate deal payouts", 403);
-    return this.dealRepository.generatePayout(payload, actor);
+    throw new AppError("Deal earnings are paid through Seller Payouts. Use the seller payout workflow.", 410);
   }
 
   async processPayout(payoutId, payload = {}, actor = {}) {
     if (!this.isAdmin(actor)) throw new AppError("Only admin users can process deal payouts", 403);
-    const row = await this.dealRepository.processPayout(payoutId, payload, actor);
-    if (!row) throw new AppError("Deal payout not found", 404);
-    return row;
+    throw new AppError("Separate deal payouts have been retired. Use Seller Payouts; historical records remain read-only.", 410);
   }
 
   async findActiveDealForItem(input = {}) {

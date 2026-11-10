@@ -727,27 +727,32 @@ class OrderService {
   }
 
   async listSellerOrders(actor, filters = {}) {
-      const sellerId = actor.ownerSellerId || actor.sellerId || actor.userId;
+    const sellerId = actor.ownerSellerId || actor.sellerId || actor.userId;
     const scopedFilters = {
       ...filters,
       organizationId: filters.organizationId || actor.organizationId || null,
     };
-    let orders;
+    let productIds = null;
     if (["seller-admin", "seller-sub-admin"].includes(actor.role)) {
       const products = await ProductModel.find({ sellerId, createdBy: actor.userId }).select("_id");
-      const productIds = products.map((product) => String(product._id));
-      if (!productIds.length) return [];
-      orders = await withTransientDatabaseRetry(
-        () => this.orderRepository.listOrdersBySeller(sellerId, productIds, scopedFilters),
-        { attempts: 3, delayMs: 150 },
-      );
-      return orders.map((order) => this.filterOrderForSeller(order, sellerId, scopedFilters.organizationId));
+      productIds = products.map((product) => String(product._id));
+      if (!productIds.length) {
+        return {
+          items: [],
+          total: 0,
+          limit: Number(filters.limit || 50),
+          offset: Number(filters.offset || 0),
+        };
+      }
     }
-    orders = await withTransientDatabaseRetry(
-      () => this.orderRepository.listOrdersBySeller(sellerId, null, scopedFilters),
+    const result = await withTransientDatabaseRetry(
+      () => this.orderRepository.listOrdersBySeller(sellerId, productIds, scopedFilters),
       { attempts: 3, delayMs: 150 },
     );
-    return orders.map((order) => this.filterOrderForSeller(order, sellerId, scopedFilters.organizationId));
+    return {
+      ...result,
+      items: result.items.map((order) => this.filterOrderForSeller(order, sellerId, scopedFilters.organizationId)),
+    };
   }
 
   async listAdminOrders(actor, filters = {}) {
@@ -1561,6 +1566,13 @@ const sellerPayoutAmount = Number(
     const deliveryChargeAmount = Number(sellerDeliveryCharge?.chargeAmount || 0);
     const customerTotalAmount = Number((subtotalAmount + Number(sellerTaxBreakup.taxPayableAmount || 0) + deliveryChargeAmount).toFixed(2));
 
+    const scopedInvoices = (Array.isArray(relations.invoices) && relations.invoices.length
+      ? relations.invoices : [relations.invoice || relations.taxInvoice].filter(Boolean)
+    ).filter((invoice) =>
+      String(invoice.seller_id || invoice.sellerId || "") === sellerKey &&
+      (!organizationKey || String(invoice.organization_id || invoice.organizationId || "") === organizationKey)
+    );
+
     return {
       ...order,
       subtotal_amount: subtotalAmount,
@@ -1591,6 +1603,9 @@ const sellerPayoutAmount = Number(
         ...relations,
         sellers,
         sellerSettlements,
+        invoices: scopedInvoices,
+        invoice: scopedInvoices[0] || null,
+        taxInvoice: scopedInvoices[0] || null,
         shipments: sellerShipments,
         sellerFulfillmentGroups,
       },

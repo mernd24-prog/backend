@@ -682,6 +682,7 @@ const SIDEBAR_MODULES = [
     icon: "MdPayments",
     routePath: "/app/deal-payouts",
     moduleType: "page",
+    isVisibleInSidebar: false,
     order: 225,
     parentModule: "deals-management",
     requiredModule: "deals",

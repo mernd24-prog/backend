@@ -1,3 +1,4 @@
+const { payoutEarningsBreakdown } = require("../../../shared/domain/payout-earnings-breakdown");
 const { knex } = require("../../../infrastructure/postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
 const { logger } = require("../../../shared/logger/logger");
@@ -630,6 +631,7 @@ class SellerCommissionService {
     let payout = await knex("seller_payouts").where("id", payoutId).first();
     if (!payout) throw new AppError("Payout not found", 404);
     if (payout.status === "completed") return payout;
+    await this.assertPayoutHasNoLegacyDealPayments(payoutId);
     if (["pending", "on_hold"].includes(payout.status)) {
       const metadata = {
         ...this.parseJson(payout.metadata, {}),
@@ -959,6 +961,7 @@ class SellerCommissionService {
     const payout = await knex("seller_payouts").where("id", payoutId).first();
     if (!payout) throw new AppError("Payout not found", 404);
     if (payout.status === "completed") return payout;
+    await this.assertPayoutHasNoLegacyDealPayments(payoutId);
     if (payout.status !== "processing") {
       throw new AppError(`Seller wallet payout cannot be completed from ${payout.status}`, 409);
     }
@@ -2577,6 +2580,37 @@ gstTcsAmount,
     };
   }
 
+  async buildPayoutEarningsBreakdown(commissions, client = knex) {
+    const itemIds = [...new Set(commissions.map((row) => row.order_item_id).filter(Boolean))];
+    const items = itemIds.length
+      ? await client("order_items").whereIn("id", itemIds).select("id", "deal_id", "deal_snapshot")
+      : [];
+    return payoutEarningsBreakdown(commissions, items);
+  }
+
+  async assertNoLegacyDealPayments(commissions, client = knex) {
+    if (!commissions.length) return;
+    const paid = await client("seller_commissions as sc")
+      .whereIn("sc.id", commissions.map((row) => row.id))
+      .whereExists(function () {
+        this.select(1).from("deal_sales as ds")
+          .innerJoin("deal_payouts as dp", "dp.id", "ds.payout_id")
+          .where("dp.status", "paid")
+          .whereRaw("ds.order_id = sc.order_id AND ds.seller_id = sc.seller_id")
+          .where(function () {
+            this.whereRaw("ds.order_item_id = sc.order_item_id").orWhereNull("sc.order_item_id");
+          });
+      }).first("sc.id");
+    if (paid) {
+      throw new AppError("This earning includes a historical paid deal payout. Reconcile that payment before creating or completing a seller payout.", 409);
+    }
+  }
+
+  async assertPayoutHasNoLegacyDealPayments(payoutId) {
+    const commissions = await knex("seller_commissions").where("payout_id", payoutId).select("id");
+    await this.assertNoLegacyDealPayments(commissions);
+  }
+
   async initiatePayout(sellerId, periodStart, periodEnd, options = {}) {
     const range = this.buildDateRange(periodStart, periodEnd);
     const commerceSettings = await commerceSettingsService.getSettings();
@@ -2706,6 +2740,9 @@ gstTcsAmount,
         throw new AppError("No released commissions to payout for the selected period", 400);
       }
 
+      await this.assertNoLegacyDealPayments(payoutCommissions, trx);
+      const earningsBreakdown = await this.buildPayoutEarningsBreakdown(payoutCommissions, trx);
+
       const totals = payoutCommissions.reduce(
         (acc, c) => {
           acc.totalAmount += Number(c.amount || 0);
@@ -2825,6 +2862,7 @@ gstTcsAmount,
           recoveryAppliedAmount,
           offsetOnly,
           financialBreakdown,
+          earningsBreakdown,
           payoutPolicy,
           note: options.note || null,
           createdBy: options.actor?.userId || options.actor?.sub || null,
@@ -2986,6 +3024,9 @@ gstTcsAmount,
       if (payout.status !== "processing") {
         throw new AppError(`Payout cannot be completed from ${payout.status}`, 409);
       }
+
+      const commissions = await trx("seller_commissions").where("payout_id", payoutId).select("id");
+      await this.assertNoLegacyDealPayments(commissions, trx);
 
       await trx("seller_payouts")
         .where("id", payoutId)
@@ -4109,9 +4150,23 @@ gstTcsAmount,
         .first(),
     ]);
 
+    const missingBreakdowns = items.filter((item) => !this.parseJson(item.metadata, {}).earningsBreakdown);
+    const payoutCommissions = missingBreakdowns.length
+      ? await knex("seller_commissions").whereIn("payout_id", missingBreakdowns.map((item) => item.id))
+      : [];
+    const breakdownItemIds = [...new Set(payoutCommissions.map((row) => row.order_item_id).filter(Boolean))];
+    const breakdownItems = breakdownItemIds.length
+      ? await knex("order_items").whereIn("id", breakdownItemIds).select("id", "deal_id", "deal_snapshot")
+      : [];
+    const breakdowns = new Map(missingBreakdowns.map((payout) => [
+      payout.id,
+      payoutEarningsBreakdown(payoutCommissions.filter((row) => row.payout_id === payout.id), breakdownItems),
+    ]));
+
     return {
       items: (await this.enrichFinanceRecords(items)).map((item) => ({
         ...item,
+        earningsBreakdown: this.parseJson(item.metadata, {}).earningsBreakdown || breakdowns.get(item.id),
         lifecycleStatus: item.status === "completed" ? "released"
           : item.status === "on_hold" ? "held"
             : item.status === "failed" ? "failed"

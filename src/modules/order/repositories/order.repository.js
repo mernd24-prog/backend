@@ -253,19 +253,31 @@ class OrderRepository {
     const sortDirection = filters.sortDir === "asc" || filters.sortOrder === "asc"
       ? "ASC"
       : "DESC";
-    values.push(Number(filters.limit || 50), Number(filters.offset || 0));
-
-    const { rows } = await postgresPool.query(
-      `SELECT DISTINCT o.*
-       FROM orders o
+    const limit = Number(filters.limit || 50);
+    const offset = Number(filters.offset || 0);
+    const fromSql = `FROM orders o
        INNER JOIN order_items oi ON oi.order_id = o.id
-       WHERE ${clauses.join(" AND ")}
-       ORDER BY ${sortColumn} ${sortDirection} NULLS LAST, o.created_at DESC, o.id ASC
-       LIMIT $${index++}
-       OFFSET $${index}`,
-      values,
-    );
-    return this.attachOrderRelations(rows);
+       WHERE ${clauses.join(" AND ")}`;
+    const [countResult, rowsResult] = await Promise.all([
+      postgresPool.query(
+        `SELECT COUNT(DISTINCT o.id)::int AS total ${fromSql}`,
+        values,
+      ),
+      postgresPool.query(
+        `SELECT DISTINCT o.*
+         ${fromSql}
+         ORDER BY ${sortColumn} ${sortDirection} NULLS LAST, o.created_at DESC, o.id ASC
+         LIMIT $${index++}
+         OFFSET $${index}`,
+        [...values, limit, offset],
+      ),
+    ]);
+    return {
+      items: await this.attachOrderRelations(rowsResult.rows),
+      total: Number(countResult.rows?.[0]?.total || 0),
+      limit,
+      offset,
+    };
   }
 
   async updateStatus(orderId, status, metadata = {}) {

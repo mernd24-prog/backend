@@ -1722,7 +1722,7 @@ getBoxLabelView(document = {}) {
     sectionTitle("Settlement details");
     keyValueRows([
       { label: "Settlement ID", value: settlementId },
-      { label: "Seller ID", value: settlement.seller_id || "-" },
+      // { label: "Seller ID", value: settlement.seller_id || "-" },
       { label: "Payout ID", value: settlement.payout_id || "-" },
       { label: "Payment Reference", value: payout.payment_reference || "-" },
       { label: "Payment Method", value: payout.payment_method || "-" },
