@@ -9,7 +9,7 @@ function shouldNotify(eventName, payload = {}) {
   if (eventName === E.AUTH_USER_REGISTERED_V1) return payload.role === 'buyer';
   if (eventName === E.SELLER_PAYOUT_STATUS_UPDATED_V1) return ["completed", "paid", "failed", "rejected", "cancelled"].includes(statusOf(payload));
   const status = statusOf(payload);
-  if (eventName === E.SHIPMENT_TRACKING_UPDATED_V1) return status === 'out_for_delivery';
+  if (eventName === E.SHIPMENT_TRACKING_UPDATED_V1) return ['in_transit', 'out_for_delivery'].includes(status);
   if (eventName === E.ORDER_STATUS_UPDATED_V1) return ['confirmed', 'shipped', 'dispatched', 'out_for_delivery'].includes(status);
   if (eventName === E.RETURN_STATUS_UPDATED_V1) return ['pickup_scheduled', 'picked_up', 'pickup_failed'].includes(status);
   return true;
