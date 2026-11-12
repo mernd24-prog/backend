@@ -306,17 +306,6 @@ const SIDEBAR_MODULES = [
     requiredModule: "sellers/commissions",
   },
   {
-    moduleName: "Seller Wallet",
-    moduleKey: "admin-seller-wallet",
-    moduleSlug: "admin-seller-wallet",
-    icon: "MdAccountBalanceWallet",
-    routePath: "/app/seller-wallet",
-    moduleType: "page",
-    order: 99.47,
-    parentModule: "seller-finance-payouts",
-    requiredModule: "sellers/commissions",
-  },
-  {
     moduleName: "Seller Payouts",
     moduleKey: "seller-payouts",
     moduleSlug: "seller-payouts",
@@ -407,13 +396,13 @@ const SIDEBAR_MODULES = [
     requiredModule: "sellers",
   },
   { moduleName: "Admin Users", moduleKey: "admin-users", moduleSlug: "admin-users", icon: "MdAdminPanelSettings", routePath: "/app/admin-users", moduleType: "page", order: 103, parentModule: "users-access", requiredModule: "admin_users" },
-  // { moduleName: "Seller Users", moduleKey: "seller-users", moduleSlug: "seller-users", icon: "MdGroup", routePath: "/app/seller-users", moduleType: "page", order: 104, parentModule: "users-access", requiredModule: "sellers" },
-  // // seller-organizations is accessible internally from Seller detail pages and hidden from sidebar navigation
-  // { moduleName: "Roles & Permissions", moduleKey: "roles-permissions", moduleSlug: "roles-permissions", icon: "MdSecurity", routePath: "/app/roles-permissions", moduleType: "page", order: 107, parentModule: "users-access", requiredModule: "rbac" },
-  // { moduleName: "Module Management", moduleKey: "module-management", moduleSlug: "module-management", icon: "MdViewModule", routePath: "/app/module-management", moduleType: "page", order: 108, parentModule: "users-access", requiredModule: "rbac" },
-  // { moduleName: "Activity Logs", moduleKey: "activity-logs", moduleSlug: "activity-logs", icon: "MdHistory", routePath: "/app/activity-logs", moduleType: "page", order: 109, parentModule: "users-access", requiredModule: "rbac" },
-  // { moduleName: "RBAC Audit Log", moduleKey: "rbac-audit-log", moduleSlug: "rbac-audit-log", icon: "MdManageSearch", routePath: "/app/rbac-audit-log", moduleType: "page", order: 110, parentModule: "users-access", requiredModule: "rbac" },
-  // { moduleName: "Permission Templates", moduleKey: "permission-templates", moduleSlug: "permission-templates", icon: "MdDashboardCustomize", routePath: "/app/permission-templates", moduleType: "page", order: 111, parentModule: "users-access", requiredModule: "rbac" },
+  { moduleName: "Seller Users", moduleKey: "seller-users", moduleSlug: "seller-users", icon: "MdGroup", routePath: "/app/seller-users", moduleType: "page", order: 104, parentModule: "users-access", requiredModule: "sellers" },
+  // seller-organizations is accessible internally from Seller detail pages and hidden from sidebar navigation
+  { moduleName: "Roles & Permissions", moduleKey: "roles-permissions", moduleSlug: "roles-permissions", icon: "MdSecurity", routePath: "/app/roles-permissions", moduleType: "page", order: 107, parentModule: "users-access", requiredModule: "rbac" },
+  { moduleName: "Module Management", moduleKey: "module-management", moduleSlug: "module-management", icon: "MdViewModule", routePath: "/app/module-management", moduleType: "page", order: 108, parentModule: "users-access", requiredModule: "rbac" },
+  { moduleName: "Activity Logs", moduleKey: "activity-logs", moduleSlug: "activity-logs", icon: "MdHistory", routePath: "/app/activity-logs", moduleType: "page", order: 109, parentModule: "users-access", requiredModule: "rbac" },
+  { moduleName: "RBAC Audit Log", moduleKey: "rbac-audit-log", moduleSlug: "rbac-audit-log", icon: "MdManageSearch", routePath: "/app/rbac-audit-log", moduleType: "page", order: 110, parentModule: "users-access", requiredModule: "rbac" },
+  { moduleName: "Permission Templates", moduleKey: "permission-templates", moduleSlug: "permission-templates", icon: "MdDashboardCustomize", routePath: "/app/permission-templates", moduleType: "page", order: 111, parentModule: "users-access", requiredModule: "rbac" },
 
   {
     moduleName: "Marketing",
@@ -1155,7 +1144,6 @@ const ROUTE_METADATA_BY_KEY = {
   "shipping-profiles": { supportedRoutes: ["/app/shipping-profiles"] },
   "seller-shipping-profiles": { supportedRoutes: ["/app/shipping-profiles"] },
   "wallet-management": { supportedRoutes: ["/app/wallet-transactions"] },
-  "admin-seller-wallet": { supportedRoutes: [] },
   categories: { supportedRoutes: ["/app/category-attributes"] },
 };
 
