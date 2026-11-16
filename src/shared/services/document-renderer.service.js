@@ -2653,7 +2653,8 @@ renderBoxLabelPdf(document = {}) {
         const total = isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0
           ? Number(amounts.customerPaidTowardInvoiceAmount || 0) + sellerShippingAmount
           : invoiceValue;
-        const summaryTop = Math.min(y - 4, 205 + summaryRows.length * 17);
+        // Credit notes reserve an extra line for the refund amount and its balances.
+        const summaryTop = Math.min(y - 4, (isCreditNote ? 235 : 205) + summaryRows.length * 17);
         text("AMOUNT SUMMARY", 355, summaryTop + 18, 8, true);
         summaryRows.forEach(([label, value, negative], index) => {
           const rowY = summaryTop - index * 16;
@@ -2674,18 +2675,18 @@ renderBoxLabelPdf(document = {}) {
         const totalLabelSize = isOrderReceipt ? 9 : 10;
         const totalValue = isCreditNote ? reversalMoney(amounts.customerRefundAmount) : money(total);
         if (isCreditNote) {
-          const totalValueWidth = pdfTextWidth(totalValue, 11);
-          const totalLabelWidth = rightEdge - 355 - totalValueWidth - 10;
-          const labelLines = textBoxLines(totalLabel, 355, totalY - 2, totalLabelWidth, totalLabelSize, true, 2, 11);
-          const totalValueY = labelLines > 1 ? totalY - 13 : totalY - 2;
-          text(totalValue, rightEdge, totalValueY, 11, true, "right");
+          const totalWidth = rightEdge - 355;
+          textBoxLines(totalLabel, 355, totalY - 2, totalWidth, totalLabelSize, true, 1);
+          // Keep the complete amount on its own line, including unusually long values.
+          const valueSize = Math.min(11, totalWidth / pdfTextWidth(totalValue, 1));
+          text(totalValue, rightEdge, totalY - 19, valueSize, true, "right");
         } else {
           text(totalLabel, 355, totalY - 2, totalLabelSize, true);
           text(totalValue, rightEdge, totalY - 2, 11, true, "right");
         }
         if (isCreditNote) {
-          text(`Remaining invoice balance: ${money(amounts.remainingInvoiceBalance || 0)}`, 355, totalY - 16, 7.5);
-          text(`Remaining customer-paid balance: ${money(amounts.remainingCustomerBalance || 0)}`, 355, totalY - 29, 7.5);
+          text(`Remaining invoice balance: ${money(amounts.remainingInvoiceBalance || 0)}`, 355, totalY - 35, 7.5);
+          text(`Remaining customer-paid balance: ${money(amounts.remainingCustomerBalance || 0)}`, 355, totalY - 48, 7.5);
         }
         if (!isCreditNote && isSellerCustomer && Number(amounts.customerPaidTowardInvoiceAmount || 0) > 0) {
           text(`Tax invoice value: ${money(invoiceValue)}`, 355, totalY - 16, 7.5);
