@@ -1,3 +1,4 @@
+const { OrderRepository } = require("../../order/repositories/order.repository");
 const { postgresPool } = require("../../../infrastructure/postgres/postgres-client");
 const { UserModel } = require("../../user/models/user.model");
 const { ProductModel } = require("../../product/models/product.model");
@@ -37,6 +38,10 @@ function invalidationReasonForUserPayload(payload = {}) {
 }
 
 class AdminRepository {
+  constructor({ orderRepository = new OrderRepository() } = {}) {
+    this.orderRepository = orderRepository;
+  }
+
   money(value) {
     return Number(value || 0);
   }
@@ -621,235 +626,11 @@ class AdminRepository {
     return rows[0] || null;
   }
 
-  async listOrders({
-    status = null,
-    paymentStatus = null,
-    paymentProvider = null,
-    deliveryStatus = null,
-    sellerId = null,
-    buyerId = null,
-    search = null,
-    fromDate = null,
-    toDate = null,
-    sortBy = "created_at",
-    sortDir = "desc",
-    sortOrder = null,
-    limit = 50,
-    offset = 0,
-  } = {}) {
-    const values = [];
-    const clauses = [];
-    let idx = 1;
-
-    if (status) {
-      clauses.push(`orders.status = $${idx++}`);
-      values.push(status);
-    }
-    if (paymentStatus) {
-      clauses.push(`orders.payment_status = $${idx++}`);
-      values.push(paymentStatus);
-    }
-    if (paymentProvider) {
-      clauses.push(`orders.payment_provider = $${idx++}`);
-      values.push(paymentProvider);
-    }
-    if (deliveryStatus) {
-      clauses.push(`orders.delivery_status = $${idx++}`);
-      values.push(deliveryStatus);
-    }
-    if (buyerId) {
-      clauses.push(`orders.buyer_id = $${idx++}`);
-      values.push(buyerId);
-    }
-    if (sellerId) {
-      clauses.push(`EXISTS (
-        SELECT 1
-        FROM order_items oi
-        WHERE oi.order_id = orders.id
-          AND oi.seller_id = $${idx++}
-      )`);
-      values.push(sellerId);
-    }
-    if (search) {
-      clauses.push(`(orders.order_number ILIKE $${idx} OR orders.id::text ILIKE $${idx})`);
-      values.push(`%${search}%`);
-      idx += 1;
-    }
-    if (fromDate) {
-      clauses.push(`orders.created_at >= $${idx++}`);
-      values.push(fromDate);
-    }
-    if (toDate) {
-      clauses.push(`orders.created_at <= $${idx++}`);
-      values.push(toDate);
-    }
-
-    const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-    const sortColumns = {
-      createdAt: "orders.created_at",
-      created_at: "orders.created_at",
-      order_number: "orders.order_number",
-      orderNumber: "orders.order_number",
-      total_amount: "orders.total_amount",
-      totalAmount: "orders.total_amount",
-      status: "orders.status",
-      payment_status: "orders.payment_status",
-      paymentStatus: "orders.payment_status",
-      delivery_status: "orders.delivery_status",
-      deliveryStatus: "orders.delivery_status",
-    };
-    const sortColumn = sortColumns[sortBy] || sortColumns.created_at;
-    const direction = String(sortDir || sortOrder).toLowerCase() === "asc"
-      ? "ASC"
-      : "DESC";
-    const pagingValues = [...values, limit, offset];
-
-    const [listResult, countResult] = await Promise.all([
-      postgresPool.query(
-      `SELECT *
-       FROM orders
-       ${whereSql}
-       ORDER BY ${sortColumn} ${direction} NULLS LAST, orders.created_at DESC, orders.id ASC
-       LIMIT $${idx++}
-       OFFSET $${idx}`,
-        pagingValues,
-      ),
-      postgresPool.query(
-        `SELECT COUNT(*)::INT AS total
-         FROM orders
-         ${whereSql}`,
-        values,
-      ),
-    ]);
-    const list = await this.enrichOrderListRows(listResult.rows || []);
-    return {
-      list,
-      total: Number(countResult.rows[0]?.total || 0),
-    };
-  }
-
-  async enrichOrderListRows(rows = []) {
-    const orderIds = rows.map((order) => order.id).filter(Boolean);
-    if (!orderIds.length) return rows;
-
-    const [items, shipments] = await Promise.all([
-      this.safePostgresQuery(
-        `SELECT
-           id,
-           order_id,
-           seller_id,
-           organization_id,
-           quantity,
-           seller_snapshot,
-           organization_snapshot
-         FROM order_items
-         WHERE order_id = ANY($1::uuid[])
-         ORDER BY id ASC`,
-        [orderIds],
-        [],
-      ),
-      this.safePostgresQuery(
-        `SELECT
-           id,
-           order_id,
-           seller_id,
-           organization_id,
-           status,
-           direction,
-           delivery_status
-         FROM shipments
-         WHERE order_id = ANY($1::uuid[])
-         ORDER BY created_at DESC`,
-        [orderIds],
-        [],
-      ),
-    ]);
-
-    const itemsByOrder = items.reduce((map, item) => {
-      if (!map.has(item.order_id)) map.set(item.order_id, []);
-      map.get(item.order_id).push(item);
-      return map;
-    }, new Map());
-    const shipmentsByOrder = shipments.reduce((map, shipment) => {
-      if (!map.has(shipment.order_id)) map.set(shipment.order_id, []);
-      map.get(shipment.order_id).push(shipment);
-      return map;
-    }, new Map());
-
-    const fallbackSellerIds = rows.flatMap((order) => {
-      const platformFeeBreakup = this.parseJson(order.platform_fee_breakup, []);
-      const metadata = this.parseJson(order.metadata, {});
-      const feeSellerIds = Array.isArray(platformFeeBreakup)
-        ? platformFeeBreakup.map((entry) => entry?.sellerId)
-        : [];
-      const deliverySellerIds = Array.isArray(metadata.deliveryCharge?.sellers)
-        ? metadata.deliveryCharge.sellers.map((entry) => entry?.sellerId)
-        : [];
-      return [...feeSellerIds, ...deliverySellerIds];
-    });
-    const sellerIds = [...new Set([
-      ...items.map((item) => item.seller_id),
-      ...fallbackSellerIds,
-    ].filter(Boolean).map(String))];
-    const sellerNames = await this.getUsersByIds(sellerIds);
-
-    const nameFromSnapshot = (snapshot = {}) =>
-      snapshot.displayName ||
-      snapshot.businessName ||
-      snapshot.legalBusinessName ||
-      snapshot.name ||
-      snapshot.sellerName ||
-      "";
-    const orgNameFromSnapshot = (snapshot = {}) =>
-      snapshot.storeDisplayName ||
-      snapshot.legalBusinessName ||
-      snapshot.legalName ||
-      snapshot.store_name ||
-      snapshot.name ||
-      "";
-
-    return rows.map((order) => {
-      const orderItems = itemsByOrder.get(order.id) || [];
-      const orderShipments = shipmentsByOrder.get(order.id) || [];
-      const platformFeeBreakup = this.parseJson(order.platform_fee_breakup, []);
-      const metadata = this.parseJson(order.metadata, {});
-      const taxBreakup = this.parseJson(order.tax_breakup, {});
-      const deliverySeller = Array.isArray(metadata.deliveryCharge?.sellers)
-        ? metadata.deliveryCharge.sellers[0]
-        : null;
-      const feeSeller = Array.isArray(platformFeeBreakup) ? platformFeeBreakup[0] : null;
-      const firstItem = orderItems[0] || {};
-      const sellerSnapshot = this.parseJson(firstItem.seller_snapshot, {});
-      const organizationSnapshot = this.parseJson(firstItem.organization_snapshot, {});
-      const sellerId = firstItem.seller_id || feeSeller?.sellerId || deliverySeller?.sellerId || null;
-      const organizationId = firstItem.organization_id || feeSeller?.organizationId || deliverySeller?.organizationId || null;
-      const forwardShipments = orderShipments.filter((shipment) => String(shipment.direction || "forward") !== "reverse");
-      const shipmentStatuses = forwardShipments
-        .map((shipment) => shipment.status || shipment.delivery_status)
-        .filter(Boolean);
-      const shipmentStatus = shipmentStatuses[0] || order.delivery_status || "not_created";
-      const fallbackQuantity = Array.isArray(metadata.deliveryCharge?.sellers)
-        ? metadata.deliveryCharge.sellers.reduce((sum, seller) => sum + Number(seller.quantity || 0), 0)
-        : 0;
-      const fallbackItemCount = Array.isArray(taxBreakup.items) ? taxBreakup.items.length : 0;
-
-      return {
-        ...order,
-        orderNumber: order.order_number || order.orderNumber || null,
-        order_number: order.order_number || order.orderNumber || null,
-        sellerId,
-        seller_id: sellerId,
-        sellerName: sellerNames.get(String(sellerId)) || nameFromSnapshot(sellerSnapshot) || null,
-        organizationId,
-        organization_id: organizationId,
-        organizationName: orgNameFromSnapshot(organizationSnapshot) || null,
-        itemCount: orderItems.length || fallbackItemCount,
-        itemQuantity: orderItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0) || fallbackQuantity || fallbackItemCount,
-        shipmentStatus,
-        shipment_status: shipmentStatus,
-        shipmentCount: forwardShipments.length,
-      };
-    });
+  async listOrders(query = {}) {
+    // Both admin routes must hydrate the same order, item and shipment data.
+    // Do not turn missing shipment columns or query failures into empty packages.
+    const { items, ...pagination } = await this.orderRepository.listOrdersForAdmin(query);
+    return { ...pagination, list: items };
   }
 
   async listPayments({ status = null, provider = null, fromDate = null, toDate = null, limit = 50, offset = 0 } = {}) {

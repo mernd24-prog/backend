@@ -22,6 +22,8 @@ const { knex } = require("../../../infrastructure/postgres/postgres-client");
 const { forwardDeliveryProgress, isForwardShipment, FORWARD_ORDER_STATUSES } = require("../../../shared/domain/order-fulfillment");
 const { CLOSED_RETURN_STATUSES } = require("../../../shared/domain/return-lifecycle");
 
+const { reverseShipment, shipmentBelongsToReturn, assertReverseTrackingTransition, LOGISTICS_STATES } = require("../../../shared/domain/reverse-return-tracking");
+
 const shippingProfilesService = new ShippingProfilesService();
 
 const SHIPMENT_TRANSITIONS = {
@@ -346,7 +348,7 @@ class DeliveryService {
       fulfillmentModel: dealFulfillment.fulfillmentModel || payload.fulfillmentModel || null,
       deliveryProofSnapshot: payload.deliveryProofSnapshot || {},
       packageSnapshot: { ...(payload.packageSnapshot || {}), items: fulfillmentItems.filter((item) => item.quantity > 0) },
-      metadata: { ...(payload.metadata || {}), fulfillmentItems, excludedRequestedQuantities: fulfillmentItems.filter((item) => item.excludedQuantity > 0) },
+      metadata: { ...(payload.metadata || {}), orderStatus: "packed", fulfillmentItems, excludedRequestedQuantities: fulfillmentItems.filter((item) => item.excludedQuantity > 0) },
       createdBy: actor.userId,
       updatedBy: actor.userId,
     });
@@ -564,7 +566,16 @@ class DeliveryService {
       }
       payload.expectedDeliveryAt = new Date(expectedDeliveryAt).toISOString();
     }
-    this.assertTrackingTransition(shipment.status, payload.status, payload);
+    if (reverseShipment(shipment)) {
+      const request = await ReturnModel.findById(shipment.return_id);
+      if (!request || !shipmentBelongsToReturn(request, shipment)) throw new AppError("Shipment does not belong to the active return pickup", 409);
+      if (!LOGISTICS_STATES.includes(request.status) && !(request.status === "received" && shipment.status === payload.status)) {
+        throw new AppError("Reverse tracking is no longer open for this return", 409);
+      }
+      assertReverseTrackingTransition(shipment.status, payload.status);
+    } else {
+      this.assertTrackingTransition(shipment.status, payload.status, payload);
+    }
     if (handoverStatus) await this.deliveryRepository.updateShipmentFulfillmentSnapshot(shipmentId, fulfillmentItems);
     const result = await this.deliveryRepository.addTrackingEvent(shipmentId, {
       ...payload,
@@ -573,6 +584,10 @@ class DeliveryService {
     });
 
     await this.syncOrderForTracking(result.shipment, actor);
+    if (reverseShipment(result.shipment)) {
+      const { ReturnService } = require("../../returns/services/return.service");
+      await ReturnService.syncReverseShipmentForTracking(result.shipment, actor, payload);
+    }
     await this.syncReplacementReturnForTracking(result.shipment, actor);
     await this.syncDealDeliveryForShipment(result.shipment, actor);
     await this.publishShipmentTrackingEvent(result.shipment, actor);

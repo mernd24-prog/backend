@@ -460,7 +460,7 @@ async function main() {
   await check('admin item reference regression', 'legacy metadata item references stay isolated', ['delivered', 'shipped'],
     () => referenced.items.map(row => admin.itemDisplayStatus(row, referenced)));
   const referencedBuyer = api.filterOrderForBuyer(referenced);
-  await check('buyer item reference regression', 'legacy metadata item references stay isolated', ['delivered', 'in_transit'],
+  await check('buyer item reference regression', 'legacy metadata item references stay isolated', ['delivered', 'shipped'],
     () => referencedBuyer.items.map(row => customer.resolveOrderItemDisplayStatus(row, 'shipped', referencedBuyer.relations.shipments)));
   const summary = {};
   for (const entry of cases) {
@@ -500,10 +500,18 @@ async function main() {
     '## Remaining failed expectations', '',
     ...(failures.length ? ['| Category | Scenario | Expected | Actual |', '| --- | --- | --- | --- |',
       ...failures.map(entry => `| ${entry.category} | ${entry.name} | ${cell(entry.expected)} | ${cell(entry.actual)} |`)] : ['None in the executable audit.']), '',
+    '## Cross-screen regression', '',
+    'The screenshot exposed a separate admin list path that the original audit did not exercise. Its SQL selected shipments.delivery_status (not a shipment column), then swallowed the error and returned an empty shipment list. The detail utility also promoted initiated labels to packed. Both defects are corrected.', '',
+    '- GET /admin/orders now delegates to the same OrderRepository.listOrdersForAdmin and relation hydrator as the management list/detail paths. The legacy list response shape is retained.',
+    '- A shared server presentation produces display_status, shipment_status and per-item effective_status. List, detail and customer progress use these fields; an automatically created initiated package does not imply packing.',
+    '- Returns and cancellations are hydrated on both routes; closed/rejected claims cannot hide current fulfillment. Missing columns/tables or shipment-query errors reject the read instead of claiming Not Created.',
+    '- New controller/service/repository contract tests compare all 18 order states crossed with all 11 shipment states, all 121 two-seller combinations, and all 242 same-store/split-store package combinations: 561 generated combinations, plus the screenshot, no-package, return/cancellation and error scenarios.',
+    '- Order list/detail reads reject stale responses. The detail view also ignores older local responses, and the screens refresh when the window becomes visible again.', '',
+    'Run the response suite with node backend/test/order-response-consistency.test.js. Its fixtures execute the real controller/service/repository methods and validate query-error propagation; they do not connect to a live database or exercise HTTP middleware.', '',
     '## Re-run', '',
     'From the workspace root, with existing Admin dependencies installed:', '', '```sh',
-    'node backend/scripts/qa/audit-order-status.js', 'cd Admin',
-    'CI=true npm test -- --watchAll=false --runInBand --runTestsByPath src/utils/orderDisplayStatus.test.js', '```', '',
+    'node backend/scripts/qa/audit-order-status.js', 'node backend/test/order-response-consistency.test.js', 'cd Admin',
+    'CI=true npm test -- --watchAll=false --runInBand --runTestsByPath src/utils/orderDisplayStatus.test.js src/_helpers/ApiThunk.orderFreshness.test.js src/hooks/__tests__/useRealtimeRefresh.test.jsx', '```', '',
     'Exit 1 means a scenario failed; exit 2 means the audit could not complete. The audit regenerates this report and order-status-audit-results.json without accessing the database or payment providers.', '',
     '## Verification limits', '',
     'The tests execute production methods and frontend utilities with isolated repository fixtures. HTTP/RBAC middleware, browser flows, real database transactions, courier/payment callbacks, actual scheduler execution, deployed historical data and real concurrent requests remain unverified. The lock-guard tests exercise the repository method with transaction fixtures, not simultaneous database connections.', '',

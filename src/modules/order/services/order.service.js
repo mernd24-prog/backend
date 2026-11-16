@@ -1,4 +1,5 @@
-const { groupKey, forwardDeliveryProgress, itemDeliveryProgress, manifestLines, shipmentMatchesItem: matchesForwardItem } = require("../../../shared/domain/order-fulfillment");
+const { itemOrderStatus } = require("../../../shared/domain/order-presentation");
+const { groupKey, forwardDeliveryProgress, manifestLines, shipmentMatchesItem: matchesForwardItem } = require("../../../shared/domain/order-fulfillment");
 const { CLOSED_RETURN_STATUSES } = require("../../../shared/domain/return-lifecycle");
 const { OrderRepository } = require("../repositories/order.repository");
 const { makeEvent } = require("../../../contracts/events/event");
@@ -352,6 +353,7 @@ class OrderService {
         fulfillmentModel: fulfillment.fulfillmentModel,
         metadata: {
           source: "order_auto_shipment",
+          orderStatus: order.status,
           reason,
           organizationId: organizationId || null,
           orderItemIds: sellerItems.map((item) => item.id).filter(Boolean),
@@ -712,20 +714,7 @@ class OrderService {
 
   async listMyOrders(actor, filters = {}) {
     const orders = await this.orderRepository.listOrdersByBuyer(actor.userId, filters);
-    const returns = orders.length
-      ? await ReturnModel.find({ orderId: { $in: orders.map((order) => String(order.id)) } }).lean()
-      : [];
-    const returnsByOrder = returns.reduce((map, returnRequest) => {
-      const key = String(returnRequest.orderId || "");
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(returnRequest);
-      return map;
-    }, new Map());
-    return orders.map((order) => this.filterOrderForBuyer(
-      order,
-      null,
-      returnsByOrder.get(String(order.id)) || [],
-    ));
+    return orders.map((order) => this.filterOrderForBuyer(order, null, order.relations?.returns || []));
   }
 
   async listSellerOrders(actor, filters = {}) {
@@ -789,9 +778,7 @@ class OrderService {
     }
 
     const activeCommerceSettings = isOwner ? await commerceSettingsService.getSettings().catch(() => null) : null;
-    const buyerReturns = isOwner
-      ? await ReturnModel.find({ orderId: String(order.id) }).lean()
-      : [];
+    const buyerReturns = isOwner ? order.relations?.returns || [] : [];
     const scopedOrder = isOwner
       ? this.filterOrderForBuyer(
         order,
@@ -1195,7 +1182,7 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
     });
   }
 
-  filterOrderForBuyer(order = {}, fallbackRefundPolicy = null, returnRequests = []) {
+  filterOrderForBuyer(order = {}, fallbackRefundPolicy = null, returnRequests = order.relations?.returns || []) {
     const relations = order.relations || {};
     const sanitizeTrackingEvent = (event = {}) => {
       const { raw_payload, rawPayload, actor_id, actorId, ...visible } = event;
@@ -1238,33 +1225,6 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
       "processing",
       "on_hold",
     ]);
-    const forwardItemStatusRank = {
-      initiated: 0,
-      pending_payment: 1,
-      paid: 2,
-      confirmed: 3,
-      processing: 4,
-      packed: 5,
-      ready_to_ship: 6,
-      manifested: 6,
-      shipped: 7,
-      in_transit: 8,
-      out_for_delivery: 9,
-      delivered: 10,
-      fulfilled: 11,
-    };
-    const mostAdvancedForwardStatus = (statuses = []) =>
-      statuses
-        .map((status) => String(status || "").toLowerCase())
-        .filter((status) => Object.prototype.hasOwnProperty.call(forwardItemStatusRank, status))
-        .reduce(
-          (latest, status) =>
-            forwardItemStatusRank[status] > forwardItemStatusRank[latest] ? status : latest,
-          "initiated",
-        );
-    const sharedItemTimelineStatuses = orderTimeline
-      .map((entry) => entry.to_status || entry.status)
-      .filter((status) => sharedItemOrderStatuses.has(String(status || "").toLowerCase()));
     const cancellationMatchesItem = (cancellation = {}, itemId) =>
       (Array.isArray(cancellation.items) ? cancellation.items : []).some((entry) =>
         String(entry.orderItemId || entry.order_item_id || entry.id || "") === String(itemId),
@@ -1280,6 +1240,8 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
     const resolveReturnDisplayStatus = (returnRequest = {}) => {
       const returnStatus = String(returnRequest.status || "").toLowerCase();
       const refundStatus = String(returnRequest.refund?.status || "").toLowerCase();
+      if (["rejected", "qc_failure_upheld", "replaced"].includes(returnStatus)) return null;
+      if (returnStatus === "closed" && refundStatus !== "completed") return null;
       if (refundStatus === "completed" || returnStatus === "refunded") return "refunded";
       if (returnStatus === "partially_refunded") return "partially_refunded";
       if (["pending", "provider_pending", "manual_review"].includes(refundStatus) || returnStatus === "refund_pending") {
@@ -1344,16 +1306,9 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
       const itemCancellations = (relations.cancellations || []).filter((cancellation) =>
         cancellationMatchesItem(cancellation, item.id),
       );
-      const latestCancellation = itemCancellations[0] || null;
-      const itemCancellationStatus = latestCancellation
-        ? resolveCancellationDisplayStatus(latestCancellation, item)
-        : null;
       const itemReturn = returnRequests.find((returnRequest) => returnMatchesItem(returnRequest, item));
       const itemReturnStatus = itemReturn ? resolveReturnDisplayStatus(itemReturn) : null;
-      const deliveryProgress = itemDeliveryProgress(item, relations.shipments || []);
-      const forwardItemStatus = deliveryProgress.status || mostAdvancedForwardStatus([
-        ...sharedItemTimelineStatuses, item.delivery_status,
-      ]);
+      const forwardItemStatus = itemOrderStatus(item, { ...order, relations: { ...relations, returns: returnRequests } });
       const itemTimeline = [
         // Only payment/confirmation milestones are shared by every item. Later
         // order statuses can be aggregate values from another item/package.
@@ -1405,12 +1360,7 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
           refundStatus: itemReturn.refund?.status || null,
           refundAmount: Number(itemReturn.refund?.refundedAmount || itemReturn.refundAmount || 0),
         } : null,
-        effective_status:
-          itemCancellationStatus ||
-          item.cancellation_status ||
-          itemReturnStatus ||
-          item.return_status ||
-          forwardItemStatus,
+        effective_status: forwardItemStatus,
         timeline: itemTimeline,
         seller: {
           name: sellerSnapshot.displayName || sellerSnapshot.businessName || organizationSnapshot.storeDisplayName || "Seller",
@@ -1527,6 +1477,11 @@ const sellerPayoutAmount = Number(
     0,
   ).toFixed(2),
 );
+    const visibleItemIds = new Set(items.map((item) => String(item.id)));
+    const sellerReturns = (relations.returns || []).map((entry) => ({
+      ...entry,
+      items: (entry.items || []).filter((item) => visibleItemIds.has(String(item.orderItemId || item.order_item_id))),
+    })).filter((entry) => entry.items.length);
     const sellerShipments = (relations.shipments || []).filter((shipment) => String(shipment.seller_id || shipment.sellerId || "") === sellerKey &&
       (!organizationKey || String(shipment.organization_id || shipment.organizationId || this.normalizeJson(shipment.metadata, {}).organizationId || "") === organizationKey));
     const sellerFulfillmentGroups = (relations.sellerFulfillmentGroups || [])
@@ -1587,6 +1542,7 @@ const sellerPayoutAmount = Number(
         invoice: scopedInvoices[0] || null,
         taxInvoice: scopedInvoices[0] || null,
         shipments: sellerShipments,
+        returns: sellerReturns,
         sellerFulfillmentGroups,
       },
     };

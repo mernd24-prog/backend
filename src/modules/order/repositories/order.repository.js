@@ -1,3 +1,5 @@
+const { ReturnModel } = require("../../returns/models/return.model");
+const { orderPresentation } = require("../../../shared/domain/order-presentation");
 const { forwardDeliveryProgress, isForwardShipment } = require("../../../shared/domain/order-fulfillment");
 const { knex, postgresPool } = require("../../../infrastructure/postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
@@ -927,6 +929,7 @@ class OrderRepository {
       walletTransactions,
       cancellations,
       sellerCommissions,
+      returns,
     ] = await Promise.all([
       includeItems
         ? knex("order_items").whereIn("order_id", orderIds).orderBy("id", "asc")
@@ -944,13 +947,16 @@ class OrderRepository {
         ? this.optionalTableRows("tax_invoices", (query) => query.whereIn("order_id", orderIds).orderBy("created_at", "desc"))
         : Promise.resolve([]),
       includeDelivery
-        ? this.optionalTableRows("shipments", (query) => query.whereIn("order_id", orderIds).orderBy("created_at", "desc"))
+        ? knex("shipments").whereIn("order_id", orderIds).orderBy("created_at", "desc")
         : Promise.resolve([]),
       includeWallet
         ? this.optionalTableRows("wallet_transactions", (query) => query.where("reference_type", "order").whereIn("reference_id", orderIds).orderBy("created_at", "desc"))
         : Promise.resolve([]),
       this.optionalTableRows("order_cancellations", (query) => query.whereIn("order_id", orderIds).orderBy("created_at", "desc")),
       this.optionalTableRows("seller_commissions", (query) => query.whereIn("order_id", orderIds).orderBy("created_at", "desc")),
+      ReturnModel.find({ orderId: { $in: orderIds.map(String) } })
+        .select("_id orderId returnNumber status resolution refund.status refund.refundedAmount refundAmount refundedAt createdAt items")
+        .sort({ createdAt: -1 }).lean(),
     ]);
 
     const trackingEvents = includeDelivery && shipments.length
@@ -970,6 +976,7 @@ class OrderRepository {
       : new Map();
 
     const grouped = {
+      returns: this.groupBy(returns, "orderId"),
       items: this.groupBy(items, "order_id"),
       timeline: this.groupBy(timeline, "order_id"),
       notes: this.groupBy(notes, "order_id"),
@@ -1017,7 +1024,7 @@ class OrderRepository {
         orderShipments,
       );
 
-      return {
+      const hydrated = {
         ...order,
         ...(buyer.displayName ? { buyerName: buyer.displayName } : {}),
         ...(buyer.email ? { buyerEmail: buyer.email } : {}),
@@ -1041,8 +1048,10 @@ class OrderRepository {
           sellerFulfillmentGroups,
           walletTransactions: grouped.walletTransactions.get(order.id) || [],
           cancellations: grouped.cancellations.get(order.id) || [],
+          returns: grouped.returns.get(String(order.id)) || [],
         },
       };
+      return { ...hydrated, ...orderPresentation(hydrated) };
     });
   }
 

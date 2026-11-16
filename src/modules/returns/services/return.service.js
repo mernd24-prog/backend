@@ -58,18 +58,7 @@ const RETURN_REASONS = new Set([
   "other",
 ]);
 
-const REVERSE_STATUS_MAP = {
-  initiated: "reverse_pickup_scheduled",
-  manifested: "reverse_pickup_scheduled",
-  pickup_scheduled: "reverse_pickup_scheduled",
-  failed: "pickup_failed",
-  pickup_failed: "pickup_failed",
-  picked_up: "in_reverse_transit",
-  in_transit: "in_reverse_transit",
-  out_for_delivery: "in_reverse_transit",
-  delivered: "received",
-  received: "received",
-};
+const { LOGISTICS_STATES, shipmentBelongsToReturn, assertReverseTrackingTransition, projectReverseReturn } = require("../../../shared/domain/reverse-return-tracking");
 
 class ReturnServiceClass {
   constructor({
@@ -159,6 +148,10 @@ class ReturnServiceClass {
   }
 
   async enrichReturnDetail(response = {}) {
+    if (response.reverseShipment?.shipmentId) {
+      const shipment = await this.deliveryRepository.findShipmentById(response.reverseShipment.shipmentId);
+      if (shipment) response = projectReverseReturn(response, shipment);
+    }
     const userIds = new Set([
       response.buyerId,
       response.sellerId,
@@ -455,6 +448,14 @@ class ReturnServiceClass {
   async getReturnOrThrow(returnId) {
     const returnRequest = await ReturnModel.findById(returnId);
     if (!returnRequest) throw new AppError("Return not found", 404);
+    if (returnRequest.reverseShipment?.shipmentId) {
+      const shipment = await this.deliveryRepository.findShipmentById(returnRequest.reverseShipment.shipmentId);
+      if (shipment) {
+        const projected = projectReverseReturn(returnRequest.toObject(), shipment);
+        returnRequest.set({ status: projected.status, reverseShipment: projected.reverseShipment,
+          items: projected.items, ...(projected.receivedAt ? { receivedAt: projected.receivedAt } : {}) });
+      }
+    }
     return returnRequest;
   }
 
@@ -1067,6 +1068,12 @@ class ReturnServiceClass {
   async scheduleReversePickup(returnId, payload = {}, actor = {}) {
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
+    if (!["approved", "pickup_failed"].includes(returnRequest.status)) {
+      throw new AppError("Pickup can only be arranged after approval or a failed pickup", 409);
+    }
+    const retryShipmentKey = returnRequest.status === "pickup_failed"
+      ? `return:${returnRequest._id}:reverse-retry:${returnRequest.timeline.length}`
+      : `return:${returnRequest._id}:reverse-shipment`;
     const manualShipBack = payload.mode === "manual_ship_back" || payload.manualShipBack;
     const nextStatus = manualShipBack ? "manual_ship_back" : "reverse_pickup_scheduled";
     this.validateTransition(returnRequest.status, nextStatus);
@@ -1096,7 +1103,7 @@ class ReturnServiceClass {
         rateSnapshot: payload.rateSnapshot || {},
         labelData: payload.labelData || {},
         expectedDeliveryAt: payload.expectedDeliveryAt || null,
-        idempotencyKey: payload.idempotencyKey || `return:${returnRequest._id}:reverse-shipment`,
+        idempotencyKey: payload.idempotencyKey || retryShipmentKey,
         metadata: {
           ...(payload.metadata || {}),
           returnNumber: returnRequest.returnNumber,
@@ -1136,6 +1143,11 @@ class ReturnServiceClass {
 
     returnRequest.status = nextStatus;
     if (manualShipBack) {
+      // The failed courier package is no longer the active customer-arranged shipment.
+      returnRequest.reverseShipment = {
+        provider: "customer_manual", status: "manual_ship_back", events: [],
+        metadata: { previousShipmentId: returnRequest.reverseShipment?.shipmentId || null },
+      };
       returnRequest.trackingNumber = payload.trackingNumber || returnRequest.trackingNumber;
     }
     this.appendTimeline(returnRequest, nextStatus, actor, {
@@ -1184,18 +1196,13 @@ class ReturnServiceClass {
     if (!shipmentId) throw new AppError("Reverse shipment has not been created", 409);
     const reverseShipment = await this.deliveryRepository.findShipmentById(shipmentId);
     if (!reverseShipment) throw new AppError("Reverse shipment not found", 404);
-    if (
-      String(reverseShipment.return_id || "") !== String(returnRequest._id || "") &&
-      String(returnRequest.reverseShipment?.shipmentId || "") !== String(reverseShipment.id || "")
-    ) {
+    if (!shipmentBelongsToReturn(returnRequest, reverseShipment)) {
       throw new AppError("Shipment does not belong to this return", 403);
     }
-
-    const returnStatus = REVERSE_STATUS_MAP[payload.status];
-    if (!returnStatus) throw new AppError("Unsupported reverse shipment status", 400);
-    if (returnRequest.status !== returnStatus) {
-      this.validateTransition(returnRequest.status, returnStatus);
+    if (!LOGISTICS_STATES.includes(returnRequest.status)) {
+      throw new AppError("Reverse tracking is no longer open for this return", 409);
     }
+    assertReverseTrackingTransition(reverseShipment.status, payload.status);
 
     const result = await this.deliveryRepository.addTrackingEvent(shipmentId, {
       status: payload.status,
@@ -1209,13 +1216,22 @@ class ReturnServiceClass {
     });
     if (!result) throw new AppError("Reverse shipment not found", 404);
 
-    if (returnRequest.status !== returnStatus) {
-      returnRequest.status = returnStatus;
-    }
-    returnRequest.reverseShipment.status = payload.status;
-    returnRequest.reverseShipment.trackingNumber = result.shipment.tracking_number || returnRequest.reverseShipment.trackingNumber;
-    if (payload.status === "picked_up") returnRequest.reverseShipment.pickedUpAt = payload.eventTime || new Date();
-    if (payload.status === "picked_up" && returnRequest.replacement?.orderId) {
+    return this.syncReverseShipmentForTracking(result.shipment, actor, payload, returnRequest);
+  }
+
+  async syncReverseShipmentForTracking(shipment, actor = {}, payload = {}, existingRequest = null) {
+    const returnRequest = existingRequest || await ReturnModel.findById(shipment.return_id);
+    if (!returnRequest || !shipmentBelongsToReturn(returnRequest, shipment)) return null;
+    const projected = projectReverseReturn(returnRequest.toObject(), shipment);
+    const returnStatus = projected.status;
+    // Repeated tracking delivery must not duplicate timeline entries or receipt events.
+    if (returnRequest.status === returnStatus && returnRequest.reverseShipment?.status === shipment.status) return returnRequest;
+    const previousStatus = returnRequest.status;
+    const shipmentId = shipment.id;
+    payload = { ...payload, status: shipment.status };
+    returnRequest.set({ status: returnStatus, reverseShipment: projected.reverseShipment,
+      items: projected.items, ...(projected.receivedAt ? { receivedAt: projected.receivedAt } : {}) });
+    if (shipment.status === "picked_up" && returnRequest.replacement?.orderId) {
       returnRequest.replacement.status = "delivered";
       returnRequest.replacement.deliveredAt = payload.eventTime || new Date();
       this.appendTimeline(returnRequest, "replacement_delivered", actor, {
@@ -1223,14 +1239,7 @@ class ReturnServiceClass {
         metadata: { shipmentId, doorstepExchange: true },
       });
     }
-    if (["delivered", "received"].includes(payload.status)) {
-      const receivedAt = payload.eventTime || new Date();
-      returnRequest.reverseShipment.deliveredToWarehouseAt = receivedAt;
-      returnRequest.receivedAt = returnRequest.receivedAt || receivedAt;
-      returnRequest.items.forEach((item) => {
-        item.receivedQuantity = Number(item.approvedQuantity || item.requestedQuantity || item.quantity || 0);
-      });
-    }
+    returnRequest.reverseShipment.events = returnRequest.reverseShipment.events || [];
     returnRequest.reverseShipment.events.push({
       status: payload.status,
       location: payload.location || null,
@@ -1245,7 +1254,7 @@ class ReturnServiceClass {
       metadata: { shipmentId, shipmentStatus: payload.status, location: payload.location || null },
     });
     await returnRequest.save();
-    if (returnStatus === "received") {
+    if (returnStatus === "received" && previousStatus !== "received") {
       await this.publishReturnEvent(DOMAIN_EVENTS.RETURN_RECEIVED_V1, returnRequest, actor);
     } else {
       await this.publishReturnStatusUpdated(returnRequest, actor, {
@@ -2447,8 +2456,15 @@ class ReturnServiceClass {
     return returnRequest;
   }
 
+  async projectReturnRecords(items) {
+    const shipmentIds = [...new Set(items.map(item => item.reverseShipment?.shipmentId).filter(Boolean))];
+    const shipments = shipmentIds.length ? await knex("shipments").whereIn("id", shipmentIds) : [];
+    const shipmentMap = new Map(shipments.map(shipment => [String(shipment.id), shipment]));
+    return items.map(item => projectReverseReturn(item, shipmentMap.get(String(item.reverseShipment?.shipmentId))));
+  }
+
   async getReturnsByBuyer(buyerId) {
-    return ReturnModel.find({ buyerId }).sort({ createdAt: -1 }).lean();
+    return this.projectReturnRecords(await ReturnModel.find({ buyerId }).sort({ createdAt: -1 }).lean());
   }
 
   async getReturnById(returnId, actor = {}) {
@@ -2573,7 +2589,8 @@ class ReturnServiceClass {
       orderNumberMap = new Map((rows || []).map((r) => [String(r.id), r.order_number]));
     }
 
-    const enrichedItems = (items || []).map((item) => {
+    const projectedItems = await this.projectReturnRecords(items);
+    const enrichedItems = projectedItems.map((item) => {
       const resolvedOrderNumber = item.order_number || orderNumberMap.get(String(item.orderId)) || item.orderNumber || null;
       return {
         ...item,
