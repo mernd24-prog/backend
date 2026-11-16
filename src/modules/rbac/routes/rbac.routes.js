@@ -60,8 +60,8 @@ const roleController = new RoleController();
 const permissionAssignmentController = new PermissionAssignmentController();
 
 // Authentication required for all RBAC routes.
-// Super-admins and admins pass freely; sub-admins are admitted but each
-// route still requires the specific rbac:* permission (enforced below).
+// Super-admin retains its system bypass. Platform staff must satisfy the
+// effective rbac:* action required by each endpoint.
 rbacRoutes.use(authenticate, allowRoles(ROLES.ADMIN, ROLES.SUB_ADMIN));
 
 // MODULES ROUTES

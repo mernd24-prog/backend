@@ -1,5 +1,8 @@
 "use strict";
 
+const { CLOSED_RETURN_STATUSES } = require("../../../shared/domain/return-lifecycle");
+const { shipmentMatchesItem, itemDeliveryProgress, FORWARD_ORDER_STATUSES } = require("../../../shared/domain/order-fulfillment");
+
 const { v4: uuidv4 } = require("uuid");
 const { knex } = require("../../../infrastructure/postgres/postgres-client");
 const { AppError } = require("../../../shared/errors/app-error");
@@ -11,7 +14,6 @@ const { NotificationService } = require("../../notification/services/notificatio
 const { recoverySnapshot, resolveCollectionAmount } = require("../../../shared/domain/cod-recovery");
 
 const ADMIN_ROLES = new Set(["admin", "sub-admin", "super-admin"]);
-const OPEN_RETURN_STATUSES = ["requested", "approved", "picked_up", "received", "qc_pending", "refund_pending"];
 // `remitted` is retained only for historical records. New seller-direct COD
 // follows pending -> confirmed -> verified and is recovered through payouts.
 const FINAL_COLLECTION_STATUSES = ["verified", "remitted"];
@@ -76,20 +78,19 @@ class SettlementLifecycleService {
 
   async ensureOrderDeliveryLifecycle(orderId, deliveredAt = new Date(), shipment = null) {
     const order = await knex("orders").where("id", orderId).first();
-    if (!order) return null;
+    if (!order || ![...FORWARD_ORDER_STATUSES, ORDER_STATUS.DELIVERED].includes(order.status)) return null;
     const policy = await this.getPolicy();
     const allOrderItems = await knex("order_items").where("order_id", orderId);
-    const shipmentMetadata = this.parseJson(shipment?.metadata, {});
-    const shipmentItemIds = new Set((shipmentMetadata.orderItemIds || []).map(String));
-    const shipmentOrganizationId = shipmentMetadata.organizationId || shipment?.organization_id || null;
+    const forwardShipments = shipment ? await knex("shipments").where("order_id", orderId) : [];
     const orderItems = shipment
-      ? allOrderItems.filter((item) => {
-        if (shipmentItemIds.size) return shipmentItemIds.has(String(item.id));
-        return String(item.seller_id) === String(shipment.seller_id) &&
-          (!shipmentOrganizationId || String(item.organization_id || "") === String(shipmentOrganizationId));
-      })
-      : allOrderItems;
-    if (!orderItems.length) return null;
+      ? allOrderItems.filter((item) => shipmentMatchesItem(shipment, item) &&
+        itemDeliveryProgress(item, forwardShipments).status === "delivered")
+      : allOrderItems.filter((item) => item.delivered_at && Number(item.quantity || 0) > Number(item.cancelled_quantity || 0));
+    if (!orderItems.length) {
+      // A COD package can be collected before the item's last split quantity arrives.
+      if (shipment && order.payment_provider === PAYMENT_PROVIDER.COD) await this.ensureCodCollectionForShipment(order, shipment, policy);
+      return null;
+    }
     const itemSnapshots = orderItems.map((item) => {
       const productSnapshot = this.parseJson(item.product_snapshot, {});
       const existingSnapshot = this.parseJson(item.return_policy_snapshot, {});
@@ -603,16 +604,23 @@ class SettlementLifecycleService {
       .limit(500);
     const results = [];
     for (const order of orders) {
-      const openReturn = await ReturnModel.exists({ orderId: String(order.id), status: { $in: OPEN_RETURN_STATUSES } }).catch(() => null);
+      let openReturn;
+      try {
+        openReturn = await ReturnModel.exists({ orderId: String(order.id), status: { $nin: CLOSED_RETURN_STATUSES } });
+      } catch (error) {
+        results.push({ orderId: order.id, fulfilled: false, reason: "return_lookup_failed" });
+        continue;
+      }
       if (openReturn) {
         results.push({ orderId: order.id, fulfilled: false, reason: "open_return" });
         continue;
       }
-      await knex("orders").where({ id: order.id, status: ORDER_STATUS.DELIVERED }).update({
+      const updated = await knex("orders").where({ id: order.id, status: ORDER_STATUS.DELIVERED }).update({
         status: ORDER_STATUS.FULFILLED,
         metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({ settlementLifecycle: { fulfilledAt: now.toISOString(), reason: "return_window_closed" } })]),
         updated_at: knex.fn.now(),
       });
+      if (!updated) continue;
       await knex("order_status_history").insert({
         id: uuidv4(), order_id: order.id, from_status: ORDER_STATUS.DELIVERED,
         to_status: ORDER_STATUS.FULFILLED, reason: "return_window_closed", actor_id: "system", actor_role: "system",
@@ -640,11 +648,16 @@ class SettlementLifecycleService {
       .skipLocked());
     const results = [];
     for (const item of claimedItems) {
-      const openReturn = await ReturnModel.exists({
-        orderId: String(item.order_id),
-        status: { $in: OPEN_RETURN_STATUSES },
-        items: { $elemMatch: { orderItemId: String(item.id) } },
-      }).catch(() => null);
+      let openReturn;
+      try {
+        openReturn = await ReturnModel.exists({
+          orderId: String(item.order_id), status: { $nin: CLOSED_RETURN_STATUSES },
+          items: { $elemMatch: { orderItemId: String(item.id) } },
+        });
+      } catch (error) {
+        results.push({ orderItemId: item.id, eligible: false, reason: "return_lookup_failed" });
+        continue;
+      }
       if (openReturn) {
         results.push({ orderItemId: item.id, eligible: false, reason: "open_return" });
         continue;

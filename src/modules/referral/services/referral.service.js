@@ -1185,24 +1185,29 @@ class ReferralService {
     const configByProduct = new Map(
       configs.map((config) => [String(config.productId), config]),
     );
-    const pools = [];
+    const poolsByProduct = new Map();
     for (const item of items) {
       const config = configByProduct.get(String(item.productId));
       if (!config || config.active === false) continue;
       const quantity = Math.max(Number(item.quantity || 1), 1);
       // Use one unit's price for percentage configurations and affordability.
-      // Neither duplicate rows nor increased quantities can multiply a pool.
+      // Each distinct product contributes once, regardless of quantity or duplicate rows.
       const unitAmount = Math.max(Number(item.lineTotal || 0) / quantity, 0);
       const raw = config.amountType === "percentage"
         ? unitAmount * Number(config.amountValue || 0) / 100
         : Number(config.amountValue || 0);
       const cap = Number(config.maximumAmount || 0);
       const pool = Math.min(Math.max(cap > 0 ? Math.min(raw, cap) : raw, 0), unitAmount);
-      if (Number.isFinite(pool) && pool > 0) pools.push(pool);
+      if (Number.isFinite(pool) && pool > 0) {
+        const productId = String(item.productId);
+        // Multiple selected variants share one product configuration. Use its
+        // highest eligible unit pool without counting the same product twice.
+        poolsByProduct.set(productId, Math.max(poolsByProduct.get(productId) || 0, pool));
+      }
     }
-    // One pool per order: ignore non-referral products and select the lowest
-    // positive eligible product pool, irrespective of quantity or code owner.
-    return Number(Math.min(pools.length ? Math.min(...pools) : 0, Math.max(Number(eligibleAmount || 0), 0)).toFixed(2));
+    // Add every eligible product's pool; non-referral products contribute nothing.
+    const totalPool = [...poolsByProduct.values()].reduce((sum, pool) => sum + pool, 0);
+    return Number(Math.min(totalPool, Math.max(Number(eligibleAmount || 0), 0)).toFixed(2));
   }
 
   async resolveInfluencerCodeForCheckout(
@@ -1721,6 +1726,18 @@ class ReferralService {
     return !openReturn;
   }
 
+  async enrichOrderNumbers(items = []) {
+    const ids = [...new Set(items.map((item) => item.orderId)
+      .filter((id) => id && !String(id).startsWith("bonus:")).map(String))];
+    if (!ids.length) return items;
+    const orders = await knex("orders").whereIn("id", ids).select("id", "order_number");
+    const numbers = new Map(orders.map((order) => [String(order.id), order.order_number]));
+    return items.map((item) => ({
+      ...item,
+      orderNumber: numbers.get(String(item.orderId)) || item.orderNumber || item.metadata?.orderNumber || null,
+    }));
+  }
+
   async listReferralOrders(query = {}) {
     const result = await this.referralRepository.listReferralOrders({
       ...query,
@@ -1739,7 +1756,7 @@ class ReferralService {
     );
 
     return {
-      items: result.items.map((item) => {
+      items: await this.enrichOrderNumbers(result.items.map((item) => {
         const order = this.toPlainObject(item);
         const customer = customersById.get(String(order.customerId)) || {};
         const profile = customer.profile || {};
@@ -1759,7 +1776,7 @@ class ReferralService {
             email: customerEmail,
           },
         };
-      }),
+      })),
       total: result.total,
       page: Number(query.page || 1),
       limit: Number(query.limit || 50),
@@ -1773,7 +1790,7 @@ class ReferralService {
       limit: Number(query.limit || 50),
     });
     return {
-      items: result.items.map((item) => this.toPlainObject(item)),
+      items: await this.enrichOrderNumbers(result.items.map((item) => this.toPlainObject(item))),
       total: result.total,
       page: Number(query.page || 1),
       limit: Number(query.limit || 50),
@@ -3089,7 +3106,7 @@ class ReferralService {
     if (!orderIds.length) return items;
     const [orders, returns] = await Promise.all([
       knex("orders").whereIn("id", orderIds).select(
-        "id", "status", "payment_status", "return_eligible_until", "fulfillment_eligible_at",
+        "id", "order_number", "status", "payment_status", "return_eligible_until", "fulfillment_eligible_at",
       ),
       ReturnModel.find({ orderId: { $in: orderIds } })
         .select("orderId status qcReview.status createdAt")
@@ -3104,6 +3121,7 @@ class ReferralService {
     }
     return items.map((item) => item.orderId ? {
       ...item,
+      orderNumber: ordersById.get(String(item.orderId))?.order_number || item.orderNumber || item.metadata?.orderNumber || null,
       coinStatus: item.coinStatus || (["pending", "locked"].includes(item.status) ? "locked" : item.status),
       ...coinOrderContext(ordersById.get(String(item.orderId)), returnsByOrder.get(String(item.orderId)), item.coinStatus || item.status),
     } : item);

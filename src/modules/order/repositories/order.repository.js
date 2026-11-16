@@ -1,3 +1,4 @@
+const { forwardDeliveryProgress, isForwardShipment } = require("../../../shared/domain/order-fulfillment");
 const { knex, postgresPool } = require("../../../infrastructure/postgres/postgres-client");
 const { v4: uuidv4 } = require("uuid");
 const { OutboxRepository } = require("../../../infrastructure/postgres/outbox.repository");
@@ -290,6 +291,10 @@ class OrderRepository {
         return null;
       }
 
+      if (metadata.expectedStatuses && !metadata.expectedStatuses.includes(current.status)) {
+        await trx.commit();
+        return current;
+      }
       const [order] = await trx("orders")
       .where("id", orderId)
         .update({
@@ -453,7 +458,7 @@ class OrderRepository {
   async hasNonCancellableShipment(orderId) {
     const rows = await this.optionalTableRows("shipments", (query) => query
       .where("order_id", orderId)
-      .whereNotIn("status", ["initiated", "cancelled", "failed"])
+      .whereNotIn("status", ["initiated", "manifested", "cancelled", "failed"])
       .limit(1));
     return rows.length > 0;
   }
@@ -2211,7 +2216,8 @@ class OrderRepository {
       const sellerShipments = shipmentGroup.shipments || [];
       const forwardShipments = sellerShipments.filter((shipment) => this.isForwardShipment(shipment));
       const reverseShipments = sellerShipments.filter((shipment) => !this.isForwardShipment(shipment));
-      const deliveryStatus = this.resolveSellerDeliveryStatus(forwardShipments, order);
+      const progress = forwardDeliveryProgress(sellerItems, forwardShipments);
+      const deliveryStatus = progress.aggregateDeliveryStatus;
       const deliveredShipmentCount = forwardShipments.filter((shipment) =>
         this.isDeliveredShipmentStatus(shipment.status),
       ).length;
@@ -2235,8 +2241,8 @@ class OrderRepository {
         reverseShipmentCount: reverseShipments.length,
         deliveredShipmentCount,
         pendingShipmentCount: Math.max(forwardShipments.length - deliveredShipmentCount, 0),
-        isFullyDelivered: forwardShipments.length > 0 && deliveredShipmentCount === forwardShipments.length,
-        isPartiallyDelivered: deliveredShipmentCount > 0 && deliveredShipmentCount < forwardShipments.length,
+        isFullyDelivered: progress.allDelivered,
+        isPartiallyDelivered: deliveryStatus === "partially_delivered",
         expectedDeliveryAt: this.resolveExpectedDeliveryAt(forwardShipments),
         latestTrackingEvent,
         latestTrackingStatus: latestTrackingEvent?.status || deliveryStatus,
@@ -2247,9 +2253,7 @@ class OrderRepository {
   }
 
   isForwardShipment(shipment = {}) {
-    const direction = String(shipment.direction || "forward");
-    const shipmentType = String(shipment.shipment_type || shipment.shipmentType || "forward");
-    return direction !== "reverse" && shipmentType !== "return";
+    return isForwardShipment(shipment);
   }
 
   isDeliveredShipmentStatus(status) {

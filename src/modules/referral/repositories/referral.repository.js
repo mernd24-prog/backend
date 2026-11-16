@@ -1,3 +1,4 @@
+const { summarizeWalletActivity } = require("../utils/wallet-totals");
 const {
   ReferralModel,
   InfluencerAccountModel,
@@ -1480,27 +1481,21 @@ class ReferralRepository {
   }
 
   async aggregateWalletTotals() {
-    const [result] = await InfluencerWalletModel.aggregate([
-      {
-        $group: {
-          _id: null,
-          pendingBalance: { $sum: "$pendingBalance" },
-          availableBalance: { $sum: "$availableBalance" },
-          reservedBalance: { $sum: "$reservedBalance" },
-          paidBalance: { $sum: "$paidBalance" },
-          reversedBalance: { $sum: "$reversedBalance" },
-        },
-      },
+    const [ledger, payouts] = await Promise.all([
+      ReferralCommissionLedgerModel.aggregate([
+        { $group: {
+          _id: { influencerId: "$influencerId", status: "$status" },
+          amount: { $sum: "$amount" },
+        } },
+      ]),
+      InfluencerPayoutRequestModel.aggregate([
+        { $group: {
+          _id: { influencerId: "$influencerId", status: "$status", reservationStatus: "$reservationStatus" },
+          amount: { $sum: "$amount" },
+        } },
+      ]),
     ]);
-    return (
-      result || {
-        pendingBalance: 0,
-        availableBalance: 0,
-        reservedBalance: 0,
-        paidBalance: 0,
-        reversedBalance: 0,
-      }
-    );
+    return summarizeWalletActivity(ledger, payouts);
   }
 
   async listFraudReviews({

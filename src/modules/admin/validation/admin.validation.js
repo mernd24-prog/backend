@@ -220,7 +220,7 @@ const updateUserSchema = Joi.object({
       primaryContactName: Joi.string().allow("", null),
       onboardingStatus: Joi.string().valid(...sellerOnboardingStatuses).allow("", null),
     }),
-    password: Joi.string().min(8).max(15),
+    password: Joi.string().min(8).max(64),
   })
     .min(1)
     .required(),
@@ -672,11 +672,12 @@ const createPlatformSubAdminSchema = Joi.object({
       .valid("sub-admin", "seller", "seller-admin", "seller-sub-admin")
       .default("sub-admin"),
     parentSellerId: Joi.string().allow("", null),
+    parentAdminId: Joi.string().allow("", null),
     profile: Joi.object({
       firstName: Joi.string().required(),
       lastName: Joi.string().allow("", null),
     }).required(),
-    allowedModules: Joi.array().items(Joi.string()).min(1).required(),
+    allowedModules: Joi.array().items(Joi.string()).required(),
     modulePermissions: Joi.array().items(
       Joi.object({
         module: Joi.string().required(),

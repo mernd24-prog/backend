@@ -244,6 +244,22 @@ class RbacRepository {
     });
   }
 
+  async reorderModules(items = []) {
+    return sequelize.transaction(async transaction => {
+      const updated = [];
+      for (const item of items) {
+        const module = await Module.findByPk(item.id, { transaction });
+        if (!module) throw new AppError("Module not found", 404);
+        await module.update({
+          order: Number(item.order || 0),
+          ...(item.parentModuleId !== undefined ? { parentModuleId: item.parentModuleId || null } : {}),
+        }, { transaction });
+        updated.push(module.toJSON());
+      }
+      return updated;
+    });
+  }
+
   async getInactiveModuleCodes() {
     const rows = await Module.findAll({ where: { active: false }, attributes: ["slug", "metadata"] });
     return rows.filter(row => row.slug === moduleCode(row)).map(row => row.slug);

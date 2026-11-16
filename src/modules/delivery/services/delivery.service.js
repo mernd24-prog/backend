@@ -19,14 +19,17 @@ const { settlementLifecycleService } = require("../../seller/services/settlement
 const { ReturnModel } = require("../../returns/models/return.model");
 const { knex } = require("../../../infrastructure/postgres/postgres-client");
 
+const { forwardDeliveryProgress, isForwardShipment, FORWARD_ORDER_STATUSES } = require("../../../shared/domain/order-fulfillment");
+const { CLOSED_RETURN_STATUSES } = require("../../../shared/domain/return-lifecycle");
+
 const shippingProfilesService = new ShippingProfilesService();
 
 const SHIPMENT_TRANSITIONS = {
-  initiated: ["in_transit", "failed"],
-  manifested: ["in_transit", "failed"],
-  picked_up: ["in_transit", "failed", "rto"],
-  in_transit: ["delivered", "failed", "rto"],
-  out_for_delivery: ["delivered", "failed", "rto"],
+  initiated: ["manifested", "picked_up", "in_transit", "failed"],
+  manifested: ["picked_up", "in_transit", "failed"],
+  picked_up: ["in_transit", "out_for_delivery", "failed", "rto", "lost", "damaged"],
+  in_transit: ["out_for_delivery", "delivered", "failed", "rto", "lost", "damaged"],
+  out_for_delivery: ["delivered", "failed", "rto", "lost", "damaged"],
   failed: ["in_transit", "rto"],
   delivered: [],
   cancelled: [],
@@ -532,21 +535,23 @@ class DeliveryService {
         409,
       );
     }
+    const handoverStatus = this.isForwardShipment(shipment) &&
+      [DELIVERY_STATUS.PICKED_UP, DELIVERY_STATUS.IN_TRANSIT, DELIVERY_STATUS.OUT_FOR_DELIVERY].includes(payload.status);
+    let fulfillmentItems;
     const automaticEventTime = payload.eventTime || new Date().toISOString();
     payload.eventTime = automaticEventTime;
     if (
-      payload.status === DELIVERY_STATUS.IN_TRANSIT &&
+      handoverStatus &&
       !payload.shippedAt &&
       !shipment.shipped_at
     ) {
       payload.shippedAt = automaticEventTime;
     }
-    if (payload.status === DELIVERY_STATUS.IN_TRANSIT) {
+    if (handoverStatus) {
       const orderWithItems = await this.orderRepository.findByIdWithItems(shipment.order_id);
       const organizationId = shipment.organization_id || shipment.metadata?.organizationId || null;
-      const fulfillmentItems = await this.getForwardFulfillmentItems(orderWithItems, shipment.seller_id, organizationId);
+      fulfillmentItems = await this.getForwardFulfillmentItems(orderWithItems, shipment.seller_id, organizationId);
       this.assertHasFulfillableQuantity(fulfillmentItems);
-      await this.deliveryRepository.updateShipmentFulfillmentSnapshot(shipmentId, fulfillmentItems);
       if (!String(payload.courierName || shipment.courier_name || "").trim()) throw new AppError("Courier name is required when shipping", 400);
       if (!String(payload.awbNumber || payload.trackingNumber || shipment.awb_number || shipment.tracking_number || "").trim()) {
         throw new AppError("AWB or tracking number is required when shipping", 400);
@@ -560,6 +565,7 @@ class DeliveryService {
       payload.expectedDeliveryAt = new Date(expectedDeliveryAt).toISOString();
     }
     this.assertTrackingTransition(shipment.status, payload.status, payload);
+    if (handoverStatus) await this.deliveryRepository.updateShipmentFulfillmentSnapshot(shipmentId, fulfillmentItems);
     const result = await this.deliveryRepository.addTrackingEvent(shipmentId, {
       ...payload,
       actorId: actor.userId,
@@ -618,40 +624,33 @@ class DeliveryService {
     if (!this.isForwardShipment(shipment)) {
       return;
     }
-    let aggregateDeliveryStatus = shipment.status;
-    let progress = null;
+    const progress = await this.getForwardDeliveryProgress(shipment.order_id);
+    // Tracking must never reopen payment, hold, return/refund or completed orders.
+    if (!FORWARD_ORDER_STATUSES.includes(progress.order?.status)) return;
     if (shipment.status === DELIVERY_STATUS.DELIVERED) {
-      progress = await this.getForwardDeliveryProgress(shipment.order_id);
-      aggregateDeliveryStatus = progress.aggregateDeliveryStatus;
       await settlementLifecycleService.ensureOrderDeliveryLifecycle(
-        shipment.order_id,
-        shipment.delivered_at || new Date(),
-        shipment,
+        shipment.order_id, shipment.delivered_at || new Date(), shipment,
       );
       await this.syncSellerFinanceForDeliveredOrder(shipment.order_id, actor);
     }
-    if (
-      progress?.allDelivered &&
-      ![ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED].includes(progress.order?.status)
-    ) {
+    if (progress.allDelivered) {
       await this.orderRepository.updateStatus(shipment.order_id, ORDER_STATUS.DELIVERED, {
         actorId: actor.userId,
         actorRole: actor.role,
+        expectedStatuses: FORWARD_ORDER_STATUSES,
         reason: "seller_marked_delivered",
         deliveryStatus: DELIVERY_STATUS.DELIVERED,
-        metadata: {
-          shipmentId: shipment.id,
-          deliveredAt: shipment.delivered_at || new Date().toISOString(),
-        },
+        metadata: { shipmentId: shipment.id, deliveredAt: shipment.delivered_at || new Date().toISOString() },
       });
       return;
     }
-    await this.updateOrderDeliveryStatusOnly(shipment.order_id, aggregateDeliveryStatus, actor, shipment.id);
+    if (progress.aggregateDeliveryStatus) {
+      await this.updateOrderDeliveryStatusOnly(shipment.order_id, progress.aggregateDeliveryStatus, actor, shipment.id);
+    }
   }
 
   isForwardShipment(shipment = {}) {
-    return String(shipment.direction || "forward") !== "reverse" &&
-      String(shipment.shipment_type || "forward") !== "return";
+    return isForwardShipment(shipment);
   }
 
   isDeliveredShipmentStatus(status) {
@@ -659,49 +658,14 @@ class DeliveryService {
   }
 
   async getForwardDeliveryProgress(orderId) {
-    const { order, items, shipments: forwardShipments } =
-      await this.deliveryRepository.findOrderDeliveryProgress(orderId);
-    const [pendingCancellations, pendingReturns] = await Promise.all([
-      knex("order_cancellations")
-        .where("order_id", orderId)
-        .whereNotIn("status", ["completed", "failed", "rejected"]),
-      ReturnModel.find({
-        orderId: String(orderId),
-        status: { $in: ["requested", "pending", "under_review"] },
-      }).select("_id").lean(),
+    const { order, items, shipments } = await this.deliveryRepository.findOrderDeliveryProgress(orderId);
+    const [cancellations, returns] = await Promise.all([
+      knex("order_cancellations").where("order_id", orderId).whereNotIn("status", ["completed", "failed", "rejected"]),
+      ReturnModel.find({ orderId: String(orderId), status: { $nin: CLOSED_RETURN_STATUSES } }).select("_id").lean(),
     ]);
-    const hasPendingItemRequests = pendingCancellations.length > 0 || pendingReturns.length > 0;
-    const groupKey = (sellerId, organizationId = null) => `${String(sellerId)}:${organizationId || "default"}`;
-    const sellerIds = new Set(
-      (items || [])
-        .map((item) => {
-          const sellerId = item.seller_id || item.sellerId || "";
-          if (!sellerId) return "";
-          return groupKey(sellerId, item.organization_id || item.organizationId || null);
-        })
-        .filter(Boolean),
-    );
-    const deliveredSellerIds = new Set(
-      forwardShipments
-        .filter((item) => this.isDeliveredShipmentStatus(item.status))
-        .map((item) => {
-          const metadata = this.normalizeJson(item.metadata, {});
-          return groupKey(
-            item.seller_id || item.sellerId || "",
-            item.organization_id || item.organizationId || metadata.organizationId || null,
-          );
-        })
-        .filter(Boolean),
-    );
-    const allDelivered = !hasPendingItemRequests && sellerIds.size > 0 && Array.from(sellerIds).every((sellerId) => deliveredSellerIds.has(sellerId));
-    return {
-      order,
-      allDelivered,
-      hasPendingItemRequests,
-      aggregateDeliveryStatus: allDelivered
-        ? DELIVERY_STATUS.DELIVERED
-        : "partially_delivered",
-    };
+    const progress = forwardDeliveryProgress(items, shipments);
+    const hasPendingItemRequests = cancellations.length > 0 || returns.length > 0;
+    return { ...progress, order, hasPendingItemRequests, allDelivered: progress.allDelivered && !hasPendingItemRequests };
   }
 
   async syncDealDeliveryForShipment(shipment, actor = {}) {
@@ -724,14 +688,15 @@ class DeliveryService {
 
   async updateOrderDeliveryStatusOnly(orderId, deliveryStatus, actor, shipmentId) {
     const order = await this.orderRepository.findById(orderId);
-    if (!order) return null;
-    const nextOrderStatus = [DELIVERY_STATUS.IN_TRANSIT, DELIVERY_STATUS.OUT_FOR_DELIVERY, "partially_delivered"].includes(deliveryStatus) &&
+    if (!order || !FORWARD_ORDER_STATUSES.includes(order.status)) return order;
+    const nextOrderStatus = [DELIVERY_STATUS.PICKED_UP, DELIVERY_STATUS.IN_TRANSIT, DELIVERY_STATUS.OUT_FOR_DELIVERY, "partially_delivered"].includes(deliveryStatus) &&
       ![ORDER_STATUS.SHIPPED, ORDER_STATUS.DELIVERED, ORDER_STATUS.FULFILLED, ORDER_STATUS.CANCELLED].includes(order.status)
       ? ORDER_STATUS.SHIPPED
       : order.status;
     return this.orderRepository.updateStatus(orderId, nextOrderStatus, {
       actorId: actor.userId,
       actorRole: actor.role,
+      expectedStatuses: FORWARD_ORDER_STATUSES,
       reason: `delivery_${deliveryStatus}`,
       deliveryStatus,
       metadata: { shipmentId },

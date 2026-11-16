@@ -255,7 +255,7 @@ async function hydrateAuthPermissions(payload = {}) {
     };
   }
 
-  if (PERMISSION_CACHE_TTL_MS > 0) {
+  if (PERMISSION_CACHE_TTL_MS > 0 && !user.inheritParentPermissions) {
     const cached = permissionCache.get(`${payload.sub}:${user.sessionVersion || 0}:${user.permissionVersion || 0}`);
     if (cached && cached.expiresAt > Date.now()) {
       return {
@@ -281,13 +281,13 @@ async function hydrateAuthPermissions(payload = {}) {
     : [];
   const allowedModules = Array.from(
     new Set([
-      ...(Array.isArray(user.allowedModules) ? user.allowedModules : []),
+      ...(!user.inheritParentPermissions && Array.isArray(user.allowedModules) ? user.allowedModules : []),
       ...permissions
         .map((permission) => String(permission || "").split(":")[0])
         .filter(Boolean),
     ]),
   );
-  if (PERMISSION_CACHE_TTL_MS > 0) {
+  if (PERMISSION_CACHE_TTL_MS > 0 && !user.inheritParentPermissions) {
     permissionCache.set(`${payload.sub}:${user.sessionVersion || 0}:${user.permissionVersion || 0}`, {
       permissions,
       allowedModules,

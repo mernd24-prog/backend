@@ -164,7 +164,7 @@ class PermissionAssignmentController {
 
   // AUDIT LOGS
   listAuditLogs = async (req, res) => {
-    const result = await this.rbacService.listAuditLogs(req.query);
+    const result = await this.rbacService.listAuditLogs(req.query, getCurrentUser(req));
     res.json(okResponse(result));
   };
 

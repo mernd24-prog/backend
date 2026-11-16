@@ -1,3 +1,5 @@
+const { groupKey, forwardDeliveryProgress, itemDeliveryProgress, manifestLines, shipmentMatchesItem: matchesForwardItem } = require("../../../shared/domain/order-fulfillment");
+const { CLOSED_RETURN_STATUSES } = require("../../../shared/domain/return-lifecycle");
 const { OrderRepository } = require("../repositories/order.repository");
 const { makeEvent } = require("../../../contracts/events/event");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
@@ -314,7 +316,7 @@ class OrderService {
   async hasPendingFulfillmentRequests(orderId) {
     const [cancellations, returns] = await Promise.all([
       this.orderRepository.listCancellationsByOrderId(orderId),
-      ReturnModel.find({ orderId: String(orderId), status: { $in: ["requested", "pending", "under_review"] } }).select("_id").lean(),
+      ReturnModel.find({ orderId: String(orderId), status: { $nin: CLOSED_RETURN_STATUSES } }).select("_id").lean(),
     ]);
     return cancellations.some((request) =>
       !["completed", "failed", "rejected"].includes(String(request.status || "").toLowerCase()),
@@ -1215,7 +1217,9 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
         seller_id: shipment.seller_id || null,
         sellerId: shipment.seller_id || null,
         organizationId: shipment.organization_id || shipmentMetadata.organizationId || null,
-        orderItemIds: Array.isArray(shipmentMetadata.orderItemIds) ? shipmentMetadata.orderItemIds : [],
+        orderItemIds: manifestLines(shipment).length
+          ? manifestLines(shipment).map((line) => line.orderItemId || line.order_item_id).filter(Boolean)
+          : Array.isArray(shipmentMetadata.orderItemIds) ? shipmentMetadata.orderItemIds : [],
         seller: shipment.seller ? {
           displayName: shipment.seller.displayName || shipment.seller.businessName || shipment.seller.email || "Seller",
           businessName: shipment.seller.businessName || shipment.seller.sellerProfile?.businessName || null,
@@ -1323,29 +1327,7 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
         receivedQuantity: Number(entry.receivedQuantity || 0),
       })),
     });
-    const shipmentMatchesItem = (shipment = {}, item = {}) => {
-      const shipmentMetadata = this.normalizeJson(shipment.metadata, {});
-      const packageSnapshot = this.normalizeJson(shipment.package_snapshot || shipment.packageSnapshot, {});
-      const fulfillmentItems = Array.isArray(shipmentMetadata.fulfillmentItems)
-        ? shipmentMetadata.fulfillmentItems
-        : Array.isArray(packageSnapshot.items)
-          ? packageSnapshot.items
-          : [];
-      if (fulfillmentItems.length) {
-        const manifestItem = fulfillmentItems.find((entry) =>
-          String(entry.orderItemId || entry.order_item_id || "") === String(item.id),
-        );
-        return Boolean(manifestItem && Number(manifestItem.quantity || 0) > 0);
-      }
-      const shipmentItemIds = Array.isArray(shipmentMetadata.orderItemIds)
-        ? shipmentMetadata.orderItemIds.map(String)
-        : [];
-      if (shipmentItemIds.length) return shipmentItemIds.includes(String(item.id));
-      return (
-        String(shipment.seller_id || "") === String(item.seller_id || "") &&
-        String(shipment.organization_id || "default") === String(item.organization_id || "default")
-      );
-    };
+    const shipmentMatchesItem = matchesForwardItem;
     const items = (order.items || []).map((item) => {
       const {
         pricing_snapshot,
@@ -1368,13 +1350,9 @@ buildBoxLabelDocument(order = {}, shipment = {}) {
         : null;
       const itemReturn = returnRequests.find((returnRequest) => returnMatchesItem(returnRequest, item));
       const itemReturnStatus = itemReturn ? resolveReturnDisplayStatus(itemReturn) : null;
-      const forwardItemStatus = mostAdvancedForwardStatus([
-        ...sharedItemTimelineStatuses,
-        item.delivery_status,
-        ...itemShipments.map((shipment) => shipment.status),
-        ...itemShipments.flatMap((shipment) =>
-          (shipment.trackingEvents || []).map((entry) => entry.status),
-        ),
+      const deliveryProgress = itemDeliveryProgress(item, relations.shipments || []);
+      const forwardItemStatus = deliveryProgress.status || mostAdvancedForwardStatus([
+        ...sharedItemTimelineStatuses, item.delivery_status,
       ]);
       const itemTimeline = [
         // Only payment/confirmation milestones are shared by every item. Later
@@ -1549,9 +1527,11 @@ const sellerPayoutAmount = Number(
     0,
   ).toFixed(2),
 );
-    const sellerShipments = (relations.shipments || []).filter((shipment) => String(shipment.seller_id || shipment.sellerId || "") === sellerKey);
+    const sellerShipments = (relations.shipments || []).filter((shipment) => String(shipment.seller_id || shipment.sellerId || "") === sellerKey &&
+      (!organizationKey || String(shipment.organization_id || shipment.organizationId || this.normalizeJson(shipment.metadata, {}).organizationId || "") === organizationKey));
     const sellerFulfillmentGroups = (relations.sellerFulfillmentGroups || [])
-      .filter((group) => String(group.sellerId || group.seller_id || "") === sellerKey);
+      .filter((group) => String(group.sellerId || group.seller_id || "") === sellerKey &&
+        (!organizationKey || String(group.organizationId || group.organization_id || "") === organizationKey));
     const taxBreakup = this.normalizeJson(order.tax_breakup, {});
     const taxItems = Array.isArray(taxBreakup.items)
       ? taxBreakup.items.filter((item) => productIds.has(String(item.productId || item.product_id || "")))
@@ -1942,6 +1922,10 @@ const sellerPayoutAmount = Number(
       `${ORDER_STATUS.PAYMENT_FAILED}->${ORDER_STATUS.CANCELLED}`,
       `${ORDER_STATUS.PACKED}->${ORDER_STATUS.CANCELLED}`,
       `${ORDER_STATUS.DELIVERED}->${ORDER_STATUS.RETURN_REQUESTED}`,
+      `${ORDER_STATUS.RETURN_REQUESTED}->${ORDER_STATUS.RETURN_APPROVED}`,
+      `${ORDER_STATUS.RETURN_APPROVED}->${ORDER_STATUS.PARTIALLY_RETURNED}`,
+      `${ORDER_STATUS.RETURN_APPROVED}->${ORDER_STATUS.RETURNED}`,
+      `${ORDER_STATUS.RETURN_APPROVED}->${ORDER_STATUS.REFUNDED}`,
       `${ORDER_STATUS.RETURN_REQUESTED}->${ORDER_STATUS.PARTIALLY_RETURNED}`,
       `${ORDER_STATUS.PARTIALLY_RETURNED}->${ORDER_STATUS.RETURN_REQUESTED}`,
       `${ORDER_STATUS.PARTIALLY_RETURNED}->${ORDER_STATUS.FULFILLED}`,
@@ -1961,7 +1945,7 @@ const sellerPayoutAmount = Number(
         throw new AppError("Only the buyer or admin can cancel this order", 403);
       }
       if ([ORDER_STATUS.PACKED, ORDER_STATUS.READY_TO_SHIP].includes(order.status)) {
-        const blockedByDeliveryStatus = order.delivery_status && !["initiated", "cancelled", "failed"].includes(order.delivery_status);
+        const blockedByDeliveryStatus = order.delivery_status && !["initiated", "manifested", "cancelled", "failed"].includes(order.delivery_status);
         const blockedByShipment = await this.orderRepository.hasNonCancellableShipment(orderId);
         if (blockedByDeliveryStatus || blockedByShipment) {
           throw new AppError("Order cannot be cancelled after shipment handover. Please request a return after delivery.", 409);
@@ -1993,12 +1977,16 @@ const sellerPayoutAmount = Number(
       }
       if (isSeller) {
         const items = await this.orderRepository.findItemsByOrderId(orderId);
-        const sellerIds = new Set((items || []).map((item) => String(item.seller_id || "")).filter(Boolean));
-        if (sellerIds.size > 1) {
-          throw new AppError("Multi-seller order fulfillment must be managed from Seller Shipments, not aggregate order status", 409);
+        const activeItems = (items || []).filter((item) => Number(item.quantity || 0) > Number(item.cancelled_quantity || 0));
+        const fulfillmentGroups = new Set(activeItems.map(groupKey));
+        if (fulfillmentGroups.size > 1) {
+          throw new AppError("Orders spanning sellers or stores must be managed from Seller Shipments", 409);
+        }
+        if (!activeItems.some((item) => String(item.seller_id || "") === String(sellerId))) {
+          throw new AppError("This seller has no active items to fulfill", 403);
         }
         if (actor.organizationId) {
-          const sellerOrgMatch = (items || []).some((item) =>
+          const sellerOrgMatch = activeItems.some((item) =>
             String(item.seller_id || "") === String(sellerId) &&
             String(item.organization_id || "") === String(actor.organizationId),
           );
@@ -2015,23 +2003,17 @@ const sellerPayoutAmount = Number(
         throw new AppError("Only admin can mark an order delivered from order status", 403);
       }
       const fullOrder = await this.orderRepository.findByIdWithItems(orderId);
-      const sellerIds = new Set((fullOrder?.items || []).map((item) => String(item.seller_id || "")).filter(Boolean));
-      const forwardShipments = (fullOrder?.relations?.shipments || [])
-        .filter((shipment) => String(shipment.direction || "forward") !== "reverse" && String(shipment.shipment_type || "forward") !== "return");
-      const deliveredSellerIds = new Set(
-        forwardShipments
-          .filter((shipment) => shipment.status === "delivered")
-          .map((shipment) => String(shipment.seller_id || ""))
-          .filter(Boolean),
-      );
-      const allDelivered = sellerIds.size > 0 && Array.from(sellerIds).every((sellerId) => deliveredSellerIds.has(sellerId));
+      const { allDelivered } = forwardDeliveryProgress(fullOrder?.items || [], fullOrder?.relations?.shipments || []);
       if (!allDelivered) {
         throw new AppError("Order can be marked delivered only after all seller shipments are delivered", 409);
       }
       return;
     }
 
-    if ([ORDER_STATUS.RETURN_REQUESTED, ORDER_STATUS.PARTIALLY_RETURNED, ORDER_STATUS.RETURNED, ORDER_STATUS.REFUNDED].includes(nextStatus)) {
+    if (nextStatus === ORDER_STATUS.RETURN_APPROVED && !isAdmin) {
+      throw new AppError("Only admin can approve an aggregate order return; use the item return workflow", 403);
+    }
+    if ([ORDER_STATUS.RETURN_REQUESTED, ORDER_STATUS.RETURN_APPROVED, ORDER_STATUS.PARTIALLY_RETURNED, ORDER_STATUS.RETURNED, ORDER_STATUS.REFUNDED].includes(nextStatus)) {
       if (!isOwner && !isSeller && !isAdmin) {
         throw new AppError("You are not allowed to update this order", 403);
       }

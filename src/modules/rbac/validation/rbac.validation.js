@@ -54,10 +54,12 @@ const listModulesSchema = {
   query: Joi.object({
     active: Joi.boolean(),
     includeInactive: Joi.boolean().default(false),
-    status: Joi.string().valid("active", "inactive", "draft"),
+    status: Joi.string().valid("active", "inactive", "draft", "unconfigured"),
+    panel: Joi.string().valid("platform", "seller", "both"),
     q: Joi.string().allow(""),
     sidebar: Joi.boolean(),
     scope: Joi.string().valid("backend", "sidebar").default("backend"),
+    includeNavigation: Joi.boolean().default(false),
     parentModuleId: Joi.string().uuid().allow("", null),
     limit: Joi.number().integer().min(1).max(1000).default(100),
     offset: Joi.number().integer().min(0).default(0),
@@ -262,7 +264,7 @@ const listAuditLogsSchema = {
   query: Joi.object({
     actorId: Joi.string(),
     targetUserId: Joi.string(),
-    action: Joi.string().valid("grant", "revoke", "role_assign", "role_remove", "module_add", "module_remove", "template_apply", "force_logout", "copy_permissions"),
+    action: Joi.string().trim().min(1).max(128),
     moduleSlug: Joi.string(),
     from: Joi.date().iso(),
     to: Joi.date().iso(),

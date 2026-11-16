@@ -1,3 +1,4 @@
+const { modulePresentation } = require("../../../shared/auth/admin-module-presentation");
 const { AppError } = require("../../../shared/errors/app-error");
 const { AdminRepository } = require("../repositories/admin.repository");
 const { ProductService } = require("../../product/services/product.service");
@@ -935,6 +936,9 @@ class AdminService {
       throw new AppError("User not found", 404);
     }
     this.assertActorCanSeeUser(existingUser, actor);
+    if (payload.password && ![ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(actor.role)) {
+      throw new AppError("Only an admin can change another user's password", 403);
+    }
     const nextPayload = { ...payload };
     let kyc = null;
 
@@ -981,6 +985,10 @@ class AdminService {
       throw new AppError("User not found", 404);
     }
     this.assertActorCanSeeUser(existingUser, actor);
+    if ([ROLES.ADMIN, ROLES.SUB_ADMIN].includes(existingUser.role)) {
+      if (![ROLES.SUPER_ADMIN, ROLES.ADMIN].includes(actor.role) || String(userId) === String(actor.userId)) throw new AppError("Forbidden", 403);
+      return this.adminRepository.updateUserById(userId, { accountStatus: "deleted" });
+    }
     const user = await this.adminRepository.deactivateUserById(
       userId,
       payload?.reason || null,
@@ -1844,8 +1852,9 @@ class AdminService {
       accessUser?.role || query.roleSlug || query.role || ROLES.SUB_ADMIN;
     const assignableModuleSlugs = this.getAssignableModuleSlugs(targetRole);
     const roleSlug = query.roleSlug || targetRole;
+    const inheritedRows = accessUser?.inheritParentPermissions ? await this.rbacService.getUserEffectivePermissions(this.getRecordId(accessUser)) : null;
     const assignedModuleSet = new Set(
-      (accessUser?.allowedModules || []).map(cleanModuleName).filter(Boolean),
+      (inheritedRows ? inheritedRows.map(row => row.slug.split(":")[0]) : accessUser?.allowedModules || []).map(cleanModuleName).filter(Boolean),
     );
     const shouldUseAssignedModules =
       Boolean(accessUser) &&
@@ -1889,6 +1898,7 @@ class AdminService {
     const includePermissions = query.includePermissions !== false;
     const modules = assignableModuleSlugs
       .filter((moduleSlug) => {
+        if (inheritedRows && !assignedModuleSet.has(moduleSlug)) return false;
         if (!actorPermissionMap) return true;
         const actorActions = actorPermissionMap.get(cleanModuleName(moduleSlug));
         return Boolean(actorActions?.has("view"));
@@ -1930,6 +1940,7 @@ class AdminService {
           : undefined;
 
         return {
+          presentation: modulePresentation(rbacModule || { slug: moduleSlug }, targetRole),
           slug: moduleSlug,
           name: rbacModule?.name || this.formatModuleName(moduleSlug),
           icon: rbacModule?.icon || null,
@@ -1961,6 +1972,8 @@ class AdminService {
             id: this.getRecordId(accessUser),
             role: accessUser.role,
             allowedModules: accessUser.allowedModules || [],
+            inheritParentPermissions: accessUser.inheritParentPermissions === true,
+            parentAdminId: accessUser.parentAdminId || null,
           }
         : null,
       modules,
@@ -2203,7 +2216,7 @@ class AdminService {
   }
 
   async listAdmins(query = {}, actor = {}) {
-    const listQuery = { ...query };
+    const listQuery = { ...query, excludeDeleted: true };
     if (actor.isSuperAdmin || actor.role === ROLES.SUPER_ADMIN) {
       listQuery.roles = [ROLES.ADMIN];
     } else if (actor.role === ROLES.ADMIN) {
@@ -2226,21 +2239,36 @@ class AdminService {
     if ([ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(targetRole)) {
       await this.assertSellerBelongsToActor(payload.parentSellerId, actor);
     }
+    let parent = null;
+    if (targetRole === ROLES.SUB_ADMIN) {
+      const parentId = payload.parentAdminId || (actor.role === ROLES.ADMIN ? actor.userId : null);
+      if (parentId) {
+        if (actor.role === ROLES.ADMIN && String(parentId) !== String(actor.userId)) throw new AppError("Cannot select another admin as parent", 403);
+        parent = await this.adminRepository.getUserById(parentId);
+        if (!parent || parent.role !== ROLES.ADMIN || parent.accountStatus !== "active" || parent.deletedAt || parent.blockedAt) throw new AppError("Parent must be an active admin", 400);
+        payload = { ...payload, parentAdminId: String(parent.id || parent._id) };
+      }
+    } else if (payload.parentAdminId) {
+      throw new AppError("Parent admin selection is only available for sub-admins", 400);
+    }
     const existing = await this.adminRepository.findUserByEmail(payload.email);
     if (existing) {
       throw new AppError("User already exists", 409);
     }
-    const allowedModules = this.sanitizeModules(payload.allowedModules, targetRole);
-    if (!allowedModules.length) {
+    const inheritedPermissions = parent ? await this.rbacService.getUserEffectivePermissions(String(parent.id || parent._id)) : [];
+    const allowedModules = parent
+      ? Array.from(new Set(inheritedPermissions.map(permission => cleanModuleName(permission.slug.split(":")[0]))))
+      : this.sanitizeModules(payload.allowedModules, targetRole);
+    if (!allowedModules.length && targetRole !== ROLES.SUB_ADMIN) {
       throw new AppError("At least one valid module is required", 400);
     }
     let modulePermissions = this.normalizeModulePermissions(
-      payload.modulePermissions,
-      allowedModules,
+      parent ? [] : payload.modulePermissions,
+      parent ? [] : allowedModules,
     );
     const actorPermissionMap = await this.getActorAssignablePermissionMap(actor);
     this.assertRoleManagementCapability(actorPermissionMap, targetRole);
-    const constrained = this.constrainModuleAssignmentByActor(
+    const constrained = parent ? { allowedModules, modulePermissions: [] } : this.constrainModuleAssignmentByActor(
       actor,
       actorPermissionMap,
       allowedModules,
@@ -2268,6 +2296,7 @@ class AdminService {
           }
         : {}),
       allowedModules: finalAllowedModules,
+      inheritParentPermissions: Boolean(parent),
       accountStatus: "active",
       emailVerified: true,
       authProviders: [],
@@ -2293,7 +2322,7 @@ class AdminService {
       },
     );
 
-    await this.rbacService.syncUserModulePermissions(
+    if (!parent) await this.rbacService.syncUserModulePermissions(
       String(user.id),
       modulePermissions,
       actor.userId,
@@ -2306,6 +2335,7 @@ class AdminService {
   async listPlatformSubAdmins(query, actor) {
     const listQuery = {
       ...query,
+      excludeDeleted: true,
       roles: SUBORDINATE_ROLES,
     };
     if (actor.isSuperAdmin || actor.role === ROLES.SUPER_ADMIN) {
@@ -2448,6 +2478,7 @@ class AdminService {
     if (!existingUser || !ACCESS_MANAGED_ROLES.includes(existingUser.role)) {
       throw new AppError("Managed user not found", 404);
     }
+    if (existingUser.inheritParentPermissions) throw new AppError("This sub-admin inherits access from its parent admin", 403);
     if (
       actor.role === ROLES.ADMIN &&
       String(existingUser.ownerAdminId || "") !== String(actor.ownerAdminId || actor.userId)

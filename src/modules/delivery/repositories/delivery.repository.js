@@ -259,7 +259,7 @@ class DeliveryRepository {
       knex("orders").where("id", orderId).first(),
       knex("order_items")
         .where("order_id", orderId)
-        .select("id", "seller_id", "organization_id"),
+        .select("id", "seller_id", "organization_id", "quantity", "cancelled_quantity", "delivered_at"),
       knex("shipments")
         .where("order_id", orderId)
         .where((builder) => builder.where("direction", "forward").orWhereNull("direction"))
@@ -296,7 +296,7 @@ class DeliveryRepository {
           awb_number: payload.awbNumber || payload.trackingNumber || shipment.awb_number,
           tracking_number: payload.trackingNumber || payload.awbNumber || shipment.tracking_number,
           tracking_url: payload.trackingUrl || shipment.tracking_url,
-          shipped_at: payload.status === "in_transit" ? (payload.shippedAt || shipment.shipped_at || new Date()) : shipment.shipped_at,
+          shipped_at: ["picked_up", "in_transit", "out_for_delivery"].includes(payload.status) ? (shipment.shipped_at || payload.shippedAt || new Date()) : shipment.shipped_at,
           delivered_at: payload.status === "delivered" ? (payload.eventTime || shipment.delivered_at || new Date()) : shipment.delivered_at,
           expected_delivery_at: payload.expectedDeliveryAt !== undefined
             ? payload.expectedDeliveryAt

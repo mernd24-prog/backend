@@ -1,3 +1,5 @@
+const { forwardDeliveryProgress } = require("../../../shared/domain/order-fulfillment");
+const { isOpenReturn } = require("../../../shared/domain/return-lifecycle");
 const { v4: uuidv4 } = require("uuid");
 const { ReturnModel } = require("../models/return.model");
 const { UserModel } = require("../../user/models/user.model");
@@ -234,6 +236,8 @@ class ReturnServiceClass {
           returnIds: nextReturnIds,
           openReturnCount: nextReturnIds.length,
           lastReturnId: returnIds[returnIds.length - 1] || metadata.returnLifecycle?.lastReturnId || null,
+          previousOrderStatus: [ORDER_STATUS.RETURN_REQUESTED, ORDER_STATUS.RETURN_APPROVED].includes(order.status)
+            ? metadata.returnLifecycle?.previousOrderStatus || null : order.status,
           requestedAt: metadata.returnLifecycle?.requestedAt || now,
           updatedAt: now,
         },
@@ -299,11 +303,13 @@ class ReturnServiceClass {
       if (completed) {
         completedReturnCount += 1;
         refundedAmount = this.round(refundedAmount + this.getReturnRefundedAmount(returnRequest));
-      } else if (!["closed", "qc_failed"].includes(returnRequest.status)) {
+      } else if (isOpenReturn(returnRequest)) {
         openReturnCount += 1;
       }
 
-      if (!completed) return;
+      // Replacements resolve the claim but are not final returned quantities.
+      if (!completed || returnRequest.status === "replaced" ||
+        (returnRequest.status === "closed" && returnRequest.refund?.status === "not_required")) return;
       (returnRequest.items || []).forEach((item) => {
         const orderItemId = String(item.orderItemId || "");
         const key = orderItemIds.has(orderItemId)
@@ -331,13 +337,25 @@ class ReturnServiceClass {
     const paymentStatus = refundedAmount > 0
       ? (hasFullAmountRefund ? PAYMENT_STATUS.REFUNDED : PAYMENT_STATUS.PARTIALLY_REFUNDED)
       : order.payment_status;
+    const shipments = order.relations?.shipments || [];
+    const activeItems = orderItems.filter((item) => Number(item.quantity || 0) > Number(item.cancelled_quantity || 0));
+    const delivery = forwardDeliveryProgress(orderItems, shipments);
+    const allDelivered = delivery.allDelivered || (!shipments.length && activeItems.length > 0 &&
+      (activeItems.every((item) => item.delivered_at) || order.delivery_status === "delivered"));
+    const previousStatus = this.parseJson(order.metadata, {}).returnLifecycle?.previousOrderStatus;
+    const restoredStatus = allDelivered
+      ? (previousStatus === ORDER_STATUS.FULFILLED ? ORDER_STATUS.FULFILLED : ORDER_STATUS.DELIVERED)
+      : (delivery.aggregateDeliveryStatus || ["partially_delivered", "in_transit", "out_for_delivery"].includes(order.delivery_status))
+        ? ORDER_STATUS.SHIPPED : order.status;
     const status = hasFullQuantityReturn
       ? ORDER_STATUS.RETURNED
       : openReturnCount > 0
         ? ORDER_STATUS.RETURN_REQUESTED
         : refundedAmount > 0 || returnedQuantity > 0
           ? ORDER_STATUS.PARTIALLY_RETURNED
-          : order.status;
+          : [ORDER_STATUS.RETURN_REQUESTED, ORDER_STATUS.RETURN_APPROVED].includes(order.status) && !returnRequests.some(isOpenReturn)
+            ? restoredStatus
+            : order.status;
 
     return {
       order,

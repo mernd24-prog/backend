@@ -12,6 +12,7 @@ const {
   ACTION_ALIASES,
   normalizePermissionAction: normalizeRbacPermissionAction,
 } = require("../auth/rbac-permissions");
+const { modulesForRole } = require("../auth/rbac-module-policy");
 
 function getUserRoles(req) {
   const roles = [];
@@ -25,10 +26,6 @@ function isSuperAdmin(req) {
     return true;
   }
   return getUserRoles(req).includes(ROLES.SUPER_ADMIN);
-}
-
-function isPlatformAdminRole(role) {
-  return role === ROLES.SUPER_ADMIN;
 }
 
 // Full (owner) seller bypasses permission checks on seller-scoped slugs.
@@ -73,19 +70,8 @@ const PERMISSION_ACTION_ALIASES = Object.entries(ACTION_ALIASES).reduce(
   {},
 );
 
-const ACTION_CANONICAL = Object.entries(PERMISSION_ACTION_ALIASES).reduce(
-  (lookup, [canonical, aliases]) => {
-    lookup[canonical] = canonical;
-    aliases.forEach((alias) => {
-      lookup[alias] = canonical;
-    });
-    return lookup;
-  },
-  {},
-);
-
 function normalizePermissionAction(action = "view") {
-  return normalizeRbacPermissionAction(ACTION_CANONICAL[String(action || "view").trim().toLowerCase()] || action || "view");
+  return normalizeRbacPermissionAction(action || "view");
 }
 
 const METHOD_ACTIONS = {
@@ -198,6 +184,14 @@ const READ_DEPENDENCIES = {
 
 function hasReadDependencyAccess(req, moduleName) {
   if (String(req.method || "GET").toUpperCase() !== "GET") return false;
+  // Picker dependencies must never authorize product details, revisions,
+  // inventory, documents, or arbitrary GET endpoints in the product module.
+  const path = String(req.originalUrl || req.path || "")
+    .split("?")[0].replace(/^\/api(?:\/v\d+)?/i, "").replace(/\/+$/, "");
+  if (!new Set([
+    "/admin/products", "/admin/products/prefill/products",
+    "/products/prefill/products",
+  ]).has(path.toLowerCase())) return false;
   const dependencies = READ_DEPENDENCIES[cleanModuleName(moduleName)];
   if (!dependencies?.size) return false;
   return Array.isArray(req.auth?.permissions) && req.auth.permissions.some((slug) => {
@@ -221,6 +215,13 @@ function enforceModuleScope(req) {
 
   const allowedModules = getAuthorizedModuleScope(req.auth);
   const normalizedRequestModule = cleanModuleName(requestModule);
+
+  // A legacy or accidentally stored grant cannot turn a seller identity into
+  // platform staff. Panel availability and action grants are separate checks.
+  if ([ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(req.auth.role) &&
+      !modulesForRole(req.auth.role).includes(normalizedRequestModule)) {
+    return new AppError("Forbidden: module is outside seller scope", 403);
+  }
 
   if (!allowedModules.size) {
     return new AppError("Forbidden: no modules assigned", 403);
@@ -292,10 +293,7 @@ function allowRoles(...roles) {
     }
 
     const permissionError = enforceRequestPermission(req);
-    if (permissionError && allowed) {
-      return next(permissionError);
-    }
-    if (!allowed && permissionError) {
+    if (permissionError) {
       return next(permissionError);
     }
     if (!allowed && !usesModuleAccess(req.auth)) {
@@ -395,12 +393,7 @@ function allowPermissions(...permissionSlugs) {
       : [];
     const allowed = permissionSlugs.every((permission) => {
       const permissionCandidates = buildPermissionCandidates(permission);
-      if (permissionCandidates.some((candidate) => grantedPermissions.includes(candidate))) {
-        return true;
-      }
-      return userRoles.some(
-        (role) => isPlatformAdminRole(role) && canDo(role, permission),
-      );
+      return permissionCandidates.some((candidate) => grantedPermissions.includes(candidate));
     });
 
     if (!allowed) {

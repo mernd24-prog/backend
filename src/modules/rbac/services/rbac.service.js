@@ -1,4 +1,5 @@
-const { canonicalModules, modulesForRole, moduleCode, supportedActions } = require("../../../shared/auth/rbac-module-policy");
+const { modulePresentation, savedModulePresentation } = require("../../../shared/auth/admin-module-presentation");
+const { canonicalModules, modulesForRole, moduleCode, supportedActions, isNavigationModule } = require("../../../shared/auth/rbac-module-policy");
 const { v4: uuidv4 } = require("uuid");
 const { RbacRepository } = require("../repositories/rbac.repository");
 const { AppError } = require("../../../shared/errors/app-error");
@@ -120,6 +121,7 @@ class RbacService {
             moduleSlug: plain.parentModule.slug,
           }
         : null,
+      identityLocked: require("../../../shared/auth/module-catalog").MODULE_CATALOG.some(item => item.slug === plain.slug) || plain.metadata?.source === "sidebar-seed",
       allowedRoles: plain.metadata?.allowedRoles || [],
       permissions: plain.permissions || plain.modulePermissions || [],
     };
@@ -137,6 +139,7 @@ class RbacService {
       if (existingByKey) throw new AppError("Module with this key already exists", 409);
     }
 
+    await this.assertValidModuleParent(null, payload.parentModuleId);
     return this.serializeModule(await this.rbacRepository.createModule(payload));
   }
 
@@ -173,21 +176,41 @@ class RbacService {
     return this.serializeModule(module);
   }
 
-  async listModules(filters) {
-    const options = filters || {};
-    if (options.scope === "sidebar") {
-      const result = await this.rbacRepository.listModules(options);
-      return { ...result, items: result.items.map(item => this.serializeModule(item)) };
+  async listModules(filters = {}) {
+    // Read all stored rows before canonicalization/filtering so management
+    // totals and pagination include inactive and navigation-only modules.
+    const stored = [];
+    let total;
+    do {
+      const result = await this.rbacRepository.listModules({
+        scope: filters.scope || "backend", includeInactive: true,
+        limit: 1000, offset: stored.length,
+      });
+      stored.push(...result.items.map(item => this.serializeModule(item)));
+      total = result.total;
+      if (!result.items.length) break;
+    } while (stored.length < total);
+    const { managementCatalog } = require("../../../shared/auth/module-management-catalog");
+    let items = managementCatalog(stored, filters.scope).map(item => ({ ...item, presentation: modulePresentation(item) }));
+    if (filters.includeNavigation && filters.scope !== "sidebar") {
+      const navigation = await this.listModules({ scope: "sidebar", includeInactive: true, limit: 10000 });
+      items = items.map(item => ({
+        ...item,
+        presentation: savedModulePresentation(item, navigation.items),
+        navigationEntries: navigation.items.filter(entry => entry.configured !== false && entry.moduleType !== "group" && moduleCode(entry) === moduleCode(item)),
+      }));
     }
-    const result = await this.rbacRepository.listModules({ ...options, includeInactive: true, q: undefined, status: undefined, limit: 1000, offset: 0 });
-    let items = canonicalModules(result.items.map(item => this.serializeModule(item)));
-    if (!options.includeInactive) items = items.filter(item => item.active === (options.active ?? true));
-    if (options.status) items = items.filter(item => item.status === options.status);
-    if (options.q) {
-      const q = String(options.q).toLowerCase();
-      items = items.filter(item => [item.name, item.slug, item.routePath, ...(item.aliases || [])].some(value => String(value || "").toLowerCase().includes(q)));
+    if (!filters.includeInactive) items = items.filter(item => item.active === (filters.active ?? true));
+    if (filters.status) items = items.filter(item => item.status === filters.status);
+    if (filters.panel) items = items.filter(item => filters.panel === "both" ? item.panel === "both" : item.panel === filters.panel || item.panel === "both");
+    if (filters.sidebar !== undefined) items = items.filter(item => item.isVisibleInSidebar === filters.sidebar);
+    if (filters.parentModuleId !== undefined) items = items.filter(item => (item.parentModuleId || null) === (filters.parentModuleId || null));
+    if (filters.q) {
+      const q = String(filters.q).trim().toLowerCase();
+      items = items.filter(item => [item.moduleName, item.name, item.slug, item.routePath, ...(item.aliases || [])].some(value => String(value || "").toLowerCase().includes(q)));
     }
-    return { items: items.slice(options.offset || 0, (options.offset || 0) + (options.limit || 100)), total: items.length };
+    const offset = Number(filters.offset || 0);
+    return { items: items.slice(offset, offset + Number(filters.limit || 100)), total: items.length };
   }
 
   async listSidebarModules(filters = {}, actor = {}) {
@@ -241,6 +264,8 @@ class RbacService {
         return false;
       }
       if (isSuperAdmin) return true;
+      if ([ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN].includes(actor.role) &&
+          !modulesForRole(actor.role).includes(moduleCode(item))) return false;
       const candidates = [
         item.metadata?.requiredModule,
         item.requiredModule,
@@ -348,8 +373,13 @@ class RbacService {
       const inactive = new Set(await this.rbacRepository.getInactiveModuleCodes());
       matrix.items = canonicalModules(matrix.items, { role: targetRole })
         .filter(module => filters.active === false || !inactive.has(module.slug));
+      const { managementCatalog } = require("../../../shared/auth/module-management-catalog");
+      const allowed = targetRole ? new Set(modulesForRole(targetRole)) : null;
+      matrix.items = managementCatalog(matrix.items).filter(module =>
+        (!allowed || allowed.has(module.slug)) && (filters.active === false || !inactive.has(module.slug)));
       matrix.total = matrix.items.length;
     }
+    matrix.items = matrix.items.map(module => ({ ...module, presentation: modulePresentation(module) }));
     let canManageRole = false;
     if (matrix.role?.id && actor.userId) {
       try { await this.assertCanManageRole(matrix.role.id, [], actor); canManageRole = true; }
@@ -480,10 +510,41 @@ class RbacService {
     return Array.from(new Set([...ids, ...impliedPermissionIds]));
   }
 
+  async assertValidModuleParent(id, parentId) {
+    const seen = new Set(id ? [String(id)] : []);
+    let current = parentId;
+    while (current) {
+      if (seen.has(String(current))) throw new AppError("Module parent would create a cycle", 400);
+      seen.add(String(current));
+      const parent = await this.rbacRepository.getModuleById(current);
+      if (!parent) throw new AppError("Parent module not found", 400);
+      current = parent.parentModuleId;
+    }
+  }
+
   async updateModule(id, updates) {
     const module = await this.rbacRepository.getModuleById(id);
     if (!module) {
       throw new AppError("Module not found", 404);
+    }
+
+    // Presentation edits must never normalize permission actions or alter grants.
+    const presentationFields = ["moduleName", "order", "isVisibleInSidebar", "allowedRoles"];
+    if (isNavigationModule(module) && Object.keys(updates).every(key => presentationFields.includes(key))) {
+      const payload = {};
+      if (updates.moduleName !== undefined) {
+        if (!String(updates.moduleName).trim()) throw new AppError("Menu label is required", 400);
+        payload.metadata = { ...module.metadata, displayName: updates.moduleName.trim() };
+      }
+      if (updates.allowedRoles !== undefined) {
+        payload.metadata = { ...module.metadata, ...(payload.metadata || {}), allowedRoles: [...new Set(updates.allowedRoles)] };
+      }
+      if (updates.order !== undefined) {
+        if (!Number.isInteger(Number(updates.order)) || Number(updates.order) < 0) throw new AppError("Invalid menu position", 400);
+        payload.order = Number(updates.order);
+      }
+      if (updates.isVisibleInSidebar !== undefined) payload.isVisibleInSidebar = updates.isVisibleInSidebar;
+      return this.serializeModule(await this.rbacRepository.updateModule(id, payload));
     }
 
     if (updates.parentModuleId === id || updates.parentModule === id) {
@@ -513,6 +574,7 @@ class RbacService {
       if (existing) throw new AppError("Module with this key already exists", 409);
     }
 
+    await this.assertValidModuleParent(id, payload.parentModuleId);
     const result = await this.rbacRepository.updateModule(id, payload);
     await this.invalidateUsersForModule(id);
     return this.serializeModule(result);
@@ -528,17 +590,24 @@ class RbacService {
   }
 
   async reorderModules(items = []) {
-    const updated = [];
+    // Validate the complete proposed tree before writing any row. Validate
+    // existing ancestors too, including parents outside this reorder batch.
+    const proposed = new Map(items.map(item => [String(item.id), item]));
     for (const item of items) {
-      if (!item.id) continue;
-      updated.push(
-        await this.rbacRepository.updateModule(item.id, {
-          order: Number(item.order || 0),
-          ...(item.parentModuleId !== undefined ? { parentModuleId: item.parentModuleId || null } : {}),
-        }),
-      );
+      const seen = new Set([String(item.id)]);
+      const currentRow = await this.rbacRepository.getModuleById(item.id);
+      if (!currentRow) throw new AppError("Module not found", 404);
+      let parentId = item.parentModuleId !== undefined ? item.parentModuleId : currentRow.parentModuleId;
+      while (parentId) {
+        if (seen.has(String(parentId))) throw new AppError("Module parent would create a cycle", 400);
+        seen.add(String(parentId));
+        const parent = await this.rbacRepository.getModuleById(parentId);
+        if (!parent) throw new AppError("Parent module not found", 400);
+        const proposedParent = proposed.get(String(parentId));
+        parentId = proposedParent?.parentModuleId !== undefined ? proposedParent.parentModuleId : parent.parentModuleId;
+      }
     }
-    return updated.map((item) => this.serializeModule(item));
+    return this.rbacRepository.reorderModules(items);
   }
 
   async deleteModule(id) {
@@ -786,6 +855,8 @@ class RbacService {
   }
 
   async assertCanAssignUserPermissions(actor = {}, targetUserId, permissionIds = []) {
+    const inheritingTarget = await UserModel.findById(targetUserId).select("role inheritParentPermissions").lean();
+    if (inheritingTarget?.role === ROLES.SUB_ADMIN && inheritingTarget.inheritParentPermissions) throw new AppError("This sub-admin inherits access from its parent admin", 403);
     await this.validateUserPermissionScope(targetUserId, permissionIds);
     if (!actor.userId) return;
     if (actor.isSuperAdmin || actor.role === ROLES.SUPER_ADMIN) return;
@@ -964,6 +1035,13 @@ class RbacService {
     if (!target) throw new AppError("User not found", 404);
     if (role.type !== "custom" && role.slug !== target.role) {
       throw new AppError("System role must match the user's account type", 403);
+    }
+    if (target.role === ROLES.SUB_ADMIN) {
+      const inheritance = await UserModel.findById(userId).select("inheritParentPermissions").lean();
+      if (inheritance?.inheritParentPermissions) {
+        if (!actor.userId && role.slug === ROLES.SUB_ADMIN && role.type !== "custom") return;
+        throw new AppError("This sub-admin inherits access from its parent admin", 403);
+      }
     }
     const rows = await this.rbacRepository.getRolePermissions(roleId);
     const permissionIds = rows.map(row => (row.permission || row).id).filter(Boolean);
@@ -1155,9 +1233,18 @@ class RbacService {
   // GET EFFECTIVE PERMISSIONS
   async getUserEffectivePermissions(userId) {
     const user = await UserModel.findById(userId)
-      .select("role allowedModules")
-      .lean()
-      .catch(() => null);
+      .select("role allowedModules parentAdminId inheritParentPermissions accountStatus deletedAt blockedAt")
+      .lean();
+
+    if (!user) return [];
+
+    if (user.role === ROLES.SUB_ADMIN && user.inheritParentPermissions === true) {
+      if (!user.parentAdminId || String(user.parentAdminId) === String(userId)) return [];
+      const parent = await UserModel.findById(user.parentAdminId).select("role accountStatus deletedAt blockedAt").lean();
+      if (!parent || parent.role !== ROLES.ADMIN || parent.accountStatus !== "active" || parent.deletedAt || parent.blockedAt) return [];
+      const allowed = new Set(modulesForRole(ROLES.SUB_ADMIN));
+      return (await this.getUserEffectivePermissions(user.parentAdminId)).filter(permission => allowed.has(permission.moduleSlug || permission.slug.split(":")[0]));
+    }
 
     if (user?.role === ROLES.SUPER_ADMIN) {
       const permissions = await this.rbacRepository.listAllActivePermissions();
@@ -1341,7 +1428,7 @@ class RbacService {
     RbacAuditLog.create(record).catch(() => {});
   }
 
-  async listAuditLogs(filters = {}) {
+  async listAuditLogs(filters = {}, actor = {}) {
     const { Op } = require("sequelize");
     const {
       actorId, targetUserId, action, moduleSlug,
@@ -1349,8 +1436,25 @@ class RbacService {
     } = filters;
 
     const where = {};
+    if (!actor.userId) throw new AppError("Authentication required", 401);
+    if (!actor.isSuperAdmin && actor.role !== ROLES.SUPER_ADMIN) {
+      if (targetUserId) {
+        await this.assertCanViewUserAccess(actor, targetUserId);
+      } else {
+        let visibleIds = [String(actor.userId)];
+        if (actor.role === ROLES.ADMIN) {
+          const users = await UserModel.find({
+            ownerAdminId: actor.ownerAdminId || actor.userId,
+            role: { $in: [ROLES.SUB_ADMIN, ROLES.SELLER, ROLES.SELLER_ADMIN, ROLES.SELLER_SUB_ADMIN] },
+          }).select("_id").lean();
+          visibleIds.push(...users.map(user => String(user._id)));
+        }
+        where.targetUserId = { [Op.in]: visibleIds };
+      }
+    }
     if (actorId) where.actorId = actorId;
     if (targetUserId) where.targetUserId = targetUserId;
+    const actionScope = { ...where };
     if (action) where.action = action;
     if (moduleSlug) where.moduleSlug = moduleSlug;
     if (from || to) {
@@ -1360,14 +1464,14 @@ class RbacService {
     }
 
     const offset = (Number(page) - 1) * Number(limit);
-    const { count, rows } = await RbacAuditLog.findAndCountAll({
-      where,
-      order: [["created_at", "DESC"]],
-      limit: Number(limit),
-      offset,
-    });
+    const [{ count, rows }, actionRows] = await Promise.all([
+      RbacAuditLog.findAndCountAll({
+        where, order: [["created_at", "DESC"]], limit: Number(limit), offset,
+      }),
+      RbacAuditLog.findAll({ attributes: ["action"], where: actionScope, group: ["action"], order: [["action", "ASC"]], raw: true }),
+    ]);
 
-    return { items: rows, total: count, page: Number(page), limit: Number(limit) };
+    return { items: rows, total: count, page: Number(page), limit: Number(limit), actions: actionRows.map(row => row.action).filter(Boolean) };
   }
 
   // FORCE LOGOUT
@@ -1401,10 +1505,11 @@ class RbacService {
 
     const [source, target] = await Promise.all([
       UserModel.findById(sourceUserId).select("role allowedModules").lean(),
-      UserModel.findById(targetUserId).select("role allowedModules").lean(),
+      UserModel.findById(targetUserId).select("role allowedModules inheritParentPermissions").lean(),
     ]);
     if (!source) throw new AppError("Source user not found", 404);
     if (!target) throw new AppError("Target user not found", 404);
+    if (target.inheritParentPermissions) throw new AppError("This sub-admin inherits access from its parent admin", 403);
     await this.assertCanViewUserAccess(actor, sourceUserId);
 
     const grantedBy = actor.userId;

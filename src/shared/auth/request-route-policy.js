@@ -27,6 +27,8 @@ function getRoutePermission(req = {}) {
   const method = String(req.method || "GET").toUpperCase();
   const url = String(req.originalUrl || req.path || "").split("?")[0];
   const path = url.replace(/^\/api(?:\/v\d+)?(?=\/|$)/i, "") || "/";
+  // Own navigation is an authenticated self-read, not a module-ID lookup.
+  if (["GET", "HEAD"].includes(method) && /^\/rbac\/modules\/sidebar\/?$/i.test(path)) return null;
   return (
     rules.find(
       (rule) =>

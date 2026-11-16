@@ -173,6 +173,7 @@ phoneVerified: {
     createdBy: { type: String, index: true },
     createdByRole: { type: String, enum: Object.values(ROLES) },
     parentAdminId: { type: String, index: true },
+    inheritParentPermissions: { type: Boolean, default: false },
     parentSellerId: { type: String, index: true },
     hierarchyLevel: { type: Number, default: 0, index: true },
     ownerAdminId: { type: String, index: true },

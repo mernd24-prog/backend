@@ -25,6 +25,7 @@ function statusSessionFields(accountStatus) {
 }
 
 function invalidationReasonForUserPayload(payload = {}) {
+  if (payload.password) return SESSION_INVALIDATION_REASONS.PASSWORD_CHANGED;
   if (payload.role) return SESSION_INVALIDATION_REASONS.ROLE_CHANGED;
   if (Object.prototype.hasOwnProperty.call(payload, "allowedModules")) {
     return SESSION_INVALIDATION_REASONS.PERMISSIONS_CHANGED;
@@ -411,8 +412,8 @@ class AdminRepository {
     return { items, total };
   }
 
-  async listUsers({ q = "", role = null, roles = null, accountStatus = null, status = null, emailVerified = null, includeInfluencers = false, page = 1, limit = 50, paginate = true, ownerAdminId = null, ownerSellerId = null, parentAdminId = null, parentSellerId = null, createdBy = null } = {}) {
-    const filter = {};
+  async listUsers({ excludeDeleted = false, q = "", role = null, roles = null, accountStatus = null, status = null, emailVerified = null, includeInfluencers = false, page = 1, limit = 50, paginate = true, ownerAdminId = null, ownerSellerId = null, parentAdminId = null, parentSellerId = null, createdBy = null } = {}) {
+    const filter = excludeDeleted ? { deletedAt: null, accountStatus: { $ne: "deleted" } } : {};
     if (Array.isArray(roles) && roles.length) {
       filter.role = { $in: roles };
     } else if (role) {
@@ -550,12 +551,9 @@ class AdminRepository {
     };
 
     if (payload.password) {
-      try {
-        const passwordHash = await hashText(payload.password);
-        setFields.passwordHash = passwordHash;
-      } catch (err) {
-        // ignore hashing errors and proceed without updating password
-      }
+      setFields.passwordHash = await hashText(payload.password);
+      setFields.passwordChangedAt = new Date();
+      setFields.refreshSessions = [];
     }
 
     const update = { $set: setFields };
@@ -991,6 +989,7 @@ class AdminRepository {
   }
 
   async listSubAdmins({
+    excludeDeleted = false,
     ownerAdminId = null,
     ownerSellerId = null,
     roles = ["sub-admin"],
@@ -999,7 +998,7 @@ class AdminRepository {
     page = 1,
     limit = 100,
   } = {}) {
-    const filter = { role: { $in: roles } };
+    const filter = { role: { $in: roles }, ...(excludeDeleted ? { deletedAt: null, accountStatus: { $ne: "deleted" } } : {}) };
     if (ownerAdminId) {
       filter.ownerAdminId = ownerAdminId;
     }
@@ -1019,7 +1018,7 @@ class AdminRepository {
     const skip = (Number(page) - 1) * Number(limit);
     const [items, total] = await Promise.all([
       UserModel.find(filter)
-        .select("email phone role profile accountStatus allowedModules createdBy createdByRole parentAdminId parentSellerId hierarchyLevel ownerAdminId ownerSellerId createdAt updatedAt lastLoginAt")
+        .select("email phone role profile accountStatus allowedModules inheritParentPermissions createdBy createdByRole parentAdminId parentSellerId hierarchyLevel ownerAdminId ownerSellerId createdAt updatedAt lastLoginAt")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(Number(limit)),
@@ -1044,7 +1043,7 @@ class AdminRepository {
         makeSessionInvalidationUpdate(SESSION_INVALIDATION_REASONS.PERMISSIONS_CHANGED),
       ),
       { new: true },
-    ).select("email phone role profile accountStatus allowedModules createdBy createdByRole parentAdminId parentSellerId hierarchyLevel ownerAdminId ownerSellerId createdAt updatedAt lastLoginAt");
+    ).select("email phone role profile accountStatus allowedModules inheritParentPermissions createdBy createdByRole parentAdminId parentSellerId hierarchyLevel ownerAdminId ownerSellerId createdAt updatedAt lastLoginAt");
   }
 
   async upsertFeatureFlag({ flagKey, description, enabled, rolloutPercentage, targetRules, actorId }) {
