@@ -21,6 +21,10 @@ const notificationPreferenceSchema = new mongoose.Schema(
     doNotDisturbStart: String, // HH:MM format
     doNotDisturbEnd: String,
     timezone: { type: String, default: "UTC" },
+    marketingConsent: {
+      granted: { type: Boolean, default: false },
+      updatedAt: { type: Date, default: null },
+    },
   },
   { timestamps: true },
 );
@@ -34,12 +38,14 @@ const notificationQueueSchema = new mongoose.Schema(
     subject: String,
     body: String,
     payload: Object,
-    status: { type: String, enum: ["queued", "sent", "failed", "bounced"], default: "queued", index: true },
+    status: { type: String, enum: ["queued", "sending", "sent", "provider_accepted", "delivery_unknown", "deferred", "skipped", "failed", "bounced"], default: "queued", index: true },
     attempts: { type: Number, default: 0 },
     lastAttemptAt: Date,
     sentAt: Date,
     failureReason: String,
     scheduledFor: Date,
+    idempotencyKey: { type: String, unique: true, sparse: true },
+    providerMessageId: String,
   },
   { timestamps: true },
 );

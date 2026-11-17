@@ -449,7 +449,7 @@ class DealRepository {
         const dealId = item.deal_id || snapshot.dealId || snapshot.id;
         const quantity = Number(item.quantity || 0);
         const [deal] = await trx("deals").where("id", dealId).forUpdate().limit(1);
-        if (!deal || !["active", "scheduled"].includes(deal.status)) {
+        if (!deal || !["active", "scheduled"].includes(deal.status) || new Date(deal.start_at).getTime() > Date.now() || new Date(deal.end_at).getTime() <= Date.now()) {
           throw new Error("Deal is no longer available");
         }
         if (Number(deal.allocated_quantity || 0) > 0 && Number(deal.sold_quantity || 0) + Number(deal.reserved_quantity || 0) + quantity > Number(deal.allocated_quantity || 0)) {
@@ -793,6 +793,22 @@ class DealRepository {
           toStatus: "expired",
           actorId: actor.userId || "system",
           actorRole: actor.role || "system",
+        });
+      }
+      // Repair older active future deals and activate approved scheduled deals.
+      // Draft, approval, paused and terminal states are deliberately excluded.
+      const scheduled = await trx("deals")
+        .whereIn("status", ["active", "scheduled"])
+        .andWhere("end_at", ">", now)
+        .forUpdate();
+      for (const row of scheduled) {
+        const nextStatus = new Date(row.start_at) > now ? "scheduled" : "active";
+        if (row.status === nextStatus) continue;
+        await trx("deals").where("id", row.id).update({ status: nextStatus, updated_at: knex.fn.now(), updated_by: actor.userId || "system" });
+        await this.insertTimeline(trx, {
+          dealId: row.id, eventType: nextStatus === "active" ? "deal_activated" : "deal_scheduled",
+          fromStatus: row.status, toStatus: nextStatus,
+          actorId: actor.userId || "system", actorRole: actor.role || "system",
         });
       }
       const soldOut = await trx("deals")

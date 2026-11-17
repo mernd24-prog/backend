@@ -6,6 +6,9 @@ const { logger } = require("../../../shared/logger/logger");
 const { renderEmailTemplate } = require("../../notification/services/email-template-catalog");
 const { UserModel } = require("../../user/models/user.model");
 const { NotificationService } = require("../../notification/services/notification.service");
+const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
+const { makeEvent } = require("../../../contracts/events/event");
+const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { SellerOrganizationRepository } = require("../../seller/repositories/seller-organization.repository");
 const { SupportRepository } = require("../repositories/support.repository");
 const {
@@ -388,6 +391,13 @@ class SupportService {
     if (!updated) {
       throw new AppError("Support query not found", 404);
     }
+    const statusChanged = existing.status !== updated.status;
+    const replyChanged = String(updated.adminNotes || "").trim() && updated.adminNotes !== existing.adminNotes;
+    if (statusChanged || replyChanged) await eventPublisher.publish(makeEvent(statusChanged ? DOMAIN_EVENTS.SUPPORT_STATUS_UPDATED_V1 : DOMAIN_EVENTS.SUPPORT_REPLY_CREATED_V1, {
+      buyerId: updated.userId, status: updated.status, queryNumber: updated.queryId,
+      recipientType: updated.userType === "seller" ? "seller" : "buyer",
+      targetType: "support", viewUrl: updated.userType === "seller" ? `/app/support?queryId=${encodeURIComponent(updated.queryId)}` : `/support/tickets/${encodeURIComponent(updated.queryId)}`,
+    }, { source: "support-module", aggregateId: updated.queryId }));
     return updated;
   }
 

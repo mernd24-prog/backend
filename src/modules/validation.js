@@ -333,6 +333,7 @@ const dynamicPricingValidation = {
 
 const notificationValidation = {
   updatePreferences: Joi.object({
+    marketingConsent: Joi.boolean(),
     channels: Joi.object({
       email: Joi.boolean(),
       sms: Joi.boolean(),
@@ -348,9 +349,12 @@ const notificationValidation = {
       newProduct: Joi.boolean(),
     }),
     frequency: Joi.string().valid("real_time", "daily", "weekly", "never"),
-    doNotDisturbStart: Joi.string().pattern(/^\d{2}:\d{2}$/),
-    doNotDisturbEnd: Joi.string().pattern(/^\d{2}:\d{2}$/),
-    timezone: Joi.string(),
+    doNotDisturbStart: Joi.string().pattern(/^([01]\d|2[0-3]):[0-5]\d$/),
+    doNotDisturbEnd: Joi.string().pattern(/^([01]\d|2[0-3]):[0-5]\d$/),
+    timezone: Joi.string().custom((value, helpers) => {
+      try { new Intl.DateTimeFormat("en", { timeZone: value }); return value; }
+      catch { return helpers.error("any.invalid"); }
+    }),
   }),
 };
 

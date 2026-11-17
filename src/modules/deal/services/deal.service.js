@@ -1,3 +1,4 @@
+const { scheduledDealStatus } = require("./deal-schedule");
 const { CategoryTreeModel } = require("../../platform/models/category-tree.model");
 const { mongoose } = require("../../../infrastructure/mongo/mongo-client");
 const { resolveDealVariant, variantPrices, projectDealVariant } = require("./deal-variant");
@@ -120,7 +121,7 @@ class DealService {
     return Number(Number(value || 0).toFixed(2));
   }
 
-  async normalizeDealPayload(payload = {}, actor = {}) {
+  async normalizeDealPayload(payload = {}, actor = {}, existing = null) {
     const isAdmin = this.isAdmin(actor);
     const sellerId = payload.sellerId || this.sellerIdFor(actor);
     const product = await this.productRepository.findById(payload.productId);
@@ -134,7 +135,10 @@ class DealService {
     if (variant.status === "inactive") throw new AppError("Selected variant is inactive", 400);
     const price = variantPrices(product, variant);
     const availableStock = Math.max(0, Number(variant.stock || 0) - Number(variant.reservedStock || 0));
-    if (Number(payload.allocatedQuantity || 0) > availableStock) throw new AppError("Deal quantity exceeds selected variant stock", 400);
+    const committed = existing ? Number(existing.soldQuantity || 0) + Number(existing.reservedQuantity || 0) : 0;
+    const allocation = Number(payload.allocatedQuantity || 0);
+    if (allocation < committed) throw new AppError("Deal quantity cannot be below units already sold or reserved", 409);
+    if (allocation - committed > availableStock) throw new AppError("Remaining deal quantity exceeds selected variant stock", 400);
     if (!sellerId) throw new AppError("Seller ID is required", 400);
     return {
       ...payload,
@@ -142,7 +146,7 @@ class DealService {
       variantId: String(variant._id || variant.id),
       variantSku: variant.sku,
       ...price,
-      status: payload.status && isAdmin ? payload.status : DEAL_STATUS.DRAFT,
+      status: scheduledDealStatus(payload.status && isAdmin ? payload.status : DEAL_STATUS.DRAFT, payload.startAt, payload.endAt),
       fulfillmentModel: payload.fulfillmentModel || DEAL_FULFILLMENT_MODEL.SELLER_FULFILLED,
       createdBy: actor.userId,
       updatedBy: actor.userId,
@@ -154,7 +158,7 @@ class DealService {
   }
 
   async listDeals(query = {}, actor = {}) {
-    await this.dealRepository.expireDueDeals({ userId: "system", role: "system" }).catch(() => null);
+    await this.dealRepository.expireDueDeals({ userId: "system", role: "system" });
     const result = await this.dealRepository.listDeals(this.scopeListQuery(query, actor));
     return {
       ...result,
@@ -163,6 +167,7 @@ class DealService {
   }
 
   async getDeal(dealId, actor = {}) {
+    await this.dealRepository.expireDueDeals({ userId: "system", role: "system" });
     const deal = await this.dealRepository.getDealDetail(dealId);
     await this.assertDealVisible(deal, actor);
     const [enriched] = await this.enrichDealsWithSellers(deal ? [deal] : []);
@@ -205,15 +210,19 @@ class DealService {
       fulfillmentModel: payload.fulfillmentModel || existing.fulfillmentModel,
       updatedBy: actor.userId,
     };
-    const priced = await this.normalizeDealPayload(normalized, { ...actor, userId: existing.created_by || actor.userId });
+    const committed = Number(existing.soldQuantity || 0) + Number(existing.reservedQuantity || 0);
+    if (committed > 0 && ["sellerId", "productId", "variantId", "variantSku"].some(key => String(normalized[key] || "") !== String(existing[key] || ""))) {
+      throw new AppError("A deal with sold or reserved units cannot change seller, product or variant", 409);
+    }
+    const priced = await this.normalizeDealPayload(normalized, { ...actor, userId: existing.created_by || actor.userId }, existing);
     const deal = await this.dealRepository.updateDeal(dealId, {
       ...priced,
-      status: existing.status,
+      status: scheduledDealStatus(existing.status, normalized.startAt, normalized.endAt),
       createdBy: undefined,
     }, {
       eventType: DEAL_TIMELINE_EVENT.UPDATED,
       fromStatus: existing.status,
-      toStatus: existing.status,
+      toStatus: scheduledDealStatus(existing.status, normalized.startAt, normalized.endAt),
       payload,
       actorId: actor.userId,
       actorRole: actor.role,
@@ -251,7 +260,8 @@ class DealService {
     if (![DEAL_STATUS.PENDING_APPROVAL, DEAL_STATUS.DRAFT].includes(deal.status)) {
       throw new AppError("Only submitted deals can be approved", 409);
     }
-    const nextStatus = new Date(deal.startAt).getTime() > Date.now() ? DEAL_STATUS.SCHEDULED : DEAL_STATUS.ACTIVE;
+    const nextStatus = scheduledDealStatus(DEAL_STATUS.ACTIVE, deal.startAt, deal.endAt);
+    if (nextStatus === DEAL_STATUS.EXPIRED) throw new AppError("This deal period has ended; renew the deal before approval", 409);
     const updated = await this.dealRepository.updateDealStatus(dealId, {
       status: nextStatus,
       approvedAt: new Date(),
@@ -688,7 +698,7 @@ class DealService {
   }
 
   async getPublicDealProducts(query = {}) {
-    await this.dealRepository.expireDueDeals({ userId: "system", role: "system" }).catch(() => null);
+    await this.dealRepository.expireDueDeals({ userId: "system", role: "system" });
 
     const page = Math.max(1, Number(query.page || 1));
     const limit = Math.min(100, Math.max(1, Number(query.limit || 12)));
@@ -786,6 +796,7 @@ class DealService {
   }
 
   async getAnalytics(query = {}, actor = {}) {
+    await this.dealRepository.expireDueDeals({ userId: "system", role: "system" });
     const filters = this.scopeListQuery(query, actor);
     return this.dealRepository.getAnalytics(filters);
   }

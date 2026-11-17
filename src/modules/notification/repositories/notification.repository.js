@@ -48,6 +48,14 @@ const compactCustomerOrderNotification = (group = {}) => {
 };
 
 class NotificationRepository {
+  async markRead(notificationId, userIds, readerId) {
+    if (!NotificationModel.db.base.Types.ObjectId.isValid(notificationId)) return null;
+    // One atomic update per reader, restricted to the recipient scope. Repeated
+    // calls must not append duplicates or mark another account's notification.
+    await NotificationModel.updateOne({ _id: notificationId, userId: { $in: userIds }, "readBy.userId": { $ne: readerId } },
+      { $push: { readBy: { userId: readerId, readAt: new Date() } } });
+    return NotificationModel.findOne({ _id: notificationId, userId: { $in: userIds } }).lean();
+  }
   async create(payload) {
     if (payload.idempotencyKey) {
       return NotificationModel.findOneAndUpdate(
@@ -179,7 +187,7 @@ class NotificationRepository {
           },
         },
       },
-      { $sort: { feedGroupKey: 1, feedPriority: -1, createdAt: -1 } },
+      { $sort: { feedGroupKey: 1, createdAt: -1, feedPriority: -1 } },
       {
         $group: {
           _id: "$feedGroupKey",

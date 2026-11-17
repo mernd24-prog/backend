@@ -8,6 +8,31 @@ const root = path.resolve(__dirname, '..');
 const { ORDER_STATUS } = require('../src/shared/domain/commerce-constants');
 const { DELIVERY_STATUS } = require('../src/modules/delivery/models/delivery.model');
 const { orderPresentation } = require('../src/shared/domain/order-presentation');
+
+test('live return receipt replaces a stale approved display while preserving stored status', () => {
+  const original = { status: 'return_approved', items: [{ id: 'a', product_id: 'p', quantity: 1 }], relations: { returns: [{ status: 'received', items: [{ orderItemId: 'a', quantity: 1 }] }] } };
+  const result = orderPresentation(original);
+  assert.equal(result.items[0].effective_status, 'return_received');
+  assert.equal(result.display_status, 'return_received');
+  assert.equal(original.status, 'return_approved');
+});
+
+test('a partial-quantity receipt does not claim the whole item was received or refunded', () => {
+  const request = { status: 'received', items: [{ orderItemId: 'a', quantity: 1 }] };
+  const order = { status: 'return_approved', items: [{ id: 'a', product_id: 'p', quantity: 3 }], relations: { returns: [request] } };
+  assert.equal(orderPresentation(order).display_status, 'return_in_progress');
+  request.status = 'refunded';
+  request.refund = { status: 'completed' };
+  assert.equal(orderPresentation(order).items[0].effective_status, 'partially_refunded');
+});
+
+test('a new active return takes precedence over an older closed claim for the same item', () => {
+  const order = { status: 'return_approved', items: [{ id: 'a', product_id: 'p', quantity: 1 }], relations: { returns: [
+    { status: 'closed', refund: { status: 'completed' }, items: [{ orderItemId: 'a', quantity: 1 }] },
+    { status: 'received', items: [{ orderItemId: 'a', quantity: 1 }] },
+  ] } };
+  assert.equal(orderPresentation(order).display_status, 'return_received');
+});
 const stub = new Proxy({}, { get: () => class Stub {} });
 function load(fileName, overrides = {}) {
   const file = path.join(root, fileName);

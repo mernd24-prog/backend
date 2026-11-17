@@ -2,6 +2,8 @@ const { WarrantyRepository } = require("../repositories/warranty.repository");
 const { ProductRepository } = require("../../product/repositories/product.repository");
 const { OrderRepository } = require("../../order/repositories/order.repository");
 const { EventPublisher } = require("../../../infrastructure/events/event-publisher");
+const { makeEvent } = require("../../../contracts/events/event");
+const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { v4: uuidv4 } = require("uuid");
 const { AppError } = require("../../../shared/errors/app-error");
 
@@ -41,8 +43,8 @@ class WarrantyService {
       orderId,
       productId,
       variantId,
-      customerId: order.customerId,
-      sellerId: order.sellerId,
+      customerId: order.customerId || order.buyer_id || order.buyerId,
+      sellerId: product.sellerId || product.seller_id || order.sellerId || order.seller_id,
       warrantyDetails: product.warranty,
       startDate: new Date(),
       endDate: this.calculateEndDate(product.warranty),
@@ -52,12 +54,14 @@ class WarrantyService {
 
     const warranty = await this.warrantyRepository.create(warrantyData);
 
-    await this.eventPublisher.publish("warranty.registered", {
+    await this.eventPublisher.publish(makeEvent(DOMAIN_EVENTS.WARRANTY_REGISTERED_V1, {
       warrantyId: warranty.warrantyId,
       orderId,
       productId,
-      customerId: order.customerId,
-    });
+      buyerId: order.customerId || order.buyer_id || order.buyerId,
+      sellerId: warranty.sellerId,
+      status: warranty.status,
+    }, { source: "warranty-module", aggregateId: warranty.warrantyId }));
 
     return warranty;
   }
@@ -90,11 +94,14 @@ class WarrantyService {
     warranty.claims.push(claim);
     await this.warrantyRepository.update(warrantyId, warranty);
 
-    await this.eventPublisher.publish("warranty.claimed", {
+    await this.eventPublisher.publish(makeEvent(DOMAIN_EVENTS.WARRANTY_CLAIMED_V1, {
       warrantyId,
       claimId: claim.claimId,
-      customerId: warranty.customerId,
-    });
+      buyerId: warranty.customerId,
+      sellerId: warranty.sellerId,
+      orderId: warranty.orderId,
+      status: claim.status,
+    }, { source: "warranty-module", aggregateId: warrantyId }));
 
     return claim;
   }
@@ -112,6 +119,10 @@ class WarrantyService {
 
     await this.warrantyRepository.update(warrantyId, warranty);
 
+    await this.eventPublisher.publish(makeEvent(DOMAIN_EVENTS.WARRANTY_CLAIM_STATUS_UPDATED_V1, {
+      warrantyId, claimId, buyerId: warranty.customerId, sellerId: warranty.sellerId,
+      orderId: warranty.orderId, status, reason: notes || null,
+    }, { source: "warranty-module", aggregateId: warrantyId }));
     return claim;
   }
 

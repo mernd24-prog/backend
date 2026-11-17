@@ -1,3 +1,4 @@
+const { DealRepository } = require("../../modules/deal/repositories/deal.repository");
 const { retryMediaCleanup } = require("../../shared/storage/media-cleanup-task");
 const { env } = require("../../config/env");
 const { logger } = require("../../shared/logger/logger");
@@ -111,6 +112,7 @@ function registerCronJobs() {
     orderService.reconcileExpiredPaymentReservations({ limit: 200 }), 5 * 60 * 1000);
   runPeriodicJob("payment-reconciliation", async () =>
     orderService.reconcilePaidOrderState({ limit: 200 }), 2 * 60 * 1000);
+  runPeriodicJob("deal-schedule", () => new DealRepository().expireDueDeals({ userId: "system", role: "system" }), 60 * 1000);
   runPeriodicJob("analytics-aggregation", async () => {}, 30 * 60 * 1000);
   runPeriodicJob("product-scheduled-publish", async () => {
     await productService.publishScheduledProducts();
@@ -152,6 +154,7 @@ function registerCronJobs() {
     return cancellationService.reconcileRtoSettlements({ limit: 100 });
   }, 5 * 60 * 1000);
   runPeriodicJob("outbox-flush", async () => outboxProcessor.flushPending(), 15 * 1000);
+  runPeriodicJob("notification-event-retry", async () => require("../../modules/notification/services/publish-use-case").retryNotificationEvents(), 60000);
 }
 
 async function stopCronJobs() {

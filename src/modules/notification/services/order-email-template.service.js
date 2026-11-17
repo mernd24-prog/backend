@@ -263,14 +263,14 @@ const resolveOrderEmailCopy = ({ eventName, subject, message, payload = {}, reci
   if ([DOMAIN_EVENTS.REFUND_PROCESSED_V1, DOMAIN_EVENTS.RETURN_REFUNDED_V1, DOMAIN_EVENTS.PAYMENT_REFUNDED_V1].includes(eventName)) {
     return {
       title: recipientType === "admin" ? "Refund processed" : "Your refund has been processed",
-      intro: `Refund details for order ${orderRef} are listed below.`,
+      intro: `The refund for order ${orderRef} was marked processed. Review the destination and reference below; bank posting time depends on the payment provider.`,
     };
   }
 
   if (eventName === DOMAIN_EVENTS.REFUND_FAILED_V1) {
     return {
       title: "Refund failed",
-      intro: `Refund could not be completed for order ${orderRef}.`,
+      intro: `The refund for order ${orderRef} could not complete. Review its status and reason, or contact support. Do not assume the amount was credited.`,
     };
   }
 
@@ -284,7 +284,7 @@ const resolveOrderEmailCopy = ({ eventName, subject, message, payload = {}, reci
   if (eventName === DOMAIN_EVENTS.ORDER_PAYMENT_FAILED_V1) {
     return {
       title: "Payment failed",
-      intro: `Payment failed for order ${orderRef}.`,
+      intro: `Payment could not be completed for order ${orderRef}. Check the order's payment status before retrying. If your account was debited, contact support with the payment reference.`,
     };
   }
 

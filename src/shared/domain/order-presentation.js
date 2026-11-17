@@ -4,6 +4,7 @@ const {
   shipmentMatchesItem,
   isForwardShipment,
 } = require("./order-fulfillment");
+const { normalizeReturnDisplayStatus, aggregateReturnDisplay } = require("./return-display");
 const key = (value) =>
   String(value || "")
     .toLowerCase()
@@ -72,15 +73,19 @@ function itemLifecycleStatus(item, order) {
       return "refund_pending";
     return `cancellation_${cancellation.status}`;
   }
-  const request = (order.relations?.returns || []).find((entry) =>
-    (entry.items || []).some(matches),
-  );
+  const terminal = ["closed", "rejected", "qc_failure_upheld", "replaced", "refunded"];
+  const request = (order.relations?.returns || []).filter(entry => (entry.items || []).some(matches))
+    .sort((a, b) => Number(terminal.includes(a.status)) - Number(terminal.includes(b.status)) ||
+      new Date(b.updatedAt || b.updated_at || b.createdAt || 0) - new Date(a.updatedAt || a.updated_at || a.createdAt || 0))[0];
   if (
     request &&
     !["rejected", "qc_failure_upheld", "replaced"].includes(request.status)
   ) {
+    const requestedQuantity = (request.items || []).filter(matches).reduce((sum, line) => sum + Number(line.requestedQuantity ?? line.quantity ?? 0), 0);
+    const activeQuantity = Math.max(0, Number(item.quantity || 0) - Number(item.cancelled_quantity || item.cancelledQuantity || 0));
+    const partial = requestedQuantity > 0 && requestedQuantity < activeQuantity;
     if (request.refund?.status === "completed" || request.status === "refunded")
-      return "refunded";
+      return partial ? "partially_refunded" : "refunded";
     if (request.status === "partially_refunded") return "partially_refunded";
     if (
       ["pending", "provider_pending", "manual_review"].includes(
@@ -91,7 +96,7 @@ function itemLifecycleStatus(item, order) {
     if (request.refund?.status === "failed") return "refund_failed";
     if (request.status === "requested") return "return_requested";
     if (request.status === "approved") return "return_approved";
-    if (request.status !== "closed") return request.status;
+    if (request.status !== "closed") return partial ? "return_in_progress" : request.status;
   }
   return key(item.return_status || item.returnStatus);
 }
@@ -100,7 +105,7 @@ function itemOrderStatus(item = {}, order = {}) {
   const progress = itemDeliveryProgress(item, shipments);
   if (progress.status === "cancelled") return "cancelled";
   const lifecycle = itemLifecycleStatus(item, order);
-  if (lifecycle) return lifecycle;
+  if (lifecycle) return normalizeReturnDisplayStatus(lifecycle);
   const stored = key(order.status || order.order_status);
   if (
     ["pending_payment", "payment_failed", "cancelled", "on_hold"].includes(
@@ -209,6 +214,10 @@ function orderPresentation(order = {}) {
     )
   ) {
     displayStatus = "return_requested";
+  }
+  if (!["cancelled", "pending_payment", "payment_failed", "on_hold", "refunded"].includes(stored)) {
+    const returnProgress = aggregateReturnDisplay(statuses);
+    if (returnProgress) displayStatus = returnProgress;
   }
   const forward = (order.relations?.shipments || []).filter(isForwardShipment);
   const delivery = forwardDeliveryProgress(rows, forward);

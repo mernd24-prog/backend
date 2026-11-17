@@ -1,4 +1,6 @@
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
+const { buildUseCaseEmailDefinitions } = require("./use-case-message-catalog");
+const { specs, detailGroup } = require("./notification-content");
 
 const titleCase = (value = "") =>
   String(value || "")
@@ -41,7 +43,7 @@ const EMAIL_ICONS = {
 
 const { renderTrustStrip } = require("./email-layout");
 
-const renderOtpCodeBlock = (otp) => {
+const renderOtpCodeBlock = (otp, validityMinutes) => {
   if (!otp) return "";
   const code = String(otp || "").replace(/\s+/g, "");
   return `
@@ -54,7 +56,7 @@ const renderOtpCodeBlock = (otp) => {
     </table>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 12px;background:#fff8eb;border:1px solid #ffe2a8;border-radius:10px;">
       <tr>
-        <td style="padding:12px 14px;font-size:11px;line-height:1.5;color:#0a1450;"><strong>This code will expire in 15 minutes.</strong><br>Please do not share it with anyone.</td>
+          <td style="padding:12px 14px;font-size:11px;line-height:1.5;color:#0a1450;"><strong>${Number.isFinite(Number(validityMinutes)) && Number(validityMinutes) > 0 ? `This code expires in ${escapeHtml(validityMinutes)} minutes.` : "Use this code before it expires."}</strong><br>Please do not share it with anyone.</td>
       </tr>
     </table>`;
 };
@@ -257,6 +259,19 @@ const authRows = (payload = {}) => compactRows([
 ]);
 
 const EMAIL_TEMPLATE_DEFINITIONS = {
+  notification_generic: {
+    subject: "Account update", title: "Account update", intro: () => "An update is available in your account.", rows: () => [], ctaText: "View details",
+  },
+  // Explicit template keys only: the event-to-template map below is unchanged.
+  ...buildUseCaseEmailDefinitions((payload, entry) => compactRows(specs[detailGroup(entry)].map(([label, field, format]) => {
+    const raw = payload[field];
+    if (raw === undefined || raw === null || raw === "") return null;
+    const value = format === "reference" ? publicValue(raw)
+      : format === "money" ? formatMoney(raw, payload.currency || "INR")
+        : format === "coins" ? (Number.isFinite(Number(raw)) ? `${Number(raw)} Coins` : "")
+          : /status|purpose|category/i.test(field) ? humanize(raw) : String(raw);
+    return row(label, value);
+  }))),
   auth_otp: {
     subject: "Your Sam Global verification code",
     title: "Verify Your Account",
@@ -340,7 +355,7 @@ const EMAIL_TEMPLATE_DEFINITIONS = {
   payment_failed_customer: {
     subject: "Payment Failed",
     title: "Payment Failed",
-    intro: () => "Payment could not be completed for this order. Please try again or use another payment method.",
+    intro: () => "Check this order's payment status before retrying. If your account was debited, contact support with the payment reference.",
     rows: orderRows,
     ctaText: "Retry payment",
   },
@@ -382,7 +397,7 @@ const EMAIL_TEMPLATE_DEFINITIONS = {
   refund_processed: {
     subject: "Refund Processed",
     title: "Refund Processed",
-    intro: () => "Your refund has been processed successfully.",
+    intro: () => "Your refund was marked processed. Review its destination and reference; bank posting time depends on the payment provider.",
     rows: returnRows,
     ctaText: "View details",
   },
@@ -519,7 +534,7 @@ const EMAIL_TEMPLATE_DEFINITIONS = {
     subject: "Growth Partner Order Reward Pending",
     title: "Growth Partner Order Reward Pending",
     intro: ({ orderNumber }) =>
-      `An order${publicValue(orderNumber) ? ` ${publicValue(orderNumber)}` : ""} was placed using your Growth Partner code. Your reward is pending until the order is completed.`,
+      `An order${publicValue(orderNumber) ? ` ${publicValue(orderNumber)}` : ""} was placed using your Growth Partner code. Your reward remains pending until the configured release conditions are met.`,
     rows: growthRows,
     ctaText: "View rewards",
   },
@@ -596,9 +611,9 @@ function renderEmailTemplate({
   ctaUrl = "",
 } = {}) {
   const resolvedKey = resolveTemplateKey({ templateKey, eventName, recipientType, payload });
-  const definition = EMAIL_TEMPLATE_DEFINITIONS[resolvedKey] || EMAIL_TEMPLATE_DEFINITIONS.account_welcome;
+  const definition = EMAIL_TEMPLATE_DEFINITIONS[resolvedKey] || { ...EMAIL_TEMPLATE_DEFINITIONS.notification_generic, title: subject || "Account update", intro: () => message || "An update is available in your account." };
   const title = subject || definition.subject;
-  const heading = definition.title || title;
+  const heading = resolvedKey?.startsWith("usecase_") ? title : definition.title || title;
   const intro = typeof definition.intro === "function"
     ? definition.intro(payload)
     : definition.intro || message || "";
@@ -607,10 +622,10 @@ function renderEmailTemplate({
   const rows = typeof definition.rows === "function" ? definition.rows(payload) : [];
   const preheader = [heading, rows[0]?.value].filter(Boolean).join(" - ");
   const resolvedCtaUrl = ctaUrl || (resolvedKey === "account_welcome" ? customerAppBaseUrl : "");
-  const safeCtaUrl = containsPrivateReference(resolvedCtaUrl) ? "" : resolvedCtaUrl;
-  const isOtpTemplate = resolvedKey === "auth_otp" && payload.otp;
+  const safeCtaUrl = containsPrivateReference(resolvedCtaUrl) || !/^https?:\/\//i.test(resolvedCtaUrl) ? "" : resolvedCtaUrl;
+  const isOtpTemplate = (resolvedKey === "auth_otp" || definition.isOtp) && payload.otp;
   const bodyIntro = isOtpTemplate
-    ? `Thank you for using ${brandName}. Please use the verification code below to confirm your email address and complete your account setup.`
+    ? `Use the verification code below to complete ${humanize(payload.purpose || "verification").toLowerCase()}. If you did not request this, do not share or use the code.`
     : message || intro;
   const bodyIntroHtml = resolvedKey === "product_submitted_admin"
     ? `A seller ${escapeHtml(payload.action === "updated" ? "updated" : "added")} <span style="color:#9a6500;">${escapeHtml(payload.productName || "a product")}</span>. Please review the product details.`
@@ -692,7 +707,7 @@ function renderEmailTemplate({
                           </tr>
                         </table>
                         <h1 class="sg-title" style="margin:12px 0 4px;font-size:24px;line-height:1.25;color:#ffffff;font-weight:800;mso-line-height-rule:exactly;">${escapeHtml(heading)}</h1>
-                        <p style="margin:2px 0 0;font-size:11px;line-height:1.5;color:#dbe6ff;">${escapeHtml(isOtpTemplate ? "One last step to complete your registration" : "Important account update")}</p>
+                        <p style="margin:2px 0 0;font-size:11px;line-height:1.5;color:#dbe6ff;">${escapeHtml(isOtpTemplate ? "Use this code for the action you requested" : "Important account update")}</p>
                       </td>
                     </tr>
                   </table>
@@ -703,7 +718,7 @@ function renderEmailTemplate({
                   ${isAlert ? `<div style="margin:0 0 24px;border:1px solid #ffb7b7;background:#fff4f4;color:#c1121f;border-radius:9px;padding:8px 12px;font-size:12px;font-weight:800;line-height:1.5;">${escapeHtml(alertText)}</div>` : ""}
                   ${greeting ? `<p style="margin:0 0 8px;font-size:18px;line-height:1.5;color:#0a1450;font-weight:800;">${escapeHtml(greeting)}</p>` : ""}
                   ${isAlert ? "" : `<p style="margin:0 0 12px;font-size:12px;line-height:1.45;color:#0a1450;">${bodyIntroHtml}</p>`}
-                  ${renderOtpCodeBlock(payload.otp)}
+                  ${renderOtpCodeBlock(isOtpTemplate ? payload.otp : null, payload.validityMinutes)}
                   ${detailRows ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #eef0f4;">${detailRows}</table>` : ""}
                   ${button}
                   <div class="sg-trust">${renderTrustStrip()}</div>

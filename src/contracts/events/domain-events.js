@@ -1,4 +1,10 @@
 const DOMAIN_EVENTS = {
+  NOTIFICATION_USE_CASE_V1: "notification.use_case.v1",
+  SUPPORT_REPLY_CREATED_V1: "support.reply_created.v1",
+  SUPPORT_STATUS_UPDATED_V1: "support.status_updated.v1",
+  WARRANTY_REGISTERED_V1: "warranty.registered.v1",
+  WARRANTY_CLAIMED_V1: "warranty.claimed.v1",
+  WARRANTY_CLAIM_STATUS_UPDATED_V1: "warranty.claim_status_updated.v1",
   OTP_SENT_V1: "otp.sent.v1",
   OTP_VERIFIED_V1: "otp.verified.v1",
   OTP_FAILED_V1: "otp.failed.v1",

@@ -4598,8 +4598,7 @@ gstTcsAmount,
       buildBase().orderBy("created_at", "asc").limit(limit).offset(offset),
       buildBase().count({ total: "*" }),
     ]);
-    return {
-      items: items.map((item) => {
+    const mappedItems = items.map((item) => {
         const metadata = this.parseJson(item.metadata, {});
         const isCodLiability = metadata.source === "seller_direct_cod_recovery" || metadata.adjustmentType === "cod_recovery";
         return {
@@ -4612,7 +4611,9 @@ gstTcsAmount,
           reservedAmount: Number(metadata.reservedRecoveryAmount || 0),
           remainingAmount: Number(metadata.remainingAmount ?? Math.abs(Number(item.net_amount || 0))),
         };
-      }),
+      });
+    return {
+      items: await this.enrichFinanceRecords(mappedItems),
       total: Number(countRows?.[0]?.total || 0),
       limit,
       offset,

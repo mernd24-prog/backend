@@ -45,6 +45,8 @@ function registerWorkers() {
     createWorker(
       "notifications",
       async (job) => {
+        if (job.name === "business-event") return require("../modules/notification/services/publish-use-case").deliverUseCaseEvent(job.data);
+        if (job.name === "mobile-push") return require("../modules/notification/services/mobile-push.service").sendPush(job.data);
         if (job.name === "welcome-email") {
           const template = renderEmailTemplate({
             templateKey: "account_welcome",
@@ -59,7 +61,16 @@ function registerWorkers() {
           });
         }
         if (job.name === "templated-email") {
-          return notificationMailService.sendTemplatedMail(job.data);
+          const { deliverNotificationEmail } = require("../modules/notification/services/notification-email-delivery");
+          const { NotificationPreferenceModel } = require("../modules/notification/models/notification-preference.model");
+          const { notificationQueue } = require("../modules/notification/services/notification.service");
+          return deliverNotificationEmail(job.data, {
+            lookupPreference: userId => NotificationPreferenceModel.findOne({ userId }).lean(),
+            lookupDispatch: id => NotificationQueueModel.findById(id).lean(),
+            updateDispatch: (id, patch) => NotificationQueueModel.updateOne({ _id: id }, { $set: patch, $inc: { attempts: patch.status === "sending" ? 1 : 0 } }),
+            send: data => notificationMailService.sendTemplatedMail(data),
+            defer: (data, delay) => notificationQueue.add("templated-email", data, { jobId: `deferred-${data.dispatchId || job.id}-${Date.now()}`, delay }),
+          });
         }
         if (job.name === "direct-email") {
           return sendMail(job.data);
@@ -114,30 +125,7 @@ function registerWorkers() {
 
 async function closeWorkers() {
   const activeWorkers = [...workers];
-  const { campaignService } = require("../modules/notification/services/notification-campaign.service");
-  const { NotificationDeliveryModel, NotificationCampaignModel } = require("../modules/notification/models/notification-campaign.model");
-  const campaignWorker = createWorker("notification-campaigns", job =>
-    job.name === "retry-failed" ? campaignService.retryFailed(job.data) : campaignService.expand(job.data),
-    { concurrency: 1, limiter: { max: 1, duration: 1000 } });
-  const bulkWorker = createWorker("notification-bulk-delivery", job => campaignService.deliver(job.data),
-    { concurrency: 2, limiter: { max: 5, duration: 1000 } });
-  bulkWorker.on("failed", (job, error) => {
-    if (job && job.attemptsMade >= (job.opts.attempts || 1)) {
-      NotificationDeliveryModel.updateOne({ _id: job.data.deliveryId },
-        { status: "failed", lastError: String(error.message).slice(0, 1000) })
-        .catch(err => logger.error({ err }, "Failed to persist bulk delivery failure"));
-    }
-  });
-  campaignWorker.on("failed", (job, error) => {
-    if (job && job.attemptsMade >= (job.opts.attempts || 1)) {
-      NotificationCampaignModel.updateOne({ _id: job.data.campaignId },
-        { status: "failed", lastError: String(error.message).slice(0, 1000) })
-        .catch(err => logger.error({ err }, "Failed to persist campaign failure"));
-    }
-  });
-  workers = [
-    campaignWorker,
-    bulkWorker,];
+  workers = [];
   registered = false;
   await Promise.allSettled(activeWorkers.map((worker) => worker.close()));
 }

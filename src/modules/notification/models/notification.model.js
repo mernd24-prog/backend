@@ -8,6 +8,7 @@ const notificationSchema = new mongoose.Schema(
     subject: { type: String },
     payload: { type: Object, default: {} },
     status: { type: String, default: "queued", index: true },
+    readBy: [{ userId: String, readAt: Date, _id: false }],
     idempotencyKey: { type: String, unique: true, sparse: true, index: true },
   },
   { timestamps: true },

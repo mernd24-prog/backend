@@ -6,6 +6,8 @@ const { AppError } = require('../../../shared/errors/app-error');
 const { sendMail } = require('../../../infrastructure/mail/mailer');
 const { renderEmailTemplate } = require('./email-template-catalog');
 const { env } = require('../../../config/env');
+const { NotificationPreferenceModel } = require('../models/notification-preference.model');
+const { deliveryDecision } = require('./delivery-preferences');
 
 const campaignQueue = createQueue('notification-campaigns');
 const bulkQueue = createQueue('notification-bulk-delivery');
@@ -81,7 +83,7 @@ const campaignService = {
     await Campaign.updateOne({ _id: campaignId }, { cursor: String(recipients[recipients.length - 1]._id), status: 'processing', lastError: null });
   },
 
-  async deliver({ deliveryId }) {
+  async deliver({ deliveryId, scheduled = false }) {
     const delivery = await Delivery.findById(deliveryId).lean();
     if (!delivery || ['saved', 'provider_accepted', 'delivery_unknown'].includes(delivery.status)) return;
     if (delivery.sendStartedAt) {
@@ -90,6 +92,18 @@ const campaignService = {
     }
     const campaign = await Campaign.findById(delivery.campaignId).lean();
     if (!campaign) throw new Error('Campaign missing');
+    const preference = await NotificationPreferenceModel.findOne({ userId: delivery.userId }).lean();
+    const campaignPayload = { ...campaign.data, messageClass: 'marketing' };
+    const decision = deliveryDecision(preference, { channel: campaign.channel, payload: campaignPayload, scheduled });
+    if (!decision.allowed) {
+      await Delivery.updateOne({ _id: deliveryId }, { status: 'skipped', lastError: decision.reason });
+      return;
+    }
+    if (decision.delay) {
+      await bulkQueue.add('deliver', { deliveryId, scheduled: true }, { jobId: `delivery-deferred-${deliveryId}-${Date.now()}`, delay: decision.delay, attempts: 3 });
+      await Delivery.updateOne({ _id: deliveryId }, { status: 'deferred' });
+      return;
+    }
     await Delivery.updateOne({ _id: deliveryId }, { $inc: { attempts: 1 }, $set: { status: 'processing' } });
     let sendingEmail = false;
     try {
@@ -98,11 +112,15 @@ const campaignService = {
         return;
       }
       const { NotificationService } = require('./notification.service');
-      await new NotificationService().createNotification({
+      const saved = await new NotificationService().createNotification({
         userId: delivery.userId, channel: campaign.channel, subject: campaign.title, template: campaign.body,
-        payload: { ...campaign.data, campaignId: delivery.campaignId, recipientType: delivery.role, targetType: 'broadcast' },
+        payload: { ...campaignPayload, campaignId: delivery.campaignId, recipientType: delivery.role, targetType: 'broadcast' },
         idempotencyKey: `campaign-${delivery.campaignId}-${delivery.userId}`,
       });
+      if (saved?.skipped) {
+        await Delivery.updateOne({ _id: deliveryId }, { status: 'skipped', lastError: saved.reason });
+        return;
+      }
       if (campaign.channel === 'email') {
         const rendered = renderEmailTemplate({ subject: campaign.title, message: campaign.body, recipientType: delivery.role, templateKey: campaign.data?.templateKey, payload: campaign.data || {} });
         await Delivery.updateOne({ _id: deliveryId }, { sendStartedAt: new Date() });

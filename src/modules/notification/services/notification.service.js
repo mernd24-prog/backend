@@ -4,7 +4,7 @@ const { eventBus } = require("../../../infrastructure/events/event-bus");
 const { DOMAIN_EVENTS } = require("../../../contracts/events/domain-events");
 const { makeEvent } = require("../../../contracts/events/event");
 const { eventPublisher } = require("../../../infrastructure/events/event-publisher");
-const { NotificationPreferenceModel } = require("../models/notification-preference.model");
+const { NotificationPreferenceModel, NotificationQueueModel } = require("../models/notification-preference.model");
 const { ROLES } = require("../../../shared/constants/roles");
 const { UserModel } = require("../../user/models/user.model");
 const { SellerOrganizationRepository } = require("../../seller/repositories/seller-organization.repository");
@@ -17,6 +17,8 @@ const notificationQueue = createQueue("notifications");
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 let subscribersRegistered = false;
 const { shouldNotify, notificationIdentity } = require("./notification-policy");
+const { resolveNotificationContent, normalizeNotificationPayload, sellerNotificationPayload } = require("./notification-content");
+const { deliveryDecision } = require("./delivery-preferences");
 const SELLER_ROLES = new Set([
   ROLES.SELLER,
   ROLES.SELLER_ADMIN,
@@ -62,7 +64,7 @@ class NotificationService {
     const definitions = [
       [DOMAIN_EVENTS.ORDER_CREATED_V1, "Order Created", (p) => `Your order ${p.orderNumber || p.orderId} has been created.`],
       [DOMAIN_EVENTS.ORDER_PAID_V1, "Order Confirmed", (p) => `Your order ${p.orderNumber || p.orderId} has been confirmed.`],
-      [DOMAIN_EVENTS.ORDER_PAYMENT_FAILED_V1, "Payment Failed", (p) => `Payment failed for order ${p.orderNumber || p.orderId}.`],
+      [DOMAIN_EVENTS.ORDER_PAYMENT_FAILED_V1, "Payment Failed", (p) => `Payment could not be completed for order ${p.orderNumber || p.orderId}. Check payment status before retrying. If your account was debited, contact support with the payment reference.`],
       [DOMAIN_EVENTS.ORDER_CANCELLED_V1, "Order Cancelled", (p) => `Order ${p.orderNumber || p.orderId} was cancelled.`],
       [DOMAIN_EVENTS.ORDER_STATUS_UPDATED_V1, "Order Updated", (p) => `Order ${p.orderNumber || p.orderId} is now ${String(p.status || "").replace(/_/g, " ")}.`],
       [DOMAIN_EVENTS.RETURN_REQUESTED_V1, "Return Requested", (p) => `Return requested for order ${p.orderNumber || p.orderId}.`],
@@ -85,6 +87,13 @@ class NotificationService {
       [DOMAIN_EVENTS.SHIPMENT_RTO_V1, "Shipment RTO", (p) => `Shipment for order ${p.orderNumber || p.orderId} is returning to origin.`],
       [DOMAIN_EVENTS.INVOICE_GENERATED_V1, "Invoice Generated", (p) => `Invoice generated for order ${p.orderNumber || p.orderId}.`],
       [DOMAIN_EVENTS.CREDIT_NOTE_GENERATED_V1, "Credit Note Generated", (p) => `Credit note generated for order ${p.orderNumber || p.orderId}.`],
+      [DOMAIN_EVENTS.WARRANTY_REGISTERED_V1, "Warranty Registered", () => "Warranty information was recorded. Review the coverage and dates in your account."],
+      [DOMAIN_EVENTS.WARRANTY_CLAIMED_V1, "Warranty Claim Received", () => "A warranty claim was received. Review its current status in your account."],
+      [DOMAIN_EVENTS.WARRANTY_CLAIM_STATUS_UPDATED_V1, "Warranty Claim Updated", () => "A warranty claim decision is available. Review the status and next steps."],
+      [DOMAIN_EVENTS.SUPPORT_REPLY_CREATED_V1, "Support Reply", () => "There is a new reply to your support request."],
+      [DOMAIN_EVENTS.SUPPORT_STATUS_UPDATED_V1, "Support Ticket Updated", () => "Your support ticket status changed. Review its latest decision."],
+      [DOMAIN_EVENTS.KYC_STATUS_UPDATED_V1, "Verification Updated", () => "A verification decision is available in your account."],
+      [DOMAIN_EVENTS.NOTIFICATION_USE_CASE_V1, "Account Update", () => "An update is available in your account."],
     ];
 
     definitions.forEach(([eventName, subject, templateBuilder]) => {
@@ -94,7 +103,8 @@ class NotificationService {
           String(event.payload.status || event.payload.orderStatus || "").toLowerCase() === ORDER_STATUS.CONFIRMED
           ? "Order Confirmed" : subject;
         const userId = event.payload.buyerId || event.payload.userId;
-        const customerPayload = this.withViewMetadata(event.payload, "buyer");
+        const customerRecipientType = event.payload.recipientType === "seller" ? "seller" : "buyer";
+        const customerPayload = this.withViewMetadata(event.payload, customerRecipientType);
         const hasCustomerEmail = Boolean(
           customerPayload.recipientEmail ||
             customerPayload.recipient_email ||
@@ -113,7 +123,7 @@ class NotificationService {
             payload: {
               eventName,
               eventId: event.id,
-              recipientType: "buyer",
+              recipientType: customerRecipientType,
               ...customerPayload,
             },
             status: "queued",
@@ -121,13 +131,13 @@ class NotificationService {
           });
         }
 
-        if ((userId || hasCustomerEmail) && this.shouldQueueEmail(eventName, "buyer", event.payload)) {
+        if ((userId || hasCustomerEmail) && this.shouldQueueEmail(eventName, customerRecipientType, event.payload)) {
           await this.queueEmailForUser(userId, {
             subject: notificationSubject,
             message: templateBuilder(event.payload),
             eventName,
             eventId: event.id,
-            recipientType: "buyer",
+            recipientType: customerRecipientType,
             payload: customerPayload,
           });
         }
@@ -140,7 +150,7 @@ class NotificationService {
           .filter((sellerId) => String(sellerId) !== String(userId || ""));
         await Promise.all(sellerIds.map(async (sellerId) => {
           const sellerMessage = this.buildSellerCommerceMessage(eventName, event.payload, templateBuilder);
-          const sellerPayload = this.withViewMetadata(event.payload, "seller");
+          const sellerPayload = this.withViewMetadata(sellerNotificationPayload(event.payload, sellerId), "seller");
           await this.createNotification({
             userId: sellerId,
             channel: "in_app",
@@ -454,7 +464,7 @@ class NotificationService {
       if (growthPartnerUserId || event.payload?.recipientEmail) {
         const subject = "Growth Partner Order Reward Pending";
         const orderRef = event.payload?.orderNumber ? ` ${event.payload.orderNumber}` : "";
-        const message = `An order${orderRef} was placed using your Growth Partner code. Your reward is pending until the order is completed.`;
+        const message = `An order${orderRef} was placed using your Growth Partner code. Your reward remains pending until the configured release conditions are met.`;
         const payload = {
           ...event.payload,
           eventName: event.eventName,
@@ -672,7 +682,7 @@ class NotificationService {
     const returnId = payload.returnId || payload.return_id || "";
     const payoutId = payload.payoutId || payload.payout_id || "";
     const viewUrl = payload.viewUrl ||
-      (returnId ? `/app/returns?returnId=${encodeURIComponent(returnId)}` : "") ||
+      (returnId ? recipientType === "buyer" ? `/returns?returnId=${encodeURIComponent(returnId)}` : `/app/returns?returnId=${encodeURIComponent(returnId)}` : "") ||
       (payoutId ? `/app/seller-payouts?payoutId=${encodeURIComponent(payoutId)}` : "") ||
       (orderId
         ? recipientType === "buyer"
@@ -688,6 +698,16 @@ class NotificationService {
 
   async queueEmailForUser(userId, { subject, message, eventName, eventId, recipientType, payload = {} }) {
     if (!shouldNotify(eventName, payload)) return;
+    payload = normalizeNotificationPayload(eventName, payload);
+    const content = resolveNotificationContent(eventName, payload, recipientType);
+    if (content) {
+      subject = content.subject;
+      message = content.message;
+      payload = { ...payload, templateKey: content.templateKey, useCaseId: content.useCaseId };
+    }
+    const preference = userId ? await NotificationPreferenceModel.findOne({ userId }).lean() : null;
+    const decision = deliveryDecision(preference, { channel: "email", eventName, payload });
+    if (!decision.allowed) return { skipped: true, reason: decision.reason };
     const isBuyerRecipient = ["buyer", "customer"].includes(String(recipientType || ""));
     const isSellerRecipient = String(recipientType || "") === "seller";
     const directEmail = isBuyerRecipient
@@ -708,7 +728,13 @@ class NotificationService {
     const jobId = identity || jobIdentity.includes(":")
       ? require("node:crypto").createHash("sha256").update(jobIdentity).digest("hex")
       : jobIdentity;
+    const dispatch = await NotificationQueueModel.findOneAndUpdate({ idempotencyKey: jobId }, { $setOnInsert: {
+      userId: userId || to, type: "email", channel: eventName, recipient: to, subject, body: message,
+      payload, status: "queued", scheduledFor: new Date(Date.now() + decision.delay),
+    } }, { upsert: true, new: true });
     await notificationQueue.add("templated-email", {
+      dispatchId: String(dispatch._id || dispatch.id),
+      userId,
       to,
       subject,
       message,
@@ -718,7 +744,7 @@ class NotificationService {
       payload,
     }, {
       jobId,
-      delay: env.smtp.queue.initialDelayMs,
+      delay: Math.max(Number(env.smtp.queue.initialDelayMs || 0), decision.delay),
       attempts: 3,
       backoff: {
         type: "exponential",
@@ -784,8 +810,9 @@ class NotificationService {
     if (!env.sms.transactionalEnabled) return;
     const resolved = this.resolveCommerceSms(eventName, payload);
     if (!resolved) return;
-    const preference = await NotificationPreferenceModel.findOne({ userId }).select("sms").lean().catch(() => null);
-    if (preference?.sms !== true) return;
+    const preference = await NotificationPreferenceModel.findOne({ userId }).lean();
+    const decision = deliveryDecision(preference, { channel: "sms", eventName, payload });
+    if (!decision.allowed || preference?.channels?.sms !== true) return;
     const id = String(userId || "");
     const user = UserModel.db.base.Types.ObjectId.isValid(id)
       ? await UserModel.findById(id).select("phone phoneNormalized").lean().catch(() => null)
@@ -795,6 +822,7 @@ class NotificationService {
     const [template, variables] = resolved;
     if (Object.values(variables).some((value) => value === undefined || value === null || String(value).trim() === "")) return;
     await notificationQueue.add("templated-sms", { mobile, template, variables, idempotencyKey: `${eventName}:${eventId}:${userId}` }, {
+      delay: decision.delay,
       jobId: ["sms", eventName, eventId, userId].join("|"),
       attempts: 3,
       backoff: { type: "exponential", delay: 60000 },
@@ -857,6 +885,9 @@ class NotificationService {
     }
 
     if (isSellerRecipient) {
+      if ([DOMAIN_EVENTS.DEAL_APPROVED_V1, DOMAIN_EVENTS.DEAL_REJECTED_V1, DOMAIN_EVENTS.KYC_STATUS_UPDATED_V1,
+        DOMAIN_EVENTS.RETURN_APPROVED_V1, DOMAIN_EVENTS.RETURN_REJECTED_V1, DOMAIN_EVENTS.REFUND_FAILED_V1,
+        DOMAIN_EVENTS.WARRANTY_REGISTERED_V1, DOMAIN_EVENTS.WARRANTY_CLAIMED_V1, DOMAIN_EVENTS.WARRANTY_CLAIM_STATUS_UPDATED_V1].includes(eventName)) return true;
       if ([DOMAIN_EVENTS.ORDER_PAID_V1, DOMAIN_EVENTS.ORDER_CANCELLED_V1, DOMAIN_EVENTS.ORDER_PAYMENT_FAILED_V1].includes(eventName)) {
         return true;
       }
@@ -879,7 +910,8 @@ class NotificationService {
       return entry.sellerEmail || entry.seller_email || entry.email || entry.supportEmail || null;
     };
 
-    const direct = payload.sellerEmail || payload.seller_email || null;
+    const direct = !targetSellerId || String(payload.sellerId || payload.seller_id || "") === targetSellerId
+      ? payload.sellerEmail || payload.seller_email || null : null;
     if (direct) return direct;
 
     for (const list of [payload.items, payload.sellers, payload.shipments]) {
@@ -997,9 +1029,25 @@ class NotificationService {
     }
 
     if (!shouldNotify(payload.payload?.eventName, payload.payload || {})) return { skipped: true };
+    payload = { ...payload, payload: normalizeNotificationPayload(payload.payload?.eventName || "", payload.payload || {}) };
+    if (payload.channel === "push" && !env.firebase.configured) throw new (require("../../../shared/errors/app-error").AppError)("Mobile push is not configured", 503);
+    const content = resolveNotificationContent(payload.payload?.eventName, payload.payload || {}, payload.payload?.recipientType);
+    if (content) payload = { ...payload, subject: content.subject, template: content.message, payload: { ...payload.payload, templateKey: content.templateKey, useCaseId: content.useCaseId } };
+    const preference = await NotificationPreferenceModel.findOne({ userId: payload.userId }).lean();
+    const decision = deliveryDecision(preference, { channel: payload.channel, eventName: payload.payload?.eventName, payload: payload.payload });
+    if (!decision.allowed) return { skipped: true, reason: decision.reason };
     const identity = notificationIdentity(payload.payload?.eventName, payload.payload || {});
     if (identity) payload = { ...payload, idempotencyKey: `${identity}:${payload.userId}:${payload.channel}` };
+    if (payload.channel === "in_app") payload = { ...payload, status: "saved" };
     const notification = await this.notificationRepository.create(payload);
+
+    if (["in_app", "push"].includes(notification.channel) && env.firebase.configured) {
+      const pushDecision = deliveryDecision(preference, { channel: "push", eventName: payload.payload?.eventName, payload: payload.payload });
+      if (pushDecision.allowed) await notificationQueue.add("mobile-push", {
+        notificationId: String(notification._id || notification.id), userId: notification.userId,
+        subject: notification.subject, payload: { eventName: payload.payload?.eventName, useCaseId: payload.payload?.useCaseId, notificationCaseId: payload.payload?.notificationCaseId, messageClass: payload.payload?.messageClass },
+      }, { jobId: `push-${notification._id || notification.id}`, delay: pushDecision.delay });
+    }
 
     if (notification.channel === "email" && payload.email) {
       const template = renderEmailTemplate({
@@ -1024,6 +1072,7 @@ class NotificationService {
         DOMAIN_EVENTS.NOTIFICATION_CREATED_V1,
         {
           userId: notification.userId,
+          notificationId: String(notification._id || notification.id),
           channel: notification.channel,
           subject: notification.subject,
         },
@@ -1045,7 +1094,7 @@ class NotificationService {
     const rawFeedRequested = ["1", "true", "yes"].includes(String(query.raw || "").toLowerCase());
     const compactOrderGroups = actor.role === ROLES.BUYER && !rawFeedRequested;
 
-    return this.notificationRepository.listByUser([...new Set(userIds.filter(Boolean))], {
+    const result = await this.notificationRepository.listByUser([...new Set(userIds.filter(Boolean))], {
       channel: query.type || query.channel || null,
       page: query.page,
       limit: query.limit,
@@ -1054,6 +1103,19 @@ class NotificationService {
       search: query.search || query.q || query.keyWord,
       compactOrderGroups,
     });
+    return { ...result, items: result.items.map(item => {
+      const readAt = item.readBy?.find(entry => entry.userId === actor.userId)?.readAt || null;
+      const { readBy, ...safe } = item;
+      return { ...safe, readAt, read: Boolean(readAt), isRead: Boolean(readAt) };
+    }) };
+  }
+
+  async markRead(actor, notificationId) {
+    const userIds = [actor.userId];
+    if (SELLER_ROLES.has(actor.role) && actor.ownerSellerId) userIds.push(actor.ownerSellerId);
+    const result = await this.notificationRepository.markRead(notificationId, userIds, actor.userId);
+    if (!result) throw new (require("../../../shared/errors/app-error").AppError)("Notification not found", 404);
+    return { id: String(result._id), read: true };
   }
 
   async getPreferences(userId) {
@@ -1065,6 +1127,7 @@ class NotificationService {
   }
 
   async updatePreferences(userId, payload) {
+    if (typeof payload.marketingConsent === "boolean") payload = { ...payload, marketingConsent: { granted: payload.marketingConsent, updatedAt: new Date() } };
     return NotificationPreferenceModel.findOneAndUpdate(
       { userId },
       { $set: payload, $setOnInsert: { userId } },

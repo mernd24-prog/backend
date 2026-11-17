@@ -12,6 +12,19 @@ const { ACTIONS } = require("../../../shared/constants/actions");
 
 const notificationRoutes = express.Router();
 const notificationController = new NotificationController();
+notificationRoutes.post("/devices", authenticate, catchErrors(async (req, res) => {
+  const { registerDevice } = require("../services/mobile-push.service");
+  res.json({ success: true, data: await registerDevice(req.auth.sub, req.body) });
+}));
+notificationRoutes.delete("/devices", authenticate, catchErrors(async (req, res) => {
+  const { unregisterDevice } = require("../services/mobile-push.service");
+  res.json({ success: true, data: await unregisterDevice(req.auth.sub, req.body?.token) });
+}));
+notificationRoutes.patch("/:notificationId/read", authenticate, catchErrors(async (req, res) => {
+  const { getCurrentUser } = require("../../../shared/auth/current-user");
+  const result = await notificationController.notificationService.markRead(getCurrentUser(req), req.params.notificationId);
+  res.json({ success: true, data: result });
+}));
 
 notificationRoutes.get(
   "/me",

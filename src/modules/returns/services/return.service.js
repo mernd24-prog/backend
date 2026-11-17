@@ -2603,13 +2603,21 @@ class ReturnServiceClass {
   }
 
   async publishReturnEvent(eventName, returnRequest, actor = {}, extra = {}) {
+    const order = await this.orderRepository.findById(returnRequest.orderId).catch(() => null);
     await eventPublisher.publish(
       makeEvent(
         eventName,
         {
           returnId: String(returnRequest._id || returnRequest.id),
           returnNumber: returnRequest.returnNumber || null,
+          notificationRevision: String(returnRequest.timeline?.length || returnRequest.updatedAt || ""),
+          refundStatus: returnRequest.refund?.status,
+          refundTotalAmount: returnRequest.refund?.refundedAmount,
+          approvedRefundAmount: returnRequest.refund?.approvedAmount,
+          refundMethod: returnRequest.refund?.method,
+          refundReference: returnRequest.refund?.referenceId,
           orderId: returnRequest.orderId,
+          orderNumber: order?.order_number || order?.orderNumber || null,
           buyerId: returnRequest.buyerId,
           sellerId: returnRequest.sellerId || null,
           status: returnRequest.status,

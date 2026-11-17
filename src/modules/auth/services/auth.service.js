@@ -286,7 +286,7 @@ class AuthService {
       delivery = await sendMail({
         to: email,
         subject: `OTP For ${this.getOtpPurposeLabel(purpose)}`,
-        text: `Your Sam Global verification code is ${otp}. It will expire in 15 minutes. Please do not share it with anyone.`,
+        text: `Your Sam Global verification code is ${otp}. Use it before it expires. Please do not share it with anyone.`,
         html,
         type: "auth_otp",
       });
@@ -1585,6 +1585,7 @@ class AuthService {
             this.getOtpPurposeLabel(
               BUYER_OTP_PURPOSE,
             ),
+          validityMinutes: Math.ceil(BUYER_OTP_TTL_SECONDS / 60),
         });
 
         delivery = await sendMail({
@@ -1596,7 +1597,7 @@ class AuthService {
             )}`,
 
           text:
-            `Your Sam Global verification code is ${otp}. It will expire in 15 minutes. Please do not share it with anyone.`,
+            `Your Sam Global verification code is ${otp}. It expires in ${Math.ceil(BUYER_OTP_TTL_SECONDS / 60)} minutes. Please do not share it with anyone.`,
 
           html,
           type: "auth_otp",
@@ -2725,6 +2726,14 @@ class AuthService {
     });
 
     await this.authRepository.updateRefreshSessions(user.id, refreshSessions);
+    const knownSessions = (user.refreshSessions || []).filter(session => session.userAgent);
+    if (!replacedSessionId && requestContext.userAgent && knownSessions.length &&
+      !knownSessions.some(session => session.userAgent === requestContext.userAgent && session.platform === requestContext.platform)) {
+      await require("../../notification/services/publish-use-case").publishUseCase("N009", String(user.id), {
+        status: "new_sign_in", platform: requestContext.platform || "browser", occurredAt: new Date().toISOString(),
+        recipientEmail: user.email, purpose: "Review a sign-in from an unfamiliar browser or device", viewUrl: "/account",
+      }, refreshPayload.sessionId);
+    }
     await this.recordSecurityEvent(successEventType, "success", {
       userId: user.id,
       email: user.email,
