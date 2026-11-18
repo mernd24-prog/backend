@@ -317,7 +317,10 @@ class DeliveryRepository {
           location: payload.location || null,
           note: payload.note || null,
           source: payload.source || "manual",
-          raw_payload: payload.rawPayload || {},
+          raw_payload: {
+            ...(payload.rawPayload || {}),
+            eventType: payload.eventType || payload.rawPayload?.eventType || "status_updated",
+          },
           actor_id: payload.actorId || null,
           idempotency_key: payload.idempotencyKey || null,
         })

@@ -105,6 +105,16 @@ const publicValue = (...values) => {
   const value = firstValue(...values);
   return isPublicReference(value) ? value : "";
 };
+const commerceDateTime = (value) => {
+  const date = value ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime())
+    ? new Intl.DateTimeFormat("en-IN", {
+        timeZone: "Asia/Kolkata",
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(date)
+    : "";
+};
 
 const compactRows = (rows = []) =>
   rows.filter((row) => row?.value !== undefined && row?.value !== null && row?.value !== "");
@@ -250,7 +260,12 @@ const shipmentRows = (payload = {}) => compactRows([
   row("Status", humanize(firstValue(payload.status, payload.shipmentStatus))),
   row("Tracking number", publicValue(payload.trackingNumber, payload.tracking_number)),
   row("Carrier", firstValue(payload.carrierName, payload.carrier_name)),
-  row("Estimated delivery", firstValue(payload.estimatedDelivery, payload.estimated_delivery)),
+  row("Estimated delivery", commerceDateTime(firstValue(
+    payload.expectedDeliveryAt,
+    payload.expected_delivery_at,
+    payload.estimatedDelivery,
+    payload.estimated_delivery,
+  ))),
 ]);
 
 const authRows = (payload = {}) => compactRows([
@@ -461,6 +476,14 @@ const EMAIL_TEMPLATE_DEFINITIONS = {
     rows: shipmentRows,
     ctaText: "View details",
   },
+  shipment_eta_updated: {
+    subject: "Expected Delivery Date Updated",
+    title: "Expected Delivery Date Updated",
+    intro: ({ expectedDeliveryAt }) =>
+      `Your shipment is still in its current stage. The expected delivery date is now ${commerceDateTime(expectedDeliveryAt) || "updated"}.`,
+    rows: shipmentRows,
+    ctaText: "Track order",
+  },
   shipment_delivered: {
     subject: "Shipment Delivered",
     title: "Shipment Delivered",
@@ -588,6 +611,7 @@ const eventTemplateMap = {
   [DOMAIN_EVENTS.INVENTORY_LOW_STOCK_V1]: () => "low_stock_alert",
   [DOMAIN_EVENTS.SHIPMENT_CREATED_V1]: () => "shipment_created",
   [DOMAIN_EVENTS.SHIPMENT_TRACKING_UPDATED_V1]: () => "shipment_updated",
+  [DOMAIN_EVENTS.SHIPMENT_ETA_UPDATED_V1]: () => "shipment_eta_updated",
   [DOMAIN_EVENTS.SHIPMENT_DELIVERED_V1]: () => "shipment_delivered",
   [DOMAIN_EVENTS.SHIPMENT_FAILED_V1]: () => "shipment_failed",
   [DOMAIN_EVENTS.SHIPMENT_RTO_V1]: () => "shipment_failed",

@@ -27,8 +27,8 @@ const { reverseShipment, shipmentBelongsToReturn, assertReverseTrackingTransitio
 const shippingProfilesService = new ShippingProfilesService();
 
 const SHIPMENT_TRANSITIONS = {
-  initiated: ["manifested", "picked_up", "in_transit", "failed"],
-  manifested: ["picked_up", "in_transit", "failed"],
+  initiated: ["manifested", "picked_up", "failed"],
+  manifested: ["picked_up", "failed"],
   picked_up: ["in_transit", "out_for_delivery", "failed", "rto", "lost", "damaged"],
   in_transit: ["out_for_delivery", "delivered", "failed", "rto", "lost", "damaged"],
   out_for_delivery: ["delivered", "failed", "rto", "lost", "damaged"],
@@ -524,11 +524,50 @@ class DeliveryService {
     }
 
     await this.assertCanManageShipment(shipment, actor);
+    const previousExpectedDeliveryAt = shipment.expected_delivery_at || null;
+    const requestedExpectedDeliveryAt = payload.expectedDeliveryAt || null;
+    const etaChanged = Boolean(
+      requestedExpectedDeliveryAt &&
+        new Date(requestedExpectedDeliveryAt).getTime() !==
+          new Date(previousExpectedDeliveryAt || 0).getTime(),
+    );
+    const etaOnlyUpdate =
+      (payload.eventType === "eta_updated" || payload.status === shipment.status) &&
+      etaChanged;
+    if (etaOnlyUpdate) {
+      payload.status = shipment.status;
+      payload.eventType = "eta_updated";
+      payload.rawPayload = {
+        ...(payload.rawPayload || {}),
+        eventType: "eta_updated",
+        previousExpectedDeliveryAt,
+        expectedDeliveryAt: new Date(requestedExpectedDeliveryAt).toISOString(),
+      };
+      payload.note = payload.note || "Expected delivery date updated";
+    }
     const order = await this.orderRepository.findById(shipment.order_id);
     if (!order) throw new AppError("Order not found", 404);
     const paidForFulfillment = order.payment_status === PAYMENT_STATUS.CAPTURED ||
       (order.payment_provider === PAYMENT_PROVIDER.COD && order.payment_status === PAYMENT_STATUS.AUTHORIZED);
-    if (this.isForwardShipment(shipment) && payload.status !== DELIVERY_STATUS.CANCELLED && !paidForFulfillment) {
+    const shipmentAlreadyStarted = Boolean(
+      shipment.shipped_at ||
+        [
+          DELIVERY_STATUS.PICKED_UP,
+          DELIVERY_STATUS.IN_TRANSIT,
+          DELIVERY_STATUS.OUT_FOR_DELIVERY,
+          DELIVERY_STATUS.DELIVERED,
+          DELIVERY_STATUS.FAILED,
+          DELIVERY_STATUS.RTO,
+          DELIVERY_STATUS.LOST,
+          DELIVERY_STATUS.DAMAGED,
+        ].includes(shipment.status),
+    );
+    if (
+      this.isForwardShipment(shipment) &&
+      payload.status !== DELIVERY_STATUS.CANCELLED &&
+      !paidForFulfillment &&
+      !shipmentAlreadyStarted
+    ) {
       throw new AppError("Payment must be completed before shipment processing can begin", 409);
     }
     if (payload.status === DELIVERY_STATUS.CANCELLED) {
@@ -566,14 +605,14 @@ class DeliveryService {
       }
       payload.expectedDeliveryAt = new Date(expectedDeliveryAt).toISOString();
     }
-    if (reverseShipment(shipment)) {
+    if (reverseShipment(shipment) && !etaOnlyUpdate) {
       const request = await ReturnModel.findById(shipment.return_id);
       if (!request || !shipmentBelongsToReturn(request, shipment)) throw new AppError("Shipment does not belong to the active return pickup", 409);
       if (!LOGISTICS_STATES.includes(request.status) && !(request.status === "received" && shipment.status === payload.status)) {
         throw new AppError("Reverse tracking is no longer open for this return", 409);
       }
       assertReverseTrackingTransition(shipment.status, payload.status);
-    } else {
+    } else if (!etaOnlyUpdate) {
       this.assertTrackingTransition(shipment.status, payload.status, payload);
     }
     if (handoverStatus) await this.deliveryRepository.updateShipmentFulfillmentSnapshot(shipmentId, fulfillmentItems);
@@ -583,14 +622,18 @@ class DeliveryService {
       source: payload.source || "manual",
     });
 
-    await this.syncOrderForTracking(result.shipment, actor);
+    if (!etaOnlyUpdate) await this.syncOrderForTracking(result.shipment, actor);
     if (reverseShipment(result.shipment)) {
       const { ReturnService } = require("../../returns/services/return.service");
       await ReturnService.syncReverseShipmentForTracking(result.shipment, actor, payload);
     }
     await this.syncReplacementReturnForTracking(result.shipment, actor);
     await this.syncDealDeliveryForShipment(result.shipment, actor);
-    await this.publishShipmentTrackingEvent(result.shipment, actor);
+    await this.publishShipmentTrackingEvent(result.shipment, actor, {
+      etaOnlyUpdate,
+      previousExpectedDeliveryAt,
+      expectedDeliveryAt: result.shipment.expected_delivery_at,
+    });
     return result;
   }
 
@@ -718,14 +761,16 @@ class DeliveryService {
     });
   }
 
-  async publishShipmentTrackingEvent(shipment, actor = {}) {
+  async publishShipmentTrackingEvent(shipment, actor = {}, context = {}) {
     const order = await this.orderRepository.findById(shipment.order_id);
     const eventByStatus = {
       [DELIVERY_STATUS.DELIVERED]: DOMAIN_EVENTS.SHIPMENT_DELIVERED_V1,
       [DELIVERY_STATUS.FAILED]: DOMAIN_EVENTS.SHIPMENT_FAILED_V1,
       [DELIVERY_STATUS.RTO]: DOMAIN_EVENTS.SHIPMENT_RTO_V1,
     };
-    const eventName = eventByStatus[shipment.status] || DOMAIN_EVENTS.SHIPMENT_TRACKING_UPDATED_V1;
+    const eventName = context.etaOnlyUpdate
+      ? DOMAIN_EVENTS.SHIPMENT_ETA_UPDATED_V1
+      : eventByStatus[shipment.status] || DOMAIN_EVENTS.SHIPMENT_TRACKING_UPDATED_V1;
     await eventPublisher.publish(
       makeEvent(
         eventName,
@@ -737,6 +782,9 @@ class DeliveryService {
           organizationId: shipment.organization_id || null,
           status: shipment.status,
           trackingNumber: shipment.tracking_number,
+          orderNumber: order?.order_number || null,
+          previousExpectedDeliveryAt: context.previousExpectedDeliveryAt || null,
+          expectedDeliveryAt: context.expectedDeliveryAt || shipment.expected_delivery_at || null,
           updatedBy: actor.userId || null,
           actorRole: actor.role || null,
         },

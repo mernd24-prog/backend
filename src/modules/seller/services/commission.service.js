@@ -25,6 +25,7 @@ const {
 } = require("../../../shared/domain/seller-payout-rules");
 const { allocatePayoutRecoveries } = require("../../../shared/domain/payout-recovery-allocation");
 const { recoverySnapshot, restoreRecoveryAllocation } = require("../../../shared/domain/cod-recovery");
+const { buildFinancePresentation } = require("./finance-presentation");
 
 class SellerCommissionService {
   constructor({ razorpayXProvider = new RazorpayXPayoutProvider(), walletService = new WalletService() } = {}) {
@@ -3872,7 +3873,10 @@ gstTcsAmount,
         ? 0
         : this.round(payoutPolicy.minimumPayoutAmount - balances.effectiveAvailablePayout),
     );
-    const items = pageEvaluations.map(({ commission, release }) => ({
+    const items = pageEvaluations.map(({ commission, release }) => {
+      const metadata = this.parseJson(commission.metadata, {});
+      const breakdown = metadata.financialBreakdown || metadata;
+      return {
       commissionId: commission.id,
       orderId: commission.order_id,
       payoutId: commission.payout_id || null,
@@ -3881,6 +3885,12 @@ gstTcsAmount,
       amount: this.round(commission.amount || 0),
       commissionAmount: this.round(commission.commission_amount || 0),
       taxAmount: this.round(commission.tax_amount || 0),
+      commissionGstAmount: this.round(breakdown.commissionGstAmount || 0),
+      tcsAmount: this.round(breakdown.gstTcsAmount || 0),
+      tdsAmount: this.round(breakdown.incomeTaxTdsAmount || 0),
+      shippingAmount: this.round(breakdown.shippingReimbursementAmount || 0),
+      shippingDeduction: this.round(breakdown.shippingDeductionAmount || 0),
+      promotionFundedAmount: this.round(breakdown.platformFundedPromotionAmount || breakdown.marketplacePromotionAmount || 0),
       refundAmount: this.round(commission.refund_amount || 0),
       netAmount: release.netAmount,
       currency: commission.currency || "INR",
@@ -3889,7 +3899,8 @@ gstTcsAmount,
       eligibleAt: release.eligibleAt,
       createdAt: commission.created_at,
       updatedAt: commission.updated_at,
-    }));
+      };
+    });
 
     const [codReconciliation, codSummary] = await Promise.all([
       this.getCodFinanceReconciliation(sellerId, query),
@@ -4071,7 +4082,12 @@ gstTcsAmount,
       );
       const amount = !isImmutable && orderItem.id ? authoritativeAmount : this.round(item.amount || 0);
       const amountCorrection = this.round(amount - Number(item.amount || 0));
-      return {
+      const lifecycleStatus = release.releaseStatus === "available" ? "eligible"
+        : release.releaseStatus === "paid" ? "released"
+          : release.releaseStatus === "in_process" ? "pending"
+            : release.releaseStatus === "held" ? "held"
+              : release.releaseStatus || "pending";
+      const presented = {
         ...item,
         amount,
         net_amount: isImmutable
@@ -4086,12 +4102,9 @@ gstTcsAmount,
         releaseStatus: release.releaseStatus,
         releaseReason: release.reason,
         eligibleAt: release.eligibleAt,
-        lifecycleStatus: release.releaseStatus === "available" ? "eligible"
-          : release.releaseStatus === "paid" ? "released"
-            : release.releaseStatus === "in_process" ? "pending"
-              : release.releaseStatus === "held" ? "held"
-                : release.releaseStatus || "pending",
+        lifecycleStatus: lifecycleStatus,
       };
+      return { ...presented, finance: buildFinancePresentation({ ...presented, releaseReason: release.reason }) };
     });
     return {
       items: enrichedItems,

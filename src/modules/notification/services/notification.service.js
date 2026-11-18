@@ -78,6 +78,7 @@ class NotificationService {
       [DOMAIN_EVENTS.PAYMENT_REFUNDED_V1, "Payment Refunded", (p) => `Payment refund processed for order ${p.orderNumber || p.orderId}.`],
       [DOMAIN_EVENTS.SHIPMENT_CREATED_V1, "Shipment Created", (p) => `Shipment created for order ${p.orderNumber || p.orderId}.`],
       [DOMAIN_EVENTS.SHIPMENT_TRACKING_UPDATED_V1, "Shipment Updated", (p) => `Shipment ${p.shipmentId} is ${String(p.status || "").replace(/_/g, " ")}.`],
+      [DOMAIN_EVENTS.SHIPMENT_ETA_UPDATED_V1, "Delivery Date Updated", (p) => `The expected delivery date for order ${p.orderNumber || p.orderId} is now ${new Date(p.expectedDeliveryAt).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" })}.`],
       [DOMAIN_EVENTS.SHIPMENT_DELIVERED_V1, "Shipment Delivered", (p) => `Order ${p.orderNumber || p.orderId} has been delivered.`],
       [DOMAIN_EVENTS.DEAL_SUBMITTED_V1, "Deal Submitted", (p) => `Deal ${p.dealNumber || p.dealId} is waiting for approval.`],
       [DOMAIN_EVENTS.DEAL_APPROVED_V1, "Deal Approved", (p) => `Deal ${p.dealNumber || p.dealId} has been approved.`],

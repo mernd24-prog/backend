@@ -104,6 +104,7 @@ const shipmentParamSchema = Joi.object({
 
 const trackingEventBody = {
   status: Joi.string().valid(...Object.values(DELIVERY_STATUS)).required(),
+  eventType: Joi.string().valid("status_updated", "eta_updated").default("status_updated"),
   eventTime: Joi.date().iso(),
   location: Joi.string().allow("", null),
   note: Joi.string().max(1000).allow("", null),

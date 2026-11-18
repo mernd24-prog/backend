@@ -86,6 +86,7 @@ function registerDomainHandlers() {
     [DOMAIN_EVENTS.REFUND_FAILED_V1, "refund", (p) => p.referenceId || p.returnId],
     [DOMAIN_EVENTS.SHIPMENT_CREATED_V1, "shipment", (p) => p.shipmentId],
     [DOMAIN_EVENTS.SHIPMENT_TRACKING_UPDATED_V1, "shipment", (p) => p.shipmentId],
+    [DOMAIN_EVENTS.SHIPMENT_ETA_UPDATED_V1, "shipment", (p) => p.shipmentId],
     [DOMAIN_EVENTS.SHIPMENT_DELIVERED_V1, "shipment", (p) => p.shipmentId],
     [DOMAIN_EVENTS.SHIPMENT_FAILED_V1, "shipment", (p) => p.shipmentId],
     [DOMAIN_EVENTS.SHIPMENT_RTO_V1, "shipment", (p) => p.shipmentId],
