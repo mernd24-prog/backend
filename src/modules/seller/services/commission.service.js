@@ -3754,6 +3754,7 @@ gstTcsAmount,
       buildCommissionQuery().orderBy("created_at", "desc").limit(limit).offset(offset),
       knex("seller_payouts")
         .where({ seller_id: sellerId, status: "completed" })
+        .where("net_amount", ">", 0)
         .modify((builder) => {
           if (query.organizationId) builder.where("organization_id", query.organizationId);
         })
@@ -3763,6 +3764,7 @@ gstTcsAmount,
       knex("seller_payouts")
         .where("seller_id", sellerId)
         .whereIn("status", ["pending", "processing"])
+        .where("net_amount", ">", 0)
         .modify((builder) => {
           if (query.organizationId) builder.where("organization_id", query.organizationId);
         })
@@ -3885,7 +3887,7 @@ gstTcsAmount,
       amount: this.round(commission.amount || 0),
       commissionAmount: this.round(commission.commission_amount || 0),
       taxAmount: this.round(commission.tax_amount || 0),
-      commissionGstAmount: this.round(breakdown.commissionGstAmount || 0),
+      commissionGstAmount: this.round(breakdown.commissionGstAmount || breakdown.platformFeeTaxAmount || 0),
       tcsAmount: this.round(breakdown.gstTcsAmount || 0),
       tdsAmount: this.round(breakdown.incomeTaxTdsAmount || 0),
       shippingAmount: this.round(breakdown.shippingReimbursementAmount || 0),
