@@ -12,6 +12,8 @@ const financeView = allowPermissions("sellers/commissions:view");
 const financeExport = allowPermissions("sellers/commissions:export");
 const financeManage = allowPermissions("sellers/commissions:update");
 const SELLER_ROLES = new Set(["seller", "seller-admin", "seller-sub-admin"]);
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function platformFinanceOnly(req, res, next) {
   if (SELLER_ROLES.has(req.auth?.role)) {
@@ -45,9 +47,22 @@ function shouldAutoProcessWithRazorpayX(paymentMethod, autoProcess) {
 }
 
 function sellerOrganizationQuery(req) {
+  const query = { ...(req.query || {}) };
+  delete query.organizationId;
+  const authenticatedOrganizationId = String(
+    req.auth?.selectedOrganizationId || "",
+  ).trim();
+  const requestedOrganizationId = String(
+    req.query?.organizationId || "",
+  ).trim();
+  const organizationId = UUID_PATTERN.test(authenticatedOrganizationId)
+    ? authenticatedOrganizationId
+    : UUID_PATTERN.test(requestedOrganizationId)
+      ? requestedOrganizationId
+      : undefined;
   return {
-    ...(req.query || {}),
-    organizationId: req.query?.organizationId || req.auth?.selectedOrganizationId || undefined,
+    ...query,
+    organizationId,
   };
 }
 

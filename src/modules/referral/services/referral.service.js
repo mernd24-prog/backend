@@ -1153,11 +1153,16 @@ class ReferralService {
   }
 
   async upsertProductAmount(payload = {}, actor = {}) {
+    const amountType = payload.amountType === "percentage"
+      ? "percentage"
+      : "fixed_amount";
     return this.referralRepository.upsertProductAmount({
       ...payload,
       productId: String(payload.productId),
+      amountType,
       amountValue: Number(payload.amountValue || 0),
-      maximumAmount: Number(payload.maximumAmount || 0),
+      maximumAmount:
+        amountType === "percentage" ? Number(payload.maximumAmount || 0) : 0,
       active: payload.active !== false,
       updatedBy: actor.userId || null,
       createdBy: actor.userId || null,
@@ -1196,7 +1201,11 @@ class ReferralService {
       const raw = config.amountType === "percentage"
         ? unitAmount * Number(config.amountValue || 0) / 100
         : Number(config.amountValue || 0);
-      const cap = Number(config.maximumAmount || 0);
+      // A maximum is meaningful only for a percentage pool. Fixed pools are
+      // already an explicit per-product, per-order amount.
+      const cap = config.amountType === "percentage"
+        ? Number(config.maximumAmount || 0)
+        : 0;
       const pool = Math.min(Math.max(cap > 0 ? Math.min(raw, cap) : raw, 0), unitAmount);
       if (Number.isFinite(pool) && pool > 0) {
         const productId = String(item.productId);

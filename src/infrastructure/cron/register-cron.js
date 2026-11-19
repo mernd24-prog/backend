@@ -126,6 +126,7 @@ function registerCronJobs() {
     });
   }, 2 * 60 * 1000);
   runPeriodicJob("return-window-fulfillment", async () => {
+    const codCollections = await settlementLifecycleService.reconcileDeliveredCodCollections();
     const eligibleItems = await settlementLifecycleService.markEligibleOrderItems();
     const fulfilledOrders = await settlementLifecycleService.finalizeEligibleOrders();
     const referralOrders = await referralService.reconcileInfluencerReferralOrderStatuses();
@@ -136,6 +137,7 @@ function registerCronJobs() {
       actor: { userId: "system:return-window", role: "system" },
     });
     return {
+      codCollections,
       eligibleItems,
       fulfilledOrders,
       referralOrders,
