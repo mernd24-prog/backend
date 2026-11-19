@@ -1,3 +1,4 @@
+const { AppError } = require("../../../shared/errors/app-error");
 const { knex } = require("../../../infrastructure/postgres/postgres-client");
 const { env } = require("../../../config/env");
 
@@ -480,6 +481,15 @@ class CommerceSettingsService {
   }
 
   async updateSettings(payload = {}, actor = {}) {
+    for (const field of ["defaultWindowDays", "maxSellerOverrideDays"]) {
+      if (payload.returns?.[field] === undefined) continue;
+      const raw = payload.returns[field];
+      const days = Number(raw);
+      const minutes = days * 1440;
+      if (raw === null || raw === "" || typeof raw === "boolean" || !Number.isFinite(days) || days < 0 || days > 60 || Math.abs(minutes - Math.round(minutes)) > 1e-7) {
+        throw new AppError(`${field} must be between 0 and 60 days in whole minutes`, 400);
+      }
+    }
     await this.ensureTable();
     const current = await this.getSettings();
     const next = this.mergeSettings(current, payload);

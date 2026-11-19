@@ -565,7 +565,7 @@ class ReturnServiceClass {
         item.delivered_at || storedPolicy.deliveredAt || this.resolveOrderItemDeliveredAt(order, item) || deliveredAt,
       );
       const eligibleUntil = new Date(item.return_eligible_until || storedPolicy.eligibleUntil || itemDeliveredAt);
-      if (!item.return_eligible_until && !storedPolicy.eligibleUntil) eligibleUntil.setDate(eligibleUntil.getDate() + returnWindowDays);
+      if (!item.return_eligible_until && !storedPolicy.eligibleUntil) eligibleUntil.setTime(eligibleUntil.getTime() + Math.round(returnWindowDays * 1440) * 60000);
       return { ...productPolicy, returnable, returnWindowDays, deliveredAt: itemDeliveredAt, eligibleUntil };
     });
     if (policies.some((policy) => policy.returnable === false || policy.eligible === false)) {

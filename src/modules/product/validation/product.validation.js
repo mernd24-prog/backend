@@ -261,8 +261,8 @@ const warrantySchema = Joi.object({
   returnPolicy: Joi.object({
     eligible: Joi.boolean(),
     returnable: Joi.boolean(),
-    days: optionalNonNegativeInteger(),
-    returnWindowDays: optionalNonNegativeInteger(),
+    days: optionalNonNegativeNumber().max(365),
+    returnWindowDays: optionalNonNegativeNumber().max(365),
     type: Joi.string().valid("standard", "replacement_only", "non_returnable").default("standard"),
     resolution: Joi.string().valid("refund", "replacement", "refund_or_replacement").default("refund_or_replacement"),
     requiresImages: Joi.boolean().default(false),
@@ -285,11 +285,12 @@ const warrantySchema = Joi.object({
     returnPolicy.returnWindowDays ?? returnPolicy.days;
   if (
     returnable &&
-    (!Number.isInteger(Number(returnWindowDays)) ||
-      Number(returnWindowDays) < 1 ||
-      Number(returnWindowDays) > 365)
+    (!Number.isFinite(Number(returnWindowDays)) ||
+      Number(returnWindowDays) < 1 / 1440 ||
+      Number(returnWindowDays) > 365 ||
+      Math.abs(Number(returnWindowDays) * 1440 - Math.round(Number(returnWindowDays) * 1440)) > 1e-7)
   ) {
-    return helpers.message({ custom: "Return window must be a whole number between 1 and 365 days" });
+    return helpers.message({ custom: "Return window must be between 1 minute and 365 days in whole minutes" });
   }
 
   if (!enabled) {

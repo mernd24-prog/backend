@@ -44,7 +44,7 @@ class SettlementLifecycleService {
 
   addDays(value, days) {
     const date = new Date(value);
-    date.setDate(date.getDate() + Number(days || 0));
+    date.setTime(date.getTime() + Math.round(Number(days || 0) * 1440) * 60000);
     return date;
   }
 
