@@ -1487,6 +1487,13 @@ const sellerPayoutAmount = Number(
     const sellerFulfillmentGroups = (relations.sellerFulfillmentGroups || [])
       .filter((group) => String(group.sellerId || group.seller_id || "") === sellerKey &&
         (!organizationKey || String(group.organizationId || group.organization_id || "") === organizationKey));
+    const sellerCodCollections = (relations.codCollections || []).filter(
+      (collection) =>
+        String(collection.seller_id || collection.sellerId || "") === sellerKey &&
+        (!organizationKey ||
+          String(collection.organization_id || collection.organizationId || "") ===
+            organizationKey),
+    );
     const taxBreakup = this.normalizeJson(order.tax_breakup, {});
     const taxItems = Array.isArray(taxBreakup.items)
       ? taxBreakup.items.filter((item) => productIds.has(String(item.productId || item.product_id || "")))
@@ -1542,6 +1549,8 @@ const sellerPayoutAmount = Number(
         invoice: scopedInvoices[0] || null,
         taxInvoice: scopedInvoices[0] || null,
         shipments: sellerShipments,
+        codCollections: sellerCodCollections,
+        referralAllocations: [],
         returns: sellerReturns,
         sellerFulfillmentGroups,
       },

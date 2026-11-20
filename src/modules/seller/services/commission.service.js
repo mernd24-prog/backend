@@ -4067,7 +4067,17 @@ gstTcsAmount,
     const orderItems = orderItemIds.length
       ? await knex("order_items")
         .whereIn("id", orderItemIds)
-        .select("id", "line_total", "discount_amount", "delivered_at", "return_eligible_until", "payout_eligible_at", "payout_status", "payout_hold_reason")
+        .select(
+          "id",
+          "line_total",
+          "discount_amount",
+          "pricing_snapshot",
+          "delivered_at",
+          "return_eligible_until",
+          "payout_eligible_at",
+          "payout_status",
+          "payout_hold_reason",
+        )
       : [];
     const orderItemsById = new Map(orderItems.map((item) => [String(item.id), item]));
     const enrichedItems = (await this.enrichFinanceRecords(items)).map((item) => {

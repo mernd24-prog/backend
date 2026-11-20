@@ -1,4 +1,9 @@
 const { ReturnModel } = require("../../returns/models/return.model");
+const {
+  ReferralCommissionLedgerModel,
+  InfluencerProfileModel,
+  InfluencerAccountModel,
+} = require("../../referral/models/referral.model");
 const { orderPresentation } = require("../../../shared/domain/order-presentation");
 const { forwardDeliveryProgress, isForwardShipment } = require("../../../shared/domain/order-fulfillment");
 const { knex, postgresPool } = require("../../../infrastructure/postgres/postgres-client");
@@ -929,6 +934,8 @@ class OrderRepository {
       walletTransactions,
       cancellations,
       sellerCommissions,
+      codCollections,
+      referralAllocations,
       returns,
     ] = await Promise.all([
       includeItems
@@ -954,6 +961,8 @@ class OrderRepository {
         : Promise.resolve([]),
       this.optionalTableRows("order_cancellations", (query) => query.whereIn("order_id", orderIds).orderBy("created_at", "desc")),
       this.optionalTableRows("seller_commissions", (query) => query.whereIn("order_id", orderIds).orderBy("created_at", "desc")),
+      this.optionalTableRows("cod_collections", (query) => query.whereIn("order_id", orderIds).orderBy("created_at", "desc")),
+      this.findReferralAllocations(orderIds),
       ReturnModel.find({ orderId: { $in: orderIds.map(String) } })
         .select("_id orderId returnNumber status resolution refund.status refund.refundedAmount refundAmount refundedAt createdAt items")
         .sort({ createdAt: -1 }).lean(),
@@ -986,6 +995,8 @@ class OrderRepository {
       walletTransactions: this.groupBy(walletTransactions, "reference_id"),
       cancellations: this.groupBy(cancellations, "order_id"),
       sellerCommissions: this.groupBy(sellerCommissions, "order_id"),
+      codCollections: this.groupBy(codCollections, "order_id"),
+      referralAllocations: this.groupBy(referralAllocations, "orderId"),
       trackingEvents: this.groupBy(trackingEvents, "shipment_id"),
     };
 
@@ -1038,6 +1049,9 @@ class OrderRepository {
           sellers,
           sellerSettlements,
           sellerCommissions: orderSellerCommissions,
+          codCollections: grouped.codCollections.get(order.id) || [],
+          referralAllocations:
+            grouped.referralAllocations.get(String(order.id)) || [],
           sellerPayouts: orderSellerCommissions
             .map((commission) => payoutsById.get(String(commission.payout_id || "")))
             .filter(Boolean),
@@ -2345,6 +2359,85 @@ class OrderRepository {
       }
       throw error;
     }
+  }
+
+  async findReferralAllocations(orderIds = []) {
+    if (
+      !orderIds.length ||
+      typeof ReferralCommissionLedgerModel?.find !== "function"
+    ) {
+      return [];
+    }
+
+    const ledgers = await ReferralCommissionLedgerModel.find({
+      orderId: { $in: orderIds.map(String) },
+    }).lean();
+    if (!ledgers.length) return [];
+
+    const objectId = InfluencerProfileModel?.db?.base?.Types?.ObjectId;
+    const influencerIds = [...new Set(
+      ledgers
+        .map((entry) => String(entry.influencerId || ""))
+        .filter((id) => id && (!objectId || objectId.isValid(id))),
+    )];
+    const profiles =
+      influencerIds.length && typeof InfluencerProfileModel?.find === "function"
+        ? await InfluencerProfileModel.find({ _id: { $in: influencerIds } })
+          .select("accountId userId influencerType metadata")
+          .lean()
+        : [];
+    const accountIds = [...new Set(profiles.map((profile) => profile.accountId).filter(Boolean).map(String))];
+    const userIds = [...new Set(profiles.map((profile) => profile.userId).filter(Boolean).map(String))];
+    const accounts =
+      accountIds.length && typeof InfluencerAccountModel?.find === "function"
+        ? await InfluencerAccountModel.find({ _id: { $in: accountIds } })
+          .select("email profile")
+          .lean()
+        : [];
+    const users =
+      userIds.length && typeof UserModel?.find === "function"
+        ? await UserModel.find({ _id: { $in: userIds } })
+          .select("email profile")
+          .lean()
+        : [];
+    const profileById = new Map(profiles.map((profile) => [String(profile._id), profile]));
+    const accountById = new Map(accounts.map((account) => [String(account._id), account]));
+    const userById = new Map(users.map((user) => [String(user._id), user]));
+    const displayName = (record = {}) =>
+      record.profile?.displayName ||
+      record.profile?.name ||
+      [record.profile?.firstName, record.profile?.lastName].filter(Boolean).join(" ") ||
+      record.email ||
+      "Partner";
+
+    return ledgers.map((entry) => {
+      const metadata = this.parseJson(entry.metadata, {});
+      const influencerId = String(entry.influencerId || "");
+      const profile = profileById.get(influencerId) || {};
+      const recipient = profile.accountId
+        ? accountById.get(String(profile.accountId))
+        : userById.get(String(profile.userId || ""));
+      return {
+        id: String(entry._id || ""),
+        orderId: String(entry.orderId || ""),
+        influencerId,
+        recipientName: displayName(recipient || {}),
+        recipientPartnerType:
+          metadata.recipientPartnerType ||
+          (profile.influencerType === "parent" ? "growth_partner" : "brand_associate"),
+        commissionType: entry.commissionType,
+        basisAmount: this.money(entry.basisAmount),
+        sharePercent: this.money(entry.percent),
+        payableAmount: this.money(
+          metadata.shareAmount ??
+            Number(entry.amount || 0) * Number(metadata.coinValue || 1),
+        ),
+        coins: this.money(entry.amount),
+        coinValue: this.money(metadata.coinValue || 1),
+        referralCode: metadata.code || null,
+        status: entry.status,
+      };
+    });
   }
 
   async findOrderUsers(orders, items) {
