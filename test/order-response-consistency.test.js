@@ -228,3 +228,37 @@ test('buyer and admin item stages agree for cancellation and return outcomes', a
     assert.equal(buyer.items[0].effective_status, admin.items[0].effective_status);
   }
 });
+
+
+test('initiated shipment filtering uses forward packages rather than stale order delivery status', () => {
+  const { repository } = fixture();
+  const clauses = [];
+  const values = [];
+  let index = 1;
+  repository.applyOrderFilters(clauses, values, { deliveryStatus: 'initiated' }, () => index++);
+  assert.deepEqual(values, ['initiated']);
+  const sql = clauses.join(' AND ');
+  assert.match(sql, /EXISTS[\s\S]*FROM shipments s/);
+  assert.match(sql, /s\.status = \$1/);
+  assert.match(sql, /NOT EXISTS/);
+  assert.match(sql, /COALESCE\(s\.direction, 'forward'\) <> 'reverse'/);
+  assert.match(sql, /'return', 'reverse', 'rto'/);
+  for (const progressed of ['manifested', 'picked_up', 'in_transit', 'delivered', 'failed']) {
+    assert.ok(sql.includes(`'${progressed}'`));
+  }
+  assert.ok(!sql.includes('o.delivery_status ='));
+});
+
+test('other delivery filters and parameter positions remain unchanged', () => {
+  const { repository } = fixture();
+  for (const deliveryStatus of ['delivered', 'cancelled', 'in_transit']) {
+    const clauses = [];
+    const values = [];
+    let index = 1;
+    repository.applyOrderFilters(clauses, values, {
+      paymentStatus: 'captured', deliveryStatus,
+    }, () => index++);
+    assert.deepEqual(values, ['captured', deliveryStatus]);
+    assert.equal(clauses[1], 'o.delivery_status = $2');
+  }
+});

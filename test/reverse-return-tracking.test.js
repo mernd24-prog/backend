@@ -322,7 +322,7 @@ test("stale delivered records are projected before action validation, so pickup 
   assert.equal(ctx.doc.status, "received");
   assert.equal(ctx.writes(), 0);
 });
-test("pickup failure can be retried, and doorstep exchanges still record replacement delivery", async () => {
+test("pickup failure can be retried without claiming replacement delivery", async () => {
   const ctx = setup("pickup_failed", "failed", {
     replacement: { orderId: "replacement-a", status: "created" },
   });
@@ -332,7 +332,7 @@ test("pickup failure can be retried, and doorstep exchanges still record replace
     actor,
   );
   assert.equal(ctx.doc.status, "in_reverse_transit");
-  assert.equal(ctx.doc.replacement.status, "delivered");
+  assert.equal(ctx.doc.replacement.status, "created");
 });
 test("events for superseded or unrelated reverse shipments cannot update the active return", async () => {
   const ctx = setup();
@@ -469,4 +469,178 @@ test("courier receipt preserves an existing partial warehouse count and zero-app
     shipment("delivered"),
   );
   assert.equal(unapproved.items[0].receivedQuantity, 0);
+});
+
+
+test("reverse pickup keeps pickup date and warehouse ETA separate", async () => {
+  const ctx = setup("approved", "initiated", { reverseShipment: {} });
+  const pickup = new Date(Date.now() + 86400000).toISOString();
+  const arrival = new Date(Date.now() + 172800000).toISOString();
+  let created;
+  ctx.service.orderRepository.findByIdWithItems = async () => ({});
+  ctx.service.deliveryRepository.createShipment = async (payload) => {
+    created = payload;
+    return shipment("initiated", { expected_delivery_at: payload.expectedDeliveryAt });
+  };
+  await ctx.service.scheduleReversePickup("return-a", {
+    courierName: "Courier", trackingNumber: "AWB-1",
+    pickupScheduledAt: pickup, expectedDeliveryAt: arrival,
+  }, actor);
+  assert.equal(created.expectedDeliveryAt, arrival);
+  assert.equal(ctx.doc.reverseShipment.pickupScheduledAt, pickup);
+  assert.equal(ctx.doc.status, "reverse_pickup_scheduled");
+});
+
+test("warehouse ETA before pickup is rejected before booking", async () => {
+  const ctx = setup("approved", "initiated", { reverseShipment: {} });
+  await assert.rejects(ctx.service.scheduleReversePickup("return-a", {
+    courierName: "Courier", trackingNumber: "AWB-1",
+    pickupScheduledAt: new Date(Date.now() + 172800000).toISOString(),
+    expectedDeliveryAt: new Date(Date.now() + 86400000).toISOString(),
+  }, actor), /after pickup/);
+  assert.equal(ctx.doc.status, "approved");
+});
+
+test("replacement customer ETA is saved independently of the reverse shipment", async () => {
+  const ctx = setup("replacement_created", "delivered", {
+    replacementOrderId: "replacement-order", replacement: { status: "created" },
+  });
+  const arrival = new Date(Date.now() + 172800000).toISOString();
+  let created;
+  ctx.service.deliveryRepository.createShipment = async (payload) => {
+    created = payload;
+    return { id: "replacement-shipment" };
+  };
+  await ctx.service.createReplacement("return-a", {
+    action: "ship", courierName: "Courier", trackingNumber: "REPLACE-1", expectedDeliveryAt: arrival,
+  }, actor);
+  assert.equal(created.expectedDeliveryAt, arrival);
+  assert.equal(created.direction, "forward");
+  assert.equal(created.orderId, "replacement-order");
+  assert.equal(ctx.doc.reverseShipment.shipmentId, "reverse-a");
+  assert.equal(ctx.doc.replacement.shipmentId, "replacement-shipment");
+});
+
+
+test("forward and replacement transit retain overdue ETA relative to the original handover", async () => {
+  for (const shipmentType of ["forward", "replacement"]) {
+    const ctx = setup();
+    const forward = shipment("picked_up", {
+      direction: "forward", return_id: null, shipment_type: shipmentType,
+      shipped_at: "2020-01-01T10:00:00Z", expected_delivery_at: "2020-01-03T10:00:00Z",
+      courier_name: "Courier", tracking_number: "AWB-1",
+    });
+    let writes = 0;
+    ctx.delivery.deliveryRepository.findShipmentById = async () => forward;
+    ctx.delivery.deliveryRepository.updateShipmentFulfillmentSnapshot = async () => {};
+    ctx.delivery.deliveryRepository.addTrackingEvent = async (id, payload) => {
+      writes++;
+      assert.equal(payload.expectedDeliveryAt, "2020-01-03T10:00:00.000Z");
+      return { shipment: { ...forward, status: payload.status } };
+    };
+    ctx.delivery.orderRepository.findByIdWithItems = async () => ({});
+    ctx.delivery.getForwardFulfillmentItems = async () => [];
+    ctx.delivery.assertHasFulfillableQuantity = () => {};
+    await ctx.delivery.addTrackingEvent("reverse-a", {
+      status: "in_transit", shippedAt: new Date().toISOString(),
+    }, actor);
+    assert.equal(writes, 1);
+  }
+});
+
+test("booking a replacement return pickup does not create the replacement before QC", async () => {
+  const ctx = setup("approved", "initiated", { reverseShipment: {}, resolution: "replacement" });
+  let replacements = 0;
+  ctx.service.createReplacement = async () => { replacements++; };
+  ctx.service.orderRepository.findByIdWithItems = async () => ({});
+  ctx.service.deliveryRepository.createShipment = async () => shipment("initiated");
+  await ctx.service.scheduleReversePickup("return-a", { courierName: "Courier", trackingNumber: "AWB-1" }, actor);
+  assert.equal(replacements, 0);
+  assert.equal(ctx.doc.status, "reverse_pickup_scheduled");
+});
+
+function qcFixture(extra = {}) {
+  const ctx = setup("received", "delivered", {
+    resolution: "replacement", refund: {}, replacement: {}, ...extra,
+  });
+  ctx.service.getReturnOrThrow = async () => ctx.doc;
+  ctx.doc.items[0].toObject = () => ({ orderItemId: "item-a" });
+  ctx.service.inventoryService = { restockForReturn: async () => {} };
+  ctx.service.maybeAutoProcessRefund = async doc => doc;
+  return ctx;
+}
+
+test("accepted QC requests replacement approval and cannot claim delivery", async () => {
+  const ctx = qcFixture();
+  await ctx.service.qcReturn("return-a", { passed: true }, actor);
+  assert.equal(ctx.doc.status, "replacement_requested");
+  assert.equal(ctx.doc.replacement.status, "requested");
+  await assert.rejects(ctx.service.createReplacement("return-a", { action: "complete" }, actor), /delivery must be confirmed/);
+});
+
+test("QC resumes legacy pre-created orders without trusting inferred delivery", async () => {
+  const ctx = qcFixture({ replacement: { orderId: "replacement-order", status: "delivered", deliveredAt: new Date() } });
+  await ctx.service.qcReturn("return-a", { passed: true }, actor);
+  assert.equal(ctx.doc.status, "replacement_created");
+  assert.equal(ctx.doc.replacement.orderId, "replacement-order");
+  assert.equal(ctx.doc.replacement.deliveredAt, undefined);
+});
+
+test("QC resumes linked replacement shipments; only confirmed delivery enables explicit completion", async () => {
+  for (const [status, next] of [["in_transit", "replacement_shipped"], ["delivered", "replacement_delivered"]]) {
+    const ctx = qcFixture({ replacement: { orderId: "replacement-order", shipmentId: "replacement-package" } });
+    ctx.service.deliveryRepository.findShipmentById = async () => shipment(status, {
+      id: "replacement-package", order_id: "replacement-order", shipment_type: "replacement", direction: "forward",
+    });
+    await ctx.service.qcReturn("return-a", { passed: true }, actor);
+    assert.equal(ctx.doc.status, next);
+    assert.notEqual(ctx.doc.status, "replaced");
+    if (status === "delivered") {
+      await ctx.service.createReplacement("return-a", { action: "complete" }, actor);
+      assert.equal(ctx.doc.status, "replaced");
+    }
+  }
+});
+
+
+test("policy matrix governs refund, replacement, non-returnable and legacy requests", () => {
+  const ctx = setup();
+  for (const [policy, expected] of [
+    [{ resolution: "refund" }, ["refund"]],
+    [{ resolution: "replacement" }, ["replacement"]],
+    [{ resolution: "refund_or_replacement" }, ["refund", "replacement"]],
+    [{ type: "replacement_only" }, ["replacement"]],
+    [{ returnable: false }, []],
+    [{ type: "non_returnable" }, []],
+    [{}, ["refund", "replacement"]],
+  ]) {
+    assert.deepEqual(Array.from(ctx.service.getAllowedReturnResolutions(policy)), expected);
+  }
+  assert.deepEqual(Array.from(ctx.service.getReturnAllowedResolutions({ items: [
+    { policySnapshot: { resolution: "refund" } },
+    { policySnapshot: { resolution: "refund_or_replacement" } },
+  ] })), ["refund"]);
+});
+
+test("refund-only products reject replacement requests before order creation", async () => {
+  const ctx = setup("qc_passed", "delivered", { policySnapshot: { allowedResolutions: ["refund"] } });
+  await assert.rejects(ctx.service.createReplacement("return-a", { action: "request" }, actor), /policy does not allow/);
+  assert.equal(ctx.doc.status, "qc_passed");
+});
+
+test("replacement-only products reject a new refund before payment lookup", async () => {
+  const ctx = setup("qc_passed", "delivered", { policySnapshot: { allowedResolutions: ["replacement"] } });
+  await assert.rejects(ctx.service.processRefund("return-a", actor), /policy does not allow/);
+  assert.equal(ctx.doc.status, "qc_passed");
+});
+
+test("customer requests cannot select a resolution outside purchased policy", async () => {
+  const ctx = setup();
+  ctx.service.orderRepository.findByIdWithItems = async () => ({
+    buyer_id: "buyer-a", items: [{ id: "item-a", product_id: "product-a", delivered_at: new Date() }],
+  });
+  ctx.service.resolveReturnPolicy = async () => ({ allowedResolutions: ["refund"] });
+  await assert.rejects(ctx.service.requestReturn("order-a", "buyer-a", [
+    { orderItemId: "item-a", productId: "product-a", quantity: 1 },
+  ], "defective", "", actor, { resolution: "replacement" }), /not allowed/);
 });

@@ -600,7 +600,7 @@ class DeliveryService {
       if (!payload.shippedAt && !shipment.shipped_at) throw new AppError("Shipment date is required when shipping", 400);
       const expectedDeliveryAt = payload.expectedDeliveryAt || shipment.expected_delivery_at;
       if (!expectedDeliveryAt) throw new AppError("Expected delivery date is required when shipping", 400);
-      if (new Date(expectedDeliveryAt).getTime() <= new Date(payload.shippedAt || shipment.shipped_at || automaticEventTime).getTime()) {
+      if (new Date(expectedDeliveryAt).getTime() <= new Date(shipment.shipped_at || payload.shippedAt || automaticEventTime).getTime()) {
         throw new AppError("Expected delivery date must be after the shipment date", 400);
       }
       payload.expectedDeliveryAt = new Date(expectedDeliveryAt).toISOString();

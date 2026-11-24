@@ -773,7 +773,27 @@ class OrderRepository {
       // delivered order (for example, one delivered shipment plus pending
       // items) in the Delivered results. Keep the filter consistent with the
       // status shown on the order row.
-      clauses.push(`o.delivery_status = ${statusParameter}`);
+      if (deliveryStatus === "initiated") {
+        // Automatic packages can exist before orders.delivery_status is updated.
+        // Initiated is shown only while no forward package has progressed.
+        const forwardPackage = `s.order_id = o.id
+          AND COALESCE(s.direction, 'forward') <> 'reverse'
+          AND COALESCE(s.shipment_type, 'forward') NOT IN ('return', 'reverse', 'rto')`;
+        clauses.push(`(
+          EXISTS (
+            SELECT 1 FROM shipments s
+            WHERE ${forwardPackage} AND s.status = ${statusParameter}
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM shipments s
+            WHERE ${forwardPackage}
+              AND s.status IN ('manifested', 'picked_up', 'in_transit',
+                'out_for_delivery', 'delivered', 'failed', 'rto', 'lost', 'damaged')
+          )
+        )`);
+      } else {
+        clauses.push(`o.delivery_status = ${statusParameter}`);
+      }
     }
     if (buyerId) {
       clauses.push(`o.buyer_id = $${nextIndex()}`);

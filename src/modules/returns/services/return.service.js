@@ -28,10 +28,10 @@ const VALID_TRANSITIONS = {
   manual_ship_back: ["shipped_back", "in_reverse_transit", "received", "closed"],
   shipped_back: ["in_reverse_transit", "received", "closed"],
   in_reverse_transit: ["pickup_failed", "received", "closed"],
-  received: ["qc_passed", "qc_failed", "qc_completed", "replacement_requested", "replaced", "closed"],
+  received: ["qc_passed", "qc_failed", "qc_completed", "replacement_requested", "replacement_created", "replacement_shipped", "replacement_delivered", "closed"],
   qc_passed: ["refund_pending", "replacement_requested", "replacement_pending", "closed"],
   qc_completed: ["refund_pending", "replacement_requested", "replacement_pending", "closed"],
-  qc_failed: ["qc_passed", "qc_completed", "qc_failure_upheld", "closed"],
+  qc_failed: ["qc_passed", "qc_completed", "qc_failure_upheld", "replacement_requested", "replacement_created", "replacement_shipped", "replacement_delivered", "closed"],
   qc_failure_upheld: ["closed"],
   refund_pending: ["refunded", "refund_failed", "partially_refunded", "closed"],
   refund_failed: ["refund_pending", "refunded", "closed"],
@@ -550,13 +550,39 @@ class ReturnServiceClass {
     );
   }
 
+  getAllowedReturnResolutions(policy = {}) {
+    if (policy.returnable === false || policy.eligible === false || policy.type === "non_returnable") return [];
+    if (policy.type === "replacement_only" || policy.resolution === "replacement") return ["replacement"];
+    if (policy.resolution === "refund") return ["refund"];
+    if (Array.isArray(policy.allowedResolutions)) return policy.allowedResolutions;
+    return ["refund", "replacement"];
+  }
+
+  getReturnAllowedResolutions(returnRequest = {}) {
+    const policies = (returnRequest.items || []).map(item => item.policySnapshot || {});
+    if (!policies.length) policies.push(returnRequest.policySnapshot || {});
+    return ["refund", "replacement"].filter(resolution => policies.every(policy =>
+      this.getAllowedReturnResolutions({ ...(returnRequest.policySnapshot || {}), ...policy }).includes(resolution),
+    ));
+  }
+
+  assertReturnResolutionAllowed(returnRequest, resolution) {
+    const normalized = resolution === "exchange" ? "replacement" : resolution === "store_credit" ? "refund" : resolution;
+    if (!this.getReturnAllowedResolutions(returnRequest).includes(normalized)) {
+      throw new AppError("The product return policy does not allow this resolution", 409);
+    }
+  }
+
   async resolveReturnPolicy(order, orderItems) {
     const commerceSettings = await commerceSettingsService.getSettings();
     const deliveredAt = this.resolveDeliveredAt(order);
     const policies = orderItems.map((item) => {
       const snapshot = this.parseJson(item.product_snapshot, {});
       const storedPolicy = this.parseJson(item.return_policy_snapshot, {});
-      const productPolicy = snapshot.returnPolicy || snapshot.return_policy || snapshot.commercialPolicy?.returnPolicy || storedPolicy;
+      const productPolicy = {
+        ...(snapshot.returnPolicy || snapshot.return_policy || snapshot.commercialPolicy?.returnPolicy || {}),
+        ...storedPolicy,
+      };
       const returnable = productPolicy.returnable ?? productPolicy.eligible ?? item.returnable ?? true;
       const returnWindowDays = returnable
         ? Math.max(Number(productPolicy.returnWindowDays ?? productPolicy.days ?? item.return_window_days ?? commerceSettings.returns?.defaultWindowDays ?? 7), 0)
@@ -577,8 +603,12 @@ class ReturnServiceClass {
     }
     const returnWindowDays = Math.max(...policies.map((policy) => policy.returnWindowDays), 0);
     const eligibleUntil = policies.reduce((latest, policy) => latest > policy.eligibleUntil ? latest : policy.eligibleUntil, deliveredAt);
+    const allowedResolutions = ["refund", "replacement"].filter(resolution =>
+      policies.every(policy => this.getAllowedReturnResolutions(policy).includes(resolution)),
+    );
     return {
       returnable: true,
+      allowedResolutions,
       returnWindowDays,
       deliveredAt,
       eligibleUntil,
@@ -594,7 +624,10 @@ class ReturnServiceClass {
 
   getOrderItemReturnPolicy(orderItem = {}, fallback = {}) {
     const snapshot = this.parseJson(orderItem.product_snapshot, {});
-    const policy = snapshot.returnPolicy || snapshot.return_policy || snapshot.commercialPolicy?.returnPolicy || {};
+    const policy = {
+      ...(snapshot.returnPolicy || snapshot.return_policy || snapshot.commercialPolicy?.returnPolicy || {}),
+      ...this.parseJson(orderItem.return_policy_snapshot, {}),
+    };
     const returnable = policy.returnable ?? policy.eligible ?? orderItem.returnable ?? fallback.returnable ?? true;
     const returnWindowDays = returnable
       ? Number(policy.returnWindowDays ?? policy.days ?? orderItem.return_window_days ?? fallback.returnWindowDays ?? 7)
@@ -602,6 +635,7 @@ class ReturnServiceClass {
 
     return {
       ...policy,
+      allowedResolutions: this.getAllowedReturnResolutions(policy),
       returnable,
       eligible: returnable,
       returnWindowDays,
@@ -668,6 +702,11 @@ class ReturnServiceClass {
       return orderItem;
     });
     const policySnapshot = await this.resolveReturnPolicy(order, matchedOrderItems);
+    const requestedResolution = extra.resolution || policySnapshot.allowedResolutions[0];
+    const normalizedResolution = requestedResolution === "exchange" ? "replacement" : requestedResolution === "store_credit" ? "refund" : requestedResolution;
+    if (!policySnapshot.allowedResolutions.includes(normalizedResolution)) {
+      throw new AppError("The selected resolution is not allowed for one or more selected products", 409);
+    }
     const commerceSettings = await commerceSettingsService.getSettings();
     const existingReturns = await ReturnModel.find({ orderId, status: { $ne: "rejected" } }).lean();
     const requestedOrderItemIds = new Set();
@@ -783,7 +822,7 @@ class ReturnServiceClass {
         organizationId: organizationId || null,
         items: sellerItems,
         reason,
-        resolution: extra.resolution || "refund",
+        resolution: requestedResolution,
         description,
         photos: extra.photos || [],
         status: "requested",
@@ -805,7 +844,7 @@ class ReturnServiceClass {
           actorRole: actor.role || "buyer",
           reason,
           note: description || null,
-          metadata: { sellerId, organizationId: organizationId || null, resolution: extra.resolution || "refund" },
+          metadata: { sellerId, organizationId: organizationId || null, resolution: requestedResolution },
           at: new Date(),
         }],
       });
@@ -1079,6 +1118,13 @@ class ReturnServiceClass {
     this.validateTransition(returnRequest.status, nextStatus);
 
     if (!manualShipBack) {
+      if (payload.expectedDeliveryAt) {
+        const arrival = new Date(payload.expectedDeliveryAt).getTime();
+        const pickup = payload.pickupScheduledAt ? new Date(payload.pickupScheduledAt).getTime() : Date.now();
+        if (!Number.isFinite(arrival) || arrival <= Math.max(Date.now(), pickup)) {
+          throw new AppError("Expected warehouse arrival must be in the future and after pickup", 400);
+        }
+      }
       const order = await this.orderRepository.findByIdWithItems(returnRequest.orderId);
       const trackingNumber = payload.trackingNumber || payload.awbNumber;
       if (!payload.courierName || !trackingNumber) {
@@ -1159,29 +1205,6 @@ class ReturnServiceClass {
       },
     });
     await returnRequest.save();
-    if (["replacement", "exchange"].includes(returnRequest.resolution) && !returnRequest.replacement?.orderId) {
-      await this.createReplacement(returnId, {
-        action: "approve",
-        advanceExchange: true,
-        metadata: {
-          exchangeShipmentId: returnRequest.reverseShipment?.shipmentId || null,
-          doorstepExchange: true,
-        },
-      }, actor);
-      const exchangeReturn = await this.getReturnOrThrow(returnId);
-      if (exchangeReturn.reverseShipment?.shipmentId) {
-        await knex("shipments").where("id", exchangeReturn.reverseShipment.shipmentId).update({
-          metadata: knex.raw("COALESCE(metadata, '{}'::jsonb) || ?::jsonb", [JSON.stringify({
-            doorstepExchange: true,
-            replacementOrderId: exchangeReturn.replacementOrderId,
-            replacementOrderNumber: exchangeReturn.replacement?.orderNumber || null,
-            deliverReplacementAndCollectReturn: true,
-          })]),
-          updated_at: knex.fn.now(),
-        });
-      }
-      return exchangeReturn;
-    }
     await this.publishReturnStatusUpdated(returnRequest, actor, {
       shipmentId: returnRequest.reverseShipment?.shipmentId || null,
       trackingNumber: returnRequest.trackingNumber || null,
@@ -1231,14 +1254,6 @@ class ReturnServiceClass {
     payload = { ...payload, status: shipment.status };
     returnRequest.set({ status: returnStatus, reverseShipment: projected.reverseShipment,
       items: projected.items, ...(projected.receivedAt ? { receivedAt: projected.receivedAt } : {}) });
-    if (shipment.status === "picked_up" && returnRequest.replacement?.orderId) {
-      returnRequest.replacement.status = "delivered";
-      returnRequest.replacement.deliveredAt = payload.eventTime || new Date();
-      this.appendTimeline(returnRequest, "replacement_delivered", actor, {
-        note: "Replacement delivered during doorstep exchange",
-        metadata: { shipmentId, doorstepExchange: true },
-      });
-    }
     returnRequest.reverseShipment.events = returnRequest.reverseShipment.events || [];
     returnRequest.reverseShipment.events.push({
       status: payload.status,
@@ -1418,12 +1433,34 @@ class ReturnServiceClass {
         ? "qc_passed"
         : "qc_failed";
     if (hasAccepted && !hasRejected && ["replacement", "exchange"].includes(returnRequest.resolution)) {
-      if (returnRequest.replacement?.status === "delivered") {
-        nextStatus = "replaced";
-        returnRequest.replacement.status = "completed";
+      this.assertReturnResolutionAllowed(returnRequest, "replacement");
+      // QC never proves customer delivery. Resume any existing replacement
+      // from its linked forward package, not an old inferred delivery flag.
+      const replacement = returnRequest.replacement || (returnRequest.replacement = {});
+      const orderId = returnRequest.replacementOrderId || replacement.orderId;
+      const shipmentId = returnRequest.replacementShipmentId || replacement.shipmentId;
+      const shipment = shipmentId
+        ? await this.deliveryRepository.findShipmentById(shipmentId) : null;
+      const linkedShipment = shipment && shipment.direction === "forward" &&
+        shipment.shipment_type === "replacement" &&
+        String(shipment.order_id) === String(orderId) &&
+        String(shipment.return_id) === String(returnRequest._id);
+      if (linkedShipment && shipment.status === "delivered") {
+        nextStatus = "replacement_delivered";
+        replacement.status = "delivered";
+        replacement.deliveredAt = shipment.delivered_at || replacement.deliveredAt;
+      } else if (linkedShipment) {
+        nextStatus = "replacement_shipped";
+        replacement.status = "shipped";
+        replacement.deliveredAt = undefined;
+      } else if (orderId) {
+        nextStatus = "replacement_created";
+        replacement.status = "created";
+        replacement.deliveredAt = undefined;
       } else {
         nextStatus = "replacement_requested";
-        returnRequest.replacement.status = "requested";
+        replacement.status = "requested";
+        replacement.deliveredAt = undefined;
       }
     }
     this.validateTransition(returnRequest.status, nextStatus);
@@ -1733,6 +1770,7 @@ class ReturnServiceClass {
 
   async maybeAutoProcessRefund(returnRequest, triggerActor = {}, context = {}) {
     if (!["qc_passed", "qc_completed"].includes(returnRequest.status)) return returnRequest;
+    if (!this.getReturnAllowedResolutions(returnRequest).includes("refund")) return returnRequest;
     if (!["refund", "refund_or_replacement"].includes(String(returnRequest.resolution || "refund"))) return returnRequest;
     if (Number(returnRequest.refund?.approvedAmount || returnRequest.refundAmount || 0) <= 0) return returnRequest;
     if (["pending", "provider_pending", "completed", "manual_review"].includes(String(returnRequest.refund?.status || ""))) {
@@ -1797,6 +1835,7 @@ class ReturnServiceClass {
     if (!this.isAdmin(actor)) {
       throw new AppError("Only platform finance/admin users can process refunds", 403);
     }
+    if (returnRequest.status !== "refund_failed") this.assertReturnResolutionAllowed(returnRequest, "refund");
     if (returnRequest.refund?.status === "completed" || returnRequest.refundedAt) {
       throw new AppError("This return has already been refunded", 409, null, "REFUND_ALREADY_COMPLETED");
     }
@@ -2239,6 +2278,7 @@ class ReturnServiceClass {
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
     const action = payload.action || "request";
+    if (["request", "approve"].includes(action)) this.assertReturnResolutionAllowed(returnRequest, "replacement");
 
     if (action === "request") {
       if (!["qc_passed", "qc_completed"].includes(returnRequest.status)) {
@@ -2363,6 +2403,11 @@ class ReturnServiceClass {
       this.appendTimeline(returnRequest, "replacement_created", actor, { ...payload, metadata: { replacementOrderId } });
     } else if (action === "ship") {
       if (returnRequest.status !== "replacement_created") throw new AppError("Replacement order is not ready to ship", 409);
+      if (payload.expectedDeliveryAt &&
+        (!Number.isFinite(new Date(payload.expectedDeliveryAt).getTime()) ||
+          new Date(payload.expectedDeliveryAt).getTime() <= Date.now())) {
+        throw new AppError("Expected customer delivery must be a valid future date", 400);
+      }
       const trackingNumber = payload.trackingNumber || payload.awbNumber;
       if (!payload.courierName || !trackingNumber) throw new AppError("Courier and tracking number are required", 400);
       const shipment = await this.deliveryRepository.createShipment({
@@ -2376,6 +2421,7 @@ class ReturnServiceClass {
         awbNumber: payload.awbNumber || trackingNumber,
         trackingNumber,
         status: "initiated",
+        expectedDeliveryAt: payload.expectedDeliveryAt || null,
         shippingMode: payload.shippingMode || "standard",
         pickupAddressSnapshot: payload.pickupAddressSnapshot || returnRequest.shipToSnapshot || {},
         shipToSnapshot: returnRequest.shipFromSnapshot || {},

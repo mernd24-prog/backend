@@ -144,6 +144,7 @@ const returnSchema = new mongoose.Schema(
     replacementOrderId: String,
     replacementShipmentId: String,
     policySnapshot: {
+      allowedResolutions: { type: [String], default: undefined },
       returnable: { type: Boolean, default: true },
       returnWindowDays: Number,
       deliveredAt: Date,

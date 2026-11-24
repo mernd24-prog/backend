@@ -218,6 +218,7 @@ const returnValidation = {
     shippingMode: Joi.string().valid("standard", "express", "same_day", "hyperlocal").default("standard"),
     packageSnapshot: Joi.object(),
     pickupAddressSnapshot: Joi.object(),
+    expectedDeliveryAt: Joi.date().iso(),
     metadata: Joi.object(),
     note: Joi.string().allow("", null),
   }),

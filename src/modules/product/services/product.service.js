@@ -353,6 +353,7 @@ class ProductService {
       returnWindowDays,
       days: returnWindowDays,
       type: returnable ? source.type || "standard" : "non_returnable",
+      resolution: type === "replacement_only" ? "replacement" : source.resolution || "refund_or_replacement",
     };
   }
 
