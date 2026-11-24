@@ -1,4 +1,5 @@
 const { randomUUID } = require("node:crypto");
+const { getOtpChannelOverride } = require("./otp-channel");
 const { AuthRepository } = require("../repositories/auth.repository");
 const { AppError } = require("../../../shared/errors/app-error");
 const { hashText, checkHash } = require("../../../shared/tools/hash");
@@ -1197,6 +1198,14 @@ class AuthService {
       );
     }
 
+    const channelOverride = getOtpChannelOverride();
+    if (channelOverride === "email" && !rawEmail) {
+      throw new AppError("Email is required for OTP. Please enter your email address.", 400);
+    }
+    if (channelOverride === "sms" && !rawMobile) {
+      throw new AppError("Mobile number is required for OTP. Please enter your mobile number.", 400);
+    }
+
     if (rawEmail) {
       const email = rawEmail.toLowerCase();
 
@@ -2118,7 +2127,7 @@ class AuthService {
     const primaryOtpChannel = String(
       process.env.AUTH_PRIMARY_OTP_CHANNEL || "email",
     ).toLowerCase();
-    const selectedOtpChannel =
+    const selectedOtpChannel = getOtpChannelOverride() || (
       purpose === "change_password" && !email && mobileNumber
         ? "sms"
         : purpose === "registration" && role === ROLES.SELLER
@@ -2127,7 +2136,7 @@ class AuthService {
         ).toLowerCase()
         : purpose === "registration" && role === ROLES.BUYER
           ? "sms"
-          : primaryOtpChannel;
+          : primaryOtpChannel);
     const useSellerRegistrationWhatsapp =
       purpose === "registration" &&
       role === ROLES.SELLER &&
