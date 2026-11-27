@@ -644,12 +644,14 @@ class CancellationService {
 
   getCustomerPlatformFeeAmount(order = {}) {
     const metadata = this.parseJson(order.metadata, {});
-    return this.round(
-      order.summary?.customerPlatformFeeAmount ??
-      metadata.pricingSummary?.customerPlatformFeeAmount ??
-      metadata.pricingSummary?.customerPlatformFee ??
-      0,
-    );
+    const pricing = metadata.pricingSummary || {};
+    // Explicit GST is charged in addition to the fee. Legacy inclusive fees
+    // have no separate tax amount and must not have inferred GST added again.
+    const fee = order.summary?.customerPlatformFeeAmount ??
+      pricing.customerPlatformFeeAmount ?? pricing.customerPlatformFee ?? 0;
+    const tax = order.summary?.customerPlatformFeeTaxAmount ??
+      pricing.customerPlatformFeeTaxAmount ?? pricing.customerPlatformFeeGST ?? 0;
+    return this.round(Number(fee) + Number(tax));
   }
 
   getCompletedSellerGroupShippingAmount(order = {}, cancellationItems = []) {

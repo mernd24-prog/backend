@@ -173,6 +173,33 @@ class DeliveryRepository {
     const query = knex({ s: "shipments" })
       .leftJoin({ o: "orders" }, "o.id", "s.order_id")
       .select("s.*", "o.order_number", "o.buyer_id", "o.payment_provider", "o.payment_status");
+    // A same-reference exchange is one booking in the list. Keep the reverse
+    // record as the canonical row; the linked forward record retains stock and
+    // replacement-order accounting internally. Apply before count/pagination.
+    query.whereRaw(`NOT EXISTS (SELECT 1 FROM shipments exchange_pickup
+        WHERE s.shipment_type = 'replacement' AND s.direction = 'forward'
+          AND s.return_id IS NOT NULL AND s.tracking_number IS NOT NULL
+          AND exchange_pickup.return_id = s.return_id
+          AND exchange_pickup.direction = 'reverse'
+          AND exchange_pickup.seller_id = s.seller_id
+          AND exchange_pickup.tracking_number = s.tracking_number)`);
+    // Rescheduling creates a new reverse attempt, not another current exchange.
+    // Keep superseded attempts in storage/history but out of this booking list.
+    // Scope this to exchanges; refund-return shipment history is unchanged.
+    query.whereRaw(`NOT EXISTS (SELECT 1 FROM shipments newer_attempt
+      WHERE s.direction = 'reverse' AND s.return_id IS NOT NULL
+        AND newer_attempt.direction = 'reverse'
+        AND newer_attempt.return_id = s.return_id
+        AND newer_attempt.seller_id = s.seller_id
+        AND newer_attempt.id <> s.id
+        AND EXISTS (SELECT 1 FROM shipments exchange_delivery
+          WHERE exchange_delivery.return_id = s.return_id
+            AND exchange_delivery.seller_id = s.seller_id
+            AND exchange_delivery.shipment_type = 'replacement')
+        AND (newer_attempt.metadata->>'previousShipmentId' = s.id::text
+          OR (newer_attempt.tracking_number = s.tracking_number
+            AND (newer_attempt.created_at > s.created_at
+              OR (newer_attempt.created_at = s.created_at AND newer_attempt.id::text > s.id::text)))))`);
     if (orderId) query.where("s.order_id", orderId);
     if (returnId) query.where("s.return_id", returnId);
     if (shipmentType) query.where("s.shipment_type", shipmentType);

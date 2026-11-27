@@ -262,3 +262,51 @@ test('other delivery filters and parameter positions remain unchanged', () => {
     assert.equal(clauses[1], 'o.delivery_status = $2');
   }
 });
+
+function retryFixture(overrides = {}, handedOver = false) {
+  const { OrderService } = load('src/modules/order/services/order.service.js');
+  const service = Object.create(OrderService.prototype);
+  const order = { id: 'order-a', buyer_id: 'buyer-a', status: 'confirmed', payment_status: 'failed', payment_provider: 'razorpay', items: [item('item-a')] , ...overrides };
+  const calls = [];
+  service.orderRepository = {
+    findByIdWithItems: async () => order,
+    hasNonCancellableShipment: async () => handedOver,
+    updateStatus: async (id, status, payload) => { calls.push({ status, payload }); return { ...order, status }; },
+  };
+  service.inventoryService = { reserveForOrder: async () => calls.push('reserve') };
+  service.dealService = { reserveOrderSales: async () => {} };
+  service.updateOrderStatus = async () => { throw new Error('Unexpected general transition'); };
+  return { service, calls };
+}
+test('confirmed order with failed online payment can retry before shipment handover', async () => {
+  const { service, calls } = retryFixture();
+  const result = await service.reopenPayment('order-a', { userId: 'buyer-a', role: 'buyer' });
+  assert.equal(result.status, 'pending_payment');
+  assert.equal(calls[0], 'reserve');
+  assert.equal(calls[1].payload.paymentStatus, 'initiated');
+});
+for (const [label, overrides, handover, actor] of [
+  ['another buyer', {}, false, { userId: 'other', role: 'buyer' }],
+  ['shipment handed over', {}, true],
+  ['paid order', { payment_status: 'captured' }, false],
+  ['COD', { payment_provider: 'cod' }, false],
+  ['cancelled order', { status: 'cancelled' }, false],
+]) {
+  test(`payment retry rejects ${label} before reserving stock`, async () => {
+    const { service, calls } = retryFixture(overrides, handover);
+    await assert.rejects(service.reopenPayment('order-a', actor || { userId: 'buyer-a', role: 'buyer' }));
+    assert.equal(calls.length, 0);
+  });
+}
+
+test('reused Razorpay initiation restores checkout details instead of returning null checkout', async () => {
+  const { PaymentService } = load('src/modules/payment/services/payment.service.js', {
+    '../dtos/payment-response': require('../src/modules/payment/dtos/payment-response'),
+    '../../../config/env': { env: { razorpay: { configured: true, keyId: 'test-key' } } },
+  });
+  const service = Object.create(PaymentService.prototype);
+  service.paymentRepository = { findByIdempotencyKey: async () => ({ id: 'payment-a', provider: 'razorpay', status: 'initiated', provider_order_id: 'order-provider-a', amount: 100, currency: 'INR' }) };
+  const result = await service.initiatePaymentLocked({ idempotencyKey: 'retry-key' }, { userId: 'buyer-a' });
+  assert.equal(result.checkout.orderId, 'order-provider-a');
+  assert.equal(result.checkout.amount, 10000);
+});

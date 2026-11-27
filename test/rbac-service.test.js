@@ -410,3 +410,23 @@ test("assigned admin navigation follows saved visibility and role edits without 
   await api.updateModule("menu", { isVisibleInSidebar: false });
   assert.equal((await api.listSidebarModules({}, actor)).length, 0);
 });
+
+for (const [updates, expected] of [
+  [{ active: true, slug: 'reviewer' }, 0],
+  [{ active: false }, 1],
+  [{ slug: 'senior-reviewer' }, 1],
+]) {
+  test(`role settings invalidate sessions only when identity or activation changes: ${JSON.stringify(updates)}`, async () => {
+    const role = { id: 'role-id', slug: 'reviewer', active: true, type: 'custom' };
+    const api = service({
+      getRoleById: async () => role,
+      getRoleBySlug: async () => null,
+      updateRole: async (_, values) => ({ ...role, ...values }),
+    });
+    api.assertCanManageRole = async () => role;
+    let invalidations = 0;
+    api.invalidateUsersForRole = async () => { invalidations += 1; };
+    await api.updateRole('role-id', updates, { userId: 'owner' });
+    assert.equal(invalidations, expected);
+  });
+}

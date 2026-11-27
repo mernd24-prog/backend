@@ -1,3 +1,4 @@
+const { isDoorstepReturn, replacementResolution, validateDoorstepInspection, assertDoorstepTracking } = require("../../../shared/domain/doorstep-return");
 const { forwardDeliveryProgress } = require("../../../shared/domain/order-fulfillment");
 const { isOpenReturn } = require("../../../shared/domain/return-lifecycle");
 const { v4: uuidv4 } = require("uuid");
@@ -309,11 +310,11 @@ class ReturnServiceClass {
           ? orderItemId
           : this.buildReturnItemKey(item);
         const quantity = Number(
-          item.receivedQuantity ||
-          item.approvedQuantity ||
+          (returnRequest.collectionQc?.collectedAt ? (item.collectedQuantity ?? 0) : null) ??
+          (item.receivedQuantity || item.approvedQuantity ||
           item.requestedQuantity ||
           item.quantity ||
-          0,
+          0),
         );
         returnedQuantityByItem.set(key, (returnedQuantityByItem.get(key) || 0) + Math.max(quantity, 0));
       });
@@ -487,7 +488,7 @@ class ReturnServiceClass {
   }
 
   async assertCanView(returnRequest, actor) {
-    if (this.isAdmin(actor) || returnRequest.buyerId === actor.userId) return;
+    if (this.isAdmin(actor) || String(returnRequest.buyerId) === String(actor.userId)) return;
     if (this.isSeller(actor)) {
       const sellerId = String(actor.ownerSellerId || actor.sellerId || actor.userId);
       const organizationId = actor.organizationId ? String(actor.organizationId) : null;
@@ -826,6 +827,7 @@ class ReturnServiceClass {
         description,
         photos: extra.photos || [],
         status: "requested",
+        collectionQc: { required: true, status: "pending" },
         refundAmount: refundBreakup.totalRefundAmount,
         refundBreakup,
         refund: {
@@ -1110,10 +1112,17 @@ class ReturnServiceClass {
     if (!["approved", "pickup_failed"].includes(returnRequest.status)) {
       throw new AppError("Pickup can only be arranged after approval or a failed pickup", 409);
     }
+    if (isDoorstepReturn(returnRequest) && returnRequest.collectionQc?.collectedAt) {
+      throw new AppError("The inspected items have already been collected", 409);
+    }
+    const previousPickupShipmentId = returnRequest.status === "pickup_failed" ? returnRequest.reverseShipment?.shipmentId || null : null;
     const retryShipmentKey = returnRequest.status === "pickup_failed"
       ? `return:${returnRequest._id}:reverse-retry:${returnRequest.timeline.length}`
       : `return:${returnRequest._id}:reverse-shipment`;
     const manualShipBack = payload.mode === "manual_ship_back" || payload.manualShipBack;
+    if (manualShipBack && isDoorstepReturn(returnRequest) && returnRequest.replacementShipmentId) {
+      throw new AppError("Recover the dispatched doorstep replacement before switching to manual ship-back", 409);
+    }
     const nextStatus = manualShipBack ? "manual_ship_back" : "reverse_pickup_scheduled";
     this.validateTransition(returnRequest.status, nextStatus);
 
@@ -1154,6 +1163,7 @@ class ReturnServiceClass {
           ...(payload.metadata || {}),
           returnNumber: returnRequest.returnNumber,
           reason: returnRequest.reason,
+          ...(previousPickupShipmentId ? { previousShipmentId: previousPickupShipmentId } : {}),
         },
         createdBy: actor.userId,
         updatedBy: actor.userId,
@@ -1187,6 +1197,10 @@ class ReturnServiceClass {
       };
     }
 
+    if (isDoorstepReturn(returnRequest) && (returnRequest.collectionQc?.inspectedAt || returnRequest.collectionQc?.visitStartedAt || returnRequest.collectionQc?.exchangeFailure) && !returnRequest.collectionQc?.collectedAt) {
+      const { history = [], ...previousInspection } = returnRequest.collectionQc;
+      returnRequest.collectionQc = { required: true, status: "pending", history: [...history, previousInspection] };
+    }
     returnRequest.status = nextStatus;
     if (manualShipBack) {
       // The failed courier package is no longer the active customer-arranged shipment.
@@ -1202,6 +1216,7 @@ class ReturnServiceClass {
         shipmentId: returnRequest.reverseShipment?.shipmentId || null,
         trackingNumber: returnRequest.trackingNumber || null,
         mode: manualShipBack ? "manual_ship_back" : "reverse_pickup",
+        previousShipmentId: previousPickupShipmentId,
       },
     });
     await returnRequest.save();
@@ -1217,12 +1232,15 @@ class ReturnServiceClass {
     await this.assertCanManage(returnRequest, actor);
     const shipmentId = payload.shipmentId || returnRequest.reverseShipment?.shipmentId;
     if (!shipmentId) throw new AppError("Reverse shipment has not been created", 409);
+    if (returnRequest.collectionQc?.exchangeCompletedAt)
+      throw new AppError("This exchange is complete; no further manual return shipment update is required", 409);
+    assertDoorstepTracking(returnRequest, payload.status);
     const reverseShipment = await this.deliveryRepository.findShipmentById(shipmentId);
     if (!reverseShipment) throw new AppError("Reverse shipment not found", 404);
     if (!shipmentBelongsToReturn(returnRequest, reverseShipment)) {
       throw new AppError("Shipment does not belong to this return", 403);
     }
-    if (!LOGISTICS_STATES.includes(returnRequest.status)) {
+    if (!LOGISTICS_STATES.includes(returnRequest.status) && !(isDoorstepReturn(returnRequest) && returnRequest.collectionQc?.collectedAt)) {
       throw new AppError("Reverse tracking is no longer open for this return", 409);
     }
     assertReverseTrackingTransition(reverseShipment.status, payload.status);
@@ -1245,6 +1263,33 @@ class ReturnServiceClass {
   async syncReverseShipmentForTracking(shipment, actor = {}, payload = {}, existingRequest = null) {
     const returnRequest = existingRequest || await ReturnModel.findById(shipment.return_id);
     if (!returnRequest || !shipmentBelongsToReturn(returnRequest, shipment)) return null;
+    assertDoorstepTracking(returnRequest, shipment.status);
+    if (isDoorstepReturn(returnRequest) && returnRequest.collectionQc?.collectedAt) {
+      returnRequest.reverseShipment.status = shipment.status;
+      if (["delivered", "received"].includes(shipment.status) && !returnRequest.collectionQc.warehouseReceivedAt) {
+        const accepted = returnRequest.collectionQc.items.filter(item => item.acceptedQuantity > 0);
+        const inventoryItems = accepted.map(decision => {
+          const item = returnRequest.items.find(entry => String(entry.orderItemId) === String(decision.orderItemId));
+          return { ...(item.toObject?.() || item), quantity: decision.acceptedQuantity };
+        });
+        const sellable = inventoryItems.filter(item => item.qcResult === "sellable");
+        const damaged = inventoryItems.filter(item => item.qcResult === "damaged");
+        if (sellable.length) await this.inventoryService.restockForReturn(returnRequest, actor, sellable);
+        if (damaged.length) await this.inventoryService.recordReturnDamage(returnRequest, actor, { notes: "Doorstep-inspected return received at warehouse" }, damaged);
+        returnRequest.items.forEach(item => {
+          const decision = accepted.find(entry => String(entry.orderItemId) === String(item.orderItemId));
+          item.receivedQuantity = decision?.acceptedQuantity || 0;
+          item.restockedQuantity = item.qcResult === "sellable" ? item.receivedQuantity : 0;
+          item.damagedQuantity = item.qcResult === "damaged" ? item.receivedQuantity : 0;
+        });
+        returnRequest.receivedAt = new Date();
+        returnRequest.collectionQc = { ...returnRequest.collectionQc, warehouseReceivedAt: new Date().toISOString() };
+        this.appendTimeline(returnRequest, "warehouse_received", actor, { metadata: { shipmentId: shipment.id } });
+      }
+      await returnRequest.save();
+      await this.publishReturnStatusUpdated(returnRequest, actor, { shipmentId: shipment.id, shipmentStatus: shipment.status });
+      return returnRequest;
+    }
     const projected = projectReverseReturn(returnRequest.toObject(), shipment);
     const returnStatus = projected.status;
     // Repeated tracking delivery must not duplicate timeline entries or receipt events.
@@ -1350,9 +1395,167 @@ class ReturnServiceClass {
     return returnRequest;
   }
 
+  async startCollectionVisit(returnId, payload = {}, actor = {}) {
+    const request = await this.getReturnOrThrow(returnId);
+    await this.assertCanManage(request, actor);
+    if (!isDoorstepReturn(request) || request.status !== "reverse_pickup_scheduled" || request.collectionQc?.collectedAt) {
+      throw new AppError("A collection visit can start only for a scheduled, uncollected doorstep return", 409);
+    }
+    if (payload.courierAtDoorstep !== true) throw new AppError("Confirm that the courier is physically at the customer's address", 400);
+    const shipmentId = request.reverseShipment?.shipmentId;
+    const shipment = shipmentId ? await this.deliveryRepository.findShipmentById(shipmentId) : null;
+    if (!shipment || !shipmentBelongsToReturn(request, shipment) || !["initiated", "manifested", "pickup_scheduled"].includes(shipment.status)) {
+      throw new AppError("An active pickup booking is required to start doorstep inspection", 409);
+    }
+    if (request.collectionQc?.visitStartedAt) return request;
+    request.collectionQc = { ...request.collectionQc, visitStartedAt: new Date().toISOString(), visitStartedBy: actor.userId };
+    this.appendTimeline(request, "collection_visit_started", actor, { note: payload.note || "Courier arrival at the customer address confirmed; inspection can begin" });
+    await request.save();
+    await this.publishReturnStatusUpdated(request, actor, { collectionVisitStarted: true });
+    return request;
+  }
+
+  async recordDoorstepQc(returnRequest, payload, actor) {
+    if (!isDoorstepReturn(returnRequest)) throw new AppError("This return uses warehouse QC", 409);
+    if (returnRequest.collectionQc.collectedAt) {
+      if (replacementResolution(returnRequest) && payload.exchangeCompleted && returnRequest.collectionQc.exchangeCompletionConfirmed)
+        return this.completeDoorstepExchange(returnRequest, actor);
+      throw new AppError("Collection is already confirmed; inspection cannot be changed", 409);
+    }
+    if (returnRequest.status !== "reverse_pickup_scheduled" || !returnRequest.collectionQc?.visitStartedAt) {
+      throw new AppError("Confirm the courier has arrived at the customer address before recording doorstep QC", 409);
+    }
+    if (payload.confirmCollectionOnly) {
+      if (!payload.collectionConfirmed || !["passed", "partially_passed"].includes(returnRequest.collectionQc?.status) || !returnRequest.collectionQc?.items?.length) {
+        throw new AppError("Save an eligible inspection before confirming collection", 409);
+      }
+      // Collection uses the saved decisions; it is not a second inspection.
+      payload = { ...payload, items: returnRequest.collectionQc.items };
+    }
+    const previousInspection = returnRequest.collectionQc;
+    const decisions = validateDoorstepInspection(returnRequest, payload);
+    const accepted = decisions.filter(item => item.acceptedQuantity > 0);
+    const allAccepted = decisions.every(item => item.acceptedQuantity === item.quantity);
+    if (replacementResolution(returnRequest) && payload.collectionConfirmed &&
+      (returnRequest.collectionQc?.sameVisitExchange || payload.exchangeCompleted)) {
+      if (payload.exchangeCompleted !== true || payload.replacementInspected !== true ||
+          payload.customerAccepted !== true || payload.handoverConfirmed !== true)
+        throw new AppError("Confirm replacement inspection, customer acceptance and the same-visit exchange before completing", 409);
+    }
+    if (replacementResolution(returnRequest) && payload.collectionConfirmed) {
+      if (payload.replacementReady !== true) throw new AppError("Confirm the replacement is physically available with this courier before collection", 409);
+      if (!allAccepted) throw new AppError("A partial exchange needs review; leave all items with the customer and retry the approved exchange", 409);
+      const shipmentId = returnRequest.replacementShipmentId || returnRequest.replacement?.shipmentId;
+      const shipment = shipmentId ? await this.deliveryRepository.findShipmentById(shipmentId) : null;
+      if (!shipment || !(payload.exchangeCompleted ? ["initiated", "manifested", "picked_up", "in_transit", "out_for_delivery"] : ["in_transit", "out_for_delivery"]).includes(shipment.status) ||
+        shipment.direction !== "forward" || shipment.shipment_type !== "replacement" ||
+        String(shipment.return_id) !== String(returnRequest._id) ||
+        String(shipment.order_id) !== String(returnRequest.replacementOrderId)) {
+        throw new AppError("Prepare and dispatch the linked replacement before collecting the old item", 409);
+      }
+    }
+    // Mongoose includes this condition in save(); a stale inspection must not
+    // overwrite a collection already confirmed by a concurrent request.
+    returnRequest.$where = { ...(returnRequest.$where || {}), "collectionQc.collectedAt": { $exists: false } };
+    const now = new Date();
+    const inspectedItems = decisions.map(({ item, ...decision }) => decision);
+    returnRequest.collectionQc = {
+      ...returnRequest.collectionQc,
+      status: !accepted.length ? "failed" : allAccepted ? "passed" : "partially_passed",
+      allAccepted,
+      ...(payload.exchangeCompleted && payload.collectionConfirmed ? { exchangeCompletionConfirmed: true,
+        replacementInspected: true, customerAccepted: true } : {}),
+      inspectedAt: payload.confirmCollectionOnly ? previousInspection.inspectedAt : now.toISOString(),
+      inspectedBy: payload.confirmCollectionOnly ? previousInspection.inspectedBy : actor.userId,
+      items: inspectedItems,
+      ...(payload.collectionConfirmed ? { collectedAt: now.toISOString(), collectedBy: actor.userId } : {}),
+    };
+    if (!accepted.length || (replacementResolution(returnRequest) && !allAccepted)) {
+      decisions.forEach(({ item, notes, photos, condition }) => {
+        item.qcResult = "rejected"; item.qcNotes = notes; item.qcPhotos = photos; item.condition = condition;
+      });
+      returnRequest.status = "qc_failed";
+      returnRequest.qcReview = {
+        status: "awaiting_customer_or_admin_review", location: "customer",
+        submittedBy: actor.userId, submittedAt: now.toISOString(),
+        disputeDeadline: new Date(now.getTime() + 48 * 60 * 60 * 1000).toISOString(),
+        sellerEvidence: inspectedItems,
+      };
+    } else if (payload.collectionConfirmed) {
+      let approvedRefund = 0;
+      for (const decision of decisions) {
+        const { item, acceptedQuantity, result, notes, photos, condition } = decision;
+        item.qcResult = acceptedQuantity > 0 ? result : "rejected";
+        item.qcNotes = notes;
+        item.qcPhotos = photos;
+        item.condition = condition || result;
+        item.collectedQuantity = acceptedQuantity;
+        // Collection does not put stock back in the warehouse.
+        item.refundAmount = this.round(Number(item.eligibleRefundAmount ?? item.refundAmount ?? 0) *
+          acceptedQuantity / Math.max(Number(item.requestedQuantity || item.quantity), 1));
+        approvedRefund = this.round(approvedRefund + item.refundAmount);
+      }
+      returnRequest.refundAmount = approvedRefund;
+      returnRequest.refund.approvedAmount = approvedRefund;
+      returnRequest.refundBreakup = { ...(returnRequest.refundBreakup?.toObject?.() || returnRequest.refundBreakup || {}), qcApprovedRefundAmount: approvedRefund };
+      if (!replacementResolution(returnRequest)) {
+        returnRequest.collectionQc = { ...returnRequest.collectionQc,
+          sellerResponsibilityCompletedAt: now.toISOString(), sellerResponsibilityCompletedBy: actor.userId };
+        returnRequest.reverseShipment.metadata = { ...(returnRequest.reverseShipment.metadata || {}),
+          completionReason: "doorstep_collection_seller_responsibility", completedAt: now.toISOString() };
+        this.appendTimeline(returnRequest, "return_collection_completed", actor, {
+          note: "Return completed at doorstep collection. Onward transport is the seller's responsibility; warehouse receipt and refund payment remain separate.",
+          metadata: { shipmentId: returnRequest.reverseShipment.shipmentId },
+        });
+      }
+      returnRequest.qcAt = now;
+      returnRequest.status = replacementResolution(returnRequest) ? "replacement_shipped" : allAccepted ? "qc_passed" : "qc_completed";
+    }
+    this.appendTimeline(returnRequest, payload.collectionConfirmed ? "doorstep_collected" : "doorstep_qc_recorded", actor, {
+      note: payload.notes, metadata: { allAccepted, collectionConfirmed: !!payload.collectionConfirmed, items: inspectedItems },
+    });
+    try {
+      await returnRequest.save();
+    } catch (error) {
+      if (["DocumentNotFoundError", "VersionError"].includes(error.name)) {
+        throw new AppError("This inspection changed in another session. Refresh the return before continuing", 409);
+      }
+      throw error;
+    }
+    if (replacementResolution(returnRequest) && payload.collectionConfirmed && payload.exchangeCompleted)
+      return this.completeDoorstepExchange(returnRequest, actor);
+    await this.publishReturnStatusUpdated(returnRequest, actor, { doorstepQc: returnRequest.collectionQc.status });
+    if (payload.collectionConfirmed && !replacementResolution(returnRequest)) {
+      return this.maybeAutoProcessRefund(returnRequest, actor, { note: "Doorstep QC passed and collection confirmed" });
+    }
+    return returnRequest;
+  }
+
+  async completeDoorstepExchange(request, actor) {
+    if (!isDoorstepReturn(request) || !replacementResolution(request) || !request.collectionQc?.collectedAt ||
+        !request.collectionQc?.allAccepted || !request.collectionQc?.exchangeCompletionConfirmed)
+      throw new AppError("Confirmed inspection and same-visit exchange are required", 409);
+    if (request.status === "replaced") return request;
+    if (request.status === "replacement_shipped") {
+      await this.applyReplacementAction(String(request._id), { action: "deliver", handoverConfirmed: true,
+        note: "Old item collected and replacement handed over in the same visit" }, actor);
+    }
+    const completed = await this.getReturnOrThrow(request._id);
+    if (completed.status !== "replacement_delivered") throw new AppError("Exchange delivery is not confirmed; retry completing the exchange", 409);
+    completed.collectionQc = { ...completed.collectionQc, exchangeCompletedAt: new Date().toISOString() };
+    completed.status = "replaced";
+    completed.replacement.status = "completed";
+    this.appendTimeline(completed, "replaced", actor, { note: "Old item collected and inspected replacement handed over in the same visit" });
+    await completed.save();
+    await this.publishReturnStatusUpdated(completed, actor, { exchangeCompleted: true });
+    return completed;
+  }
+
   async qcReturn(returnId, payload = {}, actor = {}) {
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
+    if (payload.inspectionMode === "doorstep") return this.recordDoorstepQc(returnRequest, payload, actor);
+    if (isDoorstepReturn(returnRequest)) throw new AppError("Use doorstep inspection for this return", 409);
     if (!["received", "qc_failed"].includes(returnRequest.status)) {
       throw new AppError("QC can be recorded only after receipt or an evidence request", 409);
     }
@@ -1622,6 +1825,32 @@ class ReturnServiceClass {
       return returnRequest;
     }
 
+    if (isDoorstepReturn(returnRequest) && !returnRequest.collectionQc?.collectedAt) {
+      if (payload.decision === "partial" || payload.items?.length) {
+        throw new AppError("Uncollected doorstep items require reinspection; quantities cannot be approved as a refund before collection", 409);
+      }
+      returnRequest.qcReview = {
+        ...returnRequest.qcReview, status: "resolved", adminDecision: payload.decision,
+        decisionReason: payload.reason, decidedBy: actor.userId, decidedAt: new Date().toISOString(),
+      };
+      if (payload.decision === "uphold") {
+        returnRequest.status = "qc_failure_upheld";
+        returnRequest.refundAmount = 0;
+        returnRequest.refund.approvedAmount = 0;
+        returnRequest.returnToCustomer = { required: false, status: "not_required" };
+        await this.releaseReturnItemPayoutHolds(returnRequest, actor, "doorstep_qc_failure_item_not_collected");
+      } else {
+        // Admin review permits a fresh inspection, never a refund or handover
+        // for goods still in the customer's possession.
+        returnRequest.status = "pickup_failed";
+        returnRequest.collectionQc = { ...returnRequest.collectionQc, status: "reinspection_required" };
+      }
+      this.appendTimeline(returnRequest, `qc_${payload.decision}`, actor, { reason: payload.reason });
+      await returnRequest.save();
+      await this.publishReturnStatusUpdated(returnRequest, actor, { doorstepReview: payload.decision });
+      return returnRequest;
+    }
+
     if (payload.decision === "uphold") {
       returnRequest.items.forEach((item) => { item.refundAmount = 0; });
       returnRequest.refundAmount = 0;
@@ -1843,6 +2072,9 @@ class ReturnServiceClass {
       throw new AppError("Refund can be processed only after accepted QC", 409);
     }
 
+    if (isDoorstepReturn(returnRequest) && !returnRequest.collectionQc?.collectedAt) {
+      throw new AppError("Refund requires passing doorstep QC and confirmed collection", 409);
+    }
     const originalPayment = await this.orderRepository.findRefundablePaymentByOrderId(returnRequest.orderId);
     const allocation = this.resolveRefundAllocation(returnRequest, payload, originalPayment);
     const approvedAmount = Number(returnRequest.refund?.approvedAmount || returnRequest.refundAmount || 0);
@@ -2274,18 +2506,104 @@ class ReturnServiceClass {
     }, actor);
   }
 
+  async arrangeDoorstepExchange(request, payload, actor) {
+    if (!isDoorstepReturn(request) || !replacementResolution(request)) {
+      throw new AppError("A doorstep exchange is available only for doorstep replacement requests", 409);
+    }
+    if (!["approved", "reverse_pickup_scheduled", "pickup_failed"].includes(request.status) || request.collectionQc?.collectedAt) {
+      throw new AppError("This exchange is no longer awaiting arrangement", 409);
+    }
+    const exchangeReference = String(payload.exchangeReference || "").trim();
+    if (exchangeReference) payload = { ...payload, pickupTrackingNumber: payload.pickupTrackingNumber || exchangeReference,
+      replacementTrackingNumber: payload.replacementTrackingNumber || exchangeReference };
+    const pickupNeeded = ["approved", "pickup_failed"].includes(request.status);
+    const dispatchNeeded = !request.replacementShipmentId && !request.replacement?.shipmentId;
+    if (!String(payload.courierName || "").trim() ||
+      (pickupNeeded && !String(payload.pickupTrackingNumber || "").trim()) ||
+      (dispatchNeeded && !String(payload.replacementTrackingNumber || "").trim())) {
+      throw new AppError("Courier and an exchange booking reference are required", 400);
+    }
+    const existingReplacementId = request.replacementShipmentId || request.replacement?.shipmentId;
+    if (existingReplacementId) {
+      const shipment = await this.deliveryRepository.findShipmentById(existingReplacementId);
+      if (!shipment || ["cancelled", "rto", "lost", "damaged", "delivered"].includes(shipment.status)) {
+        throw new AppError("The replacement parcel needs recovery or review before another exchange visit can be arranged", 409);
+      }
+    }
+    const pickupTracking = pickupNeeded ? payload.pickupTrackingNumber : request.reverseShipment?.trackingNumber;
+    const replacementTracking = dispatchNeeded ? payload.replacementTrackingNumber : request.replacement?.trackingNumber;
+    // One exchange booking may cover both linked parcel movements.
+    if (payload.pickupScheduledAt && (!Number.isFinite(new Date(payload.pickupScheduledAt).getTime()) || new Date(payload.pickupScheduledAt).getTime() <= Date.now())) {
+      throw new AppError("The exchange visit must be scheduled in the future", 400);
+    }
+    if (payload.expectedDeliveryAt && (!Number.isFinite(new Date(payload.expectedDeliveryAt).getTime()) ||
+      new Date(payload.expectedDeliveryAt).getTime() <= Math.max(Date.now(), new Date(payload.pickupScheduledAt || 0).getTime()))) {
+      throw new AppError("Warehouse arrival must be after the exchange visit", 400);
+    }
+    const id = String(request._id);
+    if (!request.replacementOrderId && !request.replacement?.orderId) {
+      await this.applyReplacementAction(id, { action: "approve", advanceExchange: true, note: payload.note }, actor);
+    }
+    if (dispatchNeeded) {
+      await this.applyReplacementAction(id, {
+        action: "ship", courierName: payload.courierName, trackingNumber: payload.replacementTrackingNumber,
+        provider: payload.provider, shippingMode: payload.shippingMode, note: payload.note,
+      }, actor);
+    }
+    if (pickupNeeded) {
+      await this.scheduleReversePickup(id, {
+        mode: "reverse_pickup", courierName: payload.courierName, trackingNumber: payload.pickupTrackingNumber,
+        pickupScheduledAt: payload.pickupScheduledAt, expectedDeliveryAt: payload.expectedDeliveryAt,
+        provider: payload.provider, shippingMode: payload.shippingMode, note: payload.note,
+      }, actor);
+    }
+    const arranged = await this.getReturnOrThrow(id);
+    arranged.collectionQc = { ...arranged.collectionQc, sameVisitExchange: true,
+      exchangeReference: exchangeReference || pickupTracking || replacementTracking };
+    await arranged.save();
+    return this.getReturnOrThrow(id);
+  }
+
   async createReplacement(returnId, payload = {}, actor = {}) {
+    const request = await this.getReturnOrThrow(returnId);
+    if (isDoorstepReturn(request) && this.orderRepository.withCheckoutLocks) {
+      // Reuse the existing cross-process advisory lock so concurrent actions
+      // cannot reserve two replacement orders or dispatch two parcels.
+      return this.orderRepository.withCheckoutLocks([`doorstep-replacement:${returnId}`],
+        () => this.applyReplacementAction(returnId, payload, actor));
+    }
+    return this.applyReplacementAction(returnId, payload, actor);
+  }
+
+  async applyReplacementAction(returnId, payload = {}, actor = {}) {
     const returnRequest = await this.getReturnOrThrow(returnId);
     await this.assertCanManage(returnRequest, actor);
     const action = payload.action || "request";
+    if (action === "arrange_exchange") return this.arrangeDoorstepExchange(returnRequest, payload, actor);
+    if (action === "exchange_failure") {
+      if (!isDoorstepReturn(returnRequest) || !replacementResolution(returnRequest) ||
+          returnRequest.status !== "reverse_pickup_scheduled" || returnRequest.collectionQc?.collectedAt)
+        throw new AppError("Only an uncompleted doorstep exchange can be marked failed", 409);
+      if (String(payload.note || "").trim().length < 3) throw new AppError("Explain why the exchange could not be completed", 400);
+      // No collection, handover, refund or warehouse receipt is fabricated.
+      returnRequest.status = "pickup_failed";
+      returnRequest.collectionQc = { ...returnRequest.collectionQc, exchangeFailure: {
+        reason: payload.note.trim(), at: new Date().toISOString(), actorId: actor.userId }, status: "reinspection_required" };
+      this.appendTimeline(returnRequest, "exchange_failed", actor, { note: payload.note });
+      await returnRequest.save();
+      await this.publishReturnStatusUpdated(returnRequest, actor, { exchangeFailed: true });
+      return returnRequest;
+    }
+    if (isDoorstepReturn(returnRequest) && action === "request") throw new AppError("Prepare the doorstep replacement before the courier visit", 409);
+    if (isDoorstepReturn(returnRequest) && action === "approve" && returnRequest.replacementOrderId) return returnRequest;
     if (["request", "approve"].includes(action)) this.assertReturnResolutionAllowed(returnRequest, "replacement");
+    if (["request", "approve"].includes(action) && !["replacement", "exchange"].includes(returnRequest.resolution)) {
+      throw new AppError("The customer selected a refund; replacement is not available", 409);
+    }
 
     if (action === "request") {
       if (!["qc_passed", "qc_completed"].includes(returnRequest.status)) {
         throw new AppError("Replacement can be requested only after accepted QC", 409);
-      }
-      if (this.isSeller(actor) && !["replacement", "exchange"].includes(returnRequest.resolution)) {
-        throw new AppError("The customer selected a refund; only an administrator can change the resolution", 403);
       }
       this.validateTransition(returnRequest.status, "replacement_requested");
       returnRequest.resolution = "replacement";
@@ -2294,9 +2612,9 @@ class ReturnServiceClass {
       returnRequest.replacement.metadata = payload.metadata || {};
       this.appendTimeline(returnRequest, "replacement_requested", actor, payload);
     } else if (action === "approve") {
-      const advanceExchange = payload.advanceExchange === true && ["replacement", "exchange"].includes(returnRequest.resolution);
+      const advanceExchange = payload.advanceExchange === true && replacementResolution(returnRequest);
       if (!advanceExchange) this.assertAdmin(actor, "approve and create a replacement order");
-      if (!["replacement_requested", "replacement_pending", ...(advanceExchange ? ["reverse_pickup_scheduled", "manual_ship_back"] : [])].includes(returnRequest.status)) {
+      if (!["replacement_requested", "replacement_pending", ...(advanceExchange ? isDoorstepReturn(returnRequest) ? ["approved", "reverse_pickup_scheduled", "pickup_failed"] : ["reverse_pickup_scheduled", "manual_ship_back"] : [])].includes(returnRequest.status)) {
         throw new AppError("Replacement approval is not available in the current status", 409);
       }
       if (returnRequest.replacement?.orderId) return returnRequest;
@@ -2397,12 +2715,15 @@ class ReturnServiceClass {
         orderId: replacementOrderId,
         orderNumber: replacementOrder.orderNumber,
         createdAt: new Date(),
-        metadata: payload.metadata || {},
+        metadata: { ...(payload.metadata || {}), doorstepExchange: advanceExchange },
       };
       if (!advanceExchange) this.appendTimeline(returnRequest, "replacement_pending", actor, payload);
       this.appendTimeline(returnRequest, "replacement_created", actor, { ...payload, metadata: { replacementOrderId } });
     } else if (action === "ship") {
-      if (returnRequest.status !== "replacement_created") throw new AppError("Replacement order is not ready to ship", 409);
+      const doorstep = isDoorstepReturn(returnRequest);
+      if (doorstep ? !["approved", "reverse_pickup_scheduled", "pickup_failed"].includes(returnRequest.status) ||
+        !returnRequest.replacementOrderId || returnRequest.replacement?.shipmentId || returnRequest.collectionQc?.collectedAt
+        : returnRequest.status !== "replacement_created") throw new AppError("Replacement order is not ready to ship", 409);
       if (payload.expectedDeliveryAt &&
         (!Number.isFinite(new Date(payload.expectedDeliveryAt).getTime()) ||
           new Date(payload.expectedDeliveryAt).getTime() <= Date.now())) {
@@ -2431,8 +2752,10 @@ class ReturnServiceClass {
         createdBy: actor.userId,
         updatedBy: actor.userId,
       });
-      this.validateTransition(returnRequest.status, "replacement_shipped");
-      returnRequest.status = "replacement_shipped";
+      if (!doorstep) {
+        this.validateTransition(returnRequest.status, "replacement_shipped");
+        returnRequest.status = "replacement_shipped";
+      }
       returnRequest.replacementShipmentId = shipment.id;
       Object.assign(returnRequest.replacement, {
         status: "shipped",
@@ -2444,8 +2767,28 @@ class ReturnServiceClass {
       });
       this.appendTimeline(returnRequest, "replacement_shipped", actor, { ...payload, metadata: { shipmentId: shipment.id } });
     } else if (action === "deliver") {
-      this.assertAdmin(actor, "confirm replacement delivery");
+      if (!isDoorstepReturn(returnRequest)) this.assertAdmin(actor, "confirm replacement delivery");
+      if (isDoorstepReturn(returnRequest)) {
+        if (payload.handoverConfirmed !== true) throw new AppError("Confirm the replacement was physically handed to the customer", 409);
+        if (!returnRequest.collectionQc?.collectedAt || !returnRequest.collectionQc?.allAccepted)
+          throw new AppError("Complete passing doorstep QC and collect every exchange item before handover", 409);
+      }
       if (returnRequest.status !== "replacement_shipped") throw new AppError("Replacement is not currently shipped", 409);
+      if (isDoorstepReturn(returnRequest)) {
+        const shipmentId = returnRequest.replacementShipmentId || returnRequest.replacement?.shipmentId;
+        if (!shipmentId) throw new AppError("Linked replacement shipment is required", 409);
+        const { DeliveryService } = require("../../delivery/services/delivery.service");
+        const deliveryService = new DeliveryService({
+          deliveryRepository: this.deliveryRepository,
+          orderRepository: this.orderRepository,
+          commissionService: this.commissionService,
+        });
+        await deliveryService.addTrackingEvent(shipmentId, {
+          status: "delivered", note: payload.note || "Replacement handed over after doorstep QC and collection",
+          eventTime: new Date().toISOString(),
+        }, actor);
+        return this.getReturnOrThrow(returnId);
+      }
       this.validateTransition(returnRequest.status, "replacement_delivered");
       returnRequest.status = "replacement_delivered";
       returnRequest.replacement.status = "delivered";
@@ -2471,6 +2814,35 @@ class ReturnServiceClass {
     return returnRequest;
   }
 
+  async cancelUncollectedDoorstepReplacement(returnRequest, actor, reason) {
+    if (!returnRequest.replacementOrderId || returnRequest.collectionQc?.collectedAt) return;
+    const { CancellationService } = require("../../cancellation/services/cancellation.service");
+    const cancellationService = new CancellationService({
+      orderRepository: this.orderRepository, inventoryService: this.inventoryService,
+      deliveryRepository: this.deliveryRepository, walletService: this.walletService,
+      commissionService: this.commissionService,
+    });
+    // The established cancellation flow checks courier handover, releases stock
+    // and cancels unused packages. A parcel still with the courier must first
+    // be recovered; closing the claim must not silently lose that stock.
+    const replacementShipmentId = returnRequest.replacementShipmentId || returnRequest.replacement?.shipmentId;
+    const replacementShipment = replacementShipmentId
+      ? await this.deliveryRepository.findShipmentById(replacementShipmentId) : null;
+    const recoveredShipment = replacementShipment?.status === "rto";
+    const cancellation = await cancellationService.cancelOrder(returnRequest.replacementOrderId, {
+      ...(recoveredShipment ? {
+        source: "shipment_rto", shipmentId: replacementShipment.id,
+        sellerId: replacementShipment.seller_id,
+        organizationId: replacementShipment.organization_id || null,
+      } : {}),
+      reason: reason || "Uncollected doorstep exchange closed",
+      idempotencyKey: `doorstep:${returnRequest._id}:cancel:${returnRequest.replacementOrderId}`,
+    }, actor);
+    if (cancellation.status !== "completed") throw new AppError("Complete replacement order recovery before closing this return", 409);
+    returnRequest.replacement = { ...(returnRequest.replacement.toObject?.() || returnRequest.replacement),
+      status: "cancelled", metadata: { ...(returnRequest.replacement.metadata || {}), cancellationId: cancellation.id } };
+  }
+
   async closeReturn(returnId, payload, actor = {}) {
     this.assertAdmin(actor, "close a return");
     const returnRequest = await this.getReturnOrThrow(returnId);
@@ -2490,6 +2862,11 @@ class ReturnServiceClass {
       ["pending", "provider_pending", "manual_review"].includes(returnRequest.refund?.status)
     ) {
       throw new AppError("Return cannot be closed while refund processing is pending", 409);
+    }
+    if (isDoorstepReturn(returnRequest)) {
+      if (returnRequest.collectionQc?.collectedAt && !["refunded", "replaced", "replacement_delivered"].includes(returnRequest.status))
+        throw new AppError("Resolve the collected item's refund or replacement handover before closing", 409);
+      await this.cancelUncollectedDoorstepReplacement(returnRequest, actor, payload.reason || payload.note);
     }
     this.validateTransition(returnRequest.status, "closed");
     returnRequest.status = "closed";
@@ -2511,6 +2888,12 @@ class ReturnServiceClass {
 
   async getReturnsByBuyer(buyerId) {
     return this.projectReturnRecords(await ReturnModel.find({ buyerId }).sort({ createdAt: -1 }).lean());
+  }
+
+  async getBuyerReturnById(returnId, actor = {}) {
+    const request = await this.getReturnOrThrow(returnId);
+    if (String(request.buyerId) !== String(actor.userId)) throw new AppError("You can view only your own return inspection", 403);
+    return this.getReturnById(returnId, actor);
   }
 
   async getReturnById(returnId, actor = {}) {

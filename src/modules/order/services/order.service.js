@@ -2235,7 +2235,11 @@ const sellerPayoutAmount = Number(
     if (!isAdmin && String(actor.userId || "") !== String(order.buyer_id || "")) {
       throw new AppError("You cannot retry payment for this order", 403);
     }
-    if (![ORDER_STATUS.PENDING_PAYMENT, ORDER_STATUS.PAYMENT_FAILED].includes(order.status)) {
+    const confirmedUnpaid = order.status === ORDER_STATUS.CONFIRMED && order.payment_status === PAYMENT_STATUS.FAILED;
+    if (confirmedUnpaid && await this.orderRepository.hasNonCancellableShipment(orderId)) {
+      throw new AppError("Payment retry requires review because shipment handover has already started", 409);
+    }
+    if (![ORDER_STATUS.PENDING_PAYMENT, ORDER_STATUS.PAYMENT_FAILED].includes(order.status) && !confirmedUnpaid) {
       throw new AppError("Payment cannot be retried after the order is confirmed or closed", 409);
     }
     if (order.payment_status === PAYMENT_STATUS.CAPTURED ||
@@ -2269,6 +2273,15 @@ const sellerPayoutAmount = Number(
     await this.dealService.reserveOrderSales(order, actor).catch((error) =>
       logger.error({ orderId, error: error.message }, "Deal sale retry reserve failed"),
     );
+
+    // Repair legacy confirmed/failed orders only after ownership, payment,
+    // shipment and stock checks. Capture can then follow the normal pending flow.
+    if (confirmedUnpaid) {
+      return this.orderRepository.updateStatus(orderId, ORDER_STATUS.PENDING_PAYMENT, {
+        actorId: actor.userId || order.buyer_id, actorRole: actor.role || "buyer",
+        paymentStatus: PAYMENT_STATUS.INITIATED, reason: "unpaid_order_payment_retry",
+      });
+    }
 
     return this.updateOrderStatus(orderId, ORDER_STATUS.PENDING_PAYMENT, {
       userId: actor.userId || order.buyer_id,

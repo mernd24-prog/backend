@@ -2146,7 +2146,8 @@ class AuthService {
     const isStaticOtp = env.auth.otpMode === "static";
     const otp = isStaticOtp ? env.auth.staticOtp : createOtp();
     const smsTemplateKey = {
-      registration: role === ROLES.SELLER
+      // Use the general registration message when no dedicated seller template is configured.
+      registration: role === ROLES.SELLER && env.sms.templateIds.sellerRegisterOtp
         ? SMS_TEMPLATE_KEYS.SELLER_REGISTER_OTP
         : SMS_TEMPLATE_KEYS.REGISTER_OTP,
       login: SMS_TEMPLATE_KEYS.LOGIN_OTP,
@@ -2156,7 +2157,7 @@ class AuthService {
     }[purpose] || SMS_TEMPLATE_KEYS.ACCOUNT_RECOVERY_OTP;
     const smsTemplateId = purpose === "registration"
       ? role === ROLES.SELLER
-        ? env.sms.templateIds.sellerRegisterOtp
+        ? env.sms.templateIds.sellerRegisterOtp || env.sms.templateIds.registerOtp
         : env.sms.templateIds.registerOtp
       : {
         login: env.sms.templateIds.loginOtp,
@@ -2264,9 +2265,7 @@ class AuthService {
               errorMessage: primaryError.message, statusCode: primaryError.statusCode || null,
               providerCode: primaryError.providerCode || null,
               mobile: `******${mobileNumber.slice(-4)}`,
-              templateKey: purpose === "registration"
-                ? role === ROLES.SELLER ? "SELLER_REGISTER_OTP" : "REGISTER_OTP"
-                : purpose === "login" ? "LOGIN_OTP" : purpose
+              templateKey: smsTemplateKey,
             },
             role === ROLES.SELLER && purpose === "registration"
               ? "Seller registration SMS OTP failed; fallback is disabled"

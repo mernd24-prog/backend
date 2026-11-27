@@ -14,6 +14,7 @@ const returnItemSchema = new mongoose.Schema(
     quantity: Number,
     requestedQuantity: Number,
     approvedQuantity: Number,
+    collectedQuantity: Number,
     receivedQuantity: Number,
     unitPrice: Number,
     lineTotal: Number,
@@ -196,6 +197,7 @@ const returnSchema = new mongoose.Schema(
       processedAt: Date,
       metadata: { type: Object, default: {} },
     },
+    collectionQc: { type: Object, default: {} },
     qcReview: { type: Object, default: {} },
     returnToCustomer: { type: Object, default: {} },
     replacement: {

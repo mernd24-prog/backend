@@ -1,5 +1,7 @@
 "use strict";
 
+const { isDoorstepReturn, assertDoorstepTracking } = require("../../../shared/domain/doorstep-return");
+
 const { AppError } = require("../../../shared/errors/app-error");
 const { DeliveryRepository } = require("../repositories/delivery.repository");
 const { OrderRepository } = require("../../order/repositories/order.repository");
@@ -451,7 +453,14 @@ class DeliveryService {
       throw new AppError("Shipment not found", 404);
     }
     await this.assertCanViewShipment(shipment, actor);
-    return (await this.enrichShipmentRecords([shipment]))[0] || shipment;
+    const result = (await this.enrichShipmentRecords([shipment]))[0] || shipment;
+    if (shipment.return_id) {
+      const request = await ReturnModel.findById(shipment.return_id);
+      if (request && isDoorstepReturn(request)) {
+        result.returnWorkflow = this.shipmentReturnWorkflow(request);
+      }
+    }
+    return result;
   }
 
   userDisplayName(user = {}) {
@@ -492,12 +501,28 @@ class DeliveryService {
     });
   }
 
+  shipmentReturnWorkflow(request) {
+    const qc = request.collectionQc || {};
+    const exchange = isDoorstepReturn(request) && ["replacement", "exchange"].includes(request.resolution) &&
+      (qc.sameVisitExchange || (request.reverseShipment?.trackingNumber && request.reverseShipment.trackingNumber === request.replacement?.trackingNumber));
+    return { returnId: String(request._id), returnNumber: request.returnNumber, returnStatus: request.status,
+      doorstepQcRequired: isDoorstepReturn(request), collected: !!qc.collectedAt, collectedAt: qc.collectedAt || null,
+      visitStartedAt: qc.visitStartedAt || null, allAccepted: qc.allAccepted === true,
+      sellerResponsibilityCompletedAt: qc.sellerResponsibilityCompletedAt || null,
+      sameVisitExchange: !!exchange,
+      exchangeCompletedAt: qc.exchangeCompletedAt || (exchange && request.status === "replaced" ? request.replacement?.deliveredAt || qc.collectedAt : null) };
+  }
+
   async enrichShipmentRecords(records = []) {
     const ids = records.flatMap((record) => [
       record.seller_id || record.sellerId,
       record.buyer_id || record.buyerId,
       ...(record.trackingEvents || []).map((event) => event.actor_id || event.actorId),
     ]);
+    const returnIds = [...new Set(records.filter(record => record.return_id).map(record => String(record.return_id)))];
+    const requests = returnIds.length ? await ReturnModel.find({ _id: { $in: returnIds } })
+      .select("_id returnNumber reverseShipment replacement replacementShipmentId collectionQc status resolution").lean() : [];
+    const requestById = new Map(requests.map(request => [String(request._id), request]));
     const users = await this.loadUserSummaries(ids);
     return records.map((record) => {
       const seller = users.get(String(record.seller_id || record.sellerId || "")) || null;
@@ -508,6 +533,7 @@ class DeliveryService {
       });
       return {
         ...record,
+        ...(requestById.has(String(record.return_id)) ? { returnWorkflow: this.shipmentReturnWorkflow(requestById.get(String(record.return_id))) } : {}),
         seller,
         sellerName: seller?.businessName || seller?.displayName || null,
         buyer,
@@ -576,8 +602,20 @@ class DeliveryService {
         409,
       );
     }
+    // This is an already-completed, verified exchange, not a new dispatch.
+    // Trust only the persisted confirmations and the active replacement link.
+    let confirmedExchangeDelivery = false;
+    if (shipment.shipment_type === "replacement" && shipment.return_id && payload.status === "delivered") {
+      const request = await ReturnModel.findById(shipment.return_id);
+      confirmedExchangeDelivery = !!(request && isDoorstepReturn(request) &&
+        request.collectionQc?.exchangeCompletionConfirmed && request.collectionQc?.replacementInspected &&
+        request.collectionQc?.customerAccepted && request.collectionQc?.collectedAt && request.collectionQc?.allAccepted &&
+        String(request.replacementShipmentId || request.replacement?.shipmentId) === String(shipment.id) &&
+        String(request.replacementOrderId || request.replacement?.orderId) === String(shipment.order_id) &&
+        ["initiated", "manifested", "picked_up", "in_transit", "out_for_delivery"].includes(shipment.status));
+    }
     const handoverStatus = this.isForwardShipment(shipment) &&
-      [DELIVERY_STATUS.PICKED_UP, DELIVERY_STATUS.IN_TRANSIT, DELIVERY_STATUS.OUT_FOR_DELIVERY].includes(payload.status);
+      ([DELIVERY_STATUS.PICKED_UP, DELIVERY_STATUS.IN_TRANSIT, DELIVERY_STATUS.OUT_FOR_DELIVERY].includes(payload.status) || confirmedExchangeDelivery);
     let fulfillmentItems;
     const automaticEventTime = payload.eventTime || new Date().toISOString();
     payload.eventTime = automaticEventTime;
@@ -598,21 +636,37 @@ class DeliveryService {
         throw new AppError("AWB or tracking number is required when shipping", 400);
       }
       if (!payload.shippedAt && !shipment.shipped_at) throw new AppError("Shipment date is required when shipping", 400);
+      if (!confirmedExchangeDelivery) {
       const expectedDeliveryAt = payload.expectedDeliveryAt || shipment.expected_delivery_at;
       if (!expectedDeliveryAt) throw new AppError("Expected delivery date is required when shipping", 400);
       if (new Date(expectedDeliveryAt).getTime() <= new Date(shipment.shipped_at || payload.shippedAt || automaticEventTime).getTime()) {
         throw new AppError("Expected delivery date must be after the shipment date", 400);
       }
       payload.expectedDeliveryAt = new Date(expectedDeliveryAt).toISOString();
+      }
+    }
+    if (shipment.shipment_type === "replacement" && shipment.return_id && payload.status === "delivered" && !etaOnlyUpdate) {
+      const request = await ReturnModel.findById(shipment.return_id);
+      if (request && isDoorstepReturn(request) &&
+        (String(request.replacementShipmentId || request.replacement?.shipmentId || "") !== String(shipment.id) ||
+          String(request.replacementOrderId || request.replacement?.orderId || "") !== String(shipment.order_id))) {
+        throw new AppError("Shipment does not belong to the active doorstep replacement", 409);
+      }
+      if (request && isDoorstepReturn(request) && (!request.collectionQc?.collectedAt || !request.collectionQc?.allAccepted)) {
+        throw new AppError("Complete doorstep QC and collect the old item before replacement delivery", 409);
+      }
     }
     if (reverseShipment(shipment) && !etaOnlyUpdate) {
       const request = await ReturnModel.findById(shipment.return_id);
       if (!request || !shipmentBelongsToReturn(request, shipment)) throw new AppError("Shipment does not belong to the active return pickup", 409);
-      if (!LOGISTICS_STATES.includes(request.status) && !(request.status === "received" && shipment.status === payload.status)) {
+      if (!LOGISTICS_STATES.includes(request.status) && !(isDoorstepReturn(request) && request.collectionQc?.collectedAt) && !(request.status === "received" && shipment.status === payload.status)) {
         throw new AppError("Reverse tracking is no longer open for this return", 409);
       }
+      if (request.collectionQc?.exchangeCompletedAt)
+        throw new AppError("This exchange is complete; no further manual return shipment update is required", 409);
+      assertDoorstepTracking(request, payload.status);
       assertReverseTrackingTransition(shipment.status, payload.status);
-    } else if (!etaOnlyUpdate) {
+    } else if (!etaOnlyUpdate && !confirmedExchangeDelivery) {
       this.assertTrackingTransition(shipment.status, payload.status, payload);
     }
     if (handoverStatus) await this.deliveryRepository.updateShipmentFulfillmentSnapshot(shipmentId, fulfillmentItems);
@@ -643,6 +697,7 @@ class DeliveryService {
     if (!returnRequest || String(returnRequest.replacementShipmentId || "") !== String(shipment.id || "")) return;
 
     const delivered = shipment.status === DELIVERY_STATUS.DELIVERED;
+    if (isDoorstepReturn(returnRequest) && !returnRequest.collectionQc?.collectedAt) return;
     const nextStatus = delivered ? "replacement_delivered" : "replacement_shipped";
     if (returnRequest.status === nextStatus || returnRequest.status === "replaced") return;
     if (!delivered && returnRequest.status !== "replacement_created") return;

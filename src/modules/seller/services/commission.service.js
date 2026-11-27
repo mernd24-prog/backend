@@ -5171,11 +5171,11 @@ gstTcsAmount,
       const organizationId = item.organizationId || item.organization_id || matchedItem.organization_id || null;
       const orderItemId = item.orderItemId || matchedItem.id || null;
       const key = `${String(sellerId)}:${organizationId || "default"}:${orderItemId || item.productId}`;
-      const amount = this.round(item.refundAmount || item.lineTotal || 0);
+      const amount = this.round(returnRequest.collectionQc?.collectedAt ? (item.refundAmount ?? 0) : (item.refundAmount || item.lineTotal || 0));
       const orderedQuantity = Math.max(Number(matchedItem.quantity || item.orderedQuantity || item.ordered_quantity || item.quantity || 1), 1);
       const returnedQuantity = Math.min(
         orderedQuantity,
-        Math.max(Number(item.approvedQuantity ?? item.approved_quantity ?? item.receivedQuantity ?? item.received_quantity ?? item.requestedQuantity ?? item.requested_quantity ?? item.quantity ?? 1), 0),
+        Math.max(Number((returnRequest.collectionQc?.collectedAt ? (item.collectedQuantity ?? 0) : null) ?? item.approvedQuantity ?? item.approved_quantity ?? item.receivedQuantity ?? item.received_quantity ?? item.requestedQuantity ?? item.requested_quantity ?? item.quantity ?? 1), 0),
       );
       const current = sellerRefunds.get(key) || {
         sellerId: String(sellerId),

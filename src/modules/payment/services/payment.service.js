@@ -255,7 +255,10 @@ class PaymentService {
   async initiatePaymentLocked(payload, actor) {
     const existingByKey = await this.paymentRepository.findByIdempotencyKey(payload.idempotencyKey);
     if (existingByKey) {
-      return mapPaymentResponse(existingByKey);
+      const response = mapPaymentResponse(existingByKey);
+      if (response.provider === PAYMENT_PROVIDER.RAZORPAY && response.status === PAYMENT_STATUS.INITIATED)
+        response.checkout = buildRazorpayCheckout(response);
+      return response;
     }
 
     const order = await this.orderRepository.findByIdAndBuyer(payload.orderId, actor.userId);

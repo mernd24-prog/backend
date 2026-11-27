@@ -25,13 +25,16 @@ function statusSessionFields(accountStatus) {
   };
 }
 
-function invalidationReasonForUserPayload(payload = {}) {
+function invalidationReasonForUserPayload(payload = {}, current = {}) {
   if (payload.password) return SESSION_INVALIDATION_REASONS.PASSWORD_CHANGED;
-  if (payload.role) return SESSION_INVALIDATION_REASONS.ROLE_CHANGED;
-  if (Object.prototype.hasOwnProperty.call(payload, "allowedModules")) {
+  if (payload.role && payload.role !== current.role) return SESSION_INVALIDATION_REASONS.ROLE_CHANGED;
+  if (Object.prototype.hasOwnProperty.call(payload, "allowedModules") &&
+      JSON.stringify([...new Set(payload.allowedModules || [])].sort()) !==
+      JSON.stringify([...new Set(current.allowedModules || [])].sort())) {
     return SESSION_INVALIDATION_REASONS.PERMISSIONS_CHANGED;
   }
-  if (payload.accountStatus || payload.status) {
+  if ((payload.accountStatus || payload.status) &&
+      normalizeAccountStatus(payload.accountStatus || payload.status) !== normalizeAccountStatus(current.accountStatus)) {
     return SESSION_INVALIDATION_REASONS.ACCOUNT_STATUS_CHANGED;
   }
   return null;
@@ -536,7 +539,9 @@ class AdminRepository {
   }
 
   async updateUserById(userId, payload) {
-    const invalidationReason = invalidationReasonForUserPayload(payload);
+    const current = await UserModel.findById(userId).select("role allowedModules accountStatus").lean();
+    if (!current) return null;
+    const invalidationReason = invalidationReasonForUserPayload(payload, current);
     // If password is provided, hash it and include passwordHash in update
     const setFields = {
       ...(payload.accountStatus ? { accountStatus: payload.accountStatus } : {}),

@@ -60,6 +60,10 @@ function reverseReturnStatus(request, shipment) {
     !LOGISTICS_STATES.includes(request.status)
   )
     return request.status;
+  // A failed doorstep exchange is a workflow decision, not a new pickup.
+  // A stale booking event must not reopen it on detail/list reads.
+  if (["replacement", "exchange"].includes(request.resolution) &&
+      request.collectionQc?.exchangeFailure && request.status === "pickup_failed") return request.status;
   const next = REVERSE_STATUS_MAP[shipment.status];
   if (!next) return request.status;
   if (

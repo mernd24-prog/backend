@@ -114,7 +114,7 @@ test('admin-created sub-admin automatically uses that admin as parent', async ()
   assert.equal(grants.length, 0);
 });
 
-function repositoryFixture(hash = async () => 'new-hash') {
+function repositoryFixture(hash = async () => 'new-hash', current = { role: 'admin', accountStatus: 'active', allowedModules: [] }) {
   const repoFile = path.resolve(__dirname, '../src/modules/admin/repositories/admin.repository.js');
   const repoRequire = createRequire(repoFile);
   const module = { exports: {} };
@@ -122,7 +122,8 @@ function repositoryFixture(hash = async () => 'new-hash') {
   const requireMock = name => {
     if (name.endsWith('/shared/tools/hash')) return { hashText: hash };
     if (name.endsWith('/shared/auth/session-state')) return repoRequire(name);
-    if (name.endsWith('/user/models/user.model')) return { UserModel: { findByIdAndUpdate: (id, update) => { writes.push({ id, update }); return { select: async () => ({ id }) }; } } };
+    if (name.endsWith('/order/repositories/order.repository')) return { OrderRepository: class {} };
+    if (name.endsWith('/user/models/user.model')) return { UserModel: { findById: () => ({ select: () => ({ lean: async () => current }) }), findByIdAndUpdate: (id, update) => { writes.push({ id, update }); return { select: async () => ({ id }) }; } } };
     return {};
   };
   vm.runInNewContext('(function(require,module,exports){' + fs.readFileSync(repoFile, 'utf8') + '\n})', {})(requireMock, module, module.exports);
@@ -149,4 +150,27 @@ test('deleted account is marked and sessions are invalidated', async () => {
   assert.equal(writes[0].update.$set.accountStatus, 'deleted');
   assert.equal(writes[0].update.$inc.sessionVersion, 1);
   assert.equal(writes[0].update.$set.refreshSessions.length, 0);
+});
+
+test('saving unchanged role, status and reordered modules preserves sessions', async () => {
+  const { repo, writes } = repositoryFixture(undefined, { role: 'admin', accountStatus: 'active', allowedModules: ['orders', 'returns'] });
+  await repo.updateUserById('target', { role: 'admin', accountStatus: 'active', allowedModules: ['returns', 'orders'], profile: { firstName: 'Updated' } });
+  assert.equal(writes[0].update.$inc, undefined);
+  assert.equal(writes[0].update.$set.sessionInvalidationReason, undefined);
+});
+test('actual role change still invalidates sessions', async () => {
+  const { repo, writes } = repositoryFixture();
+  await repo.updateUserById('target', { role: 'sub-admin' });
+  assert.equal(writes[0].update.$set.sessionInvalidationReason, 'ROLE_CHANGED');
+  assert.equal(writes[0].update.$inc.sessionVersion, 1);
+});
+test('actual permission change with unchanged role reports permissions changed', async () => {
+  const { repo, writes } = repositoryFixture();
+  await repo.updateUserById('target', { role: 'admin', allowedModules: ['orders'] });
+  assert.equal(writes[0].update.$set.sessionInvalidationReason, 'PERMISSIONS_CHANGED');
+});
+test('editing a missing account performs no update', async () => {
+  const { repo, writes } = repositoryFixture(undefined, null);
+  assert.equal(await repo.updateUserById('missing', { role: 'admin' }), null);
+  assert.equal(writes.length, 0);
 });

@@ -171,6 +171,17 @@ function setOrganizationContextHeaders(res, auth = {}) {
   }
 }
 
+function authenticationLookupUnavailable(cause) {
+  const error = new AppError(
+    "Unable to verify your access temporarily. Please try again.",
+    503,
+    null,
+    "AUTH_SERVICE_UNAVAILABLE",
+  );
+  error.cause = cause;
+  throw error;
+}
+
 async function validateAuthUser(payload = {}) {
   if (!payload.sub) {
     throw authError(AUTH_ERROR_CODES.TOKEN_INVALID, 401);
@@ -204,7 +215,7 @@ async function validateAuthUser(payload = {}) {
   const user = await UserModel.findById(payload.sub)
     .select("-passwordHash -refreshSessions.tokenHash")
     .lean()
-    .catch(() => null);
+    .catch(authenticationLookupUnavailable);
 
   if (!user) {
     throw authError(AUTH_ERROR_CODES.USER_NOT_FOUND, 401);
@@ -219,7 +230,7 @@ async function validateAuthUser(payload = {}) {
     throw authError(AUTH_ERROR_CODES.ROLE_CHANGED, 401);
   }
 
-  const role = await Role.findOne({ where: { slug: user.role } }).catch(() => null);
+  const role = await Role.findOne({ where: { slug: user.role } }).catch(authenticationLookupUnavailable);
   if (!role && user.role !== ROLES.BUYER) {
     throw authError(AUTH_ERROR_CODES.ROLE_CHANGED, 401);
   }

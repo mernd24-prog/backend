@@ -79,6 +79,29 @@ router.get(
 );
 
 router.get(
+  "/my-returns/:returnId",
+  authenticate,
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.getReturnById, req.params);
+    res.json(okResponse(await ReturnService.getBuyerReturnById(value.returnId, actor)));
+  }),
+);
+
+router.post(
+  "/:returnId/collection-visit",
+  authenticate,
+  allowPermissions("returns:update"),
+  catchErrors(async (req, res) => {
+    const actor = getCurrentUser(req);
+    const value = validate(returnValidation.collectionVisit, { ...req.body, returnId: req.params.returnId });
+    const updated = await ReturnService.startCollectionVisit(value.returnId, value, actor);
+    await auditService.statusChange(req, { module: "returns", entityId: value.returnId, entityType: "Return", newData: updated, description: "Courier arrival confirmed for doorstep inspection" });
+    res.json(okResponse(updated));
+  }),
+);
+
+router.get(
   "/:returnId",
   authenticate,
   allowPermissions("returns:view"),

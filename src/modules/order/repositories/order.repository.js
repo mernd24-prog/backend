@@ -984,7 +984,7 @@ class OrderRepository {
       this.optionalTableRows("cod_collections", (query) => query.whereIn("order_id", orderIds).orderBy("created_at", "desc")),
       this.findReferralAllocations(orderIds),
       ReturnModel.find({ orderId: { $in: orderIds.map(String) } })
-        .select("_id orderId returnNumber status resolution refund.status refund.refundedAmount refundAmount refundedAt createdAt items")
+        .select("_id orderId returnNumber status resolution refund.status refund.refundedAmount refund.processedAt refundAmount refundedAt createdAt items collectionQc approvedAt reverseShipment replacement replacementOrderId replacementShipmentId qcAt qcReview timeline reason")
         .sort({ createdAt: -1 }).lean(),
     ]);
 

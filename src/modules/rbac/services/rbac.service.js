@@ -769,8 +769,8 @@ class RbacService {
 
     const result = await this.rbacRepository.updateRole(id, updates);
     if (
-      Object.prototype.hasOwnProperty.call(updates, "active") ||
-      Object.prototype.hasOwnProperty.call(updates, "slug")
+      (Object.prototype.hasOwnProperty.call(updates, "active") && updates.active !== role.active) ||
+      (Object.prototype.hasOwnProperty.call(updates, "slug") && updates.slug !== role.slug)
     ) {
       await this.invalidateUsersForRole(id, SESSION_INVALIDATION_REASONS.ROLE_CHANGED);
     }
